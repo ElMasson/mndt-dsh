@@ -154,10 +154,10 @@ export class GovernanceGateway extends TypertRemoteService {
    * @returns the created row, or a refusal.
    */
   @Remote('createAutomation')
-  async createAutomation(actor: string, prompt: string): Promise<AutomationRow | DecisionRow> {
-    const created = await this.automations.create(actor, prompt)
+  async createAutomation(actor: string, prompt: string, everyMinutes: number): Promise<AutomationRow | DecisionRow> {
+    const created = await this.automations.create(actor, prompt, everyMinutes)
     if ('allowed' in created) return created
-    return { ...created, everyMinutes: 60 }
+    return created
   }
 
   /**

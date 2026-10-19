@@ -19,6 +19,8 @@ export interface Automation {
   readonly prompt: string
   /** Whether it should run when triggered. */
   readonly enabled: boolean
+  /** How often it runs, in minutes. */
+  readonly everyMinutes: number
   /** ISO-8601 creation instant. */
   readonly createdAt: string
 }
@@ -131,9 +133,12 @@ export class AutomationService {
    * @param prompt - what to run.
    * @returns the created row, or a refusal.
    */
-  async create(owner: string, prompt: string): Promise<Automation | AutomationOutcome> {
+  async create(owner: string, prompt: string, everyMinutes = 60): Promise<Automation | AutomationOutcome> {
     if (owner.trim() === '') return { allowed: false, reason: 'an owner is required' }
     if (prompt.trim() === '') return { allowed: false, reason: 'a prompt is required' }
+    if (!Number.isInteger(everyMinutes) || everyMinutes < 1 || everyMinutes > 1440) {
+      return { allowed: false, reason: 'the frequency must be 1 to 1440 minutes' }
+    }
     const rows = await this.#load()
     this.#counter += 1
     const created: Automation = {
@@ -141,6 +146,7 @@ export class AutomationService {
       owner,
       prompt,
       enabled: true,
+      everyMinutes,
       createdAt: this.#now().toISOString(),
     }
     this.#rows = [...rows, created]

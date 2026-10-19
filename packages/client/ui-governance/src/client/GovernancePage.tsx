@@ -111,7 +111,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
 
   const createAutomation = async (): Promise<void> => {
     if (prompt.trim() === '') return
-    const result = await api.createAutomation(actor, prompt.trim())
+    const result = await api.createAutomation(actor, prompt.trim(), 60)
     if (result.ok) {
       setFailed(false)
       setNotice(t('accepted'))

@@ -41,6 +41,17 @@ describe('ownership', () => {
     await expect(service.list('sara')).resolves.toHaveLength(1)
   })
 
+  it('defaults to hourly and refuses an impossible frequency', async () => {
+    const service = new AutomationService(new MemoryAutomationStorage(), now)
+
+    const created = await service.create('stephane', 'summarise the inbox')
+    expect(created).toMatchObject({ everyMinutes: 60 })
+
+    expect(await service.create('stephane', 'x', 0)).toMatchObject({ allowed: false })
+    expect(await service.create('stephane', 'x', 1441)).toMatchObject({ allowed: false })
+    expect(await service.create('stephane', 'x', 15)).toMatchObject({ everyMinutes: 15 })
+  })
+
   it('refuses an empty owner or an empty prompt', async () => {
     const service = new AutomationService(new MemoryAutomationStorage(), now)
 
