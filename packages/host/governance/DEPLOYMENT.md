@@ -90,6 +90,68 @@ server {
 The important property: the browser never holds the authority token. It holds a
 session cookie with the proxy; the proxy holds the mapping.
 
+### 2 bis. Microsoft Entra ID, concretely
+
+Entra authenticates the person at the proxy. The authority token stays a separate
+secret, held per person in a password manager and exported on their machine, so the
+browser never carries it and the proxy never needs a token lookup table.
+
+**App registration (Entra portal):**
+
+1. Entra ID, App registrations, New registration, name `dsh-governance`.
+2. Redirect URI, Web: `https://governance.example.internal/oauth2/callback`.
+3. Certificates and secrets, new client secret, copy the value once.
+4. API permissions: `openid`, `profile`, `email`, `User.Read`, then grant admin consent.
+5. Token configuration: add the optional claim `email` so the identity is readable.
+6. Enterprise application, Properties, set "Assignment required" to Yes and assign the team group.
+
+**oauth2-proxy in front of the authority:**
+
+```sh
+oauth2-proxy \
+  --provider=oidc \
+  --oidc-issuer-url=https://login.microsoftonline.com/<TENANT_ID>/v2.0 \
+  --client-id=<CLIENT_ID> \
+  --client-secret=<CLIENT_SECRET> \
+  --redirect-url=https://governance.example.internal/oauth2/callback \
+  --email-domain=duke-analytics.com \
+  --cookie-secure=true \
+  --upstream=http://127.0.0.1:8787 \
+  --http-address=127.0.0.1:4180
+```
+
+**nginx in front of oauth2-proxy:**
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name governance.example.internal;
+  ssl_certificate     /etc/ssl/governance.crt;
+  ssl_certificate_key /etc/ssl/governance.key;
+
+  location / {
+    auth_request /oauth2/auth;
+    error_page 401 = /oauth2/sign_in;
+    auth_request_set $user $upstream_http_x_auth_request_email;
+    proxy_set_header X-Auth-Request-Email $user;
+    proxy_set_header Authorization $http_authorization;
+    proxy_pass http://127.0.0.1:4180;
+  }
+
+  location /oauth2/ { proxy_pass http://127.0.0.1:4180; }
+}
+```
+
+**What each piece proves, and what it does not:**
+
+- Entra proves the person reached the service. The proxy refuses anyone outside the
+  assigned group.
+- The authority token proves the identity to the authority. It is issued per person,
+  stored in their password manager, and exported as `DSH_GOVERNANCE_TOKEN`.
+- Neither replaces the other. Revoking access in Entra stops reachability; removing
+  the token entry stops identity; removing the grant stops rights. Three separate
+  levers, and an operator should know which one they are pulling.
+
 ### 3. Point workstations at the authority
 
 On each machine, export two variables before starting DSH:
