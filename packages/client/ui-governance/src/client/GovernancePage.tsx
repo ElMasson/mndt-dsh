@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
-import type { AgentRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/types'
+import type { AgentRow, ConnectorRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/types'
 import type { GovernanceKey } from './locales.ts'
 
 /** Props handed by the slot registration. */
@@ -20,7 +20,7 @@ export interface GovernancePageProps {
 }
 
 const TABS: readonly { key: GovernanceKey; id: string; wired: boolean }[] = [
-  { key: 'tabConnectors', id: 'connectors', wired: false },
+  { key: 'tabConnectors', id: 'connectors', wired: true },
   { key: 'tabAgents', id: 'agents', wired: true },
   { key: 'tabWorkflows', id: 'workflows', wired: false },
   { key: 'tabRights', id: 'rights', wired: true },
@@ -44,6 +44,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const [rows, setRows] = useState<GrantRow[]>([])
   const [agents, setAgents] = useState<AgentRow[]>([])
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
+  const [connectors, setConnectors] = useState<ConnectorRow[]>([])
   const [actor, setActor] = useState('')
   const [subject, setSubject] = useState('')
   const [role, setRole] = useState('viewer')
@@ -93,6 +94,19 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
     }
   }, [api, fail, t])
 
+  const loadConnectors = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await api.connectors()
+      if (result.ok) setConnectors(result.value)
+      else fail(failureText(result.error))
+    } catch (error) {
+      fail(error instanceof Error ? error.message : t('error'))
+    } finally {
+      setLoading(false)
+    }
+  }, [api, fail, t])
+
   const loadWorkspaces = useCallback(async () => {
     setLoading(true)
     try {
@@ -110,7 +124,8 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
     if (active === 'rights') { void loadGrants(); void loadState() }
     if (active === 'agents') void loadAgents()
     if (active === 'sharing') void loadWorkspaces()
-  }, [active, loadGrants, loadState, loadAgents, loadWorkspaces])
+    if (active === 'connectors') void loadConnectors()
+  }, [active, loadGrants, loadState, loadAgents, loadConnectors, loadWorkspaces])
 
   const submitGrant = async (): Promise<void> => {
     if (subject.trim() === '') return
@@ -180,6 +195,31 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
                   <tr key={agent.id}>
                     <td>{agent.id}</td>
                     <td>{agent.name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+      )}
+
+      {active === 'connectors' && (
+        connectors.length === 0
+          ? <p role="status">{t('empty')}</p>
+          : (
+            <table>
+              <thead>
+                <tr>
+                  <th>{t('subject')}</th>
+                  <th>{t('scope')}</th>
+                  <th>{t('actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {connectors.map(connector => (
+                  <tr key={connector.entry}>
+                    <td>{connector.server}</td>
+                    <td>{connector.module}</td>
+                    <td>{connector.enabled ? 'enabled' : 'disabled'}</td>
                   </tr>
                 ))}
               </tbody>

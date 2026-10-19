@@ -28,6 +28,7 @@ function fakeApi(overrides: Partial<TypertRemoteNamespaceMap['governance']> = {}
     bootstrapOwner: vi.fn(async () => ({ ok: true as const, value: { allowed: true, reason: 'bootstrapped' } })),
     agents: vi.fn(async () => ({ ok: true as const, value: [] })),
     workspaces: vi.fn(async () => ({ ok: true as const, value: [] })),
+    connectors: vi.fn(async () => ({ ok: true as const, value: [] })),
     tableState: vi.fn(async () => ({ ok: true as const, value: { stale: false, source: 'local', detail: 'local table' } })),
     ...overrides,
   }
@@ -108,6 +109,26 @@ describe('the rights surface', () => {
 
     expect(removeGrant).toHaveBeenCalledTimes(1)
     expect(host?.textContent).toContain('removed by owner')
+  })
+
+  it('renders the mounted connectors the Loader reported', async () => {
+    const api = fakeApi({
+      connectors: vi.fn(async () => ({
+        ok: true as const,
+        value: [{ entry: 'entry-1', module: 'dsh-mcp-client', server: 'office365', enabled: true }],
+      })),
+    })
+
+    await render(api)
+    const connectorsTab = [...(host?.querySelectorAll('button') ?? [])].find(element => element.textContent === 'tabConnectors')
+    expect(connectorsTab).toBeDefined()
+    await act(async () => {
+      connectorsTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(api.connectors).toHaveBeenCalledTimes(1)
+    expect(host?.textContent).toContain('office365')
+    expect(host?.textContent).toContain('enabled')
   })
 
   it('warns that the table is cached when the authority is unreachable', async () => {

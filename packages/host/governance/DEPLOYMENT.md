@@ -124,9 +124,10 @@ through `tableState()`. A stale table is never presented as live, and a refusal
 
 State these to the team, because they are real:
 
-1. **The page is not fully wired.** Rights, agents, and sharing read live data. The
-   connectors tab has no host roster at this seam, and the workflows tab has no
-   catalog: `ctx.workflowEngine` exposes `start()` only. Both say so on screen.
+1. **One surface is not wired.** Rights, agents, sharing, and connectors read live
+   data (connectors are the MCP client entries the Loader actually mounted). The
+   workflows tab has no catalog at this seam: `ctx.workflowEngine` exposes `start()`
+   only, so it says so on screen instead of inventing a list.
 2. **The Remote boundary does not authenticate the calling agent.** The authority
    authenticates the caller instead, which is why mutations must go through it in team
    mode. Solo mode trusts the machine.

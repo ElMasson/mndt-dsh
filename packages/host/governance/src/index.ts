@@ -26,13 +26,15 @@ import {
   asRole,
   type Capability,
 } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
-import type { AgentRow, DecisionRow, GrantRow, TableStateRow, WorkspaceRow } from './types.ts'
+import type { AgentRow, ConnectorRow, DecisionRow, GrantRow, TableStateRow, WorkspaceRow } from './types.ts'
 
 export type * from './types.ts'
 
 import { JsonFileRbacStorage } from './storage.ts'
 import { AuthorityClient } from './authority-client.ts'
 import { loadTableView } from './cache.ts'
+// Type-only: pulls the Loader augmentation of Context.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 
 export { JsonFileRbacStorage, defaultStatePath } from './storage.ts'
 export { createAuthority, startAuthority } from './authority.ts'
@@ -44,7 +46,7 @@ export type { AuthorityOptions, AuthorityRequest, AuthorityResponse, AuthorityLi
 /** The Remote gateway: the browser's only way in. */
 export class GovernanceGateway extends TypertRemoteService {
   /** Both rosters carry a surface; requiring them keeps a miss loud. */
-  static inject = ['agentPresets', 'workspaceRegistry']
+  static inject = ['agentPresets', 'workspaceRegistry', 'loader']
 
   private readonly storage: RbacStorage
   private readonly controller: GovernanceController
@@ -91,6 +93,35 @@ export class GovernanceGateway extends TypertRemoteService {
     await this.ready
     const view = await loadTableView({ authority: this.authority, storage: this.storage })
     return { stale: view.stale, source: view.source, detail: view.detail }
+  }
+
+  /**
+   * The connector surface: MCP client entries the Loader actually mounted.
+   *
+   * Each MCP client instance connects to one server and reserves its name, so
+   * this reports what is running rather than what a config file claims. A module
+   * that is not an MCP client is not a connector and is left out.
+   * @returns one row per mounted MCP client entry.
+   */
+  @Remote('connectors')
+  async connectors(): Promise<ConnectorRow[]> {
+    const rows: ConnectorRow[] = []
+    for (const entry of this.ctx.loader.entries()) {
+      if (entry.options.group !== undefined) continue
+      const module = entry.options.name
+      if (!module.includes('mcp-client')) continue
+      const config: unknown = entry.options.config
+      const server = typeof config === 'object' && config !== null && 'serverName' in config && typeof config.serverName === 'string'
+        ? config.serverName
+        : module
+      rows.push({
+        entry: String(entry.id),
+        module,
+        server,
+        enabled: entry.disabled !== true,
+      })
+    }
+    return rows.sort((a, b) => a.server.localeCompare(b.server))
   }
 
   /**

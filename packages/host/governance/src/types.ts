@@ -56,3 +56,15 @@ export interface TableStateRow {
   /** Why the read was degraded, when it was. */
   readonly detail: string
 }
+
+/** One mounted connector, as it crosses the wire. */
+export interface ConnectorRow {
+  /** The Loader entry identity. */
+  readonly entry: string
+  /** The plugin module providing it. */
+  readonly module: string
+  /** The MCP server name it reserves, when the config declares one. */
+  readonly server: string
+  /** Whether the entry is enabled. */
+  readonly enabled: boolean
+}
