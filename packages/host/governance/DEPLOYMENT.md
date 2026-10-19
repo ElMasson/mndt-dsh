@@ -136,6 +136,21 @@ State these to the team, because they are real:
 4. **Sandbox and credentials** stay per machine: `packages/sandbox` and
    `packages/credentials`. Do not put secrets in shared config.
 
+## Pinning the distribution
+
+The team must run the artifacts that were verified, not whatever a rebuild happens
+to produce. Pin them once, then verify on each workstation before handing it over:
+
+```sh
+node packages/host/governance/scripts/distribution.mjs --write   # after a verified build
+node packages/host/governance/scripts/distribution.mjs --check   # exit 1 on any drift
+```
+
+The lock records both package versions and the SHA-256 of the five shipped files
+(host entry, both generated Typert faces, client entry, browser bundle). A rebuilt
+bundle that differs from the pin fails the check instead of reaching a machine.
+`distribution.lock.json` belongs in the distributed artifact set.
+
 ## Verification before handing it over
 
 ```sh
