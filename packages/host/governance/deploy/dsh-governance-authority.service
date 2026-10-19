@@ -1,0 +1,34 @@
+[Unit]
+Description=DSH governance authority (RBAC for the Duke team)
+Documentation=file:///opt/dsh/packages/host/governance/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dsh
+Group=dsh
+WorkingDirectory=/opt/dsh
+
+# The authority binds loopback only: TLS and SSO are the reverse proxy's job,
+# and the port must never be reachable from the network directly.
+Environment=DSH_GOVERNANCE_HOST=127.0.0.1
+Environment=DSH_GOVERNANCE_PORT=8787
+Environment=DSH_GOVERNANCE_TOKENS_FILE=/etc/dsh/tokens.json
+Environment=DSH_GOVERNANCE_STATE=/var/lib/dsh/governance/rbac.json
+Environment=DSH_GOVERNANCE_AUDIT=/var/lib/dsh/governance/audit.jsonl
+
+ExecStart=/usr/bin/pnpm exec tsx packages/host/governance/scripts/serve-authority.ts
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the process only needs its state directory and its token file.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsh/governance
+ReadOnlyPaths=/etc/dsh/tokens.json
+
+[Install]
+WantedBy=multi-user.target
