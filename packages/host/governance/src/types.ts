@@ -68,3 +68,19 @@ export interface ConnectorRow {
   /** Whether the entry is enabled. */
   readonly enabled: boolean
 }
+
+/** One automation, as it crosses the wire. */
+export interface AutomationRow {
+  /** Stable identity. */
+  readonly id: string
+  /** The owner; only that identity may read or modify it. */
+  readonly owner: string
+  /** The prompt to run. */
+  readonly prompt: string
+  /** Whether the scheduler should run it. */
+  readonly enabled: boolean
+  /** ISO-8601 creation instant. */
+  readonly createdAt: string
+  /** How often it runs, in minutes. */
+  readonly everyMinutes: number
+}

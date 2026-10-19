@@ -198,6 +198,23 @@ State these to the team, because they are real:
 4. **Sandbox and credentials** stay per machine: `packages/sandbox` and
    `packages/credentials`. Do not put secrets in shared config.
 
+## Automations
+
+An automation is a prompt owned by one person, stored on their workstation
+(`automations.json` next to the RBAC table). Nobody else can list, modify or run it:
+the Host filters by owner and refuses a foreign id.
+
+Execution goes through the only real path the harness exposes:
+
+1. `ctx.agents.create({ sessionId })` creates the agent that owns the run.
+2. `ctx.workflowEngine.start({ script, meta, parent })` runs `agent(prompt)` with that
+   agent as parent.
+3. The agent is disposed on every path, including when the script throws.
+
+A scheduled run is a timer on the workstation: if the machine is asleep, the run does
+not happen and the next tick does not replay it. Say that to the team rather than
+letting them believe the schedule is guaranteed.
+
 ## Pinning the distribution
 
 The team must run the artifacts that were verified, not whatever a rebuild happens

@@ -29,6 +29,11 @@ function fakeApi(overrides: Partial<TypertRemoteNamespaceMap['governance']> = {}
     agents: vi.fn(async () => ({ ok: true as const, value: [] })),
     workspaces: vi.fn(async () => ({ ok: true as const, value: [] })),
     connectors: vi.fn(async () => ({ ok: true as const, value: [] })),
+    automations: vi.fn(async () => ({ ok: true as const, value: [] })),
+    createAutomation: vi.fn(async () => ({ ok: true as const, value: { id: 'a1', owner: 'x', prompt: 'p', enabled: true, createdAt: 'now', everyMinutes: 60 } })),
+    setAutomationEnabled: vi.fn(async () => ({ ok: true as const, value: { allowed: true, reason: 'ok' } })),
+    deleteAutomation: vi.fn(async () => ({ ok: true as const, value: { allowed: true, reason: 'ok' } })),
+    runAutomationNow: vi.fn(async () => ({ ok: true as const, value: { allowed: true, reason: 'ran' } })),
     tableState: vi.fn(async () => ({ ok: true as const, value: { stale: false, source: 'local', detail: 'local table' } })),
     ...overrides,
   }

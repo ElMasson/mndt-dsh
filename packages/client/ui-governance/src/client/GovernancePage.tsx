@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
-import type { AgentRow, ConnectorRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/types'
+import type { AgentRow, AutomationRow, ConnectorRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/types'
 import type { GovernanceKey } from './locales.ts'
 
 /** Props handed by the slot registration. */
@@ -22,7 +22,7 @@ export interface GovernancePageProps {
 const TABS: readonly { key: GovernanceKey; id: string; wired: boolean }[] = [
   { key: 'tabConnectors', id: 'connectors', wired: true },
   { key: 'tabAgents', id: 'agents', wired: true },
-  { key: 'tabWorkflows', id: 'workflows', wired: false },
+  { key: 'tabWorkflows', id: 'workflows', wired: true },
   { key: 'tabRights', id: 'rights', wired: true },
   { key: 'tabSharing', id: 'sharing', wired: true },
 ]
@@ -45,6 +45,8 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const [agents, setAgents] = useState<AgentRow[]>([])
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
   const [connectors, setConnectors] = useState<ConnectorRow[]>([])
+  const [automations, setAutomations] = useState<AutomationRow[]>([])
+  const [prompt, setPrompt] = useState('')
   const [actor, setActor] = useState('')
   const [subject, setSubject] = useState('')
   const [role, setRole] = useState('viewer')
@@ -94,6 +96,42 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
     }
   }, [api, fail, t])
 
+  const loadAutomations = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await api.automations(actor)
+      if (result.ok) setAutomations(result.value)
+      else fail(failureText(result.error))
+    } catch (error) {
+      fail(error instanceof Error ? error.message : t('error'))
+    } finally {
+      setLoading(false)
+    }
+  }, [api, actor, fail, t])
+
+  const createAutomation = async (): Promise<void> => {
+    if (prompt.trim() === '') return
+    const result = await api.createAutomation(actor, prompt.trim())
+    if (result.ok) {
+      setFailed(false)
+      setNotice(t('accepted'))
+      setPrompt('')
+    } else {
+      fail(failureText(result.error))
+    }
+    await loadAutomations()
+  }
+
+  const runAutomation = async (row: AutomationRow): Promise<void> => {
+    const result = await api.runAutomationNow(actor, row.id)
+    if (result.ok) {
+      setFailed(false)
+      setNotice(`${t('accepted')}: ${result.value.reason}`)
+    } else {
+      fail(failureText(result.error))
+    }
+  }
+
   const loadConnectors = useCallback(async () => {
     setLoading(true)
     try {
@@ -125,7 +163,8 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
     if (active === 'agents') void loadAgents()
     if (active === 'sharing') void loadWorkspaces()
     if (active === 'connectors') void loadConnectors()
-  }, [active, loadGrants, loadState, loadAgents, loadConnectors, loadWorkspaces])
+    if (active === 'workflows') void loadAutomations()
+  }, [active, loadGrants, loadState, loadAgents, loadConnectors, loadAutomations, loadWorkspaces])
 
   const submitGrant = async (): Promise<void> => {
     if (subject.trim() === '') return
@@ -200,6 +239,44 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
               </tbody>
             </table>
           )
+      )}
+
+      {active === 'workflows' && (
+        <div>
+          <label>
+            {t('actor')}
+            <input value={actor} onChange={event => setActor(event.target.value)} placeholder="usr-id" />
+          </label>
+          <div>
+            <label>
+              Prompt
+              <input value={prompt} onChange={event => setPrompt(event.target.value)} />
+            </label>
+            <button onClick={() => void createAutomation()}>{t('submit')}</button>
+          </div>
+          {automations.length === 0
+            ? <p role="status">{t('empty')}</p>
+            : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Prompt</th>
+                    <th>{t('actions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {automations.map(row => (
+                    <tr key={row.id}>
+                      <td>{row.prompt}</td>
+                      <td>
+                        <button onClick={() => void runAutomation(row)}>{t('submit')}</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
       )}
 
       {active === 'connectors' && (

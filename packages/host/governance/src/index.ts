@@ -26,15 +26,25 @@ import {
   asRole,
   type Capability,
 } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
-import type { AgentRow, ConnectorRow, DecisionRow, GrantRow, TableStateRow, WorkspaceRow } from './types.ts'
+import type { AutomationRow, AgentRow, ConnectorRow, DecisionRow, GrantRow, TableStateRow, WorkspaceRow  } from './types.ts'
 
 export type * from './types.ts'
 
 import { JsonFileRbacStorage } from './storage.ts'
 import { AuthorityClient } from './authority-client.ts'
 import { loadTableView } from './cache.ts'
+import { AutomationService, JsonFileAutomationStorage } from './automations.ts'
+import { executeAutomation } from './automations-runner.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { randomUUID } from 'node:crypto'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+// Type-only: pulls the WorkflowEngine augmentation of Context.
+import type {} from '@deepseek-ai/dsh-workflow'
 // Type-only: pulls the Loader augmentation of Context.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 export { JsonFileRbacStorage, defaultStatePath } from './storage.ts'
 export { createAuthority, startAuthority } from './authority.ts'
@@ -46,9 +56,10 @@ export type { AuthorityOptions, AuthorityRequest, AuthorityResponse, AuthorityLi
 /** The Remote gateway: the browser's only way in. */
 export class GovernanceGateway extends TypertRemoteService {
   /** Both rosters carry a surface; requiring them keeps a miss loud. */
-  static inject = ['agentPresets', 'workspaceRegistry', 'loader']
+  static inject = ['agentPresets', 'workspaceRegistry', 'loader', 'agents', 'workflowEngine']
 
   private readonly storage: RbacStorage
+  private readonly automations: AutomationService
   private readonly controller: GovernanceController
   private readonly authority: AuthorityClient | undefined
   private readonly ready: Promise<void>
@@ -60,6 +71,7 @@ export class GovernanceGateway extends TypertRemoteService {
   constructor(ctx: Context, storage: RbacStorage = new JsonFileRbacStorage()) {
     super(ctx, 'governance')
     this.storage = storage
+    this.automations = new AutomationService(new JsonFileAutomationStorage(join(process.env.DSH_GOVERNANCE_HOME ?? join(homedir(), '.dsh', 'governance'), 'automations.json')))
     this.controller = new GovernanceController(storage)
     // Team mode: someone else decides, because only the authority can turn a
     // token into an identity. Solo mode keeps the local table.
@@ -122,6 +134,86 @@ export class GovernanceGateway extends TypertRemoteService {
       })
     }
     return rows.sort((a, b) => a.server.localeCompare(b.server))
+  }
+
+  /**
+   * The caller's automations.
+   * @param actor - the identity asking; only its own rows are returned.
+   * @returns its automations.
+   */
+  @Remote('automations')
+  async automationsList(actor: string): Promise<AutomationRow[]> {
+    const rows = await this.automations.list(actor)
+    return rows.map(row => ({ ...row, everyMinutes: 60 }))
+  }
+
+  /**
+   * Create an automation for the caller.
+   * @param actor - the owner.
+   * @param prompt - what to run.
+   * @returns the created row, or a refusal.
+   */
+  @Remote('createAutomation')
+  async createAutomation(actor: string, prompt: string): Promise<AutomationRow | DecisionRow> {
+    const created = await this.automations.create(actor, prompt)
+    if ('allowed' in created) return created
+    return { ...created, everyMinutes: 60 }
+  }
+
+  /**
+   * Enable or disable one of the caller's automations.
+   * @param actor - the identity asking.
+   * @param id - the automation.
+   * @param enabled - the new state.
+   * @returns the decision.
+   */
+  @Remote('setAutomationEnabled')
+  async setAutomationEnabled(actor: string, id: string, enabled: boolean): Promise<DecisionRow> {
+    return this.automations.setEnabled(actor, id, enabled)
+  }
+
+  /**
+   * Delete one of the caller's automations.
+   * @param actor - the identity asking.
+   * @param id - the automation.
+   * @returns the decision.
+   */
+  @Remote('deleteAutomation')
+  async deleteAutomation(actor: string, id: string): Promise<DecisionRow> {
+    return this.automations.remove(actor, id)
+  }
+
+  /**
+   * Run one automation now, through the real execution path.
+   * @param actor - the identity asking; must own the automation.
+   * @param id - the automation.
+   * @returns the decision, with the runner's refusal reason when it failed.
+   */
+  @Remote('runAutomationNow')
+  async runAutomationNow(actor: string, id: string): Promise<DecisionRow> {
+    const rows = await this.automations.list(actor)
+    const automation = rows.find(row => row.id === id)
+    if (automation === undefined) return { allowed: false, reason: `no automation ${id} for this owner` }
+    let created: AgentHandle | undefined
+    const outcome = await executeAutomation({
+      createAgent: async () => {
+        const sessionId = brandString<SessionId>(randomUUID())
+        created = await this.ctx.agents.create({ sessionId })
+        return { dispose: () => created?.dispose() ?? Promise.resolve() }
+      },
+      startWorkflow: async (_handle, prompt) => {
+        if (created === undefined) throw new Error('the agent was not created')
+        const run = this.ctx.workflowEngine.start({
+          script: `return await agent(${JSON.stringify(prompt)})`,
+          meta: { name: 'automation', description: 'Scheduled user automation' },
+          parent: created.agent,
+        })
+        return await run.result
+      },
+    }, automation)
+    return outcome.ok
+      ? { allowed: true, reason: 'automation ran' }
+      : { allowed: false, reason: outcome.reason ?? 'automation failed' }
   }
 
   /**
