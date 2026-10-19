@@ -33,8 +33,9 @@ export type * from './types.ts'
 import { JsonFileRbacStorage } from './storage.ts'
 import { AuthorityClient } from './authority-client.ts'
 import { loadTableView } from './cache.ts'
-import { AutomationService, JsonFileAutomationStorage } from './automations.ts'
+import { AutomationService, JsonFileAutomationStorage, type Automation } from './automations.ts'
 import { executeAutomation } from './automations-runner.ts'
+import { AutomationScheduler } from './automations-scheduler.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { randomUUID } from 'node:crypto'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -60,6 +61,7 @@ export class GovernanceGateway extends TypertRemoteService {
 
   private readonly storage: RbacStorage
   private readonly automations: AutomationService
+  private readonly scheduler: AutomationScheduler<Automation>
   private readonly controller: GovernanceController
   private readonly authority: AuthorityClient | undefined
   private readonly ready: Promise<void>
@@ -72,6 +74,18 @@ export class GovernanceGateway extends TypertRemoteService {
     super(ctx, 'governance')
     this.storage = storage
     this.automations = new AutomationService(new JsonFileAutomationStorage(join(process.env.DSH_GOVERNANCE_HOME ?? join(homedir(), '.dsh', 'governance'), 'automations.json')))
+    this.scheduler = new AutomationScheduler({
+      list: () => this.automations.all(),
+      run: async (row) => {
+        const outcome = await this.executeRow(row)
+        if (!outcome.allowed) throw new Error(outcome.reason)
+      },
+    })
+    // The timer lives and dies with the plugin fiber.
+    this.ctx.effect(() => {
+      this.scheduler.start()
+      return () => { this.scheduler.stop() }
+    }, 'governance: automation scheduler')
     this.controller = new GovernanceController(storage)
     // Team mode: someone else decides, because only the authority can turn a
     // token into an identity. Solo mode keeps the local table.
@@ -137,6 +151,34 @@ export class GovernanceGateway extends TypertRemoteService {
   }
 
   /**
+   * Execute one automation through the real path.
+   * @param automation - the row to run.
+   * @returns the decision, with the runner's reason when it failed.
+   */
+  private async executeRow(automation: Automation): Promise<DecisionRow> {
+    let created: AgentHandle | undefined
+    const outcome = await executeAutomation({
+      createAgent: async () => {
+        const sessionId = brandString<SessionId>(randomUUID())
+        created = await this.ctx.agents.create({ sessionId })
+        return { dispose: () => created?.dispose() ?? Promise.resolve() }
+      },
+      startWorkflow: async (_handle, prompt) => {
+        if (created === undefined) throw new Error('the agent was not created')
+        const run = this.ctx.workflowEngine.start({
+          script: `return await agent(${JSON.stringify(prompt)})`,
+          meta: { name: 'automation', description: 'Scheduled user automation' },
+          parent: created.agent,
+        })
+        return await run.result
+      },
+    }, automation)
+    return outcome.ok
+      ? { allowed: true, reason: 'automation ran' }
+      : { allowed: false, reason: outcome.reason ?? 'automation failed' }
+  }
+
+  /**
    * The caller's automations.
    * @param actor - the identity asking; only its own rows are returned.
    * @returns its automations.
@@ -194,26 +236,7 @@ export class GovernanceGateway extends TypertRemoteService {
     const rows = await this.automations.list(actor)
     const automation = rows.find(row => row.id === id)
     if (automation === undefined) return { allowed: false, reason: `no automation ${id} for this owner` }
-    let created: AgentHandle | undefined
-    const outcome = await executeAutomation({
-      createAgent: async () => {
-        const sessionId = brandString<SessionId>(randomUUID())
-        created = await this.ctx.agents.create({ sessionId })
-        return { dispose: () => created?.dispose() ?? Promise.resolve() }
-      },
-      startWorkflow: async (_handle, prompt) => {
-        if (created === undefined) throw new Error('the agent was not created')
-        const run = this.ctx.workflowEngine.start({
-          script: `return await agent(${JSON.stringify(prompt)})`,
-          meta: { name: 'automation', description: 'Scheduled user automation' },
-          parent: created.agent,
-        })
-        return await run.result
-      },
-    }, automation)
-    return outcome.ok
-      ? { allowed: true, reason: 'automation ran' }
-      : { allowed: false, reason: outcome.reason ?? 'automation failed' }
+    return this.executeRow(automation)
   }
 
   /**

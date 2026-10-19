@@ -60,6 +60,17 @@ describe('ownership', () => {
   })
 })
 
+describe('scheduler access', () => {
+  it('lists every owner\'s automations through all(), unlike list()', async () => {
+    const service = new AutomationService(new MemoryAutomationStorage(), now)
+    await service.create('stephane', 'one')
+    await service.create('sara', 'two')
+
+    await expect(service.list('stephane')).resolves.toHaveLength(1)
+    await expect(service.all()).resolves.toHaveLength(2)
+  })
+})
+
 describe('lifecycle', () => {
   it('creates an enabled automation with a stable identity', async () => {
     const service = new AutomationService(new MemoryAutomationStorage(), now)

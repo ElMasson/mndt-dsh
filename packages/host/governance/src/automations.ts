@@ -128,6 +128,15 @@ export class AutomationService {
   }
 
   /**
+   * Every automation, for the scheduler only.
+   * @returns all rows, unfiltered.
+   */
+  async all(): Promise<Automation[]> {
+    const rows = await this.#load()
+    return rows.map(row => ({ ...row }))
+  }
+
+  /**
    * Create an automation for one identity.
    * @param owner - the identity creating it.
    * @param prompt - what to run.
