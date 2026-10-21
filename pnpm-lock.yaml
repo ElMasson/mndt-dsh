@@ -2787,6 +2787,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-goal':
         specifier: workspace:*
         version: link:../../client/ui-goal
+      '@deepseek-ai/dsh-client-ui-governance':
+        specifier: workspace:*
+        version: link:../../client/ui-governance
       '@deepseek-ai/dsh-client-ui-input-trigger':
         specifier: workspace:*
         version: link:../../client/ui-input-trigger
@@ -2949,6 +2952,9 @@ importers:
       '@deepseek-ai/dsh-host-frontend-static':
         specifier: workspace:*
         version: link:../../host/frontend-static
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-host-open-in-app':
         specifier: workspace:*
         version: link:../../host/open-in-app
@@ -10603,6 +10609,15 @@ importers:
       '@deepseek-ai/dsh-agent-preset-registry':
         specifier: workspace:*
         version: link:../../preset/agent-preset-registry
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:*
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../../core/session
+      '@deepseek-ai/dsh-workflow':
+        specifier: workspace:*
+        version: link:../../workflow/workflow
       '@deepseek-ai/dsh-workspace':
         specifier: workspace:*
         version: link:../../workspace/workspace
