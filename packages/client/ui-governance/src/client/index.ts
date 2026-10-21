@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: pulls the generated Remote projection that types ctx.remote.governance.
 import type {} from '@deepseek-ai/dsh-host-governance/remote'
+import { GovernanceIcon } from './GovernanceIcon.tsx'
 import { GovernancePage } from './GovernancePage.tsx'
 import { installGovernanceStyles } from './styles.ts'
 import { en, zh } from './locales.ts'
@@ -71,11 +72,20 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(installGovernanceStyles, 'ui-governance: styles')
   const t = ctx.locale.bind(NS)
   const api = governanceFace(ctx)
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-    name: 'sidebar.panellist',
-    id: 'governance',
-    priority: 0,
+  // The page lives in the main content area, keyed by the same id the sidebar
+  // entry carries: clicking that entry selects this key. Rendering the page from
+  // the panellist row itself is what confined it to the sidebar column.
+  ctx.slots.inject('main', () => ctx.slots.register({
+    name: 'main',
+    key: 'governance',
     locale: NS,
     inject: () => ({ t, api }),
   }, GovernancePage))
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+    name: 'sidebar.panellist',
+    id: 'governance',
+    order: 20,
+    locale: NS,
+    label: () => t('title'),
+  }, GovernanceIcon))
 }

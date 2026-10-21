@@ -26,10 +26,13 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 28px 32px 40px;
+  padding: 32px 40px 48px;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
   min-height: 100%;
   box-sizing: border-box;
-  background: var(--gov-canvas);
+  background: transparent;
   color: var(--gov-ink);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   font-size: 13px;
@@ -60,7 +63,7 @@ const CSS = `
 
 .gov-body {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
