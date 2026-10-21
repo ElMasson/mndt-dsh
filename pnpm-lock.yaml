@@ -1433,6 +1433,9 @@ importers:
       '@deepseek-ai/dsh-goal':
         specifier: workspace:*
         version: link:../../goal/goal
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-host-plugin-inventory':
         specifier: workspace:*
         version: link:../../host/plugin-inventory
