@@ -15,6 +15,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the AgentPresetRegistry augmentation of Context.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+// Type-only: pulls the default-model selection a programmatic Agent route reads.
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 // Type-only: pulls the WorkspaceRegistry augmentation of Context.
 import type {} from '@deepseek-ai/dsh-workspace'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -39,6 +41,8 @@ import { AutomationScheduler } from './automations-scheduler.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { randomUUID } from 'node:crypto'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+// Type-only: pulls the SessionStore augmentation and its `session/event` feed.
+import type {} from '@deepseek-ai/dsh-session'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 // Type-only: pulls the WorkflowEngine augmentation of Context.
 import type {} from '@deepseek-ai/dsh-workflow'
@@ -167,7 +171,17 @@ export class GovernanceGateway extends TypertRemoteService {
     const outcome = await executeAutomation({
       createAgent: async () => {
         const sessionId = brandString<SessionId>(randomUUID())
-        created = await this.ctx.agents.create({ sessionId })
+        // A programmatic root agent has no parent to inherit a route from. Take
+        // the deployment default the way the headless runner does, or the loop
+        // has no provider/model to build a request with and the `{{model}}`
+        // prompt variable stays empty (the turn then fails before any call).
+        const selection = this.ctx.get('agentDefaultModel')?.currentSelection()
+        created = await this.ctx.agents.create({
+          sessionId,
+          ...selection === undefined
+            ? {}
+            : { agentOptions: { provider: selection.provider, model: selection.model } },
+        })
         return { dispose: () => created?.dispose() ?? Promise.resolve() }
       },
       startWorkflow: async (_handle, prompt) => {
@@ -184,7 +198,32 @@ export class GovernanceGateway extends TypertRemoteService {
           meta: { name: 'automation', description: 'Scheduled user automation' },
           parent: created.agent,
         })
-        return await run.result
+        // A settled run only reports the script's own stop reason: the engine's
+        // `agent()` resolves `null` when a child run fails, so a completed script
+        // can hide a failed turn. Read the two contracts that do report it —
+        // `workflow/agent-end` for the child outcome and the child session's
+        // `turn/end` for the real reason — instead of trusting the label.
+        const childSessionId = created.agent.session.header.id
+        const failures: string[] = []
+        const stopAgentEnd = this.ctx.on('workflow/agent-end', (info, agent) => {
+          if (info.id !== run.id || agent.outcome === 'completed') return
+          failures.push(`agent() call ${agent.seq} (${JSON.stringify(agent.label)}) ended ${agent.outcome}`)
+        })
+        const stopTurnEnd = this.ctx.on('session/event', (session, event) => {
+          if (event.type !== 'turn/end') return
+          if (session.header.parentSession !== childSessionId) return
+          const { reason } = event.data
+          if (reason.kind !== 'error') return
+          failures.push(`the agent turn failed: ${reason.error.message}`)
+        })
+        try {
+          const settled = await run.result
+          if (failures.length > 0) throw new Error(failures.join('; '))
+          return settled
+        } finally {
+          stopAgentEnd()
+          stopTurnEnd()
+        }
       },
     }, automation)
     return outcome.ok
