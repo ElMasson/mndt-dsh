@@ -38,6 +38,7 @@ import { loadTableView } from './cache.ts'
 import { AutomationService, JsonFileAutomationStorage, type Automation } from './automations.ts'
 import { executeAutomation } from './automations-runner.ts'
 import { AutomationScheduler } from './automations-scheduler.ts'
+import { failureOfAgentEnd, failureOfTurnEnd } from './automations-failure.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { randomUUID } from 'node:crypto'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -206,15 +207,19 @@ export class GovernanceGateway extends TypertRemoteService {
         const childSessionId = created.agent.session.header.id
         const failures: string[] = []
         const stopAgentEnd = this.ctx.on('workflow/agent-end', (info, agent) => {
-          if (info.id !== run.id || agent.outcome === 'completed') return
-          failures.push(`agent() call ${agent.seq} (${JSON.stringify(agent.label)}) ended ${agent.outcome}`)
+          if (info.id !== run.id) return
+          const failure = failureOfAgentEnd({ outcome: agent.outcome, seq: agent.seq, label: agent.label })
+          if (failure !== undefined) failures.push(failure)
         })
         const stopTurnEnd = this.ctx.on('session/event', (session, event) => {
           if (event.type !== 'turn/end') return
-          if (session.header.parentSession !== childSessionId) return
           const { reason } = event.data
-          if (reason.kind !== 'error') return
-          failures.push(`the agent turn failed: ${reason.error.message}`)
+          const failure = failureOfTurnEnd(childSessionId, {
+            parentSession: session.header.parentSession,
+            kind: reason.kind,
+            message: reason.kind === 'error' ? reason.error.message : undefined,
+          })
+          if (failure !== undefined) failures.push(failure)
         })
         try {
           const settled = await run.result
