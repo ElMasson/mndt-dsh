@@ -5,6 +5,9 @@
  * forwards what the user asks. A Host refusal is shown with its reason rather
  * than swallowed: turning a refusal into an empty table would be exactly the
  * silent absence this page exists to avoid.
+ *
+ * Presentation follows the mndt shell: offwhite canvas, white cards, warm border,
+ * small uppercase labels, pill badges, and a nav column on the left.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
@@ -19,13 +22,20 @@ export interface GovernancePageProps {
   api: TypertRemoteNamespaceMap['governance']
 }
 
-const TABS: readonly { key: GovernanceKey; id: string; wired: boolean }[] = [
-  { key: 'tabConnectors', id: 'connectors', wired: true },
-  { key: 'tabAgents', id: 'agents', wired: true },
-  { key: 'tabWorkflows', id: 'workflows', wired: true },
-  { key: 'tabRights', id: 'rights', wired: true },
-  { key: 'tabSharing', id: 'sharing', wired: true },
+const TABS: readonly { key: GovernanceKey; id: string }[] = [
+  { key: 'tabConnectors', id: 'connectors' },
+  { key: 'tabAgents', id: 'agents' },
+  { key: 'tabWorkflows', id: 'workflows' },
+  { key: 'tabRights', id: 'rights' },
+  { key: 'tabSharing', id: 'sharing' },
 ]
+
+const ROLE_LABELS: Readonly<Record<string, GovernanceKey>> = {
+  viewer: 'roleViewer',
+  operator: 'roleOperator',
+  admin: 'roleAdmin',
+  owner: 'roleOwner',
+}
 
 /** @param failure - the Host failure. @returns the text to show. */
 function failureText(failure: { code?: unknown; message?: unknown }): string {
@@ -55,23 +65,29 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const [failed, setFailed] = useState(false)
   const [stale, setStale] = useState<string | null>(null)
 
-  const fail = useCallback((text: string) => {
-    setFailed(true)
-    setNotice(`${t('refused')}: ${text}`)
-  }, [t])
+  const fail = useCallback((text: string) => { setFailed(true); setNotice(text) }, [])
 
-  const loadGrants = useCallback(async () => {
+  const load = useCallback(async <T,>(
+    read: () => Promise<{ ok: true; value: T } | { ok: false; error: { code?: unknown; message?: unknown } }>,
+    apply: (value: T) => void,
+  ): Promise<void> => {
     setLoading(true)
     try {
-      const result = await api.list()
-      if (result.ok) setRows(result.value)
+      const result = await read()
+      if (result.ok) apply(result.value)
       else fail(failureText(result.error))
     } catch (error) {
       fail(error instanceof Error ? error.message : t('error'))
     } finally {
       setLoading(false)
     }
-  }, [api, fail, t])
+  }, [fail, t])
+
+  const loadGrants = useCallback(() => load(() => api.list(), setRows), [api, load])
+  const loadAgents = useCallback(() => load(() => api.agents(), setAgents), [api, load])
+  const loadWorkspaces = useCallback(() => load(() => api.workspaces(), setWorkspaces), [api, load])
+  const loadConnectors = useCallback(() => load(() => api.connectors(), setConnectors), [api, load])
+  const loadAutomations = useCallback(() => load(() => api.automations(actor), setAutomations), [actor, api, load])
 
   const loadState = useCallback(async () => {
     try {
@@ -82,81 +98,6 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
       // Staleness is a status, not a dependency: losing it must not hide the table.
     }
   }, [api])
-
-  const loadAgents = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.agents()
-      if (result.ok) setAgents(result.value)
-      else fail(failureText(result.error))
-    } catch (error) {
-      fail(error instanceof Error ? error.message : t('error'))
-    } finally {
-      setLoading(false)
-    }
-  }, [api, fail, t])
-
-  const loadAutomations = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.automations(actor)
-      if (result.ok) setAutomations(result.value)
-      else fail(failureText(result.error))
-    } catch (error) {
-      fail(error instanceof Error ? error.message : t('error'))
-    } finally {
-      setLoading(false)
-    }
-  }, [api, actor, fail, t])
-
-  const createAutomation = async (): Promise<void> => {
-    if (prompt.trim() === '') return
-    const result = await api.createAutomation(actor, prompt.trim(), 60)
-    if (result.ok) {
-      setFailed(false)
-      setNotice(t('accepted'))
-      setPrompt('')
-    } else {
-      fail(failureText(result.error))
-    }
-    await loadAutomations()
-  }
-
-  const runAutomation = async (row: AutomationRow): Promise<void> => {
-    const result = await api.runAutomationNow(actor, row.id)
-    if (result.ok) {
-      setFailed(false)
-      setNotice(`${t('accepted')}: ${result.value.reason}`)
-    } else {
-      fail(failureText(result.error))
-    }
-  }
-
-  const loadConnectors = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.connectors()
-      if (result.ok) setConnectors(result.value)
-      else fail(failureText(result.error))
-    } catch (error) {
-      fail(error instanceof Error ? error.message : t('error'))
-    } finally {
-      setLoading(false)
-    }
-  }, [api, fail, t])
-
-  const loadWorkspaces = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.workspaces()
-      if (result.ok) setWorkspaces(result.value)
-      else fail(failureText(result.error))
-    } catch (error) {
-      fail(error instanceof Error ? error.message : t('error'))
-    } finally {
-      setLoading(false)
-    }
-  }, [api, fail, t])
 
   useEffect(() => {
     if (active === 'rights') { void loadGrants(); void loadState() }
@@ -169,221 +110,233 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const submitGrant = async (): Promise<void> => {
     if (subject.trim() === '') return
     const result = await api.setGrant(actor, { subject: subject.trim(), role })
-    if (result.ok) {
-      setFailed(false)
-      setNotice(`${t('accepted')}: ${result.value.reason}`)
-      setSubject('')
-    } else {
-      fail(failureText(result.error))
-    }
+    if (result.ok) { setFailed(false); setNotice(result.value.reason); setSubject('') } else fail(failureText(result.error))
     await loadGrants()
   }
 
   const revoke = async (row: GrantRow): Promise<void> => {
     const result = await api.removeGrant(actor, row.subject, row.scope)
-    if (result.ok) {
-      setFailed(false)
-      setNotice(`${t('accepted')}: ${result.value.reason}`)
-    } else {
-      fail(failureText(result.error))
-    }
+    if (result.ok) { setFailed(false); setNotice(result.value.reason) } else fail(failureText(result.error))
     await loadGrants()
   }
 
-  const tab = TABS.find(item => item.id === active)
+  const createAutomation = async (): Promise<void> => {
+    if (prompt.trim() === '') return
+    const result = await api.createAutomation(actor, prompt.trim(), 60)
+    if (result.ok) { setFailed(false); setNotice(t('accepted')); setPrompt('') } else fail(failureText(result.error))
+    await loadAutomations()
+  }
+
+  const runAutomation = async (row: AutomationRow): Promise<void> => {
+    const result = await api.runAutomationNow(actor, row.id)
+    if (result.ok) { setFailed(false); setNotice(result.value.reason) } else fail(failureText(result.error))
+  }
+
+  /** @param value - number of rows. @returns a pill carrying it. */
+  const countPill = (value: number): JSX.Element => (
+    <span className="gov-pill" data-tone={value > 0 ? 'ok' : undefined}>{value}</span>
+  )
 
   return (
-    <section className="dsh-governance" aria-label={t('title')}>
-      <header>
-        <h1>{t('title')}</h1>
-        <p>{t('subtitle')}</p>
+    <section className="gov" aria-label={t('title')}>
+      <header className="gov-head">
+        <div>
+          <h1 className="gov-title">{t('title')}</h1>
+          <p className="gov-sub">{t('subtitle')}</p>
+        </div>
+        {stale === null
+          ? <span className="gov-pill" data-tone="ok">{t('liveTable')}</span>
+          : <span className="gov-pill" data-tone="warn">{t('staleTable')}</span>}
       </header>
 
-      <nav role="tablist">
-        {TABS.map(item => (
-          <button
-            key={item.id}
-            role="tab"
-            aria-selected={active === item.id}
-            onClick={() => setActive(item.id)}
-          >
-            {t(item.key)}
-          </button>
-        ))}
-      </nav>
+      <div className="gov-body">
+        <nav className="gov-nav" aria-label={t('title')}>
+          {TABS.map(tab => (
+            <button key={tab.id} className="gov-nav-item" aria-selected={active === tab.id} onClick={() => setActive(tab.id)}>
+              <span className="gov-nav-dot" aria-hidden="true" />
+              {t(tab.key)}
+            </button>
+          ))}
+        </nav>
 
-      {loading && <p role="status">{t('loading')}</p>}
-      {stale !== null && <p role="alert" data-stale="true">{t('staleTable')}: {stale}</p>}
-      {notice !== null && <p role="status" data-refused={failed}>{notice}</p>}
+        <div className="gov-panel">
+          {loading && <p className="gov-status">{t('loading')}</p>}
+          {stale !== null && (
+            <div className="gov-banner" data-stale="true">
+              <strong>{t('staleTable')}</strong>
+              <span>{stale}</span>
+            </div>
+          )}
+          {notice !== null && (
+            <div className="gov-banner" data-tone={failed ? 'bad' : undefined} role="status">
+              <span>{notice}</span>
+            </div>
+          )}
 
-      {tab !== undefined && !tab.wired && <p role="status">{t('notWired')}</p>}
+          {active === 'rights' && (
+            <>
+              <div className="gov-card">
+                <div className="gov-card-head">
+                  <h2 className="gov-card-title">{t('tabRights')}</h2>
+                  {countPill(rows.length)}
+                </div>
+                <div className="gov-form">
+                  <label className="gov-field">
+                    <span className="gov-label">{t('actor')}</span>
+                    <input className="gov-input" value={actor} placeholder="usr-id" onChange={event => setActor(event.target.value)} />
+                  </label>
+                  <label className="gov-field">
+                    <span className="gov-label">{t('subject')}</span>
+                    <input className="gov-input" value={subject} onChange={event => setSubject(event.target.value)} />
+                  </label>
+                  <label className="gov-field">
+                    <span className="gov-label">{t('role')}</span>
+                    <select className="gov-select" value={role} onChange={event => setRole(event.target.value)}>
+                      <option value="viewer">{t('roleViewer')}</option>
+                      <option value="operator">{t('roleOperator')}</option>
+                      <option value="admin">{t('roleAdmin')}</option>
+                      <option value="owner">{t('roleOwner')}</option>
+                    </select>
+                  </label>
+                  <button className="gov-button" data-variant="primary" onClick={() => void submitGrant()}>{t('submit')}</button>
+                  <span className="gov-status">{t('actorHint')}</span>
+                </div>
+              </div>
 
-      {active === 'agents' && (
-        agents.length === 0
-          ? <p role="status">{t('empty')}</p>
-          : (
-            <table>
-              <thead>
-                <tr>
-                  <th>{t('subject')}</th>
-                  <th>{t('role')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agents.map(agent => (
-                  <tr key={agent.id}>
-                    <td>{agent.id}</td>
-                    <td>{agent.name}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-      )}
+              <div className="gov-card">
+                {rows.length === 0
+                  ? <div className="gov-empty">{t('empty')}</div>
+                  : (
+                    <>
+                      <div className="gov-row-head">
+                        <span>{t('subject')}</span><span>{t('role')}</span><span>{t('scope')}</span><span>{t('actions')}</span>
+                      </div>
+                      <div className="gov-rows">
+                        {rows.map(row => (
+                          <div className="gov-row" key={`${row.subject}:${row.scope ?? '*'}`}>
+                            <span className="gov-cell gov-mono">{row.subject}</span>
+                            <span className="gov-cell">{t(ROLE_LABELS[row.role] ?? 'roleViewer')}</span>
+                            <span className="gov-cell gov-muted">{row.scope ?? t('global')}</span>
+                            <button className="gov-button" data-variant="quiet" onClick={() => void revoke(row)}>{t('revoke')}</button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+              </div>
+            </>
+          )}
 
-      {active === 'workflows' && (
-        <div>
-          <label>
-            {t('actor')}
-            <input value={actor} onChange={event => setActor(event.target.value)} placeholder="usr-id" />
-          </label>
-          <div>
-            <label>
-              {t('promptLabel')}
-              <input value={prompt} onChange={event => setPrompt(event.target.value)} />
-            </label>
-            <button onClick={() => void createAutomation()}>{t('submit')}</button>
-          </div>
-          {automations.length === 0
-            ? <p role="status">{t('empty')}</p>
-            : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t('promptLabel')}</th>
-                    <th>{t('actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {automations.map(row => (
-                    <tr key={row.id}>
-                      <td>{row.prompt}</td>
-                      <td>
-                        <button onClick={() => void runAutomation(row)}>{t('submit')}</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+          {active === 'agents' && (
+            <div className="gov-card">
+              <div className="gov-card-head"><h2 className="gov-card-title">{t('tabAgents')}</h2>{countPill(agents.length)}</div>
+              {agents.length === 0
+                ? <div className="gov-empty">{t('empty')}</div>
+                : (
+                  <>
+                    <div className="gov-row-head" data-columns="2"><span>{t('subject')}</span><span>{t('role')}</span></div>
+                    <div className="gov-rows">
+                      {agents.map(agent => (
+                        <div className="gov-row" data-columns="2" key={agent.id}>
+                          <span className="gov-cell gov-mono">{agent.id}</span>
+                          <span className="gov-cell">{agent.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+            </div>
+          )}
+
+          {active === 'sharing' && (
+            <div className="gov-card">
+              <div className="gov-card-head"><h2 className="gov-card-title">{t('tabSharing')}</h2>{countPill(workspaces.length)}</div>
+              {workspaces.length === 0
+                ? <div className="gov-empty">{t('empty')}</div>
+                : (
+                  <>
+                    <div className="gov-row-head" data-columns="2"><span>{t('subject')}</span><span>{t('scope')}</span></div>
+                    <div className="gov-rows">
+                      {workspaces.map(space => (
+                        <div className="gov-row" data-columns="2" key={space.id}>
+                          <span className="gov-cell">{space.title}</span>
+                          <span className="gov-cell gov-mono gov-muted">{space.path}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+            </div>
+          )}
+
+          {active === 'connectors' && (
+            <div className="gov-card">
+              <div className="gov-card-head"><h2 className="gov-card-title">{t('tabConnectors')}</h2>{countPill(connectors.length)}</div>
+              {connectors.length === 0
+                ? <div className="gov-empty">{t('empty')}</div>
+                : (
+                  <>
+                    <div className="gov-row-head" data-columns="3">
+                      <span>{t('subject')}</span><span>{t('scope')}</span><span>{t('actions')}</span>
+                    </div>
+                    <div className="gov-rows">
+                      {connectors.map(connector => (
+                        <div className="gov-row" data-columns="3" key={connector.entry}>
+                          <span className="gov-cell">{connector.server}</span>
+                          <span className="gov-cell gov-mono gov-muted">{connector.module}</span>
+                          <span className="gov-cell">
+                            <span className="gov-pill" data-tone={connector.enabled ? 'ok' : undefined}>
+                              {connector.enabled ? t('connectorEnabled') : t('connectorDisabled')}
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+            </div>
+          )}
+
+          {active === 'workflows' && (
+            <>
+              <div className="gov-card">
+                <div className="gov-card-head"><h2 className="gov-card-title">{t('tabWorkflows')}</h2>{countPill(automations.length)}</div>
+                <div className="gov-form">
+                  <label className="gov-field">
+                    <span className="gov-label">{t('actor')}</span>
+                    <input className="gov-input" value={actor} placeholder="usr-id" onChange={event => setActor(event.target.value)} />
+                  </label>
+                  <label className="gov-field" style={{ flex: '1 1 320px' }}>
+                    <span className="gov-label">{t('promptLabel')}</span>
+                    <input className="gov-input" value={prompt} onChange={event => setPrompt(event.target.value)} />
+                  </label>
+                  <button className="gov-button" data-variant="primary" onClick={() => void createAutomation()}>{t('submit')}</button>
+                </div>
+              </div>
+
+              <div className="gov-card">
+                {automations.length === 0
+                  ? <div className="gov-empty">{t('empty')}</div>
+                  : (
+                    <>
+                      <div className="gov-row-head" data-columns="2"><span>{t('promptLabel')}</span><span>{t('actions')}</span></div>
+                      <div className="gov-rows">
+                        {automations.map(row => (
+                          <div className="gov-row" data-columns="2" key={row.id}>
+                            <span className="gov-cell">{row.prompt}</span>
+                            <span className="gov-cell">
+                              <button className="gov-button" onClick={() => void runAutomation(row)}>{t('run')}</button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+              </div>
+            </>
+          )}
         </div>
-      )}
-
-      {active === 'connectors' && (
-        connectors.length === 0
-          ? <p role="status">{t('empty')}</p>
-          : (
-            <table>
-              <thead>
-                <tr>
-                  <th>{t('subject')}</th>
-                  <th>{t('scope')}</th>
-                  <th>{t('actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {connectors.map(connector => (
-                  <tr key={connector.entry}>
-                    <td>{connector.server}</td>
-                    <td>{connector.module}</td>
-                    <td>{connector.enabled ? t('connectorEnabled') : t('connectorDisabled')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-      )}
-
-      {active === 'sharing' && (
-        workspaces.length === 0
-          ? <p role="status">{t('empty')}</p>
-          : (
-            <table>
-              <thead>
-                <tr>
-                  <th>{t('subject')}</th>
-                  <th>{t('scope')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workspaces.map(space => (
-                  <tr key={space.id}>
-                    <td>{space.title}</td>
-                    <td>{space.path}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-      )}
-
-      {active === 'rights' && (
-        <div>
-          <label>
-            {t('actor')}
-            <input
-              value={actor}
-              onChange={event => setActor(event.target.value)}
-              placeholder="usr-id"
-            />
-          </label>
-          <small>{t('actorHint')}</small>
-
-          <div>
-            <label>
-              {t('subject')}
-              <input value={subject} onChange={event => setSubject(event.target.value)} />
-            </label>
-            <label>
-              {t('role')}
-              <select value={role} onChange={event => setRole(event.target.value)}>
-                <option value="viewer">{t('roleViewer')}</option>
-                <option value="operator">{t('roleOperator')}</option>
-                <option value="admin">{t('roleAdmin')}</option>
-                <option value="owner">{t('roleOwner')}</option>
-              </select>
-            </label>
-            <button onClick={() => void submitGrant()}>{t('submit')}</button>
-          </div>
-
-          {!loading && rows.length === 0
-            ? <p role="status">{t('empty')}</p>
-            : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t('subject')}</th>
-                    <th>{t('role')}</th>
-                    <th>{t('scope')}</th>
-                    <th>{t('actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(row => (
-                    <tr key={`${row.subject}:${row.scope ?? '*'}`}>
-                      <td>{row.subject}</td>
-                      <td>{row.role}</td>
-                      <td>{row.scope ?? t('global')}</td>
-                      <td>
-                        <button onClick={() => void revoke(row)}>{t('revoke')}</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-        </div>
-      )}
+      </div>
     </section>
   )
 }

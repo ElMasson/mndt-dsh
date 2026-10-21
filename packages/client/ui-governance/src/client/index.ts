@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: pulls the generated Remote projection that types ctx.remote.governance.
 import type {} from '@deepseek-ai/dsh-host-governance/remote'
 import { GovernancePage } from './GovernancePage.tsx'
+import { installGovernanceStyles } from './styles.ts'
 import { en, zh } from './locales.ts'
 import type { GovernanceKey } from './locales.ts'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
@@ -67,6 +68,7 @@ const NS = 'governance'
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-governance: dictionaries')
+  ctx.effect(installGovernanceStyles, 'ui-governance: styles')
   const t = ctx.locale.bind(NS)
   const api = governanceFace(ctx)
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({

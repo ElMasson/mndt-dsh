@@ -24,6 +24,8 @@ export const en = {
   global: 'everything',
   notWired: 'This surface is not wired yet.',
   refused: 'Refused by the Host',
+  liveTable: 'Live table',
+  run: 'Run',
   staleTable: 'Cached table, the authority is unreachable',
   accepted: 'Accepted',
   promptLabel: 'Prompt',
