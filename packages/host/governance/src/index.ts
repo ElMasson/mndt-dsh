@@ -56,9 +56,6 @@ export type { AuthorityOptions, AuthorityRequest, AuthorityResponse, AuthorityLi
 
 /** The Remote gateway: the browser's only way in. */
 export class GovernanceGateway extends TypertRemoteService {
-  /** Both rosters carry a surface; requiring them keeps a miss loud. */
-  static inject = ['agentPresets', 'workspaceRegistry', 'loader', 'agents', 'workflowEngine']
-
   private readonly storage: RbacStorage
   private readonly automations: AutomationService
   private readonly scheduler: AutomationScheduler<Automation>
