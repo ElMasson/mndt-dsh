@@ -56,6 +56,16 @@ export type { AuthorityOptions, AuthorityRequest, AuthorityResponse, AuthorityLi
 
 /** The Remote gateway: the browser's only way in. */
 export class GovernanceGateway extends TypertRemoteService {
+  /**
+   * Services this gateway reads for the Agents, Sharing and automation-run
+   * surfaces. Cordis refuses an undeclared service read with "cannot get
+   * property <name> without inject", which surfaced as a raw gateway/internal
+   * failure on those surfaces. The workflow engine is deliberately absent: the
+   * web composition disables workflow-ptc, so it is looked up per run instead
+   * (see {@link executeRow}) rather than gating this whole Remote face.
+   */
+  static inject = ['agentPresets', 'workspaceRegistry', 'agents']
+
   private readonly storage: RbacStorage
   private readonly automations: AutomationService
   private readonly scheduler: AutomationScheduler<Automation>
@@ -162,7 +172,14 @@ export class GovernanceGateway extends TypertRemoteService {
       },
       startWorkflow: async (_handle, prompt) => {
         if (created === undefined) throw new Error('the agent was not created')
-        const run = this.ctx.workflowEngine.start({
+        // Optional on purpose: a Host that disables workflow-ptc still mounts
+        // every read surface. Running an automation reports the missing engine
+        // instead of failing with a Cordis "without inject" error.
+        const engine = this.ctx.get('workflowEngine')
+        if (engine === undefined) {
+          throw new Error('governance: this Host does not mount the workflow engine, so an automation cannot run')
+        }
+        const run = engine.start({
           script: `return await agent(${JSON.stringify(prompt)})`,
           meta: { name: 'automation', description: 'Scheduled user automation' },
           parent: created.agent,
