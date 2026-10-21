@@ -33,8 +33,7 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-host-governance"
+        "@deepseek-ai/dsh-client-ui-slots"
       ],
       "platform": "web"
     }
