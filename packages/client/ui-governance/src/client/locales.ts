@@ -26,34 +26,18 @@ export const en = {
   refused: 'Refused by the Host',
   staleTable: 'Cached table, the authority is unreachable',
   accepted: 'Accepted',
+  promptLabel: 'Prompt',
+  connectorEnabled: 'enabled',
+  connectorDisabled: 'disabled',
+  roleViewer: 'viewer',
+  roleOperator: 'operator',
+  roleAdmin: 'admin',
+  roleOwner: 'owner',
 } as const
 
-export const zh = {
-  title: '治理',
-  subtitle: '谁能对什么资源做什么，以及共享了什么。',
-  tabConnectors: '连接器',
-  tabAgents: '代理',
-  tabWorkflows: '工作流',
-  tabRights: '权限',
-  tabSharing: '共享',
-  loading: '加载中...',
-  empty: '尚未记录任何授权。',
-  error: '无法读取治理数据。',
-  subject: '主体',
-  role: '角色',
-  scope: '范围',
-  actions: '操作',
-  grant: '授予角色',
-  revoke: '撤销',
-  actor: '操作者',
-  actorHint: '主机将校验该身份是否持有 rights.write。',
-  submit: '授予',
-  cancel: '取消',
-  global: '全部',
-  notWired: '该面板尚未接线。',
-  refused: '主机拒绝',
-  staleTable: '缓存的表，权威服务不可达',
-  accepted: '已接受',
-} as const
+// The locale registry requires both built-in ids for every namespace.
+// This slot mirrors English until a real translation is requested.
+export const zh = en
+
 
 export type GovernanceKey = keyof typeof en

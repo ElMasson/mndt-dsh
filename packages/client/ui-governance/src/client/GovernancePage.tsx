@@ -249,7 +249,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
           </label>
           <div>
             <label>
-              Prompt
+              {t('promptLabel')}
               <input value={prompt} onChange={event => setPrompt(event.target.value)} />
             </label>
             <button onClick={() => void createAutomation()}>{t('submit')}</button>
@@ -260,7 +260,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
               <table>
                 <thead>
                   <tr>
-                    <th>Prompt</th>
+                    <th>{t('promptLabel')}</th>
                     <th>{t('actions')}</th>
                   </tr>
                 </thead>
@@ -296,7 +296,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
                   <tr key={connector.entry}>
                     <td>{connector.server}</td>
                     <td>{connector.module}</td>
-                    <td>{connector.enabled ? 'enabled' : 'disabled'}</td>
+                    <td>{connector.enabled ? t('connectorEnabled') : t('connectorDisabled')}</td>
                   </tr>
                 ))}
               </tbody>
@@ -347,10 +347,10 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
             <label>
               {t('role')}
               <select value={role} onChange={event => setRole(event.target.value)}>
-                <option value="viewer">viewer</option>
-                <option value="operator">operator</option>
-                <option value="admin">admin</option>
-                <option value="owner">owner</option>
+                <option value="viewer">{t('roleViewer')}</option>
+                <option value="operator">{t('roleOperator')}</option>
+                <option value="admin">{t('roleAdmin')}</option>
+                <option value="owner">{t('roleOwner')}</option>
               </select>
             </label>
             <button onClick={() => void submitGrant()}>{t('submit')}</button>
