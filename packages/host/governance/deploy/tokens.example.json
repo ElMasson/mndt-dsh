@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to /etc/dsh/tokens.json, mode 0640, owner root:dsh. One entry per person; the value is the identity the authority will attribute actions to.",
+  "TOKEN_FOR_STEPHANE": { "user": "stephane" },
+  "TOKEN_FOR_SARA": { "user": "sara" }
+}
