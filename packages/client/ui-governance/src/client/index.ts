@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-governance/remote'
 import { GovernancePage } from './GovernancePage.tsx'
 import { en, zh } from './locales.ts'
 import type { GovernanceKey } from './locales.ts'
+import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap { governance: GovernanceKey }
@@ -23,8 +24,40 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export { GovernancePage } from './GovernancePage.tsx'
 export type { GovernanceKey } from './locales.ts'
 
+
+/** Rejection used when the Host never published the governance Remote face. */
+const unavailable = (): Promise<never> => Promise.reject(
+  new Error('the governance Remote is not mounted on this workstation, so this page cannot read the table'),
+)
+
+/**
+ * The Host face, or a stand-in that explains its absence.
+ * @param ctx - Client root context.
+ * @returns the mounted namespace, or one whose every call rejects with the reason.
+ */
+function governanceFace(ctx: ClientContext): TypertRemoteNamespaceMap['governance'] {
+  const mounted = ctx.remote.governance
+  if (mounted !== undefined) return mounted
+  return {
+    list: unavailable,
+    decide: unavailable,
+    setGrant: unavailable,
+    removeGrant: unavailable,
+    bootstrapOwner: unavailable,
+    automations: unavailable,
+    createAutomation: unavailable,
+    setAutomationEnabled: unavailable,
+    deleteAutomation: unavailable,
+    runAutomationNow: unavailable,
+    agents: unavailable,
+    connectors: unavailable,
+    workspaces: unavailable,
+    tableState: unavailable,
+  }
+}
+
 /** Required services: the slot registry and the copy registry. */
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'remote']
 
 const NS = 'governance'
 
@@ -35,7 +68,7 @@ const NS = 'governance'
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-governance: dictionaries')
   const t = ctx.locale.bind(NS)
-  const api = ctx.remote.governance
+  const api = governanceFace(ctx)
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
     id: 'governance',
