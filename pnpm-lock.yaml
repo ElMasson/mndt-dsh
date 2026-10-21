@@ -2291,6 +2291,9 @@ importers:
       '@deepseek-ai/dsh-hmr':
         specifier: workspace:*
         version: link:../../boot/hmr
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:*
         version: link:../../jobs/jobs-local
@@ -14984,6 +14987,9 @@ importers:
       '@deepseek-ai/dsh-app-boot':
         specifier: workspace:*
         version: link:../../boot/app-boot
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-typert-protocol':
         specifier: workspace:*
         version: link:../protocol
