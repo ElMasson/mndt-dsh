@@ -41,6 +41,27 @@ export interface AutomationRunOutcome {
   readonly reason?: string
 }
 
+/** @param value - a candidate value. @returns whether it is a plain record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/**
+ * A workflow settles to a result object carrying `stopReason`; a resolved
+ * promise therefore does not mean the run succeeded. An error stop carries no
+ * value and would otherwise be reported as a successful execution.
+ * @param result - the settled workflow value.
+ * @returns the failure reason, or undefined when the run completed.
+ */
+function failureOf(result: unknown): string | undefined {
+  if (!isRecord(result)) return undefined
+  const stopReason = result['stopReason']
+  if (stopReason === undefined || stopReason === 'completed') return undefined
+  const error = result['error']
+  if (typeof error === 'string' && error !== '') return error
+  return `the workflow stopped with ${String(stopReason)}`
+}
+
 /**
  * Run one automation.
  * @param deps - creation and workflow-start closures.
@@ -55,6 +76,8 @@ export async function executeAutomation(
   try {
     handle = await deps.createAgent(target)
     const result = await deps.startWorkflow(handle, target.prompt)
+    const failure = failureOf(result)
+    if (failure !== undefined) return { ok: false, reason: failure }
     return { ok: true, result }
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) }
