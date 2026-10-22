@@ -1,0 +1,58 @@
+# Governance stack: the authority plus its SSO front, announced to the existing
+# Traefik by labels. Nothing in the Tellus compose project is modified: this
+# project joins the Tellus network as an external network and is removed as a
+# whole for a rollback.
+name: governance
+
+services:
+  authority:
+    image: node:20-alpine
+    command: ["node", "/app/governance-authority.mjs"]
+    environment:
+      DSH_GOVERNANCE_HOST: 0.0.0.0
+      DSH_GOVERNANCE_PORT: "8787"
+      DSH_GOVERNANCE_TOKENS_FILE: /etc/dsh/tokens.json
+      DSH_GOVERNANCE_STATE: /var/lib/dsh/governance/rbac.json
+      DSH_GOVERNANCE_AUDIT: /var/lib/dsh/governance/audit.jsonl
+    volumes:
+      - /opt/dsh-governance/governance-authority.mjs:/app/governance-authority.mjs:ro
+      - /etc/dsh/tokens.json:/etc/dsh/tokens.json:ro
+      - /var/lib/dsh/governance:/var/lib/dsh/governance
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - internal
+    restart: unless-stopped
+
+  oauth2proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    command: ["--config=/etc/oauth2-proxy/governance.cfg"]
+    volumes:
+      - /opt/governance/oauth2.cfg:/etc/oauth2-proxy/governance.cfg:ro
+      - /etc/oauth2-proxy:/etc/oauth2-proxy:ro
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "tellus-ai_default"
+      traefik.http.routers.governance.rule: "Host(`governance.duke-analytics.com`)"
+      traefik.http.routers.governance.entrypoints: "websecure"
+      traefik.http.routers.governance.tls.certresolver: "letsencrypt"
+      traefik.http.services.governance.loadbalancer.server.port: "4180"
+      # Redirect plain HTTP to HTTPS for this host only.
+      traefik.http.routers.governance-web.rule: "Host(`governance.duke-analytics.com`)"
+      traefik.http.routers.governance-web.entrypoints: "web"
+    networks:
+      - internal
+      - tellus
+    restart: unless-stopped
+
+networks:
+  internal:
+    name: governance_internal
+  tellus:
+    external: true
+    name: tellus-ai_default
