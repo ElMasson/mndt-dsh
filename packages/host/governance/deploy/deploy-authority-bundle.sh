@@ -17,19 +17,33 @@ STATE_DIR=/var/lib/dsh/governance
 TOKENS=/etc/dsh/tokens.json
 SITE=/etc/nginx/conf.d/governance.conf
 HEALTH=http://127.0.0.1:8787/health
+# Set SKIP_PROXY=1 on a host where nginx and oauth2-proxy are not installed yet:
+# the authority is still installed, started and verified on loopback.
+SKIP_PROXY=${SKIP_PROXY:-0}
 
 say() { printf '\n==> %s\n' "$1"; }
 fail() { printf 'ECHEC: %s\n' "$1" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || fail "ce script doit tourner en root"
+if [ "$SKIP_PROXY" = "1" ]; then
+  echo "mode autorite seule : proxy et SSO ignores"
+else
+  command -v nginx >/dev/null || fail "nginx absent (relancez avec SKIP_PROXY=1 pour installer l autorite seule)"
+fi
 [ -f "$HERE/governance-authority.mjs" ] || fail "bundle absent: governance-authority.mjs"
 [ -x /usr/bin/node ] || fail "/usr/bin/node est absent (node 20+ requis)"
 
 say "1/6 installation du bundle"
 id -u dsh >/dev/null 2>&1 || useradd --system --home /opt/dsh-governance --shell /usr/sbin/nologin dsh
 install -d -o root -g root -m 0755 /opt/dsh-governance
-install -m 0644 "$HERE/governance-authority.mjs" /opt/dsh-governance/governance-authority.mjs
-install -m 0644 "$HERE/README-DEPLOY.md" /opt/dsh-governance/README-DEPLOY.md
+# -ef: running the installer from inside its own target directory must not try to
+# copy a file onto itself.
+if [ "$HERE/governance-authority.mjs" -ef /opt/dsh-governance/governance-authority.mjs ]; then
+  echo "bundle deja en place"
+else
+  install -m 0644 "$HERE/governance-authority.mjs" /opt/dsh-governance/governance-authority.mjs
+  install -m 0644 "$HERE/README-DEPLOY.md" /opt/dsh-governance/README-DEPLOY.md
+fi
 
 say "2/6 etat et jetons"
 install -d -o dsh -g dsh -m 0750 "$STATE_DIR"
@@ -46,10 +60,14 @@ chown root:dsh "$TOKENS"
 chmod 0640 "$TOKENS"
 
 say "3/6 secrets oauth2-proxy"
-install -d -m 0700 "$CONF_DIR"
-[ -f "$CONF_DIR/cookie_secret" ] || openssl rand -base64 32 > "$CONF_DIR/cookie_secret"
-[ -f "$CONF_DIR/client_secret" ] || { echo "ECHEC: placez le secret Entra dans $CONF_DIR/client_secret" >&2; exit 1; }
-chmod 0600 "$CONF_DIR/cookie_secret" "$CONF_DIR/client_secret"
+if [ "$SKIP_PROXY" = "1" ]; then
+  echo "ignores (proxy non installe)"
+else
+  install -d -m 0700 "$CONF_DIR"
+  [ -f "$CONF_DIR/cookie_secret" ] || openssl rand -base64 32 > "$CONF_DIR/cookie_secret"
+  [ -f "$CONF_DIR/client_secret" ] || { echo "ECHEC: placez le secret Entra dans $CONF_DIR/client_secret" >&2; exit 1; }
+  chmod 0600 "$CONF_DIR/cookie_secret" "$CONF_DIR/client_secret"
+fi
 
 say "4/6 unite systemd"
 install -m 0644 "$HERE/dsh-governance-authority-bundle.service" "$UNIT"
@@ -68,11 +86,14 @@ code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/governance/s
 echo "appel anonyme refuse (401) : attendu"
 
 say "6/6 proxy et SSO"
-install -m 0644 "$HERE/oauth2-proxy.cfg" "$CONF_DIR/governance.cfg"
-install -m 0644 "$HERE/nginx-governance.conf" "$SITE"
-command -v nginx >/dev/null || fail "nginx absent"
-nginx -t
-systemctl reload nginx
+if [ "$SKIP_PROXY" = "1" ]; then
+  echo "ignores : autorite joignable sur 127.0.0.1:8787 uniquement"
+else
+  install -m 0644 "$HERE/oauth2-proxy.cfg" "$CONF_DIR/governance.cfg"
+  install -m 0644 "$HERE/nginx-governance.conf" "$SITE"
+  nginx -t
+  systemctl reload nginx
+fi
 
 echo
 echo "Termine. Deux actions restent manuelles et volontairement hors script :"
