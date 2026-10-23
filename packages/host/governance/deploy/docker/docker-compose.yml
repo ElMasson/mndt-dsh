@@ -16,9 +16,11 @@ services:
       DSH_GOVERNANCE_STATE: /var/lib/dsh/governance/rbac.json
       DSH_GOVERNANCE_AUDIT: /var/lib/dsh/governance/audit.jsonl
       # The authority is reachable only through the SSO front on this network, so
-      # the email that front proved is the identity. Never set this when the
-      # authority is exposed directly.
-      DSH_GOVERNANCE_PROXY_USER_HEADER: x-auth-request-email
+      # the email that front proved is the identity. `x-forwarded-email` is what
+      # oauth2-proxy's pass_user_headers sends upstream (the X-Auth-Request-*
+      # family is for auth_request setups). Never set this when the authority is
+      # exposed directly.
+      DSH_GOVERNANCE_PROXY_USER_HEADER: x-forwarded-email
     volumes:
       - /opt/dsh-governance/governance-authority.mjs:/app/governance-authority.mjs:ro
       - /etc/dsh/tokens.json:/etc/dsh/tokens.json:ro
