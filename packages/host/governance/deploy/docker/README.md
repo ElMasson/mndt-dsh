@@ -22,7 +22,7 @@ sudo install -m 0644 oauth2-proxy.cfg /opt/governance/oauth2.cfg
 sudo install -m 0644 governance-authority.mjs /opt/dsh-governance/
 
 # The two secrets, mode 0600, never in the repository.
-openssl rand -base64 32 | sudo tee /etc/oauth2-proxy/cookie_secret >/dev/null
+sudo openssl rand 32 > /etc/oauth2-proxy/cookie_secret
 printf '%s' '<client-secret-entra>' | sudo tee /etc/oauth2-proxy/client_secret >/dev/null
 sudo chmod 0600 /etc/oauth2-proxy/cookie_secret /etc/oauth2-proxy/client_secret
 

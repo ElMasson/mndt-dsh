@@ -22,7 +22,7 @@ install -m 0644 "$HERE/oauth2-proxy.cfg" /etc/oauth2-proxy/governance.cfg
 
 echo "==> secrets"
 if [ ! -f /etc/oauth2-proxy/cookie_secret ]; then
-  openssl rand -base64 32 > /etc/oauth2-proxy/cookie_secret
+  openssl rand 32 > /etc/oauth2-proxy/cookie_secret
 fi
 cp "$HERE/client-secret.txt" /etc/oauth2-proxy/client_secret
 chmod 0600 /etc/oauth2-proxy/cookie_secret /etc/oauth2-proxy/client_secret

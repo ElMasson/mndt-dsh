@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Read the last minutes of the SSO front to explain an HTTP 500 seen in a browser.
+# Show exactly why the last login attempt failed.
 set -uo pipefail
 cd /opt/governance || exit 1
 
-echo "=== etat ==="
-docker compose ps
+echo "=== erreurs recentes du proxy ==="
+docker compose logs --since 90m oauth2proxy 2>&1 | grep -iE 'error|invalid|denied|callback|redeem' | tail -15
 
 echo
-echo "=== oauth2-proxy, 30 dernieres lignes ==="
-docker compose logs --tail 30 oauth2proxy 2>&1 | tail -30
+echo "=== dernieres requetes vers le callback ==="
+docker compose logs --since 90m oauth2proxy 2>&1 | grep -E 'oauth2/callback' | tail -4
 
 echo
-echo "=== traefik, requetes vers /oauth2 ==="
-docker logs tellus-ai-traefik-1 --tail 200 2>&1 | grep -i 'oauth2' | tail -5
+echo "=== etat et horloge ==="
+docker compose ps --format '{{.Name}} {{.Status}}'
+date -u '+UTC %Y-%m-%d %H:%M:%S'

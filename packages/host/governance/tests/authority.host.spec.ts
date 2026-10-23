@@ -218,3 +218,55 @@ describe('durable authority', () => {
     })
   })
 })
+
+describe('authority behind an authenticating proxy', () => {
+  it('accepts the identity the proxy proved, without a bearer token', async () => {
+    const handle = createAuthority({ tokens, storage: new MemoryRbacStorage(), proxyUserHeader: 'x-auth-request-email' })
+    const bootstrap = await handle({
+      method: 'POST',
+      path: '/governance/bootstrap',
+      body: JSON.stringify({ user: 'stephane', role: 'owner' }),
+      headers: { 'x-auth-request-email': 'stephane@duke-analytics.com' },
+    })
+
+    expect(bootstrap.status).toBe(200)
+    expect(bootstrap.body).toMatchObject({ allowed: true })
+  })
+
+  it('ignores the header when the deployment does not trust a proxy', async () => {
+    const handle = createAuthority({ tokens, storage: new MemoryRbacStorage() })
+    const response = await handle({
+      method: 'GET',
+      path: '/governance/snapshot',
+      headers: { 'x-auth-request-email': 'stephane@duke-analytics.com' },
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it('never lets the header rescue a bad bearer token', async () => {
+    const handle = createAuthority({ tokens, storage: new MemoryRbacStorage(), proxyUserHeader: 'x-auth-request-email' })
+    const response = await handle({
+      method: 'GET',
+      path: '/governance/snapshot',
+      authorization: 'Bearer not-a-token',
+      headers: { 'x-auth-request-email': 'stephane@duke-analytics.com' },
+    })
+
+    expect(response.status).toBe(401)
+  })
+})
+
+describe('authority root', () => {
+  it('answers the signed-in person at the root', async () => {
+    const handle = createAuthority({ tokens, storage: new MemoryRbacStorage(), proxyUserHeader: 'x-auth-request-email' })
+    const response = await handle({
+      method: 'GET',
+      path: '/',
+      headers: { 'x-auth-request-email': 'stephane@duke-analytics.com' },
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ service: 'dsh governance authority', you: 'stephane@duke-analytics.com' })
+  })
+})
