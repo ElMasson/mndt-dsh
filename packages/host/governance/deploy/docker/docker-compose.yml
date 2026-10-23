@@ -31,7 +31,9 @@ services:
 
   oauth2proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
-    command: ["--config=/etc/oauth2-proxy/governance.cfg"]
+    # trusted-proxy-ip is a command-line flag in this version: the config file
+    # format rejects it as an unknown key.
+    command: ["--config=/etc/oauth2-proxy/governance.cfg", "--trusted-proxy-ip=172.18.0.0/16"]
     volumes:
       # One mount only: the configuration and both secrets live in this directory.
       - /etc/oauth2-proxy:/etc/oauth2-proxy:ro
