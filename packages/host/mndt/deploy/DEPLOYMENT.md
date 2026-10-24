@@ -49,6 +49,25 @@ le serveur et de construire là, dans le conteneur node 22, sans transfert
 d'archive. Le serveur dispose de docker et du réseau nécessaire pour
 l'installation des dépendances.
 
+## Constat du 24 octobre, contrainte de memoire du serveur
+
+Le serveur a 7 Go de RAM, dont environ 4 Go disponibles. La compilation des
+declarations hotes du depot depasse cette enveloppe : sans drapeau, node meurt
+en `Ineffective mark-compacts near heap limit` ; avec `--max-old-space-size=6144`,
+la compilation tourne plus de vingt minutes en saturant la machine.
+
+Trois issues realistes, a trancher au prochain tour :
+
+1. ajouter un fichier d'echange de 8 Go sous `/data` pour la seule duree du
+   build, puis le retirer ;
+2. construire l'installation portable sur une machine plus large et ne livrer
+   que le resultat (le paquet ne depend plus de l'environnement de build) ;
+3. reduire la porte de build aux paquets du produit, si le depot expose une
+   portee plus etroite que `--scope artifacts`.
+
+La deuxieme option est la plus sure : elle deplace la contrainte ailleurs sans
+toucher au serveur de production.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
