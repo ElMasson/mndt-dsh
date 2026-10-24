@@ -7,13 +7,20 @@
 set -eu
 
 STATE=${DSH_HOME:-/state/home}
+# Inside a bridge network the shell must bind the interface address: a wildcard is
+# rejected and the loopback is unreachable from the front.
+WEB_BIND=${WEB_HOST:-}
+if [ -z "$WEB_BIND" ]; then
+  WEB_BIND=$(hostname -i 2>/dev/null | awk "{print \$1}")
+fi
+[ -n "$WEB_BIND" ] || WEB_BIND=127.0.0.1
 mkdir -p "$STATE"
 LOG="$STATE/web.log"
 TOKEN_FILE="${DSH_MNDT_WEB_TOKEN_FILE:-/state/web-token}"
 rm -f "$TOKEN_FILE"
 
 node /app/apps/cli/lib/bin.js web \
-  --host 127.0.0.1 \
+  --host "$WEB_BIND" \
   --port 3111 \
   --no-open \
   --public-url "${PUBLIC_URL:-https://mndt.duke-analytics.com/}" \

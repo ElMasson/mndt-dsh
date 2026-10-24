@@ -78,6 +78,9 @@ export class WorkbenchGateway extends TypertRemoteService {
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
+    // The composition may pin the bind address; otherwise the deployment names it
+    // through the environment, which is what a container needs.
+    const host = config.host ?? process.env.DSH_MNDT_HOST
     const runner = new DshMissionRunner(ctx)
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
@@ -87,7 +90,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         grants: this.grants,
         connectors: () => Promise.resolve(this.connectorRows()),
         port,
-        ...(config.host === undefined ? {} : { host: config.host }),
+        ...(host === undefined || host === '' ? {} : { host }),
       }),
     )
     ctx.effect(() => {

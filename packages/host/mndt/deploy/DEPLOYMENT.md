@@ -373,6 +373,30 @@ viewer, il repond `canWrite: false`. La table vient donc bien du centre.
 
 Le controle `smoke.sh` verifie en plus que l'autorite repond 200 a son instantane.
 
+## Architecture du front, corrigee le 25 octobre
+
+Le workbench etait sur le reseau hote, avec sa page et son API sur la boucle
+locale. La passerelle, elle, vit sur un reseau Docker : elle ne pouvait donc pas
+les joindre. Trois pieges ont ete trouves et corriges en une passe.
+
+1. Le pare-feu de l'hote refuse le trafic d'un conteneur vers l'adresse de pont de
+   l'hote, donc exposer le workbench sur cette adresse ne marche pas.
+2. Le workbench est donc passe sur le reseau `mndt-front`, joignable par son nom
+   de service `workbench`. La page s'y lie sur l'adresse de l'interface, car DSH
+   refuse une adresse generique, et l'API accepte desormais `DSH_MNDT_HOST`.
+3. La passerelle montait le fichier de jeton par un montage de fichier : quand ce
+   fichier disparait, Docker cree un repertoire et le conteneur boucle. Elle monte
+   maintenant le dossier d'etat en lecture seule.
+
+La page et l'API restent publiees sur la boucle locale de l'hote uniquement, pour
+le controle local ; rien n'est expose sur l'interface publique.
+
+Verifie apres bascule : `/health` repond par le nom de service, l'API rend les
+droits par personne a travers la passerelle (`canWrite` vrai pour le
+proprietaire, faux pour le lecteur), l'amorcage de la page repond 303 avec un
+cookie `dsh-auth` signe pour `mndt.duke-analytics.com`, et seize controles
+passent.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

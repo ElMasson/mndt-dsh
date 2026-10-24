@@ -12,12 +12,12 @@ services:
     command: ["node", "/opt/gateway/server.mjs"]
     environment:
       PORT: "8080"
-      WORKBENCH: "http://host.docker.internal:3111"
-      API: "http://host.docker.internal:8795"
+      WORKBENCH: "http://workbench:3111"
+      API: "http://workbench:8795"
       TOKEN_FILE: "/state/web-token"
     volumes:
       - /opt/mndt-front/gateway:/opt/gateway:ro
-      - /data/mndt/live/web-token:/state/web-token:ro
+      - /data/mndt/live:/state:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -51,9 +51,8 @@ services:
 
   workbench:
     image: mndt-workbench:local
-    # The workbench keeps its API and page on the loopback only; the gateway is
-    # the only ingress. Host networking lets it reach nothing else on the host.
-    network_mode: host
+    # The gateway is the only ingress: this service publishes no port and is only
+    # reachable on the front network.
     env_file:
       - /data/mndt/live/model.env
     environment:
@@ -62,17 +61,24 @@ services:
       DSH_MNDT_LOCAL_OWNER: duke@datanalysis.re
       DSH_MNDT_STATE: /state/state.json
       DSH_MNDT_PORT: "8795"
-      DSH_MNDT_HOST: 127.0.0.1
       DSH_MNDT_TOKENS_FILE: /state/tokens.json
       DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
       DSH_MNDT_BRIEFING_AT: "06:30"
       DSH_PERMISSION_MODE: danger-full-access
       PUBLIC_URL: https://mndt.duke-analytics.com/
       TRUSTED_HOST: mndt.duke-analytics.com
+    command: ["sh", "/opt/mndt-tools/workbench-entrypoint.sh"]
+    # Loopback-only publications so the host can check the page and the API;
+    # nothing on the public interface.
+    ports:
+      - "127.0.0.1:3111:3111"
+      - "127.0.0.1:8795:8795"
     volumes:
       - /data/mndt/live:/state
       - /data/mndt/live/tools:/opt/mndt-tools:ro
       - /data/mndt/live/mcp-auth:/state/mcp-auth
+    networks:
+      - front
     restart: unless-stopped
 networks:
   front: {}

@@ -6,8 +6,9 @@
 set -uo pipefail
 
 LIVE=${MNDT_HOME:-/data/mndt/live}
+PAGE_HOST=${MNDT_PAGE_HOST:-127.0.0.1}
 API=http://127.0.0.1:8795
-PAGE=http://127.0.0.1:3111
+PAGE=http://$PAGE_HOST:3111
 HOST=mndt.duke-analytics.com
 failures=0
 

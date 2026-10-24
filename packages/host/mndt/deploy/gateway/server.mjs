@@ -61,7 +61,14 @@ function targetOf(target) {
  */
 function forward(req, res, target, path) {
   const parts = targetOf(target)
-  const headers = { ...req.headers, host: `${parts.host}:${parts.port}` }
+  // Keep the authority the browser used. The shell signs its session cookie for
+  // that authority and refuses a cookie signed for another one, so rewriting the
+  // host here would break the session right after sign-in. The proxy already
+  // forwarded the public host, and the workbench is told to trust it.
+  const headers = { ...req.headers }
+  if (typeof req.headers.host === 'string' && req.headers.host !== '') {
+    headers['x-forwarded-host'] = req.headers.host
+  }
   headers['x-forwarded-proto'] = 'https'
   const upstream = httpRequest({
     protocol: parts.protocol,
@@ -106,7 +113,10 @@ server.on('upgrade', (req, socket, head) => {
     return
   }
   const parts = targetOf(WORKBENCH)
-  const headers = { ...req.headers, host: `${parts.host}:${parts.port}` }
+  const headers = { ...req.headers }
+  if (typeof req.headers.host === 'string' && req.headers.host !== '') {
+    headers['x-forwarded-host'] = req.headers.host
+  }
   const upstream = httpRequest({
     protocol: parts.protocol,
     hostname: parts.host,
