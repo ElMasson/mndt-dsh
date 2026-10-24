@@ -73,6 +73,8 @@ export class WorkbenchGateway extends TypertRemoteService {
       ? authorityGrants({ baseUrl, token })
       : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
+    this.#scheduleBriefing(ctx)
+
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
     const runner = new DshMissionRunner(ctx)
@@ -94,6 +96,66 @@ export class WorkbenchGateway extends TypertRemoteService {
       })
       return () => { server?.close() }
     }, 'mndt: product API')
+  }
+
+  /**
+   * Run the morning briefing on a schedule.
+   *
+   * `DSH_MNDT_BRIEFING_AT=06:30` fires once a day; `DSH_MNDT_BRIEFING_EVERY_MS`
+   * fires at a fixed interval and exists so the schedule can be proven quickly.
+   * A run already in flight is never doubled: the next tick waits.
+   * @param ctx - the host context, which owns the timer lifecycle.
+   */
+  #scheduleBriefing(ctx: Context): void {
+    const at = process.env.DSH_MNDT_BRIEFING_AT
+    const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
+    if (at === undefined && !Number.isFinite(every)) return
+    let running = false
+    const fire = (): void => {
+      if (running) return
+      running = true
+      void (async () => {
+        try {
+          const mission = await this.service.createMission({
+            kind: 'briefing',
+            prompt: 'Briefing du matin : agenda, courriers sans réponse, comptes à risque, échéances, réunions du jour.',
+            createdBy: 'scheduler',
+          })
+          await this.service.startMission(mission.id, 'scheduled')
+          try {
+            const outcome = await new DshMissionRunner(ctx).run(mission)
+            await this.service.completeMission(mission.id, outcome)
+            ctx.logger.info(`mndt: scheduled briefing ${mission.id} done`)
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error)
+            await this.service.failMission(mission.id, reason).catch(() => undefined)
+            ctx.logger.error(`mndt: scheduled briefing failed: ${reason}`)
+          }
+        } finally {
+          running = false
+        }
+      })()
+    }
+    ctx.effect(() => {
+      if (at !== undefined) {
+        const [hour, minute] = at.split(':').map(Number)
+        const delay = (): number => {
+          const now = new Date()
+          const next = new Date(now)
+          next.setHours(hour ?? 6, minute ?? 30, 0, 0)
+          if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
+          return next.getTime() - now.getTime()
+        }
+        let handle: ReturnType<typeof setTimeout>
+        const arm = (): void => {
+          handle = setTimeout(() => { fire(); arm() }, delay())
+        }
+        arm()
+        return () => { clearTimeout(handle) }
+      }
+      const handle = setInterval(fire, every)
+      return () => { clearInterval(handle) }
+    }, 'mndt: scheduled briefing')
   }
 
   /** @returns the mounted MCP connectors. */

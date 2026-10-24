@@ -65,6 +65,13 @@ export interface OutcomeRow<T> {
   readonly error?: string
 }
 
+/** One mounted connector, as the page reads it. */
+export interface ConnectorRow {
+  readonly module: string
+  readonly server: string
+  readonly enabled: boolean
+}
+
 /** The Host face this page needs. */
 export interface MndtFace {
   state(): Promise<PageStateRow>
@@ -72,6 +79,7 @@ export interface MndtFace {
   decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string): Promise<OutcomeRow<ApprovalRow>>
   approveBrief(briefId: string): Promise<OutcomeRow<BriefRow>>
   remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<OutcomeRow<MemoryRow>>
+  connectors(): Promise<readonly ConnectorRow[]>
 }
 
 /** What the page receives from its plugin. */
@@ -94,6 +102,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [reason, setReason] = useState('')
   const [note, setNote] = useState('')
   const [kind, setKind] = useState<'fact' | 'decision' | 'preference'>('fact')
+  const [connectors, setConnectors] = useState<readonly ConnectorRow[]>([])
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -106,6 +115,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const load = useCallback(async (): Promise<void> => {
     try {
       setState(await api.state())
+      setConnectors(await api.connectors().catch(() => []))
       setError(null)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
@@ -272,6 +282,22 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                     )}
                   </div>
                 </details>
+              ))}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('connectors')}</h2>
+              <span className="mndt-count">{connectors.length}</span>
+            </div>
+            <div className="mndt-card-body">
+              {connectors.length === 0 && <p className="mndt-empty">{t('noConnectors')}</p>}
+              {connectors.slice(0, 12).map(connector => (
+                <div className="mndt-row" key={connector.module}>
+                  <span className="mndt-note">{connector.server}</span>
+                  <span className="mndt-note-meta">{connector.enabled ? t('mounted') : t('off')}</span>
+                </div>
               ))}
             </div>
           </section>

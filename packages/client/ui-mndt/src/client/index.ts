@@ -54,6 +54,12 @@ function face(ctx: ClientContext): MndtFace {
       decide: async (id, decision, reason) => (await raw(() => mounted.decide(id, decision, reason))) as never,
       approveBrief: async id => (await raw(() => mounted.approveBrief(id))) as never,
       remember: async (scope, kind, text) => (await raw(() => mounted.remember(scope, kind, text))) as never,
+      connectors: async () => {
+        const answer = await mounted.connectors()
+        const envelope = answer as { readonly ok?: unknown; readonly value?: unknown } | null
+        const payload = envelope !== null && typeof envelope === 'object' && 'ok' in envelope ? envelope.value : answer
+        return (Array.isArray(payload) ? payload : []) as never
+      },
     }
   }
   const absent = (): Promise<never> => Promise.reject(new Error(
@@ -65,6 +71,7 @@ function face(ctx: ClientContext): MndtFace {
     decide: absent,
     approveBrief: absent,
     remember: absent,
+    connectors: absent,
   }
 }
 
