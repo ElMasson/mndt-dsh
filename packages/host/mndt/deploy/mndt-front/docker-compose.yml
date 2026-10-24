@@ -1,0 +1,56 @@
+name: mndt-front
+
+# Single sign-on front for the workbench.
+#
+# The gateway is the only upstream of the proxy: it bootstraps the shell launch
+# token for a browser cookie and routes /mndt-api to the product API, which reads
+# the identity the proxy proved. Traefik publishes the host and terminates TLS.
+
+services:
+  gateway:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/gateway/server.mjs"]
+    environment:
+      PORT: "8080"
+      WORKBENCH: "http://host.docker.internal:3111"
+      API: "http://host.docker.internal:8795"
+      TOKEN_FILE: "/state/web-token"
+    volumes:
+      - /opt/mndt-front/gateway:/opt/gateway:ro
+      - /data/mndt/live/web-token:/state/web-token:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - front
+    restart: unless-stopped
+
+  proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    command:
+      - "--config=/etc/mndt-front/oauth2.cfg"
+      - "--client-secret-file=/etc/mndt-front/client_secret"
+      - "--cookie-secret-file=/etc/mndt-front/cookie_secret"
+      - "--trusted-proxy-ip=172.18.0.0/16"
+    volumes:
+      - /etc/mndt-front:/etc/mndt-front:ro
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "tellus-ai_default"
+      traefik.http.routers.mndt.rule: "Host(`mndt.duke-analytics.com`)"
+      traefik.http.routers.mndt.entrypoints: "websecure"
+      traefik.http.routers.mndt.tls.certresolver: "letsencrypt"
+      traefik.http.services.mndt.loadbalancer.server.port: "4180"
+      traefik.http.routers.mndt-web.rule: "Host(`mndt.duke-analytics.com`)"
+      traefik.http.routers.mndt-web.entrypoints: "web"
+    networks:
+      - front
+      - tellus
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+networks:
+  front: {}
+  tellus:
+    external: true
+    name: tellus-ai_default

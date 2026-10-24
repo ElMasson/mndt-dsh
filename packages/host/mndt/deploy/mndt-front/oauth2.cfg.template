@@ -1,0 +1,22 @@
+# oauth2-proxy in front of the mndt workbench, Microsoft Entra ID.
+#
+# The upstream is the local gateway, never the workbench directly: the gateway
+# bootstraps the shell token and routes the product API, whose per-request
+# identity comes from the x-forwarded-email this proxy sets.
+provider = "oidc"
+oidc_issuer_url = "https://login.microsoftonline.com/5ed9c3e0-522a-46fa-978a-dd6bc245d710/v2.0"
+client_id = "__CLIENT_ID__"
+
+redirect_url = "https://mndt.duke-analytics.com/oauth2/callback"
+email_domains = ["duke-analytics.com"]
+
+cookie_secure = true
+cookie_samesite = "lax"
+cookie_name = "_mndt_proxy"
+
+http_address = "0.0.0.0:4180"
+upstreams = ["http://gateway:8080/"]
+reverse_proxy = true
+pass_user_headers = true
+skip_provider_button = true
+set_xauthrequest = true
