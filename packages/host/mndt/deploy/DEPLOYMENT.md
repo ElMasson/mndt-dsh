@@ -68,6 +68,22 @@ Trois issues realistes, a trancher au prochain tour :
 La deuxieme option est la plus sure : elle deplace la contrainte ailleurs sans
 toucher au serveur de production.
 
+## Constat du 24 octobre, poste de travail
+
+Deux pistes locales ont echoue avant de produire quoi que ce soit :
+
+- Docker Desktop est installe mais son moteur n'est pas demarre (canal
+  `dockerDesktopLinuxEngine` absent), donc pas de construction en conteneur sur
+  le poste sans intervention de l'utilisateur ;
+- le WSL Ubuntu fournit pnpm mais pas node, et l'installation de node dans
+  `/opt` echoue pour permission en utilisateur non root, puis le telechargement
+  echoue en root.
+
+Conclusion : la construction doit se faire soit sur une machine Linux de build,
+soit apres demarrage explicite de Docker Desktop, soit sur le serveur apres
+ajout d'un fichier d'echange. Aucune de ces trois voies n'est ouverte a
+l'instant, et rien n'a ete modifie en production.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
