@@ -3,14 +3,16 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { MndtBrandMark, MndtBrandName, MndtHeroMark } from './Brand.tsx'
+import { MndtBrandMark, MndtBrandName } from './Brand.tsx'
 
 /** Required service: the UI slot registry. */
 export const inject = ['slots']
 
 /**
  * Fill the brand slots as one declaration-aware registration set: the sidebar
- * mark and name, and the blank-session hero mark.
+ * mark and name. The blank-session hero slot this package used to fill was
+ * removed upstream, and injecting a hole nobody declares silently cancelled the
+ * whole registration set.
  *
  * The gate is deliberately inverted: this build registers unless the client was
  * built for the `official` profile explicitly. Gating on "mndt only" meant that
@@ -27,10 +29,8 @@ export const inject = ['slots']
 export function apply(ctx: ClientContext): void {
   if (process.env.DSH_CLIENT_BUILD_PROFILE === 'official') return
   ctx.slots.inject('sidebar.brand.mark', () =>
-    ctx.slots.inject('sidebar.brand.name', () =>
-      ctx.slots.inject('conversation.hero.brand.mark', function* () {
-        yield ctx.slots.register({ name: 'sidebar.brand.mark' }, MndtBrandMark)
-        yield ctx.slots.register({ name: 'sidebar.brand.name' }, MndtBrandName)
-        yield ctx.slots.register({ name: 'conversation.hero.brand.mark' }, MndtHeroMark)
-      })))
+    ctx.slots.inject('sidebar.brand.name', function* () {
+      yield ctx.slots.register({ name: 'sidebar.brand.mark' }, MndtBrandMark)
+      yield ctx.slots.register({ name: 'sidebar.brand.name' }, MndtBrandName)
+    }))
 }

@@ -87,13 +87,17 @@ describe('mndt browser-brand plugin', () => {
   })
 
   it('renders the mndt mark at the requested size and the wordmark independently', () => {
+    // The mark is scaled to 78% of the requested size so it optically matches the
+    // shell's own brand row; the test used to assert the raw size.
     const mark = render(<MndtBrandMark size={24} />)
     const markImage = mark.container.querySelector('img')
-    expect(markImage?.getAttribute('height')).toBe('24')
+    expect(markImage?.getAttribute('height')).toBe('19')
     expect(markImage?.getAttribute('alt')).toBe('mndt')
-    expect(markImage?.getAttribute('src')).toMatch(/^data:image\/png;base64,/)
+    // The bundler inlines a small asset and emits a URL for a larger one; both
+    // mean the same thing here, so the assertion accepts the mndt symbol either way.
+    expect(markImage?.getAttribute('src')).toMatch(/(^data:image\/png;base64,|mndt-symbol\.png$)/)
     mark.rerender(<MndtBrandMark size={34} />)
-    expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('34')
+    expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('27')
 
     const name = render(<MndtBrandName />)
     expect(name.container.querySelector('img')?.getAttribute('alt')).toBe('mndt')
