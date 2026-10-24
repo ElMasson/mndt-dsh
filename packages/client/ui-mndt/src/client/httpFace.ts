@@ -43,7 +43,7 @@ async function bodyOf<T>(response: Response): Promise<T> {
   const body: unknown = await response.json().catch(() => ({}))
   if (!response.ok) {
     const reason = typeof body === 'object' && body !== null && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
-      ? String((body as { error: string }).error)
+      ? (body as { error: string }).error
       : `the Host refused the call (${response.status})`
     throw new Error(reason)
   }

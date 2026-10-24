@@ -215,7 +215,7 @@ Capture : `docs/duke-product/evidence/page-connector-mission.png`.
 Deux missions planifiees ont ete produites par le workbench deploye, sans
 intervention : `mis_f05ef7e79f18412fb9bb` et `mis_c809dbccf1e14cec8b89`,
 toutes deux creees par `scheduler` et terminees. La seconde a produit le brief
-`Briefing du matin — Duke Analytics`, qui refuse explicitement d'inventer faute
+`Briefing du matin` (Duke Analytics), qui refuse explicitement d'inventer faute
 de source accessible :
 
 > Je n'ai trouve aucune donnee d'agenda, de messagerie, de CRM ni d'echeancier
@@ -285,6 +285,26 @@ jeton, redirection vers Entra, URI de retour attendue, automatisation deja
 executee.
 
 Execusion du 24 octobre sur le serveur : dix `PASS`, zero echec.
+
+## Nom public et certificat, 24 octobre
+
+Le DNS a ete cree cote OVH : `mndt.duke-analytics.com` resout vers
+`51.159.164.138`. Let's Encrypt a d'abord refuse (NXDOMAIN), puis le certificat
+a ete emis apres recreation du conteneur proxy, qui reannonce le routeur :
+
+    sujet    CN=mndt.duke-analytics.com
+    emetteur CN=YR1, O=Let's Encrypt, C=US
+
+Verifie depuis un poste : certificat valide, HTTPS repond 302 vers
+`login.microsoftonline.com` avec le bon `redirect_uri`, et la page de
+connexion Microsoft s'affiche pour le tenant Duke (capture
+`evidence/page-sso-microsoft-login.png`).
+
+Le controle `smoke.sh` couvre desormais quatorze points, dont le certificat
+public et la redirection Entra : quatorze `PASS`, zero echec.
+
+Une connexion complete reste a faire par une personne reelle : elle exige le mot
+de passe Duke et la validation de l'URI de redirection sur l'application Entra.
 
 ## Garde-fous
 
