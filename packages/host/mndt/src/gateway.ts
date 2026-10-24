@@ -139,6 +139,13 @@ export class WorkbenchGateway extends TypertRemoteService {
       })()
     }
     ctx.effect(() => {
+      // The test cadence wins when both are set: a fixed interval exists so the
+      // scheduled path can be proven quickly, and the daily hour is what runs in
+      // production.
+      if (Number.isFinite(every)) {
+        const handle = setInterval(fire, every)
+        return () => { clearInterval(handle) }
+      }
       if (at !== undefined) {
         const [hour, minute] = at.split(':').map(Number)
         const delay = (): number => {
@@ -155,8 +162,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         arm()
         return () => { clearTimeout(handle) }
       }
-      const handle = setInterval(fire, every)
-      return () => { clearInterval(handle) }
+      return () => undefined
     }, 'mndt: scheduled briefing')
   }
 
