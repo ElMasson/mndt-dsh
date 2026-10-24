@@ -1,0 +1,21 @@
+{
+  "name": "@deepseek-ai/dsh-mndt-core",
+  "description": "mndt workbench domain: missions, briefs, approvals and memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:~"
+  }
+}

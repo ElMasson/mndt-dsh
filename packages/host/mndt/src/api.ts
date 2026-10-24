@@ -1,0 +1,307 @@
+/**
+ * The Duke Workbench HTTP API.
+ *
+ * One handler from a request to a response, so it is testable without a socket,
+ * and one thin adapter that puts it on the network. Every route authenticates
+ * first, then asks the grant table before it changes anything. A refusal is a
+ * JSON body with its reason, never an empty success.
+ */
+import { createServer } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+import { isMissionKind } from '@deepseek-ai/dsh-mndt-core'
+import type {
+  ApprovalState,
+  Brief,
+  WorkbenchEvent,
+  Mission,
+  MissionKind,
+  MissionStatus,
+  Visibility,
+} from '@deepseek-ai/dsh-mndt-core'
+import type { WorkbenchService, MissionResult } from '@deepseek-ai/dsh-mndt-core'
+import { identityOf } from './identity.ts'
+import type { Headers, IdentityOptions } from './identity.ts'
+import { can } from './policy.ts'
+import type { GrantSource } from './policy.ts'
+
+/** One request as the handler sees it. */
+export interface MndtApiRequest {
+  readonly method: string
+  readonly path: string
+  readonly query?: Readonly<Record<string, string>>
+  readonly authorization?: string
+  readonly headers?: Headers
+  readonly body?: string
+}
+
+/** One response. */
+export interface MndtApiResponse {
+  readonly status: number
+  readonly body: unknown
+}
+
+/** Runs one mission for real. */
+export interface MissionRunner {
+  /**
+   * @param mission - the mission to run.
+   * @returns the brief material the run produced.
+   */
+  run(mission: Mission): Promise<MissionResult>
+}
+
+/** One mounted connector, as the product shows it. */
+export interface ConnectorInfo {
+  readonly module: string
+  readonly server: string
+  readonly enabled: boolean
+}
+
+/** What the API needs. */
+export interface MndtApiOptions {
+  readonly service: WorkbenchService
+  readonly runner: MissionRunner
+  readonly identity: IdentityOptions
+  readonly grants: GrantSource
+  /** Mounted connectors, when the host can enumerate them. */
+  readonly connectors?: () => Promise<readonly ConnectorInfo[]>
+}
+
+/** The API handler. */
+export type MndtApi = (request: MndtApiRequest) => Promise<MndtApiResponse>
+
+/** @param status - HTTP status. @param body - JSON body. @returns the response. */
+function respond(status: number, body: unknown): MndtApiResponse {
+  return { status, body }
+}
+
+/** @param error - a thrown value. @returns its message. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Build the handler.
+ * @param options - service, runner, identity and rights.
+ * @returns the handler.
+ */
+export function createMndtApi(options: MndtApiOptions): MndtApi {
+  const { service, runner, grants } = options
+
+  /** @param capability - what the route needs. @returns the identity, or a refusal. */
+  const authorise = async (
+    identity: string,
+    capability: 'workflows.write' | 'rights.write' | 'agents.write',
+  ): Promise<MndtApiResponse | undefined> => {
+    const table = await grants.grants()
+    if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+    const decision = can(table.grants, identity, capability)
+    return decision.allowed ? undefined : respond(403, { error: decision.reason })
+  }
+
+  return async function handle(request: MndtApiRequest): Promise<MndtApiResponse> {
+    const path = request.path.replace(/\/+$/, '') || '/'
+
+    if (request.method === 'GET' && path === '/health') return respond(200, { ok: true })
+
+    const identity = identityOf(request, options.identity)
+    if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
+
+    try {
+      if (request.method === 'GET' && path === '/me') return respond(200, { you: identity })
+
+      if (request.method === 'GET' && path === '/missions') {
+        const status = request.query?.status
+        const missions = await service.listMissions(status === undefined ? {} : { status: status as MissionStatus })
+        return respond(200, { missions: missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity) })
+      }
+
+      if (request.method === 'POST' && path === '/missions') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const input = parseBody(request.body)
+        const kind = input.kind
+        if (!isMissionKind(kind)) return respond(400, { error: `unknown mission kind: ${String(kind)}` })
+        const prompt = typeof input.prompt === 'string' ? input.prompt : ''
+        const visibility: Visibility = input.visibility === 'private' ? 'private' : 'team'
+        const mission = await service.createMission({ kind: kind as MissionKind, prompt, createdBy: identity, visibility })
+        const started = await service.startMission(mission.id, 'pending')
+        try {
+          const result = await runner.run(started)
+          const finished = await service.completeMission(started.id, result)
+          return respond(201, finished)
+        } catch (error) {
+          const reason = messageOf(error)
+          await service.failMission(started.id, reason)
+          return respond(502, { error: reason, mission: await service.getMission(started.id) })
+        }
+      }
+
+      if (request.method === 'GET' && path.startsWith('/missions/')) {
+        const id = path.slice('/missions/'.length)
+        const mission = await service.getMission(id)
+        if (mission === undefined) return respond(404, { error: `no mission ${id}` })
+        if (mission.visibility === 'private' && mission.createdBy !== identity) {
+          return respond(403, { error: `mission ${id} is private to ${mission.createdBy}` })
+        }
+        const brief = mission.briefId === undefined ? undefined : await service.getBrief(mission.briefId)
+        return respond(200, { mission, brief })
+      }
+
+      if (request.method === 'GET' && path === '/briefs') {
+        return respond(200, { briefs: await service.listBriefs() })
+      }
+
+      if (request.method === 'GET' && path.startsWith('/briefs/')) {
+        const id = path.slice('/briefs/'.length)
+        const brief = await service.getBrief(id)
+        return brief === undefined ? respond(404, { error: `no brief ${id}` }) : respond(200, { brief })
+      }
+
+      if (request.method === 'POST' && /^\/briefs\/[^/]+\/approve$/.test(path)) {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const id = path.split('/')[2] ?? ''
+        const brief = await service.approveBrief(id, identity)
+        return respond(200, { brief })
+      }
+
+      if (request.method === 'GET' && path === '/approvals') {
+        const state = (request.query?.state ?? 'pending') as ApprovalState | 'all'
+        return respond(200, { approvals: await service.listApprovals(state) })
+      }
+
+      if (request.method === 'POST' && path === '/approvals') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const input = parseBody(request.body)
+        const kind = input.kind
+        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete') {
+          return respond(400, { error: `unknown approval kind: ${String(kind)}` })
+        }
+        const approval = await service.requestApproval({
+          kind,
+          title: typeof input.title === 'string' ? input.title : '',
+          payload: typeof input.payload === 'object' && input.payload !== null ? input.payload as never : {},
+          requestedBy: identity,
+          ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
+        })
+        return respond(201, { approval })
+      }
+
+      if (request.method === 'POST' && /^\/approvals\/[^/]+\/decide$/.test(path)) {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const id = path.split('/')[2] ?? ''
+        const input = parseBody(request.body)
+        const decision = input.decision
+        if (decision !== 'approved' && decision !== 'rejected') {
+          return respond(400, { error: 'decision must be approved or rejected' })
+        }
+        const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined)
+        return respond(200, { approval })
+      }
+
+      if (request.method === 'GET' && path === '/memory') {
+        const scope = request.query?.scope
+        return respond(200, {
+          memories: await service.recall(scope === undefined ? {} : { scope: scope as never }),
+        })
+      }
+
+      if (request.method === 'POST' && path === '/memory') {
+        const denied = await authorise(identity, 'agents.write')
+        if (denied !== undefined) return denied
+        const input = parseBody(request.body)
+        const scope = input.scope
+        const kind = input.kind
+        if (scope !== 'team' && scope !== 'user' && scope !== 'mission') return respond(400, { error: 'scope must be team, user or mission' })
+        if (kind !== 'fact' && kind !== 'decision' && kind !== 'preference') return respond(400, { error: 'kind must be fact, decision or preference' })
+        const note = await service.remember({
+          scope,
+          kind,
+          text: typeof input.text === 'string' ? input.text : '',
+          createdBy: identity,
+        })
+        return respond(201, { memory: note })
+      }
+
+      if (request.method === 'GET' && path === '/connectors') {
+        const mounted = options.connectors === undefined ? [] : await options.connectors()
+        return respond(200, { connectors: mounted })
+      }
+
+      if (request.method === 'GET' && path === '/events') {
+        return respond(200, { events: await service.events(Number(request.query?.limit ?? 100)) })
+      }
+
+      return respond(404, { error: `no route ${request.method} ${path}` })
+    } catch (error) {
+      const reason = messageOf(error)
+      // A state error is the caller's fault, anything else is ours; both are
+      // reported, neither is swallowed.
+      const client = /needs|unknown|already|only|cannot|does not/.test(reason)
+      return respond(client ? 409 : 500, { error: reason })
+    }
+  }
+}
+
+/**
+ * Parse a JSON body.
+ * @param body - raw text.
+ * @returns the object, or an empty one when there is nothing to parse.
+ */
+function parseBody(body?: string): Record<string, unknown> {
+  if (body === undefined || body.trim() === '') return {}
+  const parsed: unknown = JSON.parse(body)
+  return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
+}
+
+/** What starting the server needs. */
+export interface MndtListenOptions extends MndtApiOptions {
+  readonly port: number
+  readonly host?: string
+}
+
+/** @param request - incoming message. @returns its body as text. */
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
+ * Put the handler on the network.
+ * @param options - handler options plus bind address.
+ * @returns the listening server.
+ */
+export function startMndtApi(options: MndtListenOptions): Server {
+  const handle = createMndtApi(options)
+  return createServer((request: IncomingMessage, response: ServerResponse) => {
+    void (async () => {
+      const url = new URL(request.url ?? '/', 'http://localhost')
+      const body = request.method === 'POST' ? await readBody(request) : undefined
+      const result = await handle({
+        method: request.method ?? 'GET',
+        path: url.pathname,
+        query: Object.fromEntries(url.searchParams.entries()),
+        ...(request.headers.authorization === undefined ? {} : { authorization: request.headers.authorization }),
+        headers: Object.fromEntries(
+          Object.entries(request.headers).map(([name, value]) => [name, Array.isArray(value) ? value[0] : value]),
+        ),
+        ...(body === undefined ? {} : { body }),
+      })
+      response.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(result.body))
+    })()
+  }).listen(options.port, options.host ?? '127.0.0.1')
+}
+
+/** @param event - a product event. @returns one line for a log. */
+export function eventLine(event: WorkbenchEvent): string {
+  return `${event.at} ${event.actor} ${event.action} ${event.subject}`
+}
+
+/** @param brief - a produced brief. @returns its title. */
+export function briefTitle(brief: Brief): string {
+  return brief.title
+}
