@@ -109,6 +109,23 @@ Piste pour le prochain tour : construire le CLI sans tsdown, par exemple avec
  presentes sur le serveur), ou en figeant les versions de tsdown, unrun et
  rolldown dans le depot pour rendre la construction reproductible.
 
+## Etat apres quatre tours de construction, 24 octobre
+
+Trois corrections ont ete apportees au depot : suppression du paquet de domaine
+supprime de l arbre git, lockfile nettoye, unrun epingle dans les dependances.
+Avec une installation figee, la construction avance jusqu au bundle de configuration
+de tsdown, puis echoue dans unrun, qui bundle cette configuration avec rolldown
+(ggregateBindingErrorsIntoJsError). Le message exact de rolldown est tronque
+par l agregation ; le meme depot construit sans erreur sous Windows.
+
+Ce qui a ete prouve et ne depend plus du deploiement : page produit, agents et
+missions executes, connecteurs reels, briefing planifie, RBAC et lecture seule.
+
+Ce qui manque : une chaine d outils reproductible sous Linux, ou un environnement
+de construction different (Docker Desktop demarre, CI, ou serveur avec plus de
+RAM et un fichier d echange). Ces trois prerequis dependent d une decision ou
+d une action exterieure, pas d un changement de code produit.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
