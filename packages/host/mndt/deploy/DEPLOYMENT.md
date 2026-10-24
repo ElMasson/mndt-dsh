@@ -249,6 +249,33 @@ traverse Traefik puis part vers Microsoft avec le bon `redirect_uri`.
 L'installateur retire desormais l'ancien conteneur ad hoc pour eviter deux
 proprietaires sur le meme service.
 
+## Montage generique des connecteurs, 24 octobre
+
+Un connecteur se monte desormais en une commande. Les descripteurs vivent dans
+`/data/mndt/live/connectors/<serveur>.json` :
+
+    { "serverName": "attio",
+      "command": ["npx", "-y", "mcp-remote", "https://mcp.attio.com/mcp"],
+      "envFile": "attio.env" }
+
+`mount-connector.sh <serveur> <commande...> [--env-file <f>]` ecrit le
+descripteur, regenere le bloc de composition depuis tous les descripteurs, et
+redemarre le workbench. Le secret reste dans le fichier d'environnement protege,
+lu par l'enveloppe shell generee : il n'entre jamais dans la composition.
+
+Le rendu est proprietaire unique de ces lignes : il supprime tout bloc precedent
+qui montait un client MCP, marque ou ajoute a la main. Sans cela, un ancien bloc
+manuel et un bloc genere montaient deux fois le meme serveur, ce qui s'est
+produit au premier essai et a ete corrige.
+
+Verifie apres correction : `/connectors` rend exactement une entree
+`workbench_facts` active, et une mission a de nouveau cite la reponse de
+l'outil.
+
+Commande prete pour Attio, des que sa cle existe :
+
+    mount-connector.sh attio npx -y mcp-remote https://mcp.attio.com/mcp --env-file attio.env
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
