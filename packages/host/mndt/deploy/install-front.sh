@@ -37,5 +37,8 @@ chmod 400 "$CONF/client_secret" "$CONF/cookie_secret"
 chmod 644 "$CONF/oauth2.cfg"
 
 cd "$FRONT"
+# Retire the ad-hoc container started before the stack existed, so one compose
+# project owns every mndt front container.
+docker rm -f mndt-workbench >/dev/null 2>&1 || true
 docker compose up -d
 docker compose ps

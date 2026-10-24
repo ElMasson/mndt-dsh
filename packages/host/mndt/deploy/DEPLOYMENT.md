@@ -232,6 +232,23 @@ preuve. Piege evite : passer `DSH_MNDT_BRIEFING_EVERY_MS` dans une fonction shel
 avec une expansion non quotee ne l'a pas transmis au conteneur ; la variable est
 desormais posee explicitement.
 
+## Pile unifiee, 24 octobre
+
+Le workbench n'est plus lance par une commande ad hoc : il fait partie du projet
+compose `mndt-front` avec la passerelle et le proxy. Trois conteneurs, un seul
+proprietaire :
+
+- `mndt-front-workbench-1` : reseau hote, page et API sur la boucle locale,
+  monte `/data/mndt/live` et `/data/mndt/live/tools` ;
+- `mndt-front-gateway-1` : amorcage du jeton et routage `/mndt-api` ;
+- `mndt-front-proxy-1` : Entra, route Traefik et TLS.
+
+Verifie apres bascule : `/health` repond `{"ok":true}`, la liste des
+connecteurs rend `workbench_facts` active, et une requete non authentifiee
+traverse Traefik puis part vers Microsoft avec le bon `redirect_uri`.
+L'installateur retire desormais l'ancien conteneur ad hoc pour eviter deux
+proprietaires sur le meme service.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

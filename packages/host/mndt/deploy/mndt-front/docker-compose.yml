@@ -49,6 +49,30 @@ services:
       - gateway
     restart: unless-stopped
 
+  workbench:
+    image: mndt-workbench:local
+    # The workbench keeps its API and page on the loopback only; the gateway is
+    # the only ingress. Host networking lets it reach nothing else on the host.
+    network_mode: host
+    env_file:
+      - /data/mndt/live/model.env
+    environment:
+      DSH_HOME: /state/home
+      DSH_MNDT_IDENTITY: duke@datanalysis.re
+      DSH_MNDT_LOCAL_OWNER: duke@datanalysis.re
+      DSH_MNDT_STATE: /state/state.json
+      DSH_MNDT_PORT: "8795"
+      DSH_MNDT_HOST: 127.0.0.1
+      DSH_MNDT_TOKENS_FILE: /state/tokens.json
+      DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
+      DSH_MNDT_BRIEFING_AT: "06:30"
+      DSH_PERMISSION_MODE: danger-full-access
+      PUBLIC_URL: https://mndt.duke-analytics.com/
+      TRUSTED_HOST: mndt.duke-analytics.com
+    volumes:
+      - /data/mndt/live:/state
+      - /data/mndt/live/tools:/opt/mndt-tools:ro
+    restart: unless-stopped
 networks:
   front: {}
   tellus:
