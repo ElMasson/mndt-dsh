@@ -59,6 +59,12 @@ sso=$(curl -s -o /dev/null -w '%{redirect_url}' -k -m 10 -H "Host: $HOST" https:
 check "front SSO renvoie vers Entra" 'login.microsoftonline.com' "$sso"
 check "URI de retour attendue" "redirect_uri=https%3A%2F%2F$HOST%2Foauth2%2Fcallback" "$sso"
 
+authority=$(grep -E '^DSH_MNDT_AUTHORITY=' "$LIVE/model.env" 2>/dev/null | cut -d= -f2-)
+if [ -n "$authority" ]; then
+  authority_token=$(grep -E '^DSH_MNDT_AUTHORITY_TOKEN=' "$LIVE/model.env" 2>/dev/null | cut -d= -f2-)
+  snapshot=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "Authorization: Bearer $authority_token" "$authority/governance/snapshot")
+  check "autorite centrale joignable" '^200$' "$snapshot"
+fi
 public_code=$(curl -s -o /dev/null -w '%{http_code}' -m 12 https://mndt.duke-analytics.com/)
 check "HTTPS public repond" '^302$' "$public_code"
 

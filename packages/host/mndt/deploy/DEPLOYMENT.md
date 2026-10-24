@@ -360,6 +360,19 @@ trace lue au 23/10/2026 08:56 UTC.
 
 Capture de la page avec ce briefing : a reprendre a la prochaine session visuelle.
 
+## Gouvernance centralisee, preuve du 25 octobre
+
+Le produit lit desormais la table de droits de l'autorite, plus un fichier local :
+`DSH_MNDT_AUTHORITY=https://governance.duke-analytics.com` et un jeton de service
+dans `/data/mndt/live/model.env` (droits 600). Le jeton ne sert qu'a lire
+l'instantane des droits, il ne donne aucun droit supplementaire a la personne.
+
+Preuve sans redeploiement : contact@ passe de viewer a operator dans l'autorite,
+le produit repond aussitot `canWrite: true` pour cette personne ; retour a
+viewer, il repond `canWrite: false`. La table vient donc bien du centre.
+
+Le controle `smoke.sh` verifie en plus que l'autorite repond 200 a son instantane.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
