@@ -187,6 +187,29 @@ Pieges rencontres et corriges : le proxy lit sa configuration en utilisateur
 65532, donc `/etc/mndt-front` doit etre 755 et les secrets 400 appartenant a
 65532 ; le secret de cookie doit faire 32 octets bruts, pas 44 caracteres base64.
 
+## Connecteurs MCP, preuve du 24 octobre
+
+Le workbench demarre sans serveur MCP. Un connecteur a ete monte pour prouver la
+chaine complete, et la meme forme accueille les connecteurs externes :
+
+- serveur `facts-mcp.mjs` monte depuis `/data/mndt/live/tools` dans
+  `/opt/mndt-tools` ;
+- ligne de composition dans `/state/home/profiles/web/cordis.patch.yml` ;
+- l'API rend `{"connectors":[{"module":"@deepseek-ai/dsh-mcp-client",
+  "server":"workbench_facts","enabled":true}]}` ;
+- une mission a appele `mcp__workbench_facts__workbench_facts` et le brief cite
+  la reponse verbatim, avec le serveur MCP en source.
+
+Piege important : une entree de patch qui ne vise pas un id existant est ignoree
+avec l'avertissement `patch: entry "..." not found`. Pour ajouter un plugin, la
+ligne doit etre dans une liste `insert`. C'est la raison pour laquelle le
+connecteur n'apparaissait pas au premier essai.
+
+Les connecteurs externes (Attio, Qonto, Lemlist, ...) prennent la meme forme avec
+leur propre `command`/`args`/`env` ; il ne manque que leurs identifiants.
+
+Capture : `docs/duke-product/evidence/page-connector-mission.png`.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
