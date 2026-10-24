@@ -20,6 +20,7 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
 | Multi-utilisateurs | `duke@` peut écrire, `contact@` lit seulement, à travers la passerelle (`/mndt-api/state`) | tenu |
 | Déploiement sur `51.159.164.138` | conteneurs `gateway`, `proxy`, `workbench` sur le réseau du front, publications limitées à la boucle locale | tenu |
 | Builds et tests | compilateur hôte, bundle, build web et tests unitaires au vert ; `smoke.sh` 16 contrôles | tenu |
+| Décisions humaines réelles | mission ayant demandé un accord send-email, brief sans envoi, décision humaine enregistrée avec motif, journal pproval.requested puis pproval.approved | tenu |
 | Aucune surface qui prétend exécuter | missions interrompues marquées en échec avec leur motif, brief qui déclare l'absence de source, connecteur refusé plutôt que simulé | tenu |
 
 ## Ce qui reste ouvert

@@ -43,6 +43,7 @@ check "lecteur ne peut pas ecrire" '"canWrite":false' "$viewer"
 connectors=$(curl -s -m 8 -H 'x-forwarded-email: duke@datanalysis.re' "$API/connectors")
 check "connecteur monte" '"server":"workbench_facts"' "$connectors"
 check "connecteur Attio monte" '"server":"attio"' "$connectors"
+check "outil de decision monte" '"server":"approvals"' "$connectors"
 
 if [ -f "$LIVE/web-token" ]; then
   token=$(cat "$LIVE/web-token")

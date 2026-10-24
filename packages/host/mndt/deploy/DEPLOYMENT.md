@@ -397,6 +397,22 @@ proprietaire, faux pour le lecteur), l'amorcage de la page repond 303 avec un
 cookie `dsh-auth` signe pour `mndt.duke-analytics.com`, et seize controles
 passent.
 
+## Decisions humaines, preuve du 25 octobre
+
+Une mission ne pouvait rien demander a un humain : la file de decisions restait
+vide par construction. Elle peut desormais appeler l'outil `request_approval`,
+et ne peut pas decider a sa place : l'outil de decision n'est pas expose cote
+serveur.
+
+Preuve de bout en bout : une mission a prepare un brouillon de relance et demande
+l'accord `send-email` (`apr_df6a6af835ed40e9b6b1`), le brief a indique que rien
+n'avait ete envoye, puis la decision a ete prise par une personne avec son motif,
+et le journal montre `approval.requested` puis `approval.approved`.
+
+Une seconde decision est laissee en attente (`apr_4b33985f97c84d489897`) pour
+que la personne qui se connecte la tranche elle-meme ; capture
+`page-pending-approval.png`.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
