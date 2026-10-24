@@ -276,6 +276,16 @@ Commande prete pour Attio, des que sa cle existe :
 
     mount-connector.sh attio npx -y mcp-remote https://mcp.attio.com/mcp --env-file attio.env
 
+## Controle rejouable
+
+`smoke.sh` verifie dix faits observables et sort en erreur au premier manque :
+sante de l'API, identite et droit d'ecriture du proprietaire, absence d'ecriture
+pour le lecteur, connecteur monte, page servie avec jeton, page refusee sans
+jeton, redirection vers Entra, URI de retour attendue, automatisation deja
+executee.
+
+Execusion du 24 octobre sur le serveur : dix `PASS`, zero echec.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
