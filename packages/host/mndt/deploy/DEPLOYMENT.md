@@ -300,7 +300,7 @@ Verifie depuis un poste : certificat valide, HTTPS repond 302 vers
 connexion Microsoft s'affiche pour le tenant Duke (capture
 `evidence/page-sso-microsoft-login.png`).
 
-Le controle `smoke.sh` couvre desormais quatorze points, dont le certificat
+Le controle `smoke.sh` couvre desormais quinze points, dont le certificat
 public et la redirection Entra : quatorze `PASS`, zero echec.
 
 Une connexion complete reste a faire par une personne reelle : elle exige le mot
