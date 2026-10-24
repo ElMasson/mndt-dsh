@@ -20,6 +20,9 @@ cd "$SRC"
 pnpm install --no-frozen-lockfile
 pnpm exec tsx scripts/generate-typert.ts
 DSH_CLIENT_COMMIT_HASH="$HASH" pnpm exec tsx scripts/build.ts --scope artifacts
+pnpm add -w unrun >/dev/null 2>&1 || true
+pnpm exec tsdown --filter @deepseek-ai/dsh
+test -f apps/cli/lib/bin.js || { echo "bundle cli absent"; exit 1; }
 pnpm --filter @deepseek-ai/dsh deploy --prod --legacy "$OUT"
 du -sh "$OUT"
 tar -czf "$WIN/packages/host/mndt/deploy/mndt-deploy.tgz" -C "$OUT" .

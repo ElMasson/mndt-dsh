@@ -97,6 +97,18 @@ Prochaine etape : ajouter explicitement pnpm --filter @deepseek-ai/dsh bundle
 (ou la porte de build qui produit cette lib) avant le deploy, verifier
 pps/cli/lib/index.js, puis redeployer.
 
+## Constat du 24 octobre, bundle CLI sur une installation neuve
+
+Deux tentatives pour produire pps/cli/lib sur une installation Linux neuve ont
+ echoue : tsdown ne trouve pas unrun ; apres installation de unrun, c est le
+ binding natif de rolldown qui echoue au chargement de la configuration. Ces deux
+ problemes n apparaissent pas sur le poste, ou ces dependances sont deja la.
+
+Piste pour le prochain tour : construire le CLI sans tsdown, par exemple avec
+ tsx a l execution depuis l arbre source (les dependances de developpement sont
+ presentes sur le serveur), ou en figeant les versions de tsdown, unrun et
+ rolldown dans le depot pour rendre la construction reproductible.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
