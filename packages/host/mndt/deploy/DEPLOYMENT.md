@@ -306,6 +306,24 @@ public et la redirection Entra : quatorze `PASS`, zero echec.
 Une connexion complete reste a faire par une personne reelle : elle exige le mot
 de passe Duke et la validation de l'URI de redirection sur l'application Entra.
 
+## Lecture seule sur un connecteur, 24 octobre
+
+Certains serveurs exposent des outils d'ecriture a cote des outils de lecture.
+Une mission ne doit pas pouvoir modifier un systeme sans decision. `mcp-proxy.mjs`
+s'intercale entre le client et le serveur, filtre `tools/list` sur une liste
+d'autorisation, et refuse localement tout `tools/call` hors liste : l'appel
+n'atteint jamais le serveur.
+
+Verifie sur le vrai Attio, avec le cache OAuth du poste : six outils de lecture
+exposes (`search-records`, `list-records`, `get-records-by-ids`, les trois
+recherches semantiques), et `create-record` refuse avec le motif explicite
+`tool create-record is outside the read-only allow list`.
+
+Le cache Attio du poste correspond au serveur `https://mcp.attio.com/mcp`
+(client MCP CLI Proxy, scope `openid offline_access mcp`). Le copier sur le
+serveur est une decision de securite qui attend l'accord de Stephane : le jeton
+donne acces au CRM, meme filtre en lecture seule.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
