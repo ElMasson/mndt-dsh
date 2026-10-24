@@ -18,6 +18,9 @@ import sys
 HOME = os.environ.get('MNDT_HOME', '/data/mndt/live')
 PATCH = os.path.join(HOME, 'home/profiles/web/cordis.patch.yml')
 DESCRIPTORS = os.path.join(HOME, 'connectors')
+# The container sees the state directory mounted as /state: the generated shell
+# sources the env file through that path, never the host path.
+CONNECTORS_IN_CONTAINER = os.environ.get('MNDT_CONNECTORS_IN_CONTAINER', '/state/connectors')
 BEGIN = '# >>> connecteurs montes par mount-connector'
 END = '# <<< connecteurs montes par mount-connector'
 
@@ -39,7 +42,7 @@ def load_descriptors():
         cwd = data.get('cwd')
         script = ''
         if env_file:
-            script += f'if [ -f {DESCRIPTORS}/{env_file} ]; then set -a; . {DESCRIPTORS}/{env_file}; set +a; fi; '
+            script += f'if [ -f {CONNECTORS_IN_CONTAINER}/{env_file} ]; then set -a; . {CONNECTORS_IN_CONTAINER}/{env_file}; set +a; fi; '
         if cwd:
             script += f'cd {cwd}; '
         script += 'exec ' + ' '.join(command)

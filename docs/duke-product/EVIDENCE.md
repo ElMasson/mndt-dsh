@@ -28,14 +28,14 @@ preuve est une ligne ouverte, pas une reussite.
 | --- | --- | --- |
 | Connecteur monte | `{"connectors":[{"server":"workbench_facts","enabled":true}]}` | API `/connectors` du serveur |
 | Outil appele par une mission | brief citant la reponse verbatim, source = serveur MCP | mission du 24 octobre, capture `page-connector-mission.png` |
-| Connecteurs metier externes | **ouvert** : en attente des identifiants (Attio, Qonto, ...) | question posee |
+| Connecteur metier Attio, lecture seule | mission reelle : trois entreprises lues avec domaines et identifiants, ecriture refusee par la passerelle | serveur, capture page-attio-connector.png |
 
 ## 4. Automatisations planifiees
 
 | Element | Preuve | Ou |
 | --- | --- | --- |
 | Briefing planifie local | mission `done`, auteur `scheduler`, brief date | capture `page-scheduled-briefing.png` |
-| Briefing planifie serveur | deux missions `scheduler` terminees, brief `Briefing du matin — Duke Analytics` | etat du serveur, 24 octobre |
+| Briefing planifie serveur | deux missions `scheduler` terminees, brief `Briefing du matin` (Duke Analytics) | etat du serveur, 24 octobre |
 | Honnetete du brief | il refuse de remplir les cinq rubriques faute de source | texte du brief, cite dans DEPLOYMENT.md |
 
 ## 5. Gouvernance RBAC centralisee

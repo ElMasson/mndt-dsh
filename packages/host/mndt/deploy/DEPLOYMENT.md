@@ -324,6 +324,29 @@ Le cache Attio du poste correspond au serveur `https://mcp.attio.com/mcp`
 serveur est une decision de securite qui attend l'accord de Stephane : le jeton
 donne acces au CRM, meme filtre en lecture seule.
 
+## Attio en lecture, preuve reelle, 24 octobre
+
+Le connecteur Attio est monte sur le serveur, filtre en lecture seule :
+
+- cache OAuth du poste copie dans `/data/mndt/live/mcp-auth` (dossier 700,
+  fichiers 600), monte en `/state/mcp-auth` ;
+- liste d'autorisation dans `/data/mndt/live/connectors/attio.env` : recherche,
+  listage, lecture par identifiants, recherches semantiques ;
+- l'ecriture est refusee par la passerelle avant d'atteindre Attio.
+
+Une mission reelle a lu trois entreprises avec leurs domaines et identifiants :
+Aerophile (aerophile.com, Paris), Air Austral (air-austral.com, Sainte-Marie),
+Absa Group (absa.africa, Johannesburg), avec `has_more_results: true`. Le brief
+cite ces valeurs, elles viennent de l'outil, pas du modele.
+
+Pieges corriges en route : le chemin du fichier d'environnement etait ecrit cote
+hote alors que le conteneur monte `/state`, si bien que le cache n'etait jamais
+lu et le serveur restait deconnecte ; le rendu ecrit desormais le chemin vu du
+conteneur. Verifie ensuite en lancant le proxy manuellement dans le conteneur,
+qui repondait deja correctement avec le bon chemin.
+
+Capture : `docs/duke-product/evidence/page-attio-connector.png`.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

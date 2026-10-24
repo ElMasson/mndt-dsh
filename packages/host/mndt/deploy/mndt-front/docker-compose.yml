@@ -72,6 +72,7 @@ services:
     volumes:
       - /data/mndt/live:/state
       - /data/mndt/live/tools:/opt/mndt-tools:ro
+      - /data/mndt/live/mcp-auth:/state/mcp-auth
     restart: unless-stopped
 networks:
   front: {}
