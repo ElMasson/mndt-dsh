@@ -40,6 +40,15 @@ avec deux montages :
    DNS A vers 51.159.164.138.
 4. Vérifier les deux chemins : navigateur derrière Entra, machine avec jeton.
 
+## Constat du 24 octobre, après la tentative depuis Windows
+
+Transporter une archive du source depuis Windows s'est révélé peu fiable :
+l'archive produite était incomplète, puis la compression complète a dépassé
+vingt minutes sans aboutir. Le chemin robuste est donc de cloner la branche sur
+le serveur et de construire là, dans le conteneur node 22, sans transfert
+d'archive. Le serveur dispose de docker et du réseau nécessaire pour
+l'installation des dépendances.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
