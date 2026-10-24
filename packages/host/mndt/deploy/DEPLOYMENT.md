@@ -347,6 +347,19 @@ qui repondait deja correctement avec le bon chemin.
 
 Capture : `docs/duke-product/evidence/page-attio-connector.png`.
 
+## Briefing planifie avec connecteur, preuve du 25 octobre
+
+La planification a produit seule une mission `mis_11f510baef7f4e31b945`, sans
+appel manuel : demarree par `scheduler`, terminee apres environ deux minutes,
+avec un brief qui cite Attio au lieu de declarer l'absence de source.
+
+Le brief est aussi honnete sur son perimetre : seuls `companies`, `deals` et
+`people` sont lisibles, `tasks`, `notes` et `meetings` sont refuses par le
+serveur Attio, aucun connecteur calendrier n'est monte, et il date sa derniere
+trace lue au 23/10/2026 08:56 UTC.
+
+Capture de la page avec ce briefing : a reprendre a la prochaine session visuelle.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
