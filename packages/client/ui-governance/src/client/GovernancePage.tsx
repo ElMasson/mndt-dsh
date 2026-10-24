@@ -11,7 +11,10 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
-import type { AgentRow, AutomationRow, ConnectorRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/types'
+// Type-only, through the host package's source subpath: the compiled `./types`
+// entry is a build artifact, so a fresh checkout cannot typecheck against it
+// before the host program has run at least once.
+import type { AgentRow, AutomationRow, ConnectorRow, GrantRow, WorkspaceRow } from '@deepseek-ai/dsh-host-governance/src/types.ts'
 import type { GovernanceKey } from './locales.ts'
 
 /** Props handed by the slot registration. */
