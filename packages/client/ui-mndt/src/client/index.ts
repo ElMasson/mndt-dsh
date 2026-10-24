@@ -29,7 +29,31 @@ const NS = 'mndt'
 /** @param ctx - client root context. @returns the mounted face, or one that explains its absence. */
 function face(ctx: ClientContext): MndtFace {
   const mounted = ctx.get('remote.mndt') as MndtFace | undefined
-  if (mounted !== undefined) return mounted
+  if (mounted !== undefined) {
+    // A Remote call resolves through the generated transport, which answers an
+    // envelope ({ ok, value | error }) rather than the bare host return value.
+    // Unwrap it once here so the page sees the shape it was written against.
+    const unwrap = <T>(raw: unknown): T => {
+      // Temporary diagnostic: the transport answer is what decides whether this
+      // page can render at all, so an unexpected shape must be visible.
+      console.warn('mndt raw', JSON.stringify(raw)?.slice(0, 300))
+      const record = raw as { readonly ok?: unknown; readonly value?: unknown; readonly error?: unknown } | null
+      if (record !== null && typeof record === 'object' && 'ok' in record) {
+        if (record.ok === false) {
+          throw new Error(typeof record.error === 'string' ? record.error : 'the Host refused the call')
+        }
+        return (record.value ?? raw) as T
+      }
+      return raw as T
+    }
+    return {
+      state: async () => unwrap(await mounted.state()),
+      runMission: async (kind, prompt) => unwrap(await mounted.runMission(kind, prompt)),
+      decide: async (id, decision, reason) => unwrap(await mounted.decide(id, decision, reason)),
+      approveBrief: async id => unwrap(await mounted.approveBrief(id)),
+      remember: async (scope, kind, text) => unwrap(await mounted.remember(scope, kind, text)),
+    }
+  }
   const absent = (): Promise<never> => Promise.reject(new Error(
     'the mndt Remote is not mounted on this workstation: the mndt host plugin is missing from this composition',
   ))

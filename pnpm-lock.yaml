@@ -1363,6 +1363,9 @@ importers:
       '@deepseek-ai/dsh-deque':
         specifier: workspace:*
         version: link:../../util/deque
+      '@deepseek-ai/dsh-host-mndt':
+        specifier: workspace:*
+        version: link:../../host/mndt
       '@deepseek-ai/dsh-util-values':
         specifier: workspace:*
         version: link:../../util/values
