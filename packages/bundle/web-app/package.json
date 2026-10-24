@@ -191,7 +191,9 @@
     "@deepseek-ai/schemastery": "workspace:~",
     "commander": "^15.0.0",
     "open": "^11.0.2",
-    "@deepseek-ai/dsh-client-ui-brand-mndt": "workspace:*"
+    "@deepseek-ai/dsh-client-ui-brand-mndt": "workspace:*",
+    "@deepseek-ai/dsh-host-mndt": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-mndt": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",

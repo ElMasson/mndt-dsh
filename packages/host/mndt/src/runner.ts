@@ -83,9 +83,12 @@ export class DshMissionRunner {
     const stopAgentEnd = this.#ctx.on('workflow/agent-end', (_info, agent) => {
       if (agent.outcome === 'failed') failures.push(`agent step ${agent.seq} ended failed`)
     })
+    const rootId = childSessionId
     const stopTurnEnd = this.#ctx.on('session/event', (session, event) => {
       if (event.type !== 'turn/end') return
-      if (session.header.id !== childSessionId) return
+      // The workflow engine runs an agent child under the root agent, so a
+      // failure can be reported on either session; both are the same run.
+      if (session.header.id !== rootId && session.header.parentSession !== rootId) return
       const reason = event.data.reason
       if (reason.kind !== 'completed') {
         failures.push(reason.kind === 'error' ? `the agent turn failed: ${reason.error.message}` : `the agent turn ended ${reason.kind}`)
@@ -101,7 +104,10 @@ export class DshMissionRunner {
       const settled = await run.result
       if (failures.length > 0) throw new Error(failures.join('; '))
       const text = textOf(settled)
-      if (text.trim() === '') throw new Error('the agent returned no text')
+      if (text.trim() === '') {
+        const shape = JSON.stringify(settled).slice(0, 300)
+        throw new Error(`the agent returned no text (settled: ${shape})`)
+      }
       const tokens = tokensOf(settled)
       return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
     } finally {
@@ -119,10 +125,28 @@ export class DshMissionRunner {
  */
 export function textOf(settled: unknown): string {
   if (typeof settled === 'string') return settled
-  const result = (settled as { result?: unknown } | null)?.result
-  if (typeof result === 'string') return result
-  const nested = (result as { result?: unknown } | null)?.result
-  return typeof nested === 'string' ? nested : ''
+  const record = settled as Record<string, unknown> | null
+  if (record === null || typeof record !== 'object') return ''
+  const candidates: unknown[] = [record.value, record.result, record.text, record.content, record.output]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate
+    const nested = candidate as Record<string, unknown> | null
+    if (nested !== null && typeof nested === 'object') {
+      for (const key of ['value', 'result', 'text', 'output'] as const) {
+        const value = nested[key]
+        if (typeof value === 'string' && value.trim() !== '') return value
+      }
+      const parts = nested.content
+      if (Array.isArray(parts)) {
+        const joined = parts
+          .map(part => (typeof part === 'string' ? part : (part as { text?: unknown }).text))
+          .filter((part): part is string => typeof part === 'string')
+          .join('')
+        if (joined.trim() !== '') return joined
+      }
+    }
+  }
+  return ''
 }
 
 /** @param settled - the settled run. @returns the token usage, when reported. */

@@ -2817,6 +2817,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-message-feedback':
         specifier: workspace:*
         version: link:../../client/ui-message-feedback
+      '@deepseek-ai/dsh-client-ui-mndt':
+        specifier: workspace:*
+        version: link:../../client/ui-mndt
       '@deepseek-ai/dsh-client-ui-model-selection':
         specifier: workspace:*
         version: link:../../client/ui-model-selection
@@ -2970,6 +2973,9 @@ importers:
       '@deepseek-ai/dsh-host-governance':
         specifier: workspace:*
         version: link:../../host/governance
+      '@deepseek-ai/dsh-host-mndt':
+        specifier: workspace:*
+        version: link:../../host/mndt
       '@deepseek-ai/dsh-host-open-in-app':
         specifier: workspace:*
         version: link:../../host/open-in-app
@@ -4441,6 +4447,22 @@ importers:
       react-dom:
         specifier: ^18.2.0
         version: 18.3.1(react@18.3.1)
+
+  packages/client/ui-mndt:
+    dependencies:
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:*
+        version: link:../../typert/protocol
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:*
+        version: link:../locale
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:*
+        version: link:../ui-slots
 
   packages/client/ui-model-selection:
     devDependencies:

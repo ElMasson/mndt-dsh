@@ -121,6 +121,10 @@
     - id: host-governance
       name: '@deepseek-ai/dsh-host-governance'
 
+    # mndt workbench: missions, briefs, approvals and memory, exposed to the page.
+    - id: host-mndt
+      name: '@deepseek-ai/dsh-host-mndt'
+
     # Session commands, cold reads, and live control over Typert Remote.
     - id: session-controller
       name: '@deepseek-ai/dsh-api-session-controller'
@@ -335,6 +339,9 @@
 
     - id: ui-governance
       name: '@deepseek-ai/dsh-client-ui-governance'
+
+    - id: ui-mndt
+      name: '@deepseek-ai/dsh-client-ui-mndt'
 
     - id: ui-chat
       name: '@deepseek-ai/dsh-client-ui-chat'
