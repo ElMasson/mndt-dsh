@@ -6,15 +6,15 @@
 # portable install, then runs it as a container bound to loopback.
 set -euo pipefail
 
-SRC=/opt/mndt-src
-OUT=/out
-STATE=/var/lib/dsh/mndt
+SRC=/data/mndt/src
+OUT=/data/mndt/out
+STATE=/data/mndt/state
 
 echo "=== espace disque ==="
-df -h / | tail -1
-AVAILABLE_GB=$(df -BG / | awk 'NR==2 {gsub("G","",$4); print $4}')
+df -h /data | tail -1
+AVAILABLE_GB=$(df -BG /data | awk 'NR==2 {gsub("G","",$4); print $4}')
 if [ "$AVAILABLE_GB" -lt 6 ]; then
-  echo "espace insuffisant: ${AVAILABLE_GB} Go"; exit 1
+  echo "espace insuffisant sous /data: ${AVAILABLE_GB} Go"; exit 1
 fi
 
 echo "=== extraction du source ==="
@@ -27,8 +27,9 @@ docker run --rm -v "$SRC":/src -v "$OUT":/out -w /src node:22-bookworm bash -lc 
   set -euo pipefail
   corepack enable
   pnpm --version
-  pnpm install --frozen-lockfile
-  pnpm exec tsx scripts/build.ts --scope artifacts
+  pnpm install --no-frozen-lockfile
+  pnpm exec tsx scripts/generate-typert.ts
+  DSH_CLIENT_COMMIT_HASH=f301c9b pnpm exec tsx scripts/build.ts --scope artifacts
   pnpm --filter @deepseek-ai/dsh deploy --prod --legacy /out
   ls /out | head -5
 '
