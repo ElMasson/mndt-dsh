@@ -18,7 +18,7 @@ Environment=DSH_GOVERNANCE_TOKENS_FILE=/etc/dsh/tokens.json
 Environment=DSH_GOVERNANCE_STATE=/var/lib/dsh/governance/rbac.json
 Environment=DSH_GOVERNANCE_AUDIT=/var/lib/dsh/governance/audit.jsonl
 
-ExecStart=/usr/bin/pnpm exec tsx packages/host/governance/scripts/serve-authority.ts
+ExecStart=/usr/bin/node --import tsx/esm packages/host/governance/scripts/serve-authority.ts
 Restart=on-failure
 RestartSec=5
 

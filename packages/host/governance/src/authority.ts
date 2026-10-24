@@ -36,6 +36,15 @@ export interface AuthorityOptions {
   readonly auditPath?: string
   /** Clock seam, so tests do not depend on wall time. */
   readonly now?: () => Date
+  /**
+   * Header name carrying an identity already proven by an authenticating proxy
+   * (for example `x-auth-request-email` from oauth2-proxy).
+   *
+   * Only set this when the authority is reachable *solely* through that proxy:
+   * anything able to send the header would otherwise assert any identity. Left
+   * undefined, the bearer token is the only way in.
+   */
+  readonly proxyUserHeader?: string
 }
 
 /** One request, as the handler sees it. */
@@ -44,6 +53,8 @@ export interface AuthorityRequest {
   readonly path: string
   /** The `Authorization` header, verbatim. */
   readonly authorization?: string
+  /** The request headers, lowercased, when the caller can provide them. */
+  readonly headers?: Readonly<Record<string, string | undefined>>
   /** Raw JSON body for mutations. */
   readonly body?: string
 }
@@ -94,6 +105,22 @@ export function createAuthority(options: AuthorityOptions): (request: AuthorityR
     return options.tokens[token]?.user
   }
 
+  /**
+   * The identity an authenticating proxy already proved, when this deployment
+   * trusts one. Off by default: without `proxyUserHeader` the header is ignored
+   * entirely and a bearer token remains the only way in.
+   * @param request - the request, whose headers the caller supplied.
+   * @returns the lowercased email, or undefined when it proves nothing.
+   */
+  const identityFromProxy = (request: AuthorityRequest): string | undefined => {
+    const header = options.proxyUserHeader
+    if (header === undefined) return undefined
+    const raw = request.headers?.[header.toLowerCase()]
+    if (raw === undefined) return undefined
+    const identity = raw.trim().toLowerCase()
+    return identity === '' ? undefined : identity
+  }
+
   /** @param body - raw JSON. @returns the parsed object, or undefined. */
   const parse = (body?: string): Record<string, unknown> | undefined => {
     if (body === undefined || body.trim() === '') return undefined
@@ -112,9 +139,21 @@ export function createAuthority(options: AuthorityOptions): (request: AuthorityR
       return { status: 200, body: { ok: true } }
     }
 
-    const user = authenticate(request.authorization)
+    // A supplied Authorization header means the caller chose the token path: a
+    // bad token must never be rescued by the proxy header. Without one, the
+    // proxy identity applies when this deployment trusts it.
+    const user = request.authorization === undefined
+      ? identityFromProxy(request)
+      : authenticate(request.authorization)
     if (user === undefined) {
       return { status: 401, body: { error: 'a bearer token is required' } }
+    }
+
+    // A person who just signed in lands here: answer with who they are and what
+    // they can see, instead of a bare 404 from an API root.
+    if (request.method === 'GET' && request.path === '/') {
+      const snapshot: RbacSnapshot = controller.snapshot()
+      return { status: 200, body: { service: 'dsh governance authority', you: user, ...snapshot } }
     }
 
     if (request.method === 'GET' && request.path === '/governance/snapshot') {
@@ -222,6 +261,9 @@ export function startAuthority(options: AuthorityListenOptions): Server {
         method: request.method ?? 'GET',
         path: new URL(request.url ?? '/', 'http://localhost').pathname,
         ...(request.headers.authorization === undefined ? {} : { authorization: request.headers.authorization }),
+        headers: Object.fromEntries(
+          Object.entries(request.headers).map(([name, value]) => [name, Array.isArray(value) ? value[0] : value]),
+        ),
         ...(body === undefined ? {} : { body }),
       })
       response.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8' })

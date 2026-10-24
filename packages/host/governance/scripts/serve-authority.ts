@@ -43,6 +43,11 @@ if (!Number.isInteger(port) || port <= 0) {
 const auditPath = or(process.env.DSH_GOVERNANCE_AUDIT, join(homedir(), '.dsh', 'governance', 'audit.jsonl'))
 const statePath = or(process.env.DSH_GOVERNANCE_STATE, defaultStatePath())
 const host = or(process.env.DSH_GOVERNANCE_HOST, '127.0.0.1')
+/**
+ * The identity header an authenticating proxy already proved. Set it only when
+ * this authority is reachable solely through that proxy.
+ */
+const proxyUserHeader = process.env.DSH_GOVERNANCE_PROXY_USER_HEADER
 
 const server = startAuthority({
   tokens,
@@ -50,6 +55,7 @@ const server = startAuthority({
   auditPath,
   port,
   host,
+  ...(proxyUserHeader === undefined ? {} : { proxyUserHeader }),
 })
 
 server.on('listening', () => {

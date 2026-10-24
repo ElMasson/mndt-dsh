@@ -54,4 +54,23 @@ describe('sequencing', () => {
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(outcome).toEqual({ ok: true, result: 'ok' })
   })
+
+  it('reports a workflow that stopped in error instead of a success', async () => {
+    const outcome = await executeAutomation({
+      createAgent: async () => ({ dispose: async () => {} }),
+      startWorkflow: async () => ({ value: undefined, stopReason: 'error', error: 'worker-exit: sandbox refused' }),
+    }, { id: 'a1', owner: 'stephane', prompt: 'do the thing' })
+
+    expect(outcome.ok).toBe(false)
+    expect(outcome.reason).toBe('worker-exit: sandbox refused')
+  })
+
+  it('still reports a completed workflow as a success', async () => {
+    const outcome = await executeAutomation({
+      createAgent: async () => ({ dispose: async () => {} }),
+      startWorkflow: async () => ({ value: 42, stopReason: 'completed' }),
+    }, { id: 'a2', owner: 'stephane', prompt: 'count' })
+
+    expect(outcome.ok).toBe(true)
+  })
 })

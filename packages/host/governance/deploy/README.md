@@ -51,3 +51,18 @@ Replace the entry in `/etc/dsh/tokens.json`, then
 from their environment on the next start. Removing a token stops reads immediately;
 removing a grant stops mutations immediately; revoking the Entra assignment stops
 reachability.
+
+## Secrets oauth2-proxy (jamais dans le depot)
+
+Deux fichiers, mode 0600, lisibles par le seul compte du proxy :
+
+```bash
+sudo install -d -m 0700 /etc/oauth2-proxy
+openssl rand -base64 32 | sudo tee /etc/oauth2-proxy/cookie_secret >/dev/null
+printf %s "<client-secret-entra>" | sudo tee /etc/oauth2-proxy/client_secret >/dev/null
+sudo chmod 0600 /etc/oauth2-proxy/cookie_secret /etc/oauth2-proxy/client_secret
+```
+
+La configuration y fait reference par `@/etc/oauth2-proxy/...` : sans le
+`cookie_secret`, oauth2-proxy refuse de demarrer, et c est la premiere cause
+de panne silencieuse d un deploiement SSO.

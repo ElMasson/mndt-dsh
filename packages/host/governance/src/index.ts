@@ -15,6 +15,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the AgentPresetRegistry augmentation of Context.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+// Type-only: pulls the default-model selection a programmatic Agent route reads.
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 // Type-only: pulls the WorkspaceRegistry augmentation of Context.
 import type {} from '@deepseek-ai/dsh-workspace'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -36,9 +38,12 @@ import { loadTableView } from './cache.ts'
 import { AutomationService, JsonFileAutomationStorage, type Automation } from './automations.ts'
 import { executeAutomation } from './automations-runner.ts'
 import { AutomationScheduler } from './automations-scheduler.ts'
+import { failureOfAgentEnd, failureOfTurnEnd } from './automations-failure.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { randomUUID } from 'node:crypto'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+// Type-only: pulls the SessionStore augmentation and its `session/event` feed.
+import type {} from '@deepseek-ai/dsh-session'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 // Type-only: pulls the WorkflowEngine augmentation of Context.
 import type {} from '@deepseek-ai/dsh-workflow'
@@ -56,6 +61,16 @@ export type { AuthorityOptions, AuthorityRequest, AuthorityResponse, AuthorityLi
 
 /** The Remote gateway: the browser's only way in. */
 export class GovernanceGateway extends TypertRemoteService {
+  /**
+   * Services this gateway reads for the Agents, Sharing and automation-run
+   * surfaces. Cordis refuses an undeclared service read with "cannot get
+   * property <name> without inject", which surfaced as a raw gateway/internal
+   * failure on those surfaces. The workflow engine is deliberately absent: the
+   * web composition disables workflow-ptc, so it is looked up per run instead
+   * (see {@link executeRow}) rather than gating this whole Remote face.
+   */
+  static inject = ['agentPresets', 'workspaceRegistry', 'agents']
+
   private readonly storage: RbacStorage
   private readonly automations: AutomationService
   private readonly scheduler: AutomationScheduler<Automation>
@@ -157,17 +172,63 @@ export class GovernanceGateway extends TypertRemoteService {
     const outcome = await executeAutomation({
       createAgent: async () => {
         const sessionId = brandString<SessionId>(randomUUID())
-        created = await this.ctx.agents.create({ sessionId })
+        // A programmatic root agent has no parent to inherit a route from. Take
+        // the deployment default the way the headless runner does, or the loop
+        // has no provider/model to build a request with and the `{{model}}`
+        // prompt variable stays empty (the turn then fails before any call).
+        const selection = this.ctx.get('agentDefaultModel')?.currentSelection()
+        created = await this.ctx.agents.create({
+          sessionId,
+          ...selection === undefined
+            ? {}
+            : { agentOptions: { provider: selection.provider, model: selection.model } },
+        })
         return { dispose: () => created?.dispose() ?? Promise.resolve() }
       },
       startWorkflow: async (_handle, prompt) => {
         if (created === undefined) throw new Error('the agent was not created')
-        const run = this.ctx.workflowEngine.start({
+        // Optional on purpose: a Host that disables workflow-ptc still mounts
+        // every read surface. Running an automation reports the missing engine
+        // instead of failing with a Cordis "without inject" error.
+        const engine = this.ctx.get('workflowEngine')
+        if (engine === undefined) {
+          throw new Error('governance: this Host does not mount the workflow engine, so an automation cannot run')
+        }
+        const run = engine.start({
           script: `return await agent(${JSON.stringify(prompt)})`,
           meta: { name: 'automation', description: 'Scheduled user automation' },
           parent: created.agent,
         })
-        return await run.result
+        // A settled run only reports the script's own stop reason: the engine's
+        // `agent()` resolves `null` when a child run fails, so a completed script
+        // can hide a failed turn. Read the two contracts that do report it —
+        // `workflow/agent-end` for the child outcome and the child session's
+        // `turn/end` for the real reason — instead of trusting the label.
+        const childSessionId = created.agent.session.header.id
+        const failures: string[] = []
+        const stopAgentEnd = this.ctx.on('workflow/agent-end', (info, agent) => {
+          if (info.id !== run.id) return
+          const failure = failureOfAgentEnd({ outcome: agent.outcome, seq: agent.seq, label: agent.label })
+          if (failure !== undefined) failures.push(failure)
+        })
+        const stopTurnEnd = this.ctx.on('session/event', (session, event) => {
+          if (event.type !== 'turn/end') return
+          const { reason } = event.data
+          const failure = failureOfTurnEnd(childSessionId, {
+            parentSession: session.header.parentSession,
+            kind: reason.kind,
+            message: reason.kind === 'error' ? reason.error.message : undefined,
+          })
+          if (failure !== undefined) failures.push(failure)
+        })
+        try {
+          const settled = await run.result
+          if (failures.length > 0) throw new Error(failures.join('; '))
+          return settled
+        } finally {
+          stopAgentEnd()
+          stopTurnEnd()
+        }
       },
     }, automation)
     return outcome.ok

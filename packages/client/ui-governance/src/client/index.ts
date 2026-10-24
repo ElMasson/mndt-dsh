@@ -12,7 +12,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: pulls the generated Remote projection that types ctx.remote.governance.
 import type {} from '@deepseek-ai/dsh-host-governance/remote'
+import { GovernanceIcon } from './GovernanceIcon.tsx'
 import { GovernancePage } from './GovernancePage.tsx'
+import { installGovernanceStyles } from './styles.ts'
 import { en, zh } from './locales.ts'
 import type { GovernanceKey } from './locales.ts'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
@@ -32,11 +34,19 @@ const unavailable = (): Promise<never> => Promise.reject(
 
 /**
  * The Host face, or a stand-in that explains its absence.
+ *
+ * `ctx.get` rather than the property read on purpose: the property form is
+ * reserved to services a plugin declares in `inject`, and this page must not
+ * declare `remote.governance` — the api-remotes assembly mounts that namespace
+ * asynchronously, so declaring it would park this page until the mount and fail
+ * the whole Client boot when a Host never publishes an authority. Reading
+ * through `ctx.get` keeps the face optional: present once mounted, and an
+ * explicit "not mounted" rejection (never a silent empty table) when it is not.
  * @param ctx - Client root context.
  * @returns the mounted namespace, or one whose every call rejects with the reason.
  */
 function governanceFace(ctx: ClientContext): TypertRemoteNamespaceMap['governance'] {
-  const mounted = ctx.remote.governance
+  const mounted: TypertRemoteNamespaceMap['governance'] | undefined = ctx.get('remote.governance')
   if (mounted !== undefined) return mounted
   return {
     list: unavailable,
@@ -56,7 +66,7 @@ function governanceFace(ctx: ClientContext): TypertRemoteNamespaceMap['governanc
   }
 }
 
-/** Required services: the slot registry and the copy registry. */
+/** Required services: the slot registry, the copy registry, and the Remote transport. */
 export const inject = ['slots', 'locale', 'remote']
 
 const NS = 'governance'
@@ -67,13 +77,25 @@ const NS = 'governance'
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-governance: dictionaries')
+  ctx.effect(installGovernanceStyles, 'ui-governance: styles')
   const t = ctx.locale.bind(NS)
-  const api = governanceFace(ctx)
+  // The page lives in the main content area, keyed by the same id the sidebar
+  // entry carries: clicking that entry selects this key. Rendering the page from
+  // the panellist row itself is what confined it to the sidebar column.
+  ctx.slots.inject('main', () => ctx.slots.register({
+    name: 'main',
+    key: 'governance',
+    locale: NS,
+    // Resolved on the page's first render, never during this plugin's apply:
+    // the namespace is still being mounted then, and a read at apply time would
+    // freeze the stand-in before the Host face exists.
+    inject: () => ({ t, api: governanceFace(ctx) }),
+  }, GovernancePage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
     id: 'governance',
-    priority: 0,
+    order: 20,
     locale: NS,
-    inject: () => ({ t, api }),
-  }, GovernancePage))
+    label: () => t('title'),
+  }, GovernanceIcon))
 }

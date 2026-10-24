@@ -879,9 +879,6 @@ importers:
       '@deepseek-ai/dsh-client-test-runtime':
         specifier: workspace:*
         version: link:../../packages/test-support/client-runtime
-      '@deepseek-ai/dsh-client-ui-brand-mndt':
-        specifier: workspace:*
-        version: link:../../packages/client/ui-brand-mndt
       '@deepseek-ai/dsh-client-ui-deliverables':
         specifier: workspace:*
         version: link:../../packages/client/ui-deliverables
@@ -2294,6 +2291,9 @@ importers:
       '@deepseek-ai/dsh-hmr':
         specifier: workspace:*
         version: link:../../boot/hmr
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:*
         version: link:../../jobs/jobs-local
@@ -2766,9 +2766,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-attachment':
         specifier: workspace:*
         version: link:../../client/ui-attachment
-      '@deepseek-ai/dsh-client-ui-brand-mndt':
-        specifier: workspace:*
-        version: link:../../client/ui-brand-mndt
       '@deepseek-ai/dsh-client-ui-brand-official':
         specifier: workspace:*
         version: link:../../client/ui-brand-official
@@ -3559,33 +3556,6 @@ importers:
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.2.0
-        version: 18.3.1(react@18.3.1)
-
-  packages/client/ui-brand-mndt:
-    devDependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:~
-        version: link:../../../vendor/cordis
-      '@deepseek-ai/dsh-client-ui-conversation':
-        specifier: workspace:*
-        version: link:../ui-conversation
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: workspace:*
-        version: link:../ui-primitives
-      '@deepseek-ai/dsh-client-ui-renderer':
-        specifier: workspace:*
-        version: link:../ui-renderer
-      '@deepseek-ai/dsh-client-ui-sidebar':
-        specifier: workspace:*
-        version: link:../ui-sidebar
-      '@testing-library/react':
-        specifier: ^16.3.3
-        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react:
         specifier: ^18.2.0
         version: 18.3.1
@@ -10663,6 +10633,9 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: workspace:*
         version: link:../../core/agent
+      '@deepseek-ai/dsh-agent-default-model':
+        specifier: workspace:*
+        version: link:../../core/agent-default-model
       '@deepseek-ai/dsh-agent-preset-registry':
         specifier: workspace:*
         version: link:../../preset/agent-preset-registry
@@ -15035,6 +15008,9 @@ importers:
       '@deepseek-ai/dsh-app-boot':
         specifier: workspace:*
         version: link:../../boot/app-boot
+      '@deepseek-ai/dsh-host-governance':
+        specifier: workspace:*
+        version: link:../../host/governance
       '@deepseek-ai/dsh-typert-protocol':
         specifier: workspace:*
         version: link:../protocol

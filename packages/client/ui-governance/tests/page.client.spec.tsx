@@ -77,7 +77,7 @@ describe('the rights surface', () => {
 
     expect(api.list).toHaveBeenCalledTimes(1)
     expect(text).toContain('stephane')
-    expect(text).toContain('owner')
+    expect(text).toContain('roleOwner')
     expect(text).toContain('session-42')
   })
 
@@ -133,7 +133,7 @@ describe('the rights surface', () => {
 
     expect(api.connectors).toHaveBeenCalledTimes(1)
     expect(host?.textContent).toContain('office365')
-    expect(host?.textContent).toContain('enabled')
+    expect(host?.textContent).toContain('connectorEnabled')
   })
 
   it('warns that the table is cached when the authority is unreachable', async () => {

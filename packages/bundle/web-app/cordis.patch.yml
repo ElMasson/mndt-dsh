@@ -346,11 +346,6 @@
     - id: ui-brand-official
       name: '@deepseek-ai/dsh-client-ui-brand-official'
 
-    # mndt occupants: register only when the client was built with
-    # DSH_BUILD_CLIENT_PROFILE=mndt.
-    - id: ui-brand-mndt
-      name: '@deepseek-ai/dsh-client-ui-brand-mndt'
-
     - id: ui-attachment
       name: '@deepseek-ai/dsh-client-ui-attachment'
 
@@ -579,8 +574,10 @@
 - id: tool-subagent-fork
   disabled: true
 
+# Enabled on purpose: governance automations run through this engine, and a
+# governance "Run" that cannot execute is worse than the runtime being present.
+# The agent-facing workflow tool below stays disabled.
 - id: workflow-ptc
-  disabled: true
 
 - id: tool-workflow
   disabled: true
