@@ -12,7 +12,14 @@ const src = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url)
 const STANDALONE_ERROR = 'apps/web is not a standalone application: bare Vite cannot inject window.__DSH_BOOT__. '
   + 'From a repository checkout, run `pnpm dsh web`; an installed package uses `dsh web`. '
   + 'For client-plugin HMR, run `pnpm run dev:web`, which starts `dsh web` and the rebuild watchers together.'
-const DEFAULT_CLIENT_TITLE = 'DSH Local Build'
+/** Title used when the build carries no DSH_CLIENT_TITLE value.
+ *
+ * This fork ships the mndt brand, and the title used to be set only by the
+ * `mndt` build profile. An ordinary rebuild, which carries no profile, then
+ * fell back to the placeholder below and the window title reverted while the
+ * rest of the brand stayed: the branding must not depend on spelling a profile
+ * on the command line, so the brand title is the default here. */
+const DEFAULT_CLIENT_TITLE = 'Enterprise Action OS'
 
 /** Escape build-time text before placing it in the HTML title element. */
 function escapeHtmlText(value: string): string {
@@ -30,16 +37,30 @@ function clientDocumentTitle(): Plugin {
   }
 }
 
-/** Keep the redistribution license beside the bundled brand font. */
+/**
+ * Bundled brand fonts and the redistribution license shipping beside each.
+ *
+ * A brand layer adds its faces to this list rather than leaving a font in the
+ * bundle without its terms. Typeset families live in their owning package.
+ */
+const BRAND_FONT_LICENSES = [
+  { license: '../../packages/client/ui-theme/src/styles/Montserrat-OFL.txt', out: 'Montserrat-OFL.txt' },
+  { license: '../../packages/client/ui-brand-mndt/src/styles/Inter-OFL.txt', out: 'Inter-OFL.txt' },
+  { license: '../../packages/client/ui-brand-mndt/src/styles/SpaceGrotesk-OFL.txt', out: 'SpaceGrotesk-OFL.txt' },
+] as const
+
+/** Keep each bundled brand font's redistribution license beside the asset. */
 function brandFontLicense(): Plugin {
   return {
     name: 'dsh-brand-font-license',
     async generateBundle() {
-      this.emitFile({
-        type: 'asset',
-        fileName: 'assets/fonts/Montserrat-OFL.txt',
-        source: await readFile(src('../../packages/client/ui-theme/src/styles/Montserrat-OFL.txt')),
-      })
+      for (const entry of BRAND_FONT_LICENSES) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `assets/fonts/${entry.out}`,
+          source: await readFile(src(entry.license)),
+        })
+      }
     },
   }
 }

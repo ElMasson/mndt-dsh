@@ -1,0 +1,128 @@
+/* mndt brand layer for the Web client.
+ *
+ * Why these selectors: the theme declares every token inside `body` blocks, and
+ * a declaration on an element always beats an inherited one, so overriding on
+ * `:root` (html) does nothing. Each block here restates the same-level selector
+ * the theme uses, and this sheet loads after it, so equal specificity resolves
+ * on source order.
+ *
+ * `body:not([data-ds-dark-theme])` is (0,1,1): it ties the theme's dark block,
+ * which never matches in light mode, and beats its plain `body` (0,0,1) block.
+ * The dark scheme therefore keeps the theme's own cool greys, while the accent
+ * scale is restated for it so the brand colour holds in both schemes.
+ *
+ * Brand values come from the mndt brand guide:
+ *   electric #4B5CFF  accent
+ *   violet   #8B68FF  accent, never critical text on white
+ *   mist     #B8BDC9  decor only, never text
+ *   charcoal #0C0F17  text and primary button
+ *   offwhite #F6F4F1  background
+ */
+
+/* ---------- light scheme: brand accent + warm surfaces ---------- */
+body:not([data-ds-dark-theme]) {
+  /* Accent scale. Every semantic alias (links, selection, business state) already
+   * points here, so replacing the scale rebrands the scheme without duplicating
+   * 139 aliases. */
+  --dsw-static-deepseek-50: rgb(239, 241, 255);
+  --dsw-static-deepseek-75: rgb(228, 231, 255);
+  --dsw-static-deepseek-100: rgb(221, 225, 255);
+  --dsw-static-deepseek-200: rgb(199, 205, 255);
+  --dsw-static-deepseek-300: rgb(170, 179, 255);
+  --dsw-static-deepseek-400: rgb(139, 104, 255);
+  --dsw-static-deepseek-450: rgb(107, 120, 255);
+  --dsw-static-deepseek-500: rgb(75, 92, 255);
+  --dsw-static-deepseek-600: rgb(63, 77, 230);
+  --dsw-static-deepseek-800: rgb(42, 51, 143);
+  --dsw-static-deepseek-900: rgb(27, 32, 89);
+
+  /* Surface scale. The theme's neutrals are cool bluish greys, which read as
+   * blank white next to the brand's warm paper. These values were sampled from
+   * the reference product UI, not invented:
+   *   canvas        #F6F4F1   brand offwhite
+   *   chrome/cards  #FFFFFF
+   *   active/hover  #F0EFED   brand surface
+   *   border        #E2E4E9
+   *   text          #0C0F17   brand charcoal */
+  --dsw-static-neutral-bluish-1000: #0C0F17;
+  --dsw-static-neutral-bluish-950: #0C0F17;
+  --dsw-static-neutral-bluish-900: #121722;
+  --dsw-static-neutral-bluish-875: #171B23;
+  --dsw-static-neutral-bluish-850: #1E232C;
+  --dsw-static-neutral-bluish-800: #2A303A;
+  --dsw-static-neutral-bluish-750: #333944;
+  --dsw-static-neutral-bluish-700: #454C5A;
+  --dsw-static-neutral-bluish-600: #5A6475;
+  --dsw-static-neutral-bluish-550: #6E7480;
+  --dsw-static-neutral-bluish-500: #8E94A0;
+  --dsw-static-neutral-bluish-400: #B8BDC9;
+  --dsw-static-neutral-bluish-300: #CFCDC9;
+  --dsw-static-neutral-bluish-250: #D9D7D3;
+  --dsw-static-neutral-bluish-200: #E2E4E9;
+  --dsw-static-neutral-bluish-150: #EAE8E6;
+  --dsw-static-neutral-bluish-100: #F0EFED;
+  --dsw-static-neutral-bluish-75: #F5F3F0;
+  --dsw-static-neutral-bluish-60: #F6F4F1;
+
+  /* The canvas is the brand paper; the chrome and every elevated layer stay
+   * white so the sidebar, cards and composer read as raised surfaces, exactly
+   * as in the reference. */
+  --dsw-alias-bg-base: #F6F4F1;
+  --dsw-specific-sidebar-fill: #FFFFFF;
+  --dsw-specific-sidebar-nav-item-active: #F0EFED;
+  --dsw-specific-sidebar-nav-item-hover: #F5F3F0;
+
+  /* The theme carries a second, achromatic neutral family beside the bluish
+   * one, and rows such as the active session use it. Left cool it keeps a grey
+   * cast on the warm paper, so it is warmed on the same ramp. */
+  --dsw-static-neutral-50: #FAF9F7;
+  --dsw-static-neutral-100: #F3F1EE;
+  --dsw-static-neutral-150: #EDEBE7;
+  --dsw-static-neutral-200: #E5E3DF;
+  --dsw-static-neutral-250: #DCDAD6;
+  --dsw-static-neutral-300: #D4D2CE;
+  --dsw-static-neutral-400: #A6A49F;
+  --dsw-static-neutral-500: #82807B;
+  --dsw-static-neutral-550: #68665F;
+  --dsw-static-neutral-600: #55534D;
+  --dsw-static-neutral-700: #3C3A35;
+  --dsw-static-neutral-800: #2A2823;
+  --dsw-static-neutral-850: #211F1C;
+  --dsw-static-neutral-900: #0F0E0C;
+}
+
+/* ---------- dark scheme: brand accent only ---------- */
+/* Surfaces are deliberately left to the theme: the brand's dark ground is a
+ * cool near-black, so the theme's dark greys are already on-brand. */
+body[data-ds-dark-theme] {
+  --dsw-static-deepseek-50: rgb(239, 241, 255);
+  --dsw-static-deepseek-75: rgb(228, 231, 255);
+  --dsw-static-deepseek-100: rgb(221, 225, 255);
+  --dsw-static-deepseek-200: rgb(199, 205, 255);
+  --dsw-static-deepseek-300: rgb(170, 179, 255);
+  --dsw-static-deepseek-400: rgb(139, 104, 255);
+  --dsw-static-deepseek-450: rgb(107, 120, 255);
+  --dsw-static-deepseek-500: rgb(75, 92, 255);
+  --dsw-static-deepseek-600: rgb(63, 77, 230);
+  --dsw-static-deepseek-800: rgb(42, 51, 143);
+  --dsw-static-deepseek-900: rgb(27, 32, 89);
+}
+
+/* ---------- typography ---------- */
+/* The brand guide pairs Space Grotesk for titles and brand surfaces with Inter
+ * for reading and UI. Both are read from body (base.css), so they are set at
+ * that same level here. */
+body {
+  --dsw-font-family-brand: 'Space Grotesk', var(--dsh-font-family-text-default);
+  --dsw-font-family: 'Inter', var(--dsh-font-family-text-default);
+  --dsh-font-family-text-default: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Titles: the product's headline elements are CSS-module locals, so they are
+ * matched by the stable local-name suffix rather than by their per-build hash
+ * prefix. If the scheme ever changes the selector stops matching and the UI
+ * keeps its body face instead of breaking. */
+[class*="_headline"],
+[class*="_titleGroup"] {
+  font-family: var(--dsw-font-family-brand);
+}

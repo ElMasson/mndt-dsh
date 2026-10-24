@@ -1,5 +1,10 @@
 /** Browser entry for the Web client. */
 import '@deepseek-ai/dsh-client-ui-theme/brand-font.css'
+// mndt brand layer: loaded after the theme sheet so its equal-specificity
+// token declarations win on source order, and before the app entry so both
+// sheets are in the initial CSS bundle rather than fetched later.
+import '@deepseek-ai/dsh-client-ui-brand-mndt/brand-font.css'
+import '@deepseek-ai/dsh-client-ui-brand-mndt/tokens.css'
 import { AppWebEntry, applyIndexInjections } from '@deepseek-ai/dsh-client-web'
 
 interface DesktopBootGlobal {

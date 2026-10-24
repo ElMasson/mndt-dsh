@@ -61,6 +61,7 @@
     "vitest": "^4.1.11",
     "ws": "8.21.3",
     "@deepseek-ai/dsh-client-ui-theme": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-brand-mndt": "workspace:*",
     "@deepseek-ai/dsh-launch-environment": "workspace:*",
     "@deepseek-ai/dsh-workspace-changes": "workspace:*",
     "@deepseek-ai/dsh-subprocess-local": "workspace:*",

@@ -1,0 +1,46 @@
+/* mndt brand kit typography.
+   Source: the brand guide. Space Grotesk 500/700 carries titles and brand
+   surfaces; Inter 400/500/600 carries reading and UI text.
+   Both families ship self-hosted as latin-subset woff2, matching how the
+   built-in brand face is delivered: no runtime request to a font CDN.
+   Licences: SIL Open Font License 1.1, see Inter-OFL.txt and SpaceGrotesk-OFL.txt. */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(./inter-400.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(./inter-500.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(./inter-600.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(./space-grotesk-500.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(./space-grotesk-700.woff2) format('woff2');
+}
