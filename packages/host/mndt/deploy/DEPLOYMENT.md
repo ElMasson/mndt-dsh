@@ -84,6 +84,19 @@ soit apres demarrage explicite de Docker Desktop, soit sur le serveur apres
 ajout d'un fichier d'echange. Aucune de ces trois voies n'est ouverte a
 l'instant, et rien n'a ete modifie en production.
 
+## Constat du 24 octobre, build Linux obtenu mais entree absente
+
+La construction dans WSL a node 22 a produit une installation portable de 300 Mo,
+avec les binaires natifs Linux (koffi compile par prebuild) et un paquet de 56 Mo.
+Mais pps/cli/lib n a pas ete produit par la porte --scope artifacts : le
+paquet deploye ne contient que README, package.json et node_modules, donc aucune
+entree executable. Le conteneur demarre et sort aussitot sur
+Cannot find module /app/lib/index.js.
+
+Prochaine etape : ajouter explicitement pnpm --filter @deepseek-ai/dsh bundle
+(ou la porte de build qui produit cette lib) avant le deploy, verifier
+pps/cli/lib/index.js, puis redeployer.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
