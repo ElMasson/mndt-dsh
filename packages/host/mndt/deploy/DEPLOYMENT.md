@@ -159,6 +159,34 @@ deja utilise se comporte differemment.
   connecteur reel ;
 - rotation de la cle du modele apres les tests.
 
+## Front SSO, etat au 24 octobre
+
+Le front est installe et fonctionne jusqu'a la redirection Entra. Conteneurs :
+
+- `mndt-front-gateway-1` : passerelle Node, amorce le jeton du shell et route
+  `/mndt-api` vers l'API produit, WebSocket compris ;
+- `mndt-front-proxy-1` : oauth2-proxy v7.15.5, client Entra existant
+  `122bdf54-4ab8-4ef1-995e-a08501d04782`, secret client repris de governance,
+  secret de cookie propre a mndt ;
+- router Traefik `mndt` sur `mndt.duke-analytics.com`, TLS letsencrypt.
+
+Verifie sur le serveur : la passerelle repond sur `/mndt-api/health`, la page
+se sert apres amorcage du jeton, et `/state` rend `canWrite: true` pour
+`duke@datanalysis.re` contre `false` pour `contact@datanalysis.re` quand
+l'en-tete du proxy est present. Une requete non authentifiee est redirigee vers
+`https://login.microsoftonline.com/.../authorize` avec
+`redirect_uri=https://mndt.duke-analytics.com/oauth2/callback`.
+
+Deux actions restent cote exploitation :
+
+1. enregistrement DNS `mndt.duke-analytics.com A 51.159.164.138` ;
+2. ajout de l'URI de redirection `https://mndt.duke-analytics.com/oauth2/callback`
+   sur l'application Entra.
+
+Pieges rencontres et corriges : le proxy lit sa configuration en utilisateur
+65532, donc `/etc/mndt-front` doit etre 755 et les secrets 400 appartenant a
+65532 ; le secret de cookie doit faire 32 octets bruts, pas 44 caracteres base64.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

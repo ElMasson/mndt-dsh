@@ -19,20 +19,21 @@ GOVERNANCE_SECRET=/etc/oauth2-proxy/client_secret
 [ -f "$GOVERNANCE_SECRET" ] || { echo "missing $GOVERNANCE_SECRET" >&2; exit 1; }
 
 mkdir -p "$CONF"
-chmod 700 "$CONF"
+chmod 755 "$CONF"
 
 if [ ! -f "$CONF/client_secret" ]; then
   cp "$GOVERNANCE_SECRET" "$CONF/client_secret"
 fi
 if [ ! -f "$CONF/cookie_secret" ]; then
-  openssl rand -base64 32 | tr -d '\n' > "$CONF/cookie_secret"
+  openssl rand 32 > "$CONF/cookie_secret"
 fi
 
 client_id=$(grep -E '^client_id' "$GOVERNANCE_CONF" | head -1 | cut -d'"' -f2)
 [ -n "$client_id" ] || { echo "no client_id in $GOVERNANCE_CONF" >&2; exit 1; }
 sed "s|__CLIENT_ID__|$client_id|" "$FRONT/oauth2.cfg.template" > "$CONF/oauth2.cfg"
 
-chmod 600 "$CONF/client_secret" "$CONF/cookie_secret"
+chown 65532:65532 "$CONF/client_secret" "$CONF/cookie_secret"
+chmod 400 "$CONF/client_secret" "$CONF/cookie_secret"
 chmod 644 "$CONF/oauth2.cfg"
 
 cd "$FRONT"
