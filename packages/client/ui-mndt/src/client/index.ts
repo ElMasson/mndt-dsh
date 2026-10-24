@@ -30,28 +30,30 @@ const NS = 'mndt'
 function face(ctx: ClientContext): MndtFace {
   const mounted = ctx.get('remote.mndt') as MndtFace | undefined
   if (mounted !== undefined) {
-    // A Remote call resolves through the generated transport, which answers an
-    // envelope ({ ok, value | error }) rather than the bare host return value.
-    // Unwrap it once here so the page sees the shape it was written against.
-    const unwrap = <T>(raw: unknown): T => {
-      // Temporary diagnostic: the transport answer is what decides whether this
-      // page can render at all, so an unexpected shape must be visible.
-      console.warn('mndt raw', JSON.stringify(raw)?.slice(0, 300))
-      const record = raw as { readonly ok?: unknown; readonly value?: unknown; readonly error?: unknown } | null
-      if (record !== null && typeof record === 'object' && 'ok' in record) {
-        if (record.ok === false) {
-          throw new Error(typeof record.error === 'string' ? record.error : 'the Host refused the call')
-        }
-        return (record.value ?? raw) as T
+    // The host answers JSON strings, so the transport envelope is unwrapped
+    // first and the payload parsed: a refusal keeps its own message.
+    const raw = async (work: () => Promise<unknown>): Promise<Record<string, unknown>> => {
+      const answer = await work()
+      const envelope = answer as { readonly ok?: unknown; readonly value?: unknown; readonly error?: unknown } | null
+      if (envelope !== null && typeof envelope === 'object' && 'ok' in envelope) {
+        if (envelope.ok === false) throw new Error(typeof envelope.error === 'string' ? envelope.error : 'the Host refused the call')
+        return JSON.parse(String(envelope.value)) as Record<string, unknown>
       }
-      return raw as T
+      return JSON.parse(String(answer)) as Record<string, unknown>
+    }
+    const fail = (parsed: Record<string, unknown>): never => {
+      throw new Error(typeof parsed.error === 'string' ? parsed.error : 'the Host refused the call')
     }
     return {
-      state: async () => unwrap(await mounted.state()),
-      runMission: async (kind, prompt) => unwrap(await mounted.runMission(kind, prompt)),
-      decide: async (id, decision, reason) => unwrap(await mounted.decide(id, decision, reason)),
-      approveBrief: async id => unwrap(await mounted.approveBrief(id)),
-      remember: async (scope, kind, text) => unwrap(await mounted.remember(scope, kind, text)),
+      state: async () => {
+        const parsed = await raw(() => mounted.state())
+        if (parsed.ok === false) fail(parsed)
+        return parsed.page as never
+      },
+      runMission: async (kind, prompt) => (await raw(() => mounted.runMission(kind, prompt))) as never,
+      decide: async (id, decision, reason) => (await raw(() => mounted.decide(id, decision, reason))) as never,
+      approveBrief: async id => (await raw(() => mounted.approveBrief(id))) as never,
+      remember: async (scope, kind, text) => (await raw(() => mounted.remember(scope, kind, text))) as never,
     }
   }
   const absent = (): Promise<never> => Promise.reject(new Error(

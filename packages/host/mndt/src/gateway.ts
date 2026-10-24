@@ -12,7 +12,7 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import { JsonFileStore, WorkbenchService } from './core/index.ts'
 import type { ApprovalState, MissionKind } from './core/index.ts'
-import type { Approval, Brief, MemoryNote, Mission, Outcome, PageState, RunOutcome } from './types.ts'
+import type { Mission, PageState } from './types.ts'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 // Type-only: pulls the agents service and the session/workflow event maps.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -50,11 +50,11 @@ export class WorkbenchGateway extends TypertRemoteService {
   static inject = ['agents', 'loader']
 
   readonly service: WorkbenchService
-  readonly #tokensFile: string | undefined
-  readonly #proxyUserHeader: string | undefined
-  readonly #identity: string
-  readonly #grants: GrantSource
-  readonly #statePath: string
+  private readonly tokensFile: string | undefined
+  private readonly proxyUserHeader: string | undefined
+  private readonly identity: string
+  private readonly grants: GrantSource
+  private readonly statePath: string
 
   /**
    * @param ctx - owning context.
@@ -62,26 +62,26 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   constructor(ctx: Context, config: MndtConfig = {}) {
     super(ctx, 'mndt')
-    this.#statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
-    this.service = new WorkbenchService({ store: new JsonFileStore(this.#statePath) })
-    this.#tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
-    this.#proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
-    this.#identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
+    this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
+    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath) })
+    this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
+    this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
+    this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
     const baseUrl = process.env.DSH_MNDT_AUTHORITY ?? config.authority?.baseUrl
     const token = process.env.DSH_MNDT_AUTHORITY_TOKEN ?? config.authority?.token
-    this.#grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
+    this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
       ? authorityGrants({ baseUrl, token })
-      : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.#identity)
+      : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
     const runner = new DshMissionRunner(ctx)
-    const ready = (this.#tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.#tokensFile)).then(tokens =>
+    const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
         service: this.service,
         runner,
-        identity: { tokens, ...(this.#proxyUserHeader === undefined ? {} : { proxyUserHeader: this.#proxyUserHeader }) },
-        grants: this.#grants,
+        identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
+        grants: this.grants,
         connectors: () => Promise.resolve(this.connectorRows()),
         port,
         ...(config.host === undefined ? {} : { host: config.host }),
@@ -115,25 +115,30 @@ export class WorkbenchGateway extends TypertRemoteService {
 
   /** @param capability - what an action needs. @returns whether this workstation may do it. */
   private async allowed(capability: 'workflows.write' | 'rights.write' | 'agents.write'): Promise<{ allowed: boolean; reason: string }> {
-    const table = await this.#grants.grants()
+    const table = await this.grants.grants()
     if (!table.ok) return { allowed: false, reason: `cannot read the grant table: ${table.reason}` }
-    return can(table.grants, this.#identity, capability)
+    return can(table.grants, this.identity, capability)
   }
 
-  /** @returns everything the morning page shows. */
+  /** @returns everything the morning page shows, as JSON. */
   @Remote('state')
-  async state(): Promise<PageState> {
-    const snapshot = await this.service.snapshot()
-    const table = await this.#grants.grants()
-    const decision = table.ok ? can(table.grants, this.#identity, 'workflows.write') : { allowed: false, reason: table.reason }
-    return {
-      you: this.#identity,
-      canWrite: decision.allowed,
-      missions: snapshot.missions.slice(0, 30),
-      briefs: snapshot.briefs.slice(0, 30),
-      approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
-      memories: snapshot.memories.slice(0, 20),
-      events: snapshot.events.slice(-40),
+  async state(): Promise<string> {
+    try {
+      const snapshot = await this.service.snapshot()
+      const table = await this.grants.grants()
+      const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: table.reason }
+      const page: PageState = {
+        you: this.identity,
+        canWrite: decision.allowed,
+        missions: snapshot.missions.slice(0, 30),
+        briefs: snapshot.briefs.slice(0, 30),
+        approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
+        memories: snapshot.memories.slice(0, 20),
+        events: snapshot.events.slice(-40),
+      }
+      return JSON.stringify({ ok: true, page })
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -144,25 +149,25 @@ export class WorkbenchGateway extends TypertRemoteService {
    * @returns the finished mission and its brief, or the reason it failed.
    */
   @Remote('runMission')
-  async runMission(kind: MissionKind, prompt: string): Promise<Outcome<RunOutcome>> {
+  async runMission(kind: MissionKind, prompt: string): Promise<string> {
     const decision = await this.allowed('workflows.write')
-    if (!decision.allowed) return { ok: false, error: decision.reason }
+    if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     let mission: Mission
     try {
-      mission = await this.service.createMission({ kind, prompt, createdBy: this.#identity })
+      mission = await this.service.createMission({ kind, prompt, createdBy: this.identity })
       await this.service.startMission(mission.id, 'page')
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
     try {
       const result = await new DshMissionRunner(this.ctx).run(mission)
       const finished = await this.service.completeMission(mission.id, result)
-      return { ok: true, value: finished }
+      return JSON.stringify({ ok: true, value: finished })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       await this.service.failMission(mission.id, reason).catch(() => undefined)
       const stored = await this.service.getMission(mission.id)
-      return { ok: false, error: reason, ...(stored === undefined ? {} : { value: { mission: stored } }) }
+      return JSON.stringify({ ok: false, error: reason, ...(stored === undefined ? {} : { value: { mission: stored } }) })
     }
   }
 
@@ -172,13 +177,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    * @returns the updated brief, or the reason it was refused.
    */
   @Remote('approveBrief')
-  async approveBrief(briefId: string): Promise<Outcome<Brief>> {
+  async approveBrief(briefId: string): Promise<string> {
     const decision = await this.allowed('workflows.write')
-    if (!decision.allowed) return { ok: false, error: decision.reason }
+    if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     try {
-      return { ok: true, value: await this.service.approveBrief(briefId, this.#identity) }
+      return JSON.stringify({ ok: true, value: await this.service.approveBrief(briefId, this.identity) })
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -190,13 +195,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    * @returns the decided approval.
    */
   @Remote('decide')
-  async decide(approvalId: string, decision: ApprovalState, reason?: string): Promise<Outcome<Approval>> {
+  async decide(approvalId: string, decision: ApprovalState, reason?: string): Promise<string> {
     const allowed = await this.allowed('rights.write')
-    if (!allowed.allowed) return { ok: false, error: allowed.reason }
+    if (!allowed.allowed) return JSON.stringify({ ok: false, error: allowed.reason })
     try {
-      return { ok: true, value: await this.service.decideApproval(approvalId, this.#identity, decision, reason) }
+      return JSON.stringify({ ok: true, value: await this.service.decideApproval(approvalId, this.identity, decision, reason) })
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -208,13 +213,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    * @returns the stored note.
    */
   @Remote('remember')
-  async remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<Outcome<MemoryNote>> {
+  async remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<string> {
     const allowed = await this.allowed('agents.write')
-    if (!allowed.allowed) return { ok: false, error: allowed.reason }
+    if (!allowed.allowed) return JSON.stringify({ ok: false, error: allowed.reason })
     try {
-      return { ok: true, value: await this.service.remember({ scope, kind, text, createdBy: this.#identity }) }
+      return JSON.stringify({ ok: true, value: await this.service.remember({ scope, kind, text, createdBy: this.identity }) })
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
   }
 
