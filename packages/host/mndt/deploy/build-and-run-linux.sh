@@ -20,7 +20,7 @@ fi
 echo "=== extraction du source ==="
 rm -rf "$SRC"
 mkdir -p "$SRC" "$OUT" "$STATE/home"
-python3 -m zipfile -e /root/mndt-src.zip "$SRC"
+tar -xzf /root/mndt-src.tar.gz -C "$SRC"
 
 echo "=== construction dans node 22 ==="
 docker run --rm -v "$SRC":/src -v "$OUT":/out -w /src node:22-bookworm bash -lc '
