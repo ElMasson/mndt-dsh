@@ -210,6 +210,28 @@ leur propre `command`/`args`/`env` ; il ne manque que leurs identifiants.
 
 Capture : `docs/duke-product/evidence/page-connector-mission.png`.
 
+## Automatisation planifiee, preuve sur le serveur
+
+Deux missions planifiees ont ete produites par le workbench deploye, sans
+intervention : `mis_f05ef7e79f18412fb9bb` et `mis_c809dbccf1e14cec8b89`,
+toutes deux creees par `scheduler` et terminees. La seconde a produit le brief
+`Briefing du matin — Duke Analytics`, qui refuse explicitement d'inventer faute
+de source accessible :
+
+> Je n'ai trouve aucune donnee d'agenda, de messagerie, de CRM ni d'echeancier
+> dans mon perimetre d'acces. Je ne remplis donc aucune des cinq rubriques :
+> inventer des rendez-vous, des courriers ou des comptes serait faux et non
+> sourcable.
+
+C'est le comportement attendu tant que les connecteurs metier ne sont pas montes
+sur le serveur : l'automatisation tourne, et elle dit ce qui lui manque au lieu de
+remplir du vide.
+
+La cadence quotidienne (`DSH_MNDT_BRIEFING_AT=06:30`) a ete retablie apres la
+preuve. Piege evite : passer `DSH_MNDT_BRIEFING_EVERY_MS` dans une fonction shell
+avec une expansion non quotee ne l'a pas transmis au conteneur ; la variable est
+desormais posee explicitement.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
