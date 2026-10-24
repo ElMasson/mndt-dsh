@@ -49,6 +49,20 @@ describe('duke api', () => {
     expect(response.status).toBe(200)
   })
 
+  it('serves the page state to the person the proxy proved, with their own rights', async () => {
+    const { api } = bench()
+    const asOwnerState = await api({ method: 'GET', path: '/state', ...asOwner })
+    const asViewerState = await api({ method: 'GET', path: '/state', ...asViewer })
+    expect(asOwnerState.status).toBe(200)
+    expect(asViewerState.status).toBe(200)
+    const ownerPage = (asOwnerState.body as { page: { you: string; canWrite: boolean } }).page
+    const viewerPage = (asViewerState.body as { page: { you: string; canWrite: boolean } }).page
+    expect(ownerPage.you).toBe(owner)
+    expect(viewerPage.you).toBe(viewer)
+    expect(ownerPage.canWrite).toBe(true)
+    expect(viewerPage.canWrite).toBe(false)
+  })
+
   it('refuses every other route without a proven identity', async () => {
     const { api } = bench()
     for (const path of ['/me', '/missions', '/briefs', '/approvals', '/memory', '/connectors']) {

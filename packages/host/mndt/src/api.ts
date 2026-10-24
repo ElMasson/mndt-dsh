@@ -22,6 +22,7 @@ import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { can } from './policy.ts'
 import type { GrantSource } from './policy.ts'
+import type { PageState } from './types.ts'
 
 /** One request as the handler sees it. */
 export interface MndtApiRequest {
@@ -107,6 +108,24 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
     try {
       if (request.method === 'GET' && path === '/me') return respond(200, { you: identity })
+
+      if (request.method === 'GET' && path === '/state') {
+        const snapshot = await service.snapshot()
+        const table = await grants.grants()
+        const decision = table.ok
+          ? can(table.grants, identity, 'workflows.write')
+          : { allowed: false, reason: table.reason }
+        const page: PageState = {
+          you: identity,
+          canWrite: decision.allowed,
+          missions: snapshot.missions.slice(0, 30),
+          briefs: snapshot.briefs.slice(0, 30),
+          approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
+          memories: snapshot.memories.slice(0, 20),
+          events: snapshot.events.slice(-40),
+        }
+        return respond(200, { page })
+      }
 
       if (request.method === 'GET' && path === '/missions') {
         const status = request.query?.status
