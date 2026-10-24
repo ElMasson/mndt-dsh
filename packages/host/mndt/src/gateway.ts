@@ -74,6 +74,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleBriefing(ctx)
+    this.#reconcileInterrupted(ctx)
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
@@ -96,6 +97,30 @@ export class WorkbenchGateway extends TypertRemoteService {
       })
       return () => { server?.close() }
     }, 'mndt: product API')
+  }
+
+  /**
+   * Mark missions left `running` by a previous process as failed.
+   *
+   * A workbench restart kills the agent turn that owned the mission, so nothing
+   * will ever finish it. Leaving it running would let the page show work that is
+   * not happening: the mission is failed with the reason that actually occurred.
+   * @param ctx - the host context, used for the log line.
+   */
+  #reconcileInterrupted(ctx: Context): void {
+    void (async () => {
+      try {
+        const stuck = await this.service.listMissions({ status: 'running' })
+        for (const mission of stuck) {
+          await this.service.failMission(mission.id, 'interrupted by a workbench restart; no result was produced')
+        }
+        if (stuck.length > 0) {
+          ctx.logger.warn(`mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
+        }
+      } catch (error) {
+        ctx.logger.error(`mndt: could not reconcile interrupted missions: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
   }
 
   /**
