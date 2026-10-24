@@ -21,6 +21,15 @@ check() {
   fi
 }
 
+# A container that just restarted publishes its launch token and opens its API a
+# few seconds later. Wait for that, so a green run means the stack is healthy and
+# a red one means it is not.
+for _ in $(seq 1 20); do
+  if curl -s -m 3 "$API/health" | grep -q '"ok":true' && [ -s "$LIVE/web-token" ]; then
+    break
+  fi
+  sleep 3
+done
 health=$(curl -s -m 6 "$API/health")
 check "API health" '"ok":true' "$health"
 
