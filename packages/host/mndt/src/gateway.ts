@@ -118,7 +118,9 @@ export class WorkbenchGateway extends TypertRemoteService {
         try {
           const mission = await this.service.createMission({
             kind: 'briefing',
-            prompt: 'Briefing du matin : agenda, courriers sans réponse, comptes à risque, échéances, réunions du jour.',
+            prompt: 'Briefing du matin : agenda, courriers sans réponse, comptes à risque, échéances, réunions du jour. '
+              + 'Consulte les outils de lecture des connecteurs montés, par exemple Attio en lecture, et cite ce que tu lis réellement. '
+              + 'Si une rubrique n\'a aucune source accessible, dis-le au lieu de l\'inventer.',
             createdBy: 'scheduler',
           })
           await this.service.startMission(mission.id, 'scheduled')
