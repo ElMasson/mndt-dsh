@@ -37,6 +37,7 @@ preuve est une ligne ouverte, pas une reussite.
 | Briefing planifie local | mission `done`, auteur `scheduler`, brief date | capture `page-scheduled-briefing.png` |
 | Briefing planifie serveur | deux missions `scheduler` terminees, brief `Briefing du matin` (Duke Analytics) | etat du serveur, 24 octobre |
 | Honnetete du brief | il refuse de remplir les cinq rubriques faute de source | texte du brief, cite dans DEPLOYMENT.md |
+| Briefing avec connecteurs | mission riefing : Attio lu en direct (deals, notes, companies), brief date et borne, rubriques sans source declarees | serveur, 24 octobre |
 
 ## 5. Gouvernance RBAC centralisee
 
