@@ -33,7 +33,7 @@ describe('authority over http', () => {
         headers: { authorization: 'Bearer token-owner' },
       })
       expect(authorised.status).toBe(200)
-      expect(await authorised.json()).toEqual({ grants: [] })
+      expect(await authorised.json()).toMatchObject({ grants: [], you: 'stephane' })
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

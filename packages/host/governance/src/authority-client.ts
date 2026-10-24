@@ -53,7 +53,7 @@ export class AuthorityClient {
    * @returns the grants, or an outcome explaining the refusal.
    */
   async snapshot(): Promise<
-    | { readonly ok: true; readonly grants: AuthorityGrant[] }
+    | { readonly ok: true; readonly grants: AuthorityGrant[]; readonly you?: string }
     | { readonly ok: false; readonly reason: string; readonly status: number }
   > {
     const response = await this.#call('GET', '/governance/snapshot')
@@ -62,7 +62,8 @@ export class AuthorityClient {
     const grants = Array.isArray((body as { grants?: unknown }).grants)
       ? ((body as { grants: AuthorityGrant[] }).grants)
       : []
-    return { ok: true, grants }
+    const you = typeof (body as { you?: unknown }).you === 'string' ? (body as { you: string }).you : undefined
+    return { ok: true, grants, ...(you === undefined ? {} : { you }) }
   }
 
   /**

@@ -7,6 +7,9 @@ name: governance
 services:
   authority:
     image: node:20-alpine
+    # cap_drop removes CAP_DAC_OVERRIDE, so the container must run as the account
+    # that owns the state directory. The installer writes these into .env.
+    user: "${GOV_UID:-0}:${GOV_GID:-0}"
     command: ["node", "/app/governance-authority.mjs"]
     # No secrets here: the authority authenticates bearers, it does not mint them.
     environment:
@@ -32,8 +35,21 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "tellus-ai_default"
+      # A workstation presents a bearer token and is answered by the authority
+      # itself; the browser, which presents only a cookie, goes to oauth2-proxy.
+      # The higher priority makes this router win for token calls.
+      traefik.http.routers.governance-token.rule: "Host(`governance.duke-analytics.com`) && HeaderRegexp(`Authorization`, `(?i)^Bearer .+`)"
+      traefik.http.routers.governance-token.entrypoints: "websecure"
+      traefik.http.routers.governance-token.tls.certresolver: "letsencrypt"
+      traefik.http.routers.governance-token.priority: "200"
+      traefik.http.routers.governance-token.service: "governance-token"
+      traefik.http.services.governance-token.loadbalancer.server.port: "8787"
     networks:
       - internal
+      - tellus
     restart: unless-stopped
 
   oauth2proxy:

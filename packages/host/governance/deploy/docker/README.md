@@ -65,3 +65,42 @@ The state file and the audit trail live on the host under
   configuration, not its display name.
 - The client secret expires on the date chosen at creation; renew it in Entra
   and re-run `docker compose up -d` after replacing the file.
+
+## Ajouter un membre (mode equipe)
+
+L autorite porte une seule table pour toute l equipe. Chaque personne recoit un
+jeton qui la nomme, et ses ecritures sont attribuees a son adresse dans
+`audit.jsonl`.
+
+    ssh -i ~/.ssh/tellus/tellus-root root@51.159.164.138
+    /opt/governance/add-member.sh prenom@datanalysis.re viewer
+
+Le script reutilise le jeton existant s il y en a un, sinon il en cree un et
+l affiche **une seule fois** : un jeton deja emis n est jamais reaffiche, un
+secret ne doit pas repasser par un journal ou une conversation.
+
+Cote poste de travail, deux variables suffisent :
+
+    DSH_GOVERNANCE_AUTHORITY=https://governance.duke-analytics.com
+    DSH_GOVERNANCE_TOKEN=<le jeton remis a la personne>
+
+Lance alors `dsh web`. La page Gouvernance affiche l identite resolue par
+l autorite, la provenance de la table (live ou cache) et la table partagee.
+
+## Deux chemins d acces, un seul service
+
+    navigateur, aucun identifiant   -> oauth2-proxy -> Entra -> autorite
+    navigateur, session Entra       -> oauth2-proxy -> autorite (x-forwarded-email)
+    machine, Authorization: Bearer  -> autorite directement (routeur Traefik dedie)
+
+Le routeur `governance-token` de Traefik utilise `HeaderRegexp`, pas `Header` :
+`Header` compare la valeur exacte et ne matcherait jamais un jeton. Il porte une
+priorite superieure au routeur SSO, donc un appel machine ne passe jamais par la
+redirection de connexion.
+
+## Renouveler un jeton expose
+
+    /opt/governance/rotate-token.sh prenom@datanalysis.re
+
+Le nouveau jeton est ecrit dans `/etc/dsh/tokens.json` (0640, root:dsh) et jamais
+affiche. L autorite redemarre pour le prendre en compte.

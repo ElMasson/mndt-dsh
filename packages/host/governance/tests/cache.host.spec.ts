@@ -95,3 +95,18 @@ describe('team mode', () => {
     expect(await storage.load()).toEqual({ grants: [{ subject: 'stephane', role: 'owner' }] })
   })
 })
+
+describe('team mode provenance', () => {
+  it('names the identity the authority resolved', async () => {
+    const storage = new MemoryRbacStorage()
+    const authority = {
+      snapshot: async () => ({ ok: true as const, grants: [{ subject: 'duke@datanalysis.re', role: 'owner' }], you: 'duke@datanalysis.re' }),
+    }
+
+    const view = await loadTableView({ authority, storage })
+
+    expect(view.source).toBe('authority')
+    expect(view.identity).toBe('duke@datanalysis.re')
+    expect(view.detail).toContain('authority as duke@datanalysis.re')
+  })
+})

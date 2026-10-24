@@ -158,7 +158,9 @@ export function createAuthority(options: AuthorityOptions): (request: AuthorityR
 
     if (request.method === 'GET' && request.path === '/governance/snapshot') {
       const snapshot: RbacSnapshot = controller.snapshot()
-      return { status: 200, body: snapshot }
+      // The reader learns who the authority resolved them as, so a workstation in
+      // team mode can show it instead of guessing from its own environment.
+      return { status: 200, body: { ...snapshot, you: user } }
     }
 
     if (request.method === 'POST' && request.path === '/governance/bootstrap') {

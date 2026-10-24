@@ -78,7 +78,7 @@ describe('decisions', () => {
 
     expect(response.status).toBe(200)
     const snapshot = await handle({ method: 'GET', path: '/governance/snapshot', ...auth })
-    expect(snapshot.body).toEqual({ grants: [{ subject: 'stephane', role: 'owner' }] })
+    expect(snapshot.body).toMatchObject({ grants: [{ subject: 'stephane', role: 'owner' }] })
   })
 
   it('lets the owner grant a role and refuses the same request from a viewer', async () => {
@@ -106,7 +106,7 @@ describe('decisions', () => {
       path: '/governance/snapshot',
       authorization: 'Bearer token-owner',
     })
-    expect(snapshot.body).toEqual({
+    expect(snapshot.body).toMatchObject({
       grants: [
         { subject: 'stephane', role: 'owner' },
         { subject: 'sara', role: 'operator' },
@@ -210,7 +210,7 @@ describe('durable authority', () => {
       authorization: 'Bearer token-owner',
     })
 
-    expect(snapshot.body).toEqual({
+    expect(snapshot.body).toMatchObject({
       grants: [
         { subject: 'stephane', role: 'owner' },
         { subject: 'sara', role: 'admin' },
@@ -268,5 +268,19 @@ describe('authority root', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ service: 'dsh governance authority', you: 'stephane@duke-analytics.com' })
+  })
+})
+
+describe('snapshot identity', () => {
+  it('names the reader of the table', async () => {
+    const handle = createAuthority({ tokens, storage: new MemoryRbacStorage() })
+    const response = await handle({
+      method: 'GET',
+      path: '/governance/snapshot',
+      authorization: 'Bearer token-viewer',
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ you: 'sara' })
   })
 })

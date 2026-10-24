@@ -64,6 +64,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [stale, setStale] = useState<string | null>(null)
+  const [identity, setIdentity] = useState<string | null>(null)
 
   const fail = useCallback((text: string) => { setFailed(true); setNotice(text) }, [])
 
@@ -92,6 +93,7 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
   const loadState = useCallback(async () => {
     try {
       const result = await api.tableState()
+      if (result.ok) setIdentity(result.value.identity ?? null)
       if (result.ok && result.value.stale) setStale(result.value.detail)
       else setStale(null)
     } catch {
@@ -144,9 +146,12 @@ export function GovernancePage({ t, api }: GovernancePageProps): JSX.Element {
           <h1 className="gov-title">{t('title')}</h1>
           <p className="gov-sub">{t('subtitle')}</p>
         </div>
-        {stale === null
-          ? <span className="gov-pill" data-tone="ok">{t('liveTable')}</span>
-          : <span className="gov-pill" data-tone="warn">{t('staleTable')}</span>}
+        <div className="gov-head-state">
+          {identity !== null && <span className="gov-pill" data-tone="id" title={t('identityHint')}>{identity}</span>}
+          {stale === null
+            ? <span className="gov-pill" data-tone="ok">{t('liveTable')}</span>
+            : <span className="gov-pill" data-tone="warn">{t('staleTable')}</span>}
+        </div>
       </header>
 
       <div className="gov-body">

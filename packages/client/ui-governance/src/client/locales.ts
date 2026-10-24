@@ -25,6 +25,7 @@ export const en = {
   notWired: 'This surface is not wired yet.',
   refused: 'Refused by the Host',
   liveTable: 'Live table',
+  identityHint: 'The authority resolved this identity from your token or your Entra session.',
   run: 'Run',
   staleTable: 'Cached table, the authority is unreachable',
   accepted: 'Accepted',

@@ -18,7 +18,7 @@ import { asRole } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 export interface SnapshotSource {
   /** @returns the table, or the reason it could not be read. */
   snapshot(): Promise<
-    | { readonly ok: true; readonly grants: readonly AuthorityGrant[] }
+    | { readonly ok: true; readonly grants: readonly AuthorityGrant[]; readonly you?: string }
     | { readonly ok: false; readonly reason: string; readonly status: number }
   >
 }
@@ -33,6 +33,8 @@ export interface TableView {
   readonly source: 'authority' | 'cache' | 'local'
   /** The reason, when the read was degraded. */
   readonly detail: string
+  /** Who the authority says is reading, when it said. */
+  readonly identity?: string
 }
 
 /** What a read needs. */
@@ -102,11 +104,13 @@ export async function loadTableView(input: LoadTableViewInput): Promise<TableVie
   if (remote.ok) {
     const { snapshot, dropped } = toSnapshot(remote.grants)
     await storage.save(snapshot)
+    const who = remote.you === undefined ? 'authority' : `authority as ${remote.you}`
     return {
       grants: rowsOf(snapshot),
       stale: false,
       source: 'authority',
-      detail: dropped === 0 ? 'authority' : `authority, ${dropped} unknown role(s) dropped`,
+      detail: dropped === 0 ? who : `${who}, ${dropped} unknown role(s) dropped`,
+      ...(remote.you === undefined ? {} : { identity: remote.you }),
     }
   }
 

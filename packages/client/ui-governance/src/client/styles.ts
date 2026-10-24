@@ -170,6 +170,26 @@ const CSS = `
   color: #3F4DE6;
 }
 
+/* The identity is a fact about the reader, not a status of the table. */
+.gov-pill[data-tone="id"] {
+  background: var(--gov-card);
+  border-color: var(--gov-border);
+  color: var(--gov-text);
+  font-family: var(--gov-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gov-head-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .gov-banner {
   display: flex;
   gap: 10px;

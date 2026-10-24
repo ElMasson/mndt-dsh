@@ -55,6 +55,8 @@ export interface TableStateRow {
   readonly source: string
   /** Why the read was degraded, when it was. */
   readonly detail: string
+  /** Who the authority resolved the reader as, when it answered. */
+  readonly identity?: string
 }
 
 /** One mounted connector, as it crosses the wire. */

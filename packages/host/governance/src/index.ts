@@ -130,7 +130,12 @@ export class GovernanceGateway extends TypertRemoteService {
   async tableState(): Promise<TableStateRow> {
     await this.ready
     const view = await loadTableView({ authority: this.authority, storage: this.storage })
-    return { stale: view.stale, source: view.source, detail: view.detail }
+    return {
+      stale: view.stale,
+      source: view.source,
+      detail: view.detail,
+      ...(view.identity === undefined ? {} : { identity: view.identity }),
+    }
   }
 
   /**
