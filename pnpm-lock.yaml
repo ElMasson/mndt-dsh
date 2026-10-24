@@ -10690,9 +10690,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-governance':
         specifier: workspace:*
         version: link:../../client/ui-governance
-      '@deepseek-ai/dsh-mndt-core':
+      '@deepseek-ai/dsh-typert-protocol':
         specifier: workspace:*
-        version: link:../../mndt/core
+        version: link:../../typert/protocol
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -11683,12 +11683,6 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
-
-  packages/mndt/core:
-    devDependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:~
-        version: link:../../../vendor/cordis
 
   packages/plan/plan-mode:
     dependencies:

@@ -1,7 +1,9 @@
-# Duke Workbench sur DSH : architecture cible
+# mndt workbench sur DSH : architecture cible
 
 Reconstruction from scratch, sur la base DSH, du produit décrit par le projet
-local `ceo-dashboard`. Ce document ne décrit que l'intention fonctionnelle et
+local `ceo-dashboard`. Deux références, deux rôles : **Tellus** pour les
+capacités (agents, missions, connecteurs, boucles produit) et **mndt** pour le
+produit et sa marque. Ce document ne décrit que l'intention fonctionnelle et
 l'architecture retenue ; il n'emprunte rien à l'implémentation existante.
 
 ## Le produit en une phrase
@@ -30,14 +32,16 @@ Trois conséquences pratiques :
 
 ## Découpage
 
-    packages/duke/core          domaine : mission, brief, memoire, approbation
-                                stockage, regles, tests
-    packages/host/duke          plugin hote : API HTTP, execution des missions
-                                via ctx.agents, face Remote pour le client
-    packages/client/ui-duke     pages produit : Aujourd hui, Missions,
-                                Artefacts, Connecteurs, Memoire, Approbations
-    packages/bundle/duke-app    composition : base + connecteurs MCP + duke
+    packages/host/mndt          domaine (src/core) + plugin hote : API HTTP,
+                                execution des missions via ctx.agents, face
+                                Remote pour la page
+    packages/client/ui-mndt     page produit : Ce matin, Missions, Artefacts,
+                                Connecteurs, Memoire, Approbations
+    packages/bundle/mndt-app    composition : base + connecteurs MCP + mndt
     deploy/                     service systemd, SSO Entra, jetons
+
+Le domaine vit dans le paquet hôte tant qu'il n'a qu'un consommateur ; il sera
+extrait le jour où un second en aura besoin, pas avant.
 
 Le serveur héberge la couche Duke et le runtime ; le poste de travail affiche
 les pages et peut lancer des missions. Le même identifiant circule partout :

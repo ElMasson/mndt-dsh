@@ -15,9 +15,6 @@
       "path": "../../client/ui-governance"
     },
     {
-      "path": "../../mndt/core"
-    },
-    {
       "path": "../../workflow/workflow"
     }
   ]

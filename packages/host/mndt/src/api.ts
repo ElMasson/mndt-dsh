@@ -8,17 +8,16 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { isMissionKind } from '@deepseek-ai/dsh-mndt-core'
+import { isMissionKind } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
   WorkbenchEvent,
   Mission,
-  MissionKind,
   MissionStatus,
   Visibility,
-} from '@deepseek-ai/dsh-mndt-core'
-import type { WorkbenchService, MissionResult } from '@deepseek-ai/dsh-mndt-core'
+} from './core/index.ts'
+import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { can } from './policy.ts'
@@ -123,7 +122,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (!isMissionKind(kind)) return respond(400, { error: `unknown mission kind: ${String(kind)}` })
         const prompt = typeof input.prompt === 'string' ? input.prompt : ''
         const visibility: Visibility = input.visibility === 'private' ? 'private' : 'team'
-        const mission = await service.createMission({ kind: kind as MissionKind, prompt, createdBy: identity, visibility })
+        const mission = await service.createMission({ kind, prompt, createdBy: identity, visibility })
         const started = await service.startMission(mission.id, 'pending')
         try {
           const result = await runner.run(started)
@@ -181,7 +180,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const approval = await service.requestApproval({
           kind,
           title: typeof input.title === 'string' ? input.title : '',
-          payload: typeof input.payload === 'object' && input.payload !== null ? input.payload as never : {},
+          payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
         })
@@ -264,9 +263,9 @@ export interface MndtListenOptions extends MndtApiOptions {
 
 /** @param request - incoming message. @returns its body as text. */
 async function readBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of request) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks).toString('utf8')
+  const parts: string[] = []
+  for await (const chunk of request) parts.push(String(chunk))
+  return parts.join('')
 }
 
 /**

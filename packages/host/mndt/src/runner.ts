@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
-import type { Mission, MissionResult } from '@deepseek-ai/dsh-mndt-core'
+import type { Mission, MissionResult } from './core/index.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -71,7 +71,8 @@ export class DshMissionRunner {
     if (engine === undefined) {
       throw new Error('mndt: this host does not mount the workflow engine, so a mission cannot run')
     }
-    const selection = this.#ctx.get('agentDefaultModel')?.currentSelection()
+    const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
+    const selection = model === undefined ? undefined : model.currentSelection()
     const created = await this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryStore } from '@deepseek-ai/dsh-mndt-core'
-import { WorkbenchService } from '@deepseek-ai/dsh-mndt-core'
+import { MemoryStore } from '../src/core/index.ts'
+import { WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
 import { localGrants } from '../src/index.ts'
