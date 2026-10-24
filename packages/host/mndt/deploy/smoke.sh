@@ -40,6 +40,19 @@ check "proprietaire peut ecrire" '"canWrite":true' "$owner"
 check "proprietaire identifie" '"you":"duke@datanalysis.re"' "$owner"
 check "lecteur ne peut pas ecrire" '"canWrite":false' "$viewer"
 
+viewer_mission=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -X POST \
+  -H 'x-forwarded-email: contact@datanalysis.re' -H 'content-type: application/json' \
+  -d '{"kind":"custom","prompt":"controle des droits"}' "$API/missions")
+check "lecteur ne peut pas lancer de mission" '^403$' "$viewer_mission"
+
+pending_id=$(curl -s -m 8 -H 'x-forwarded-email: duke@datanalysis.re' "$API/approvals?state=pending" \
+  | python3 -c "import json,sys; rows=json.load(sys.stdin).get('approvals',[]); print(rows[0]['id'] if rows else '')")
+if [ -n "$pending_id" ]; then
+  viewer_decide=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -X POST \
+    -H 'x-forwarded-email: contact@datanalysis.re' -H 'content-type: application/json' \
+    -d '{"decision":"approved"}' "$API/approvals/$pending_id/decide")
+  check "lecteur ne peut pas decider" '^403$' "$viewer_decide"
+fi
 connectors=$(curl -s -m 8 -H 'x-forwarded-email: duke@datanalysis.re' "$API/connectors")
 check "connecteur monte" '"server":"workbench_facts"' "$connectors"
 check "connecteur Attio monte" '"server":"attio"' "$connectors"
