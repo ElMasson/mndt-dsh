@@ -1,8 +1,8 @@
 # The mndt workbench as a self-contained Linux image.
 #
 # Stage one reproduces the repository build from a frozen lockfile. Stage two
-# keeps only the portable install, so the shipped image carries neither source
-# nor toolchain.
+# carries the built workspace, because pnpm deploy cannot carry a workspace whose
+# packages link to each other.
 FROM node:22-bookworm AS build
 RUN apt-get update -qq && apt-get install -y -qq git >/dev/null
 WORKDIR /src
@@ -18,7 +18,6 @@ ENV NODE_OPTIONS="--experimental-strip-types --max-old-space-size=6144"
 RUN pnpm exec tsx scripts/build.ts --scope artifacts || (echo "=== host compiler errors ==="; pnpm exec tsc -b tsconfig.host.json 2>&1 | head -30; exit 1)
 RUN if [ ! -f apps/cli/lib/bin.js ]; then pnpm exec tsdown --config-loader native --env.DSH_BUILD_FACE host --filter @deepseek-ai/dsh; fi
 RUN test -f apps/cli/lib/bin.js
-RUN pnpm --filter @deepseek-ai/dsh deploy --prod /out
 
 FROM node:22-bookworm
 # The whole built workspace, node_modules included: pnpm's deploy cannot carry a
