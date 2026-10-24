@@ -346,11 +346,6 @@
     - id: ui-brand-official
       name: '@deepseek-ai/dsh-client-ui-brand-official'
 
-    # mndt occupants: register only when the client was built with
-    # DSH_BUILD_CLIENT_PROFILE=mndt.
-    - id: ui-brand-mndt
-      name: '@deepseek-ai/dsh-client-ui-brand-mndt'
-
     - id: ui-attachment
       name: '@deepseek-ai/dsh-client-ui-attachment'
 
@@ -426,6 +421,9 @@
     # Model selection: the /model popupSelect + composer seat over session.models.
     - id: ui-model-selection
       name: '@deepseek-ai/dsh-client-ui-model-selection'
+
+    - id: ui-deepseek-model-label-1017
+      name: '@deepseek-ai/dsh-client-ui-deepseek-model-label-1017'
 
     - id: ui-permission
       name: '@deepseek-ai/dsh-client-ui-permission-presets'
