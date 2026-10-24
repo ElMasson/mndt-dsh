@@ -126,6 +126,39 @@ de construction different (Docker Desktop demarre, CI, ou serveur avec plus de
 RAM et un fichier d echange). Ces trois prerequis dependent d une decision ou
 d une action exterieure, pas d un changement de code produit.
 
+## Etat deploye, 24 octobre
+
+Le service tourne sur le serveur depuis une image Linux construite en local avec
+Docker Desktop. Fichiers et volumes :
+
+- image `mndt-workbench:local`, 1,05 Go, construite depuis la branche, chargee sur le serveur ;
+- conteneur `mndt-workbench`, reseau hote, redemarrage automatique ;
+- API produit sur `127.0.0.1:8795`, page sur `127.0.0.1:3111` ;
+- etat et accueil sous `/data/mndt/live` (monte en `/state`) ;
+- jetons dans `/data/mndt/live/tokens.json` (droits 600) ;
+- cle du modele dans `/data/mndt/live/model.env` (droits 600).
+
+Preuves obtenues sur cette instance : `/health` repond `{"ok":true}`, `/me`
+repond l'identite, une mission reelle a produit le brief `brf_a659bd900841474abace`,
+et la page s'affiche avec les donnees du serveur (capture
+`docs/duke-product/evidence/page-deployed-server.png`).
+
+### Piege d'un profil vide
+
+Sur un accueil DSH neuf, une fenetre d'accueil produit s'affiche et bloque toute
+interaction : les clics dans la barre laterale ne changent rien et aucune page ne
+s'affiche. Ce n'est pas un defaut des pages. Il suffit d'accepter la fenetre une
+fois ; l'acquittement est persiste dans le profil et l'interface redevient
+utilisable. C'est aussi ce qui explique qu'une instance locale avec un accueil
+deja utilise se comporte differemment.
+
+### Reste a faire
+
+- front SSO et route Traefik, avec le nom d'hote a choisir ;
+- rattachement des connecteurs aux droits, puis une mission qui appelle un
+  connecteur reel ;
+- rotation de la cle du modele apres les tests.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
