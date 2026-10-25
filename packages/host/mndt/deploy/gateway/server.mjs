@@ -78,7 +78,19 @@ function forward(req, res, target, path) {
     path,
     headers,
   }, (answer) => {
-    res.writeHead(answer.statusCode ?? 502, answer.headers)
+    // The shell marks its session cookie SameSite=Strict. A browser arriving
+    // through the sign-on proxy lands on a redirect chain started by Microsoft,
+    // and Chrome then refuses to send that cookie back, which turns the session
+    // bootstrap into a redirect loop. Lax keeps the cross-site protection that
+    // matters here (no cross-site POST, no cross-site subresource) while letting
+    // the same-site redirect carry the session.
+    const headers = { ...answer.headers }
+    const cookies = answer.headers['set-cookie']
+    if (cookies !== undefined) {
+      headers['set-cookie'] = cookies.map((cookie) =>
+        cookie.includes('dsh-auth-') ? cookie.replace(/SameSite=Strict/i, 'SameSite=Lax') : cookie)
+    }
+    res.writeHead(answer.statusCode ?? 502, headers)
     answer.pipe(res)
   })
   upstream.on('error', (error) => {

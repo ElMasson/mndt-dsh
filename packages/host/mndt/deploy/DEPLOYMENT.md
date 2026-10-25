@@ -481,6 +481,21 @@ le modele livre, puis le proxy a redemarre.
 Apres correction, aucune nouvelle tentative n a encore eu lieu. Rien ne permet
 donc d affirmer que la connexion aboutit : la prochaine tentative le dira.
 
+## Premiere connexion reussie, puis boucle corrigee, 25 octobre
+
+Le proxy a authentifie duke@datanalysis.re apres correction des domaines :
+`[AuthSuccess] Authenticated via OAuth2` a 08:34:36. La page est ensuite
+entree dans une boucle de redirection.
+
+Cause trouvee : le shell signe son cookie de session en SameSite=Strict. Chrome
+ne le renvoie pas dans une chaine de redirection issue de Microsoft, donc chaque
+requete a la racine repartait en amorcage de jeton, sans fin.
+
+La passerelle reecrit desormais l'attribut en SameSite=Lax pour ce seul cookie,
+en gardant HttpOnly, Path et l'expiration. Verifie : l'en-tete rend
+`SameSite=Lax` et la chaine jeton puis page aboutit en 200. La production
+repond toujours, seize controles passent.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
