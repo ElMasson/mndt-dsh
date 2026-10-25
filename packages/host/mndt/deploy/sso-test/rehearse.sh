@@ -18,9 +18,15 @@ EXPECTED=duke@datanalysis.re
 failures=0
 
 cleanup() {
-  sed -i "/${MARKER}/d" /etc/hosts 2>/dev/null || true
-  (cd "$DIR" 2>/dev/null && docker compose down -v >/dev/null 2>&1) || true
+  # Never let a failing teardown keep the stack or the name resolution behind:
+  # the rehearsal must leave no trace, including after a failed run.
+  set +e
+  sed -i "/${MARKER}/d" /etc/hosts 2>/dev/null
+  (cd "$DIR" 2>/dev/null && docker compose down -v >/dev/null 2>&1)
+  docker ps -a --filter "name=${PROJECT}" -q | xargs -r docker rm -f >/dev/null 2>&1
+  docker network rm "${PROJECT}_sso" >/dev/null 2>&1
   rm -rf "$DIR" "$CFG"
+  set -e
 }
 trap cleanup EXIT
 
