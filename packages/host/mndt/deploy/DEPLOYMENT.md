@@ -463,6 +463,24 @@ c est-a-dire l URI de retour enregistree et les identifiants reels.
 Production verifiee apres nettoyage : /health repond, les controles passent, la
 redirection publique pointe toujours vers Microsoft.
 
+## Premier retour Entra, et le refus qu il a revele, 25 octobre
+
+Le retour OAuth est arrive trois fois apres l enregistrement de l URI. Le proxy a
+refuse les trois, et les journaux disent pourquoi :
+
+    08:12:58  Cookies were found in OAuth callback, but none was a CSRF cookie
+    08:13:05  contact@datanalysis.re  unauthorized
+    08:13:23  duke@datanalysis.re     unauthorized
+
+Le premier echec est un cookie anti-CSRF absent, typique d une page d erreur
+restee en cache. Les deux suivants sont un refus de domaine : le proxy
+n autorisait que duke-analytics.com, alors que les comptes Duke sont en
+datanalysis.re. La liste a ete portee aux deux domaines, sur le serveur et dans
+le modele livre, puis le proxy a redemarre.
+
+Apres correction, aucune nouvelle tentative n a encore eu lieu. Rien ne permet
+donc d affirmer que la connexion aboutit : la prochaine tentative le dira.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

@@ -8,7 +8,7 @@ oidc_issuer_url = "https://login.microsoftonline.com/5ed9c3e0-522a-46fa-978a-dd6
 client_id = "__CLIENT_ID__"
 
 redirect_url = "https://mndt.duke-analytics.com/oauth2/callback"
-email_domains = ["duke-analytics.com"]
+email_domains = ["duke-analytics.com", "datanalysis.re"]
 
 cookie_secure = true
 cookie_samesite = "lax"
