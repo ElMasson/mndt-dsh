@@ -447,7 +447,7 @@ un fournisseur OIDC de recette (deploy/sso-test/sso-stub.mjs) : decouverte,
 autorisation, jeton signe RS256, JWKS. Le meme proxy, la meme passerelle et le meme
 workbench ont servi.
 
-La recette a tourne sur le serveur, en HTTP local, avec resolution d hote
+La recette se rejoue d une commande : `bash packages/host/mndt/deploy/sso-test/rehearse.sh` sur le serveur. Elle cree son fournisseur, son proxy et ses resolutions d hote, verifie trois faits, puis supprime tout ce qu elle a cree, meme en cas d echec. Derniere execution : trois PASS, zero echec, hotes propres apres coup.
 temporaire, puis a ete entierement retiree : conteneurs, fichiers et lignes
 ajoutees a /etc/hosts.
 
