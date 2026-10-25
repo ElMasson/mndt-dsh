@@ -28,6 +28,7 @@ preuve est une ligne ouverte, pas une reussite.
 | --- | --- | --- |
 | Connecteur monte | `{"connectors":[{"server":"workbench_facts","enabled":true}]}` | API `/connectors` du serveur |
 | Outil appele par une mission | brief citant la reponse verbatim, source = serveur MCP | mission du 24 octobre, capture `page-connector-mission.png` |
+| Ecriture refusee a l execution | mission tentant create-record : outil absent de l inventaire, refus unknown tool, brief qui distingue refus de dispatching et autorisation Attio | serveur, 25 octobre |
 | Connecteur metier Attio, lecture seule | mission reelle : trois entreprises lues avec domaines et identifiants, ecriture refusee par la passerelle | serveur, capture page-attio-connector.png |
 
 ## 4. Automatisations planifiees

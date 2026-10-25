@@ -413,6 +413,18 @@ Une seconde decision est laissee en attente (`apr_4b33985f97c84d489897`) pour
 que la personne qui se connecte la tranche elle-meme ; capture
 `page-pending-approval.png`.
 
+## Ecriture refusee a l'execution, preuve du 25 octobre
+
+Une mission a recu pour consigne d'ecrire dans Attio. L'outil d'ecriture n'existe
+pas dans son inventaire : la passerelle de lecture seule l'a retire de la liste,
+donc l'appel echoue avant d'atteindre Attio.
+
+    Error: unknown tool "mcp__attio__create-record"
+
+Le brief precise que le refus vient du dispatching d'outils et non d'une erreur
+d'autorisation Attio : la formulation reste exacte, et aucune entreprise n'a ete
+creee. C'est la difference entre un garde-fou et une promesse.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
