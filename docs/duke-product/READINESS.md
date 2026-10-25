@@ -29,11 +29,11 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
    doit être enregistrée sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782`,
    puis une personne réelle doit se connecter. Tout le reste du chemin est vérifié :
    redirection, retour, cookie, page, identité transmise.
-2. **Image avec rattrapage des missions interrompues.** Le correctif est commité
-   (`4ba13a0741`) mais aucun moteur de construction n'est disponible : Docker
-   Desktop ne répond plus, et une tentative d'installer un moteur dans WSL a saturé
-   la machine puis a été abandonnée. L'image déployée est celle d'avant ; le défaut
-   a été corrigé dans les données du serveur, pas dans le code embarqué.
+2. **Image à jour.** Construite dans WSL après avoir porté sa mémoire à 20 Go, puis
+   déployée. Le rattrapage des missions interrompues y est présent et a été vérifié
+   en plantant une mission en cours avant redémarrage : elle ressort en échec avec
+   le motif exact. Une mission Attio a ensuite lu une entreprise réelle sur cette
+   image.
 3. **Rotation de la clé de modèle.** Elle a servi aux tests et devrait être
    remplacée une fois la recette terminée.
 4. **Jeton OAuth Attio.** Il vit dans `/data/mndt/live/mcp-auth` (700/600) et peut
