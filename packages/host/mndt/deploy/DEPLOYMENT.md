@@ -440,6 +440,29 @@ Une mission Attio a ensuite tourne sur cette image et a cite une entreprise reel
 (Thrasos A.I., `thrasos.ai`, enregistrement `00089712-...`), ce qui confirme que
 le connecteur survit au changement d'image.
 
+## Chaine SSO rejouee sans Entra, preuve du 25 octobre
+
+Pour isoler le risque restant a la seule fiche Entra, la chaine a ete rejouee avec
+un fournisseur OIDC de recette (deploy/sso-test/sso-stub.mjs) : decouverte,
+autorisation, jeton signe RS256, JWKS. Le meme proxy, la meme passerelle et le meme
+workbench ont servi.
+
+La recette a tourne sur le serveur, en HTTP local, avec resolution d hote
+temporaire, puis a ete entierement retiree : conteneurs, fichiers et lignes
+ajoutees a /etc/hosts.
+
+    parcours    3 redirections, final 200
+    identite    you = duke@datanalysis.re, canWrite = true
+    droits      lus depuis l autorite centrale, pas du fournisseur de recette
+
+Ce que cela prouve : authentification OIDC, cookie de session du proxy,
+propagation de l en-tete d identite, lecture des droits et reponse du produit
+fonctionnent ensemble. Ce que cela ne prouve pas : la fiche Entra elle-meme,
+c est-a-dire l URI de retour enregistree et les identifiants reels.
+
+Production verifiee apres nettoyage : /health repond, les controles passent, la
+redirection publique pointe toujours vers Microsoft.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow

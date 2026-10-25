@@ -25,7 +25,7 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
 
 ## Ce qui reste ouvert
 
-1. **Connexion Entra complète.** L'URI `https://mndt.duke-analytics.com/oauth2/callback`
+1. **Connexion Entra complète.** La chaîne a été rejouée avec un fournisseur OIDC de recette : trois redirections, réponse 200, identité et droits corrects. Il ne reste donc que la fiche Entra. L'URI `https://mndt.duke-analytics.com/oauth2/callback`
    doit être enregistrée sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782`,
    puis une personne réelle doit se connecter. Tout le reste du chemin est vérifié :
    redirection, retour, cookie, page, identité transmise.
