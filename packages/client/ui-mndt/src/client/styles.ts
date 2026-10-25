@@ -80,6 +80,7 @@ export const CSS = `
 .mndt-note-meta { color: var(--mndt-muted); font-size: 11px; }
 .mndt-details summary { cursor: pointer; font-size: 13px; font-weight: 550; }
 
+.mndt-onboarding { flex-shrink: 0; }
 .mndt-onboarding .mndt-sub { margin-top: 4px; font-size: 12.5px; }
 .mndt-steps { list-style: none; margin: 4px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .mndt-step { display: flex; align-items: center; gap: 10px; font-size: 13px; }
