@@ -513,6 +513,24 @@ Verifie sans navigateur et a travers un proxy :
     api de page                     you = duke@datanalysis.re, canWrite vrai
     parcours complet via proxy      200 apres 4 redirections
 
+## Chaine verifiee dans un vrai Chrome, 25 octobre
+
+La recette a ete pilotee par un Chrome headless, en remplacant seulement Entra par
+le fournisseur OIDC de recette. Le navigateur a suivi la chaine complete :
+
+    302  racine
+    302  autorisation du fournisseur
+    302  retour /oauth2/callback avec un code
+    302  racine, session posee par la passerelle
+    200  page chargee, titre du shell rendu
+
+Aucune boucle. Le navigateur n'a jamais eu a conserver le cookie du shell : la
+passerelle le garde pour lui. Les clics d'onboarding ont ensuite ouvert un
+espace de travail, ce qui confirme que l'interface repond apres connexion.
+
+Recette retiree apres coup : conteneurs, reseau, fichiers et lignes /etc/hosts.
+Production reverifiee : seize controles, redirection publique vers Microsoft.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
