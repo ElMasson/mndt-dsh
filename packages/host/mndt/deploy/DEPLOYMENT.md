@@ -496,6 +496,23 @@ en gardant HttpOnly, Path et l'expiration. Verifie : l'en-tete rend
 `SameSite=Lax` et la chaine jeton puis page aboutit en 200. La production
 repond toujours, seize controles passent.
 
+## Session tenue par la passerelle, 25 octobre
+
+Le cookie du shell dependait de ses propres attributs, et Chrome refusait de le
+rejouer apres la chaine de connexion. Plutot que de negocier des attributs, la
+passerelle ouvre desormais la session elle-meme : pour une personne que le proxy
+a prouvee, elle echange le jeton d amorcage cote serveur, garde le cookie du
+shell, et pose son propre cookie `mndt-session` en SameSite=Lax. Le navigateur
+ne voit jamais le jeton, et la session ne depend plus du shell.
+
+Verifie sans navigateur et a travers un proxy :
+
+    premiere visite avec identite   302 + mndt-session (Lax, HttpOnly)
+    deuxieme visite avec cookie     200, titre de la page
+    visite avec cookie seul         200
+    api de page                     you = duke@datanalysis.re, canWrite vrai
+    parcours complet via proxy      200 apres 4 redirections
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
