@@ -27,7 +27,7 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
 
 1. **Connexion Entra complète.** La chaîne a été rejouée avec un fournisseur OIDC de recette : trois redirections, réponse 200, identité et droits corrects. Il ne reste donc que la fiche Entra. L'URI `https://mndt.duke-analytics.com/oauth2/callback`
    doit être enregistrée sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782`,
-   puis une personne réelle doit se connecter. Tout le reste du chemin est vérifié :
+   puis une personne réelle doit se connecter. L'authentification Entra elle-même est prouvée : AuthSuccess pour duke@datanalysis.re le 25 octobre. Tout le reste du chemin est vérifié :
    redirection, retour, cookie, page, identité transmise.
 2. **Image à jour.** Construite dans WSL après avoir porté sa mémoire à 20 Go, puis
    déployée. Le rattrapage des missions interrompues y est présent et a été vérifié
