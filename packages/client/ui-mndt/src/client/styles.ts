@@ -79,4 +79,24 @@ export const CSS = `
 .mndt-note { font-size: 12.5px; }
 .mndt-note-meta { color: var(--mndt-muted); font-size: 11px; }
 .mndt-details summary { cursor: pointer; font-size: 13px; font-weight: 550; }
+
+.mndt-onboarding .mndt-sub { margin-top: 4px; font-size: 12.5px; }
+.mndt-steps { list-style: none; margin: 4px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mndt-step { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.mndt-step-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 999px;
+  border: 1px solid var(--mndt-border); color: var(--mndt-muted); font-size: 11px;
+}
+.mndt-step[data-done="true"] .mndt-step-dot { background: var(--mndt-accent-soft); border-color: #DDE1FF; color: #3F4DE6; }
+.mndt-step-label { flex: 1; }
+.mndt-step-value { color: var(--mndt-muted); font-size: 11.5px; }
+.mndt-team { border-top: 1px dashed var(--mndt-border); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.mndt-team-title { margin: 0; font-size: 12.5px; font-weight: 600; }
+.mndt-team-cmd {
+  display: block; padding: 8px 10px; border-radius: 8px;
+  background: #F4F5F8; border: 1px solid var(--mndt-border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  overflow-x: auto; white-space: pre;
+}
 `

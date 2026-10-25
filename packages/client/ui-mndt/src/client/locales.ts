@@ -34,6 +34,19 @@ export const en = {
   draft: 'draft',
   approved: 'approved',
   you: 'You',
+  onboardingTitle: 'Premiers pas',
+  onboardingLead: 'Quatre gestes suffisent pour prendre le produit en main. Ce qui est deja fait est coche.',
+  onboardingDismiss: 'Masquer',
+  stepIdentity: 'Votre identite et vos droits',
+  stepMission: 'Lancer une mission',
+  stepDecision: 'Trancher une decision',
+  stepConnector: 'Verifier les connecteurs',
+  stepNone: 'aucune',
+  teamTitle: 'Travailler en equipe',
+  teamLead: 'Chaque personne se connecte avec son compte Duke. Ses droits viennent de l autorite centrale, pas de cette page.',
+  teamRoles: 'viewer lit, operator agit, admin gere, owner decide de tout.',
+  teamShared: 'Missions, decisions et notes sont partagees ; chaque action porte le nom de son auteur.',
+  teamAdd: '/opt/governance/add-member.sh email@duke-analytics.com viewer',
 } as const
 
 /** The same slot, mirrored. */

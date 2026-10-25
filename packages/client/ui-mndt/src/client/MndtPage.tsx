@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CSS } from './styles.ts'
 import type { MndtKey } from './locales.ts'
+import { Onboarding } from './Onboarding.tsx'
 
 /** A mission as the page reads it. */
 export interface MissionRow {
@@ -164,6 +165,22 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
       </header>
 
       {error !== null && <p className="mndt-error">{error}</p>}
+
+      <Onboarding
+        t={t}
+        you={state.you}
+        canWrite={state.canWrite}
+        missionCount={state.missions.length}
+        pendingCount={state.approvals.length}
+        connectorCount={connectors.length}
+        busy={busy !== null}
+        onRunBriefing={() => {
+          void act('onboard', async () => {
+            const result = await api.runMission('briefing', 'Briefing du matin : agenda, courriers sans reponse, comptes a risque, echeances, reunions du jour.')
+            if (!result.ok) throw new Error(result.error ?? 'refused')
+          })
+        }}
+      />
 
       <div className="mndt-grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
