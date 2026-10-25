@@ -30,9 +30,10 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
    puis une personne réelle doit se connecter. Tout le reste du chemin est vérifié :
    redirection, retour, cookie, page, identité transmise.
 2. **Image avec rattrapage des missions interrompues.** Le correctif est commité
-   (`4ba13a0741`) mais le moteur Docker local est indisponible ; l'image déployée
-   est celle d'avant. Le défaut est corrigé dans les données du serveur, pas dans
-   le code embarqué.
+   (`4ba13a0741`) mais aucun moteur de construction n'est disponible : Docker
+   Desktop ne répond plus, et une tentative d'installer un moteur dans WSL a saturé
+   la machine puis a été abandonnée. L'image déployée est celle d'avant ; le défaut
+   a été corrigé dans les données du serveur, pas dans le code embarqué.
 3. **Rotation de la clé de modèle.** Elle a servi aux tests et devrait être
    remplacée une fois la recette terminée.
 4. **Jeton OAuth Attio.** Il vit dans `/data/mndt/live/mcp-auth` (700/600) et peut
