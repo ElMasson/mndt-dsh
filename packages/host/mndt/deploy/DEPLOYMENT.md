@@ -425,6 +425,21 @@ Le brief precise que le refus vient du dispatching d'outils et non d'une erreur
 d'autorisation Attio : la formulation reste exacte, et aucune entreprise n'a ete
 creee. C'est la difference entre un garde-fou et une promesse.
 
+## Image reconstruite et rattrapage verifie, 25 octobre
+
+Docker Desktop etant muet, l'image a ete construite dans l'Ubuntu WSL avec un
+moteur docker.io, apres avoir porte sa memoire a 20 Go et ajoute 8 Go d'echange
+dans `%USERPROFILE%\.wslconfig`. Le constructeur historique suffit, sans buildx.
+
+Verification du correctif en conditions reelles : une mission à l'etat `running`
+a ete plantee dans l'etat avant redemarrage, puis le workbench a demarre avec la
+nouvelle image. Resultat : `sonde: failed` et motif
+`interrupted by a workbench restart; no result was produced`.
+
+Une mission Attio a ensuite tourne sur cette image et a cite une entreprise reelle
+(Thrasos A.I., `thrasos.ai`, enregistrement `00089712-...`), ce qui confirme que
+le connecteur survit au changement d'image.
+
 ## Garde-fous
 
 `DSH_PERMISSION_MODE=danger-full-access` est nécessaire au worker du workflow
