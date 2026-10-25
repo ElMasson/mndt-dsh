@@ -66,9 +66,11 @@ preuve est une ligne ouverte, pas une reussite.
 | Sante | `{"ok":true}` | `/health` serveur |
 | Page servie | `200` avec cookie, `401` sans | serveur et passerelle |
 | Redirection Entra | `302` vers `login.microsoftonline.com` avec `redirect_uri=https://mndt.duke-analytics.com/oauth2/callback` | Traefik, serveur |
-| DNS public | **ouvert** : `mndt.duke-analytics.com` ne resout pas encore | action utilisateur |
-| URI Entra | **ouvert** : a ajouter sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782` | action utilisateur |
-| Connexion complete | **ouvert** tant que les deux lignes ci-dessus ne sont pas faites | a verifier ensuite |
+| DNS public | resout, certificat Let's Encrypt valide | serveur, 24 octobre |
+| URI Entra | enregistree par Stephane le 25 octobre sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782` | portail Entra |
+| Authentification Entra reelle | `[AuthSuccess] Authenticated via OAuth2` pour `duke@datanalysis.re`, id_token present, 25 octobre 08:34:36 | journaux du proxy |
+| Chaine dans un navigateur reel | Chrome : 302, autorisation, retour avec code, session posee par la passerelle, 200, aucune boucle, espace de travail ouvert | recette du 25 octobre |
+| Connexion complete dans le navigateur de Stephane | **a confirmer** : aucune nouvelle visite depuis la correction de session, la derniere trace date de 08:34 | a verifier ensemble |
 
 ## 8. Limites connues, dites explicitement
 
