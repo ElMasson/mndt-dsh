@@ -74,13 +74,29 @@ preuve est une ligne ouverte, pas une reussite.
 | Marque mndt dans le hero | ruban mndt a la place du logo par defaut, capture page-hero-mndt.png | serveur, 26 octobre |
 | Carte de premiers pas | quatre gestes avec leur etat reel, bloc equipe, capture page-onboarding-full.png | serveur, 26 octobre |
 
-## 8. Limites connues, dites explicitement
+## 8. Personnel par defaut, partage explicite
 
-- La page derriere SSO partage le jeton de demarrage du shell ; les actions de
-  produit, elles, sont attribuees par personne via `/mndt-api` et l'en-tete du
-  proxy. Les fonctions de shell hors produit restent donc mono-jeton.
-- Le connecteur monte est un petit serveur de demonstration, pas un systeme Duke.
-  Il prouve la chaine ; les connecteurs metier demandent leurs acces.
-- Le brief planifie du serveur ne cite aucune source reelle, et le dit.
+| Element | Preuve | Ou |
+| --- | --- | --- |
+| Mission privee par defaut | mission creee par duke : `visibility=private`, absente de la liste du compte en lecture, lecture directe refusee 403 | verification du 26 octobre |
+| Partage explicite | apres `POST /missions/:id/visibility`, la mission devient visible du compte en lecture | verification du 26 octobre |
+| Brief herite | le brief produit par une mission privee reste prive, puis suit le partage | code et verification |
+| Refus de partage | un lecteur qui tente de partager la mission d autrui recoit 403 | verification du 26 octobre |
+| Note personnelle | `scope=user` par defaut, invisible du lecteur, puis partageable | verification du 26 octobre |
+| Automatisation d equipe | 17 missions d equipe visibles par le compte en lecture | verification du 26 octobre |
+| Page | trois perimetres (tout, mes elements, equipe), etiquettes prive/equipe, boutons de partage | captures page-hybrid-shared.png et page-hybrid-mine.png |
+
+## 9. Limites connues, dites explicitement
+
+- Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
+  sont pas cloisonnes par personne. Le cloisonnement porte sur les donnees du
+  produit (missions, briefs, notes), pas sur le shell.
+- Un connecteur metier est monte (Attio, lecture seule) avec les outils internes
+  d approbation et de faits. Les autres systemes Duke demandent leurs acces.
+- L ajout de membres passe par un script serveur, pas par un ecran d admin.
+- La reconstruction complete de l image a echoue deux fois par disque hote plein
+  (4 Go libres) ; l image en service est construite par couche sur une base
+  validee, et la reconstruction depuis la source reste a refaire quand l espace
+  le permettra. Le code source, lui, est complet et les paquets se compilent.
 - La cle du modele est stockee sur le serveur dans un fichier protege ; elle est
   a faire tourner apres les tests.

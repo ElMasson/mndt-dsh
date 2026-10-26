@@ -23,6 +23,14 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
 | Décisions humaines réelles | mission ayant demandé un accord send-email, brief sans envoi, décision humaine enregistrée avec motif, journal pproval.requested puis pproval.approved | tenu |
 | Aucune surface qui prétend exécuter | missions interrompues marquées en échec avec leur motif, brief qui déclare l'absence de source, connecteur refusé plutôt que simulé | tenu |
 
+## Modele de partage, verifie en production
+
+Le modele hybride est en service depuis le 26 octobre et verifie a deux
+identites : mission privee par defaut, invisible du compte en lecture, refus 403
+en lecture directe, partage explicite qui la rend visible, refus de partage pour
+un lecteur, note personnelle puis partagee, automatisation d equipe visible. Les
+captures de la page montrent les trois perimetres et les etiquettes.
+
 ## Ce qui reste ouvert
 
 1. **Rotation de la clé de modèle.** Elle a servi aux tests et devrait être

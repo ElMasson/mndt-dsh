@@ -54,7 +54,7 @@ export const en = {
   teamTitle: 'Travailler en equipe',
   teamLead: 'Chaque personne se connecte avec son compte Duke. Ses droits viennent de l autorite centrale, pas de cette page.',
   teamRoles: 'viewer lit, operator agit, admin gere, owner decide de tout.',
-  teamShared: 'Missions, decisions et notes sont partagees ; chaque action porte le nom de son auteur.',
+  teamShared: 'Missions, decisions et notes : personnelles par defaut, partagees sur decision explicite ; chaque action porte le nom de son auteur.',
   teamAdd: '/opt/governance/add-member.sh email@duke-analytics.com viewer',
 } as const
 
