@@ -53,6 +53,10 @@ export interface MemoryRow {
 }
 
 /** What one read returns. */
+export interface ScheduleRow {
+  readonly at: string | null
+}
+
 export interface UsageRow {
   readonly user: string
   readonly missions: number
@@ -114,6 +118,8 @@ export interface MndtFace {
   grantMember(subject: string, role: 'viewer' | 'operator' | 'admin' | 'owner'): Promise<OutcomeRow<MemberRow>>
   revokeMember(subject: string): Promise<OutcomeRow<MemberRow>>
   usage(): Promise<UsageReport>
+  schedule(): Promise<ScheduleRow>
+  setSchedule(at: string): Promise<ScheduleRow>
 }
 
 /** What the page receives from its plugin. */
@@ -141,6 +147,8 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [memberEmail, setMemberEmail] = useState('')
   const [memberRole, setMemberRole] = useState<'viewer' | 'operator' | 'admin' | 'owner'>('viewer')
   const [usage, setUsage] = useState<UsageReport | null>(null)
+  const [schedule, setSchedule] = useState<ScheduleRow | null>(null)
+  const [scheduleAt, setScheduleAt] = useState('06:30')
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
@@ -157,6 +165,9 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
       setConnectors(await api.connectors().catch(() => []))
       setMembers(await api.members().catch(() => []))
       setUsage(await api.usage().catch(() => null))
+      const loaded = await api.schedule().catch(() => null)
+      setSchedule(loaded)
+      if (loaded?.at != null) setScheduleAt(loaded.at)
       setError(null)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
@@ -435,6 +446,41 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   </button>
                 </div>
               )}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('scheduleTitle')}</h2>
+              <span className="mndt-count">{schedule?.at ?? '—'}</span>
+            </div>
+            <div className="mndt-card-body">
+              <p className="mndt-empty">{t('scheduleHint')}</p>
+              <div className="mndt-row-actions">
+                <input
+                  className="mndt-input"
+                  type="time"
+                  value={scheduleAt}
+                  disabled={state.canAdmin !== true || busy !== null}
+                  onChange={(event) => { setScheduleAt(event.target.value) }}
+                  aria-label={t('scheduleAt')}
+                />
+                {state.canAdmin === true && (
+                  <button
+                    className="mndt-button"
+                    data-variant="primary"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      void act('schedule', async () => {
+                        const result = await api.setSchedule(scheduleAt)
+                        setSchedule(result)
+                      })
+                    }}
+                  >
+                    {t('scheduleSave')}
+                  </button>
+                )}
+              </div>
             </div>
           </section>
 

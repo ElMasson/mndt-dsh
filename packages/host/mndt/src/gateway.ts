@@ -6,7 +6,8 @@
  * service, so the page and the HTTP face never disagree about the state, and it
  * starts the HTTP face only when the deployment gives it a port.
  */
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
@@ -55,6 +56,8 @@ export class WorkbenchGateway extends TypertRemoteService {
   private readonly identity: string
   private readonly grants: GrantSource
   private readonly statePath: string
+  /** Where the editable briefing schedule lives; the API writes it, the poller reads it. */
+  private readonly schedulePath: string
 
   /**
    * @param ctx - owning context.
@@ -63,6 +66,7 @@ export class WorkbenchGateway extends TypertRemoteService {
   constructor(ctx: Context, config: MndtConfig = {}) {
     super(ctx, 'mndt')
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
+    this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
     this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath) })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
@@ -88,6 +92,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         runner,
         identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
         grants: this.grants,
+        schedulePath: this.schedulePath,
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
         port,
@@ -130,15 +135,15 @@ export class WorkbenchGateway extends TypertRemoteService {
   /**
    * Run the morning briefing on a schedule.
    *
-   * `DSH_MNDT_BRIEFING_AT=06:30` fires once a day; `DSH_MNDT_BRIEFING_EVERY_MS`
-   * fires at a fixed interval and exists so the schedule can be proven quickly.
-   * A run already in flight is never doubled: the next tick waits.
+   * The hour is read from a small file the page can edit, so a change needs no
+   * deploy and survives a restart. A run already in flight is never doubled.
+   * `DSH_MNDT_BRIEFING_EVERY_MS` keeps a fixed interval for proving the path
+   * quickly; the daily hour is what runs in production.
    * @param ctx - the host context, which owns the timer lifecycle.
    */
   #scheduleBriefing(ctx: Context): void {
-    const at = process.env.DSH_MNDT_BRIEFING_AT
     const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
-    if (at === undefined && !Number.isFinite(every)) return
+    const envAt = process.env.DSH_MNDT_BRIEFING_AT
     let running = false
     const fire = (): void => {
       if (running) return
@@ -148,7 +153,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           const mission = await this.service.createMission({
             kind: 'briefing',
             prompt: 'Briefing du matin : agenda, courriers sans réponse, comptes à risque, échéances, réunions du jour. '
-              + 'Consulte les outils de lecture des connecteurs montés, par exemple Attio en lecture, et cite ce que tu lis réellement. '
+              + 'Consulte les outils de lecture des connecteurs montés, par exemple Attio et Office365 en lecture, et cite ce que tu lis réellement. '
               + 'Si une rubrique n\'a aucune source accessible, dis-le au lieu de l\'inventer.',
             createdBy: 'scheduler',
           })
@@ -168,30 +173,37 @@ export class WorkbenchGateway extends TypertRemoteService {
       })()
     }
     ctx.effect(() => {
-      // The test cadence wins when both are set: a fixed interval exists so the
-      // scheduled path can be proven quickly, and the daily hour is what runs in
-      // production.
       if (Number.isFinite(every)) {
         const handle = setInterval(fire, every)
         return () => { clearInterval(handle) }
       }
-      if (at !== undefined) {
-        const [hour, minute] = at.split(':').map(Number)
-        const delay = (): number => {
-          const now = new Date()
-          const next = new Date(now)
-          next.setHours(hour ?? 6, minute ?? 30, 0, 0)
-          if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
-          return next.getTime() - now.getTime()
-        }
-        let handle: ReturnType<typeof setTimeout>
-        const arm = (): void => {
-          handle = setTimeout(() => { fire(); arm() }, delay())
-        }
-        arm()
-        return () => { clearTimeout(handle) }
+      // Poll once a minute: the file may change at any time, including while the
+      // workbench is running, and a restart must keep honouring it.
+      if (envAt === undefined) {
+        void readFile(this.schedulePath, 'utf8').catch(() => undefined)
       }
-      return () => undefined
+      const tick = (): void => {
+        void (async () => {
+          try {
+            const raw = await readFile(this.schedulePath, 'utf8').catch(() => '')
+            let record: { at?: unknown; lastFiredDate?: unknown } = {}
+            if (raw.trim() !== '') record = JSON.parse(raw) as typeof record
+            const at = typeof record.at === 'string' ? record.at : envAt
+            if (typeof at !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) return
+            const now = new Date()
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+            const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+            if (clock !== at || record.lastFiredDate === today) return
+            await writeFile(this.schedulePath, JSON.stringify({ at, lastFiredDate: today }), 'utf8')
+            fire()
+          } catch (error) {
+            ctx.logger.warn(`mndt: could not read the briefing schedule: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        })()
+      }
+      const handle = setInterval(tick, 30_000)
+      tick()
+      return () => { clearInterval(handle) }
     }, 'mndt: scheduled briefing')
   }
 

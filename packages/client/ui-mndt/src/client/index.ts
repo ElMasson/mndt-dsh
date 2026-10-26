@@ -43,6 +43,8 @@ function absentFace(message: string): MndtFace {
     grantMember: refuse,
     revokeMember: refuse,
     usage: refuse,
+    schedule: refuse,
+    setSchedule: refuse,
     connectors: refuse,
   }
 }
@@ -83,6 +85,8 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
     grantMember: async (subject, role) => (await raw(() => mounted.grantMember(subject, role))) as never,
     revokeMember: async subject => (await raw(() => mounted.revokeMember(subject))) as never,
     usage: async () => (await raw(() => mounted.usage())) as never,
+    schedule: async () => (await raw(() => mounted.schedule())) as never,
+    setSchedule: async at => (await raw(() => mounted.setSchedule(at))) as never,
     shareMemory: async (id, scope) => (await raw(() => mounted.shareMemory(id, scope))) as never,
     connectors: async () => {
       const answer = await mounted.connectors()
@@ -117,6 +121,8 @@ function face(ctx: ClientContext): MndtFace {
     grantMember: (subject, role) => route(next => next.grantMember(subject, role)),
     revokeMember: subject => route(next => next.revokeMember(subject)),
     usage: () => route(next => next.usage()),
+    schedule: () => route(next => next.schedule()),
+    setSchedule: at => route(next => next.setSchedule(at)),
     shareMemory: (id, scope) => route(next => next.shareMemory(id, scope)),
     connectors: () => route(next => next.connectors()),
   }

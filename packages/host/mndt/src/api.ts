@@ -20,6 +20,7 @@ import type {
 import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
+import { readFile, writeFile } from 'node:fs/promises'
 import { can, roleOf } from './policy.ts'
 import type { GrantSource } from './policy.ts'
 import type { PageState } from './types.ts'
@@ -70,6 +71,8 @@ interface UsageTotals {
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
   readonly authority?: { readonly baseUrl: string; readonly token: string }
+  /** The briefing schedule file, editable from the page. */
+  readonly schedulePath?: string
   readonly service: WorkbenchService
   readonly runner: MissionRunner
   readonly identity: IdentityOptions
@@ -303,6 +306,33 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           createdBy: identity,
         })
         return respond(201, { memory: note })
+      }
+
+      if (request.method === 'GET' && path === '/schedule') {
+        let at: string | undefined = process.env.DSH_MNDT_BRIEFING_AT
+        if (options.schedulePath !== undefined) {
+          const raw = await readFile(options.schedulePath, 'utf8').catch(() => '')
+          if (raw.trim() !== '') {
+            const record = JSON.parse(raw) as { at?: unknown; lastFiredDate?: unknown }
+            if (typeof record.at === 'string') at = record.at
+          }
+        }
+        return respond(200, { at: at ?? null })
+      }
+
+      if (request.method === 'POST' && path === '/schedule') {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const input = parseBody(request.body)
+        const at = typeof input.at === 'string' ? input.at.trim() : ''
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) {
+          return respond(400, { error: 'at must be a time like 06:30' })
+        }
+        if (options.schedulePath === undefined) {
+          return respond(503, { error: 'this deployment has no writable schedule' })
+        }
+        await writeFile(options.schedulePath, JSON.stringify({ at }), 'utf8')
+        return respond(200, { at })
       }
 
       if (request.method === 'GET' && path === '/usage') {

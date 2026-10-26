@@ -9,6 +9,7 @@
 import type {
   ApprovalRow,
   MemberRow,
+  ScheduleRow,
   UsageReport,
   BriefRow,
   ConnectorRow,
@@ -111,6 +112,8 @@ export function createHttpFace(): MndtFace {
       return { subject, role }
     }),
     usage: async () => (await bodyOf<UsageReport>(await call('/usage'))),
+    schedule: async () => (await bodyOf<ScheduleRow>(await call('/schedule'))),
+    setSchedule: async at => (await bodyOf<ScheduleRow>(await call('/schedule', { method: 'POST', body: JSON.stringify({ at }) }))),
     revokeMember: subject => outcomeOf(async () => {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
       return { subject, role: 'none' }
