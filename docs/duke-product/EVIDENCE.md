@@ -93,6 +93,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Connecteur Office365 monte | 4 connecteurs lus par le produit : approvals, attio, office365, workbench_facts | verification du 26 octobre |
 | Lecture reelle de la boite | mission DSH : deux derniers courriers avec sujets et expediteurs reels, aucun envoi | verification du 26 octobre |
 | Jeton Office365 protege | /data/mndt/live/mcp-auth/office365.json, mode 600, rafraichi a la demande, jamais affiche | verification du 26 octobre |
+| Heure du briefing reglable | 06:30 vers 06:15 par l API, fichier sur disque, survit au redemarrage, lecteur 403, heure invalide 400 | verification du 26 octobre |
+| Visite guidee | sept etapes, du role a l automatisation, fermeture et memoire cote navigateur | capture page-tour.png |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

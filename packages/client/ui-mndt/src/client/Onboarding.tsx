@@ -19,6 +19,8 @@ export interface OnboardingProps {
   readonly busy: boolean
   /** Runs the first mission from the card. */
   readonly onRunBriefing: () => void
+  /** Opens the guided tour. */
+  readonly onStartTour: () => void
   /** Copy resolver owned by the page. */
   readonly t: (key: MndtKey) => string
 }
@@ -52,17 +54,22 @@ export function Onboarding(props: OnboardingProps) {
           <h2 className="mndt-card-title">{props.t('onboardingTitle')}</h2>
           <p className="mndt-sub">{props.t('onboardingLead')}</p>
         </div>
-        <button
-          className="mndt-button"
-          onClick={() => {
-            try {
-              window.localStorage.setItem(DISMISS_KEY, '1')
-            } catch {}
-            setDismissed(true)
-          }}
-        >
-          {props.t('onboardingDismiss')}
-        </button>
+        <div className="mndt-row-actions">
+          <button className="mndt-button" data-variant="primary" onClick={props.onStartTour}>
+            {props.t('tourStart')}
+          </button>
+          <button
+            className="mndt-button"
+            onClick={() => {
+              try {
+                window.localStorage.setItem(DISMISS_KEY, '1')
+              } catch {}
+              setDismissed(true)
+            }}
+          >
+            {props.t('onboardingDismiss')}
+          </button>
+        </div>
       </div>
       <div className="mndt-card-body">
         <ol className="mndt-steps">

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CSS } from './styles.ts'
 import type { MndtKey } from './locales.ts'
 import { Onboarding } from './Onboarding.tsx'
+import { GuidedTour } from './GuidedTour.tsx'
 
 /** A mission as the page reads it. */
 export interface MissionRow {
@@ -149,6 +150,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [schedule, setSchedule] = useState<ScheduleRow | null>(null)
   const [scheduleAt, setScheduleAt] = useState('06:30')
+  const [tourOpen, setTourOpen] = useState(false)
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
@@ -238,6 +240,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
         pendingCount={state.approvals.length}
         connectorCount={connectors.length}
         busy={busy !== null}
+        onStartTour={() => { setTourOpen(true) }}
         onRunBriefing={() => {
           void act('onboard', async () => {
             const result = await api.runMission('briefing', 'Briefing du matin : agenda, courriers sans reponse, comptes a risque, echeances, reunions du jour.')
@@ -246,6 +249,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
         }}
       />
 
+      <GuidedTour open={tourOpen} onClose={() => { setTourOpen(false) }} t={t} />
       <div className="mndt-grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <section className="mndt-card">

@@ -108,4 +108,20 @@ export const CSS = `
 }
 
 .mndt-usage { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--mndt-muted); }
+
+.mndt-tour { position: fixed; inset: 0; z-index: 60; background: rgba(26, 26, 26, 0.28); }
+.mndt-tour-ring {
+  position: fixed; border: 2px solid var(--mndt-accent); border-radius: 14px;
+  box-shadow: 0 0 0 9999px rgba(26, 26, 26, 0.18); pointer-events: none; transition: all 160ms ease;
+}
+.mndt-tour-card {
+  position: fixed; width: 380px; padding: 18px 20px; border-radius: 16px;
+  background: var(--mndt-surface); border: 1px solid var(--mndt-border);
+  box-shadow: 0 18px 40px rgba(20, 20, 20, 0.18);
+}
+.mndt-tour-count { font-size: 11px; color: var(--mndt-muted); }
+.mndt-tour-title { margin: 6px 0 8px; font-size: 16px; }
+.mndt-tour-body { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--mndt-muted); }
+.mndt-tour-actions { display: flex; align-items: center; gap: 8px; }
+.mndt-tour-spacer { flex: 1; }
 `
