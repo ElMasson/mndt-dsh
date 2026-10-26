@@ -56,6 +56,8 @@ export interface Brief {
   readonly markdown: string
   readonly sources: readonly BriefSource[]
   readonly status: 'draft' | 'approved' | 'shared'
+  /** Inherited from the mission: a private mission yields a private brief. */
+  readonly visibility?: Visibility
   readonly createdBy: string
   readonly createdAt: string
   readonly approvedBy?: string

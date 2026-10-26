@@ -11,6 +11,7 @@ import type {
   BriefRow,
   ConnectorRow,
   MemoryRow,
+  MissionRow,
   MndtFace,
   OutcomeRow,
   PageStateRow,
@@ -99,6 +100,20 @@ export function createHttpFace(): MndtFace {
       const body = await bodyOf<{ connectors?: readonly ConnectorRow[] }>(await call('/connectors'))
       return body.connectors ?? []
     },
+    shareMission: (missionId, visibility) => outcomeOf(async () => {
+      const body = await bodyOf<{ mission: MissionRow }>(await call(`/missions/${encodeURIComponent(missionId)}/visibility`, {
+        method: 'POST',
+        body: JSON.stringify({ visibility }),
+      }))
+      return body.mission
+    }),
+    shareMemory: (memoryId, scope) => outcomeOf(async () => {
+      const body = await bodyOf<{ memory: MemoryRow }>(await call(`/memory/${encodeURIComponent(memoryId)}/scope`, {
+        method: 'POST',
+        body: JSON.stringify({ scope }),
+      }))
+      return body.memory
+    }),
   }
 }
 

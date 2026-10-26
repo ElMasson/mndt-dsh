@@ -19,6 +19,7 @@ export interface MissionRow {
   readonly status: string
   readonly createdBy: string
   readonly createdAt: string
+  readonly visibility?: string
   readonly error?: string
 }
 
@@ -29,6 +30,8 @@ export interface BriefRow {
   readonly markdown: string
   readonly status: string
   readonly createdAt: string
+  readonly visibility?: string
+  readonly createdBy?: string
 }
 
 /** An approval as the page reads it. */
@@ -80,6 +83,8 @@ export interface MndtFace {
   decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string): Promise<OutcomeRow<ApprovalRow>>
   approveBrief(briefId: string): Promise<OutcomeRow<BriefRow>>
   remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<OutcomeRow<MemoryRow>>
+  shareMission(missionId: string, visibility: 'team' | 'private'): Promise<OutcomeRow<MissionRow>>
+  shareMemory(memoryId: string, scope: 'user' | 'team'): Promise<OutcomeRow<MemoryRow>>
   connectors(): Promise<readonly ConnectorRow[]>
 }
 
@@ -104,6 +109,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [note, setNote] = useState('')
   const [kind, setKind] = useState<'fact' | 'decision' | 'preference'>('fact')
   const [connectors, setConnectors] = useState<readonly ConnectorRow[]>([])
+  const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -138,6 +144,14 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
     }
   }
 
+  const mine = (createdBy: string | undefined): boolean => createdBy === state?.you
+  const visibleMissions = state === null ? [] : state.missions.filter(mission =>
+    filter === 'visible' || (filter === 'mine' ? mine(mission.createdBy) : mission.visibility === 'team'))
+  const visibleBriefs = state === null ? [] : state.briefs.filter(brief =>
+    filter === 'visible' || (filter === 'mine' ? mine(brief.createdBy) : (brief.visibility ?? 'team') === 'team'))
+  const visibleMemories = state === null ? [] : state.memories.filter(note =>
+    filter === 'visible' || (filter === 'mine' ? mine(note.createdBy) : note.scope === 'team'))
+
   if (state === null) {
     return (
       <section className="mndt" aria-label={t('title')}>
@@ -161,6 +175,11 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span className="mndt-pill" data-tone="id" title={t('you')}>{state.you}</span>
           <span className="mndt-pill" data-tone={state.canWrite ? 'write' : undefined}>{state.canWrite ? t('writer') : t('readOnly')}</span>
+          <select className="mndt-input mndt-filter" aria-label={t('filterLabel')} value={filter} onChange={(event) => { setFilter(event.target.value as typeof filter) }}>
+            <option value="visible">{t('filterVisible')}</option>
+            <option value="mine">{t('filterMine')}</option>
+            <option value="team">{t('filterTeam')}</option>
+          </select>
         </div>
       </header>
 
@@ -255,14 +274,30 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
               </button>
             </div>
             <div className="mndt-card-body">
-              {state.missions.length === 0 && <p className="mndt-empty">{t('noMissions')}</p>}
-              {state.missions.slice(0, 8).map(mission => (
+              {visibleMissions.length === 0 && <p className="mndt-empty">{t('noMissions')}</p>}
+              {visibleMissions.slice(0, 8).map(mission => (
                 <div className="mndt-row" key={mission.id}>
                   <div className="mndt-row-head">
-                    <span className="mndt-row-title">{mission.kind}</span>
+                    <span className="mndt-row-title">{mission.kind} <span className="mndt-tag">{mission.visibility === 'private' ? t('privateTag') : t('teamTag')}</span></span>
                     <span className="mndt-row-meta">{mission.status === 'failed' ? t('failed') : mission.status}</span>
                   </div>
                   <span className="mndt-row-meta">{mission.error ?? mission.prompt}</span>
+                  {mission.createdBy === state.you && (
+                    <div className="mndt-row-actions">
+                      <button
+                        className="mndt-button"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          void act('share', async () => {
+                            const result = await api.shareMission(mission.id, mission.visibility === 'private' ? 'team' : 'private')
+                            if (!result.ok) throw new Error(result.error ?? 'refused')
+                          })
+                        }}
+                      >
+                        {mission.visibility === 'private' ? t('shareToTeam') : t('makePrivate')}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -276,10 +311,10 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
               <span className="mndt-count">{state.briefs.length}</span>
             </div>
             <div className="mndt-card-body">
-              {state.briefs.length === 0 && <p className="mndt-empty">{t('noBriefs')}</p>}
-              {state.briefs.slice(0, 6).map(brief => (
+              {visibleBriefs.length === 0 && <p className="mndt-empty">{t('noBriefs')}</p>}
+              {visibleBriefs.slice(0, 6).map(brief => (
                 <details className="mndt-details mndt-row" key={brief.id}>
-                  <summary>{brief.title}</summary>
+                  <summary>{brief.title} <span className="mndt-tag">{(brief.visibility ?? 'team') === 'private' ? t('privateTag') : t('teamTag')}</span></summary>
                   <div className="mndt-markdown">{brief.markdown}</div>
                   <div className="mndt-row-actions">
                     <span className="mndt-row-meta">{brief.status}</span>
@@ -324,11 +359,27 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
               <h2 className="mndt-card-title">{t('memory')}</h2>
             </div>
             <div className="mndt-card-body">
-              {state.memories.length === 0 && <p className="mndt-empty">{t('noMemory')}</p>}
-              {state.memories.slice(0, 6).map(memory => (
+              {visibleMemories.length === 0 && <p className="mndt-empty">{t('noMemory')}</p>}
+              {visibleMemories.slice(0, 6).map(memory => (
                 <div className="mndt-row" key={memory.id}>
                   <span className="mndt-note">{memory.text}</span>
                   <span className="mndt-note-meta">{memory.scope} · {memory.kind} · {memory.createdBy}</span>
+                  {memory.createdBy === state.you && (
+                    <div className="mndt-row-actions">
+                      <button
+                        className="mndt-button"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          void act('scope', async () => {
+                            const result = await api.shareMemory(memory.id, memory.scope === 'team' ? 'user' : 'team')
+                            if (!result.ok) throw new Error(result.error ?? 'refused')
+                          })
+                        }}
+                      >
+                        {memory.scope === 'team' ? t('makePersonal') : t('shareToTeam')}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
               <textarea
@@ -349,7 +400,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   disabled={busy !== null || note.trim() === '' || !state.canWrite}
                   onClick={() => {
                     void act('remember', async () => {
-                      const result = await api.remember('team', kind, note)
+                      const result = await api.remember('user', kind, note)
                       if (!result.ok) throw new Error(result.error ?? 'refused')
                       setNote('')
                     })

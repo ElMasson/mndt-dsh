@@ -408,6 +408,44 @@ export class WorkbenchService {
   }
 
   /**
+   * Move one mission between private and shared.
+   * @param id - mission id.
+   * @param visibility - where it should stand.
+   * @returns the updated mission.
+   */
+  setMissionVisibility(id: string, visibility: Visibility): Promise<Mission> {
+    return this.#write((state) => {
+      const mission = state.missions.find(candidate => candidate.id === id)
+      if (mission === undefined) throw new Error(`no mission ${id}`)
+      const next: Mission = { ...mission, visibility }
+      return {
+        state: { ...state, missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor: mission.createdBy, action: `mission.${visibility}`, subject: id },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Move one note between personal and shared.
+   * @param id - note id.
+   * @param scope - 'user' keeps it personal, 'team' shares it.
+   * @returns the updated note.
+   */
+  setMemoryScope(id: string, scope: 'user' | 'team'): Promise<MemoryNote> {
+    return this.#write((state) => {
+      const note = state.memories.find(candidate => candidate.id === id)
+      if (note === undefined) throw new Error(`no memory ${id}`)
+      const next: MemoryNote = { ...note, scope }
+      return {
+        state: { ...state, memories: state.memories.map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor: note.createdBy, action: `memory.${scope}`, subject: id },
+        value: next,
+      }
+    })
+  }
+
+  /**
    * Read the product's own history.
    * @param limit - how many lines to keep.
    * @returns the events.

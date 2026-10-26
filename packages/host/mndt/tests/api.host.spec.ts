@@ -208,3 +208,55 @@ describe('solo mode', () => {
     expect(decision.ok).toBe(false)
   })
 })
+
+describe('hybrid sharing', () => {
+  it('keeps a mission a person starts private until they share it', async () => {
+    const { api } = bench()
+    const created = await api({ method: 'POST', path: '/missions', ...asOwner, body: JSON.stringify({ kind: 'custom', prompt: 'prepare une note' }) })
+    expect(created.status).toBe(201)
+    const mission = (created.body as { mission: { id: string; visibility: string } }).mission
+    expect(mission.visibility).toBe('private')
+
+    const ownerList = await api({ method: 'GET', path: '/missions', ...asOwner })
+    const viewerList = await api({ method: 'GET', path: '/missions', ...asViewer })
+    expect((ownerList.body as { missions: { id: string }[] }).missions.map(row => row.id)).toContain(mission.id)
+    expect((viewerList.body as { missions: { id: string }[] }).missions.map(row => row.id)).not.toContain(mission.id)
+  })
+
+  it('shows a shared mission and its brief to the whole team', async () => {
+    const { api } = bench()
+    const created = await api({ method: 'POST', path: '/missions', ...asOwner, body: JSON.stringify({ kind: 'custom', prompt: 'prepare une note' }) })
+    const mission = (created.body as { mission: { id: string } }).mission
+    const shared = await api({ method: 'POST', path: `/missions/${mission.id}/visibility`, ...asOwner, body: JSON.stringify({ visibility: 'team' }) })
+    expect(shared.status).toBe(200)
+    expect((shared.body as { mission: { visibility: string } }).mission.visibility).toBe('team')
+
+    const viewerMissions = await api({ method: 'GET', path: '/missions', ...asViewer })
+    expect((viewerMissions.body as { missions: { id: string }[] }).missions.map(row => row.id)).toContain(mission.id)
+    const viewerBriefs = await api({ method: 'GET', path: '/briefs', ...asViewer })
+    expect((viewerBriefs.body as { briefs: unknown[] }).briefs.length).toBeGreaterThan(0)
+  })
+
+  it('refuses a share the caller has no right to make', async () => {
+    const { api } = bench()
+    const created = await api({ method: 'POST', path: '/missions', ...asOwner, body: JSON.stringify({ kind: 'custom', prompt: 'prepare une note' }) })
+    const mission = (created.body as { mission: { id: string } }).mission
+    const refused = await api({ method: 'POST', path: `/missions/${mission.id}/visibility`, ...asViewer, body: JSON.stringify({ visibility: 'team' }) })
+    expect(refused.status).toBe(403)
+  })
+
+  it('keeps a note personal until it is shared', async () => {
+    const { api } = bench()
+    const created = await api({ method: 'POST', path: '/memory', ...asOwner, body: JSON.stringify({ kind: 'fact', text: 'le client EXCO attend une relance' }) })
+    expect(created.status).toBe(201)
+    const note = (created.body as { memory: { id: string; scope: string } }).memory
+    expect(note.scope).toBe('user')
+    const viewerNotes = await api({ method: 'GET', path: '/memory', ...asViewer })
+    expect((viewerNotes.body as { memories: { id: string }[] }).memories.map(row => row.id)).not.toContain(note.id)
+
+    const shared = await api({ method: 'POST', path: `/memory/${note.id}/scope`, ...asOwner, body: JSON.stringify({ scope: 'team' }) })
+    expect(shared.status).toBe(200)
+    const afterShare = await api({ method: 'GET', path: '/memory', ...asViewer })
+    expect((afterShare.body as { memories: { id: string }[] }).memories.map(row => row.id)).toContain(note.id)
+  })
+})

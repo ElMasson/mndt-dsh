@@ -90,7 +90,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   /** @param capability - what the route needs. @returns the identity, or a refusal. */
   const authorise = async (
     identity: string,
-    capability: 'workflows.write' | 'rights.write' | 'agents.write',
+    capability: 'workflows.write' | 'rights.write' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
     if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
@@ -118,10 +118,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const page: PageState = {
           you: identity,
           canWrite: decision.allowed,
-          missions: snapshot.missions.slice(0, 30),
-          briefs: snapshot.briefs.slice(0, 30),
+          missions: snapshot.missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity).slice(0, 30),
+          briefs: snapshot.briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity).slice(0, 30),
           approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
-          memories: snapshot.memories.slice(0, 20),
+          memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.slice(-40),
         }
         return respond(200, { page })
@@ -140,7 +140,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const kind = input.kind
         if (!isMissionKind(kind)) return respond(400, { error: `unknown mission kind: ${String(kind)}` })
         const prompt = typeof input.prompt === 'string' ? input.prompt : ''
-        const visibility: Visibility = input.visibility === 'private' ? 'private' : 'team'
+        // Hybrid model: a mission a person starts is personal until they share
+        // it. Automated missions are created by the service with 'team'.
+        const visibility: Visibility = input.visibility === 'team' ? 'team' : 'private'
         const mission = await service.createMission({ kind, prompt, createdBy: identity, visibility })
         const started = await service.startMission(mission.id, 'pending')
         try {
@@ -166,13 +168,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/briefs') {
-        return respond(200, { briefs: await service.listBriefs() })
+        const briefs = await service.listBriefs()
+        return respond(200, {
+          briefs: briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity),
+        })
       }
 
       if (request.method === 'GET' && path.startsWith('/briefs/')) {
         const id = path.slice('/briefs/'.length)
         const brief = await service.getBrief(id)
-        return brief === undefined ? respond(404, { error: `no brief ${id}` }) : respond(200, { brief })
+        if (brief === undefined) return respond(404, { error: `no brief ${id}` })
+        if ((brief.visibility ?? 'team') === 'private' && brief.createdBy !== identity) {
+          return respond(403, { error: `brief ${id} is private to ${brief.createdBy}` })
+        }
+        return respond(200, { brief })
       }
 
       if (request.method === 'POST' && /^\/briefs\/[^/]+\/approve$/.test(path)) {
@@ -219,10 +228,44 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, { approval })
       }
 
+      if (request.method === 'POST' && /^\/missions\/[^/]+\/visibility$/.test(path)) {
+        const id = path.split('/')[2] ?? ''
+        const mission = await service.getMission(id)
+        if (mission === undefined) return respond(404, { error: `no mission ${id}` })
+        if (mission.createdBy !== identity) {
+          const denied = await authorise(identity, 'sharing.write')
+          if (denied !== undefined) return denied
+        }
+        const input = parseBody(request.body)
+        if (input.visibility !== 'team' && input.visibility !== 'private') {
+          return respond(400, { error: 'visibility must be team or private' })
+        }
+        const updated = await service.setMissionVisibility(id, input.visibility)
+        return respond(200, { mission: updated })
+      }
+
+      if (request.method === 'POST' && /^\/memory\/[^/]+\/scope$/.test(path)) {
+        const id = path.split('/')[2] ?? ''
+        const notes = await service.recall({ limit: 500 })
+        const note = notes.find(candidate => candidate.id === id)
+        if (note === undefined) return respond(404, { error: `no memory ${id}` })
+        if (note.createdBy !== identity) {
+          const denied = await authorise(identity, 'sharing.write')
+          if (denied !== undefined) return denied
+        }
+        const input = parseBody(request.body)
+        if (input.scope !== 'team' && input.scope !== 'user') {
+          return respond(400, { error: 'scope must be team or user' })
+        }
+        const updated = await service.setMemoryScope(id, input.scope)
+        return respond(200, { memory: updated })
+      }
+
       if (request.method === 'GET' && path === '/memory') {
         const scope = request.query?.scope
+        const notes = await service.recall(scope === undefined ? {} : { scope: scope as never })
         return respond(200, {
-          memories: await service.recall(scope === undefined ? {} : { scope: scope as never }),
+          memories: notes.filter(note => note.scope === 'team' || note.createdBy === identity),
         })
       }
 
@@ -230,9 +273,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'agents.write')
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
-        const scope = input.scope
         const kind = input.kind
-        if (scope !== 'team' && scope !== 'user' && scope !== 'mission') return respond(400, { error: 'scope must be team, user or mission' })
+        // A note a person writes is personal until they share it; naming the
+        // team scope explicitly is the act of sharing.
+        const scope = input.scope === 'team' || input.scope === 'mission' ? input.scope : 'user'
         if (kind !== 'fact' && kind !== 'decision' && kind !== 'preference') return respond(400, { error: 'kind must be fact, decision or preference' })
         const note = await service.remember({
           scope,

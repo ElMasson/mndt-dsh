@@ -37,6 +37,8 @@ function absentFace(message: string): MndtFace {
     decide: refuse,
     approveBrief: refuse,
     remember: refuse,
+    shareMission: refuse,
+    shareMemory: refuse,
     connectors: refuse,
   }
 }
@@ -72,6 +74,8 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
     decide: async (id, decision, reason) => (await raw(() => mounted.decide(id, decision, reason))) as never,
     approveBrief: async id => (await raw(() => mounted.approveBrief(id))) as never,
     remember: async (scope, kind, text) => (await raw(() => mounted.remember(scope, kind, text))) as never,
+    shareMission: async (id, visibility) => (await raw(() => mounted.shareMission(id, visibility))) as never,
+    shareMemory: async (id, scope) => (await raw(() => mounted.shareMemory(id, scope))) as never,
     connectors: async () => {
       const answer = await mounted.connectors()
       const envelope = answer as { readonly ok?: unknown; readonly value?: unknown } | null
@@ -100,6 +104,8 @@ function face(ctx: ClientContext): MndtFace {
     decide: (approvalId, decision, reason) => route(next => next.decide(approvalId, decision, reason)),
     approveBrief: briefId => route(next => next.approveBrief(briefId)),
     remember: (scope, kind, text) => route(next => next.remember(scope, kind, text)),
+    shareMission: (id, visibility) => route(next => next.shareMission(id, visibility)),
+    shareMemory: (id, scope) => route(next => next.shareMemory(id, scope)),
     connectors: () => route(next => next.connectors()),
   }
 }

@@ -100,4 +100,10 @@ export const CSS = `
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
   overflow-x: auto; white-space: pre;
 }
+
+.mndt-filter { max-width: 190px; }
+.mndt-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--mndt-border); color: var(--mndt-muted); font-size: 10px; font-weight: 500;
+}
 `
