@@ -25,19 +25,18 @@ Date du relevé : 25 octobre 2026. Serveur : `51.159.164.138`.
 
 ## Ce qui reste ouvert
 
-1. **Connexion Entra complète.** La chaîne est vérifiée dans un vrai Chrome (302, autorisation, retour, session, 200, sans boucle) et l'authentification Entra réelle a réussi (AuthSuccess). Il reste uniquement la confirmation visuelle de la page dans le navigateur de Stéphane, qui demande sa connexion. La chaîne a été rejouée avec un fournisseur OIDC de recette : trois redirections, réponse 200, identité et droits corrects. Il ne reste donc que la fiche Entra. L'URI `https://mndt.duke-analytics.com/oauth2/callback`
-   doit être enregistrée sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782`,
-   puis une personne réelle doit se connecter. L'authentification Entra elle-même est prouvée : AuthSuccess pour duke@datanalysis.re le 25 octobre. Tout le reste du chemin est vérifié :
-   redirection, retour, cookie, page, identité transmise.
-2. **Image à jour.** Construite dans WSL après avoir porté sa mémoire à 20 Go, puis
-   déployée. Le rattrapage des missions interrompues y est présent et a été vérifié
-   en plantant une mission en cours avant redémarrage : elle ressort en échec avec
-   le motif exact. Une mission Attio a ensuite lu une entreprise réelle sur cette
-   image.
-3. **Rotation de la clé de modèle.** Elle a servi aux tests et devrait être
+1. **Rotation de la clé de modèle.** Elle a servi aux tests et devrait être
    remplacée une fois la recette terminée.
-4. **Jeton OAuth Attio.** Il vit dans `/data/mndt/live/mcp-auth` (700/600) et peut
+2. **Jeton OAuth Attio.** Il vit dans `/data/mndt/live/mcp-auth` (700/600) et peut
    être révoqué côté Attio, ou supprimé du serveur, sans toucher au reste.
+3. **Image reconstruite depuis la source.** Le correctif de hauteur de la carte
+   d'accueil est figé dans l'image en service ; une reconstruction complète depuis
+   la source est en cours pour que l'image redevienne reproductible sans passer par
+   ce figeage.
+
+Le SSO Entra n'est plus un point ouvert : Stéphane s'est connecté dans son
+navigateur le 26 octobre, la page s'est affichée avec son identité, et la capture
+est conservée (`page-authenticated-stephane.png`).
 
 ## Commandes de vérification
 

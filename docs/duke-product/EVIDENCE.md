@@ -70,7 +70,9 @@ preuve est une ligne ouverte, pas une reussite.
 | URI Entra | enregistree par Stephane le 25 octobre sur l'application `122bdf54-4ab8-4ef1-995e-a08501d04782` | portail Entra |
 | Authentification Entra reelle | `[AuthSuccess] Authenticated via OAuth2` pour `duke@datanalysis.re`, id_token present, 25 octobre 08:34:36 | journaux du proxy |
 | Chaine dans un navigateur reel | Chrome : 302, autorisation, retour avec code, session posee par la passerelle, 200, aucune boucle, espace de travail ouvert | recette du 25 octobre |
-| Connexion complete dans le navigateur de Stephane | **a confirmer** : aucune nouvelle visite depuis la correction de session, la derniere trace date de 08:34 | a verifier ensemble |
+| Connexion complete dans le navigateur de Stephane | page affichee avec son identite apres connexion Entra, 26 octobre, capture page-authenticated-stephane.png | navigateur de Stephane |
+| Marque mndt dans le hero | ruban mndt a la place du logo par defaut, capture page-hero-mndt.png | serveur, 26 octobre |
+| Carte de premiers pas | quatre gestes avec leur etat reel, bloc equipe, capture page-onboarding-full.png | serveur, 26 octobre |
 
 ## 8. Limites connues, dites explicitement
 
