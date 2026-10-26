@@ -8,6 +8,8 @@
  */
 import type {
   ApprovalRow,
+  MemberRow,
+  UsageReport,
   BriefRow,
   ConnectorRow,
   MemoryRow,
@@ -100,6 +102,19 @@ export function createHttpFace(): MndtFace {
       const body = await bodyOf<{ connectors?: readonly ConnectorRow[] }>(await call('/connectors'))
       return body.connectors ?? []
     },
+    members: async () => {
+      const body = await bodyOf<{ members?: readonly MemberRow[] }>(await call('/members'))
+      return body.members ?? []
+    },
+    grantMember: (subject, role) => outcomeOf(async () => {
+      await call('/members/grant', { method: 'POST', body: JSON.stringify({ subject, role }) })
+      return { subject, role }
+    }),
+    usage: async () => (await bodyOf<UsageReport>(await call('/usage'))),
+    revokeMember: subject => outcomeOf(async () => {
+      await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
+      return { subject, role: 'none' }
+    }),
     shareMission: (missionId, visibility) => outcomeOf(async () => {
       const body = await bodyOf<{ mission: MissionRow }>(await call(`/missions/${encodeURIComponent(missionId)}/visibility`, {
         method: 'POST',

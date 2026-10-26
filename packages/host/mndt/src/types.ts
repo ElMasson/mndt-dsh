@@ -33,6 +33,12 @@ export interface Outcome<T> {
 
 /** Everything the morning page reads in one call. */
 export interface PageState {
+  /** The role the authority resolved for this person, when it named one. */
+  readonly role?: string
+  /** Whether this person may change the member table. */
+  readonly canAdmin: boolean
+  /** Whether this person may share another person's work. */
+  readonly canShare: boolean
   readonly you: string
   readonly canWrite: boolean
   readonly missions: readonly import('./core/types.ts').Mission[]

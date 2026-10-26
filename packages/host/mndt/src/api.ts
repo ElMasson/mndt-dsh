@@ -20,7 +20,7 @@ import type {
 import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
-import { can } from './policy.ts'
+import { can, roleOf } from './policy.ts'
 import type { GrantSource } from './policy.ts'
 import type { PageState } from './types.ts'
 
@@ -57,7 +57,19 @@ export interface ConnectorInfo {
 }
 
 /** What the API needs. */
+/** One person's token counters, summed from the missions they ran. */
+interface UsageTotals {
+  user: string
+  missions: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 export interface MndtApiOptions {
+  /** Where the team authority lives, for the member screen. */
+  readonly authority?: { readonly baseUrl: string; readonly token: string }
   readonly service: WorkbenchService
   readonly runner: MissionRunner
   readonly identity: IdentityOptions
@@ -90,7 +102,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   /** @param capability - what the route needs. @returns the identity, or a refusal. */
   const authorise = async (
     identity: string,
-    capability: 'workflows.write' | 'rights.write' | 'agents.write' | 'sharing.write',
+    capability: 'workflows.write' | 'rights.write' | 'rights.read' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
     if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
@@ -115,9 +127,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const decision = table.ok
           ? can(table.grants, identity, 'workflows.write')
           : { allowed: false, reason: table.reason }
+        const role = table.ok ? roleOf(table.grants, identity) : undefined
+        const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
+        const canShare = table.ok ? can(table.grants, identity, 'sharing.write').allowed : false
         const page: PageState = {
           you: identity,
           canWrite: decision.allowed,
+          ...(role === undefined ? {} : { role }),
+          canAdmin,
+          canShare,
           missions: snapshot.missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity).slice(0, 30),
           briefs: snapshot.briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity).slice(0, 30),
           approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
@@ -285,6 +303,72 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           createdBy: identity,
         })
         return respond(201, { memory: note })
+      }
+
+      if (request.method === 'GET' && path === '/usage') {
+        const missions = await service.listMissions({})
+        const rows = new Map<string, UsageTotals>()
+        for (const mission of missions) {
+          const user = mission.createdBy
+          const row = rows.get(user) ?? { user, missions: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+          row.missions += 1
+          row.input += mission.tokens?.input ?? 0
+          row.output += mission.tokens?.output ?? 0
+          row.cacheRead += mission.tokens?.cacheRead ?? 0
+          row.cacheWrite += mission.tokens?.cacheWrite ?? 0
+          rows.set(user, row)
+        }
+        const table = await grants.grants()
+        const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
+        const all = [...rows.values()].sort((a, b) => b.input + b.output - (a.input + a.output))
+        const mine: UsageTotals = all.find(row => row.user === identity) ?? {
+          user: identity, missions: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+        }
+        return respond(200, { mine, team: canAdmin ? all : [], canAdmin })
+      }
+
+      if (request.method === 'GET' && path === '/members') {
+        const denied = await authorise(identity, 'rights.read')
+        if (denied !== undefined) return denied
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        const canAdmin = can(table.grants, identity, 'rights.write').allowed
+        return respond(200, { members: table.grants, canAdmin })
+      }
+
+      if (request.method === 'POST' && (path === '/members/grant' || path === '/members/revoke')) {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const authority = options.authority
+        if (authority === undefined) {
+          return respond(503, { error: 'this deployment has no team authority to write to' })
+        }
+        const input = parseBody(request.body)
+        const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
+        if (subject === '') return respond(400, { error: 'subject is required' })
+        const body: Record<string, unknown> = { subject }
+        if (path === '/members/grant') {
+          if (input.role !== 'viewer' && input.role !== 'operator' && input.role !== 'admin' && input.role !== 'owner') {
+            return respond(400, { error: 'role must be viewer, operator, admin or owner' })
+          }
+          body.role = input.role
+        }
+        let answer: { status: number; body: unknown }
+        try {
+          // The authority names its write routes /governance/grant and
+          // /governance/revoke; the product exposes them under /members.
+          const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
+          const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          answer = { status: response.status, body: await response.json().catch(() => ({})) }
+        } catch (error) {
+          return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+        }
+        return respond(answer.status, answer.body)
       }
 
       if (request.method === 'GET' && path === '/connectors') {

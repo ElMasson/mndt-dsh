@@ -80,11 +80,24 @@ export class DshMissionRunner {
     })
     const childSessionId = created.agent.session.header.id
     const failures: string[] = []
+    // Usage arrives on `assistant/message` events, one per model step; the
+    // settled run carries no counters of its own, so they are summed here.
+    const usageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     const stopAgentEnd = this.#ctx.on('workflow/agent-end', (_info, agent) => {
       if (agent.outcome === 'failed') failures.push(`agent step ${agent.seq} ended failed`)
     })
     const rootId = childSessionId
     const stopTurnEnd = this.#ctx.on('session/event', (session, event) => {
+      if (event.type === 'assistant/message') {
+        type StepUsage = { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+        const usage = (event as unknown as { data?: { usage?: StepUsage } }).data?.usage
+        if (usage !== undefined) {
+          usageTotals.input += usage.inputTokens ?? 0
+          usageTotals.output += usage.outputTokens ?? 0
+          usageTotals.cacheRead += usage.cacheReadTokens ?? 0
+          usageTotals.cacheWrite += usage.cacheWriteTokens ?? 0
+        }
+      }
       if (event.type !== 'turn/end') return
       // The workflow engine runs an agent child under the root agent, so a
       // failure can be reported on either session; both are the same run.
@@ -108,7 +121,10 @@ export class DshMissionRunner {
         const shape = JSON.stringify(settled).slice(0, 300)
         throw new Error(`the agent returned no text (settled: ${shape})`)
       }
-      const tokens = tokensOf(settled)
+      const reported = usageTotals.input + usageTotals.output > 0
+      const tokens = reported
+        ? { input: usageTotals.input, output: usageTotals.output, cacheRead: usageTotals.cacheRead, cacheWrite: usageTotals.cacheWrite }
+        : settledTokensOf(settled)
       return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
     } finally {
       stopAgentEnd()
@@ -150,7 +166,7 @@ export function textOf(settled: unknown): string {
 }
 
 /** @param settled - the settled run. @returns the token usage, when reported. */
-function tokensOf(settled: unknown): { input: number; output: number } | undefined {
+function settledTokensOf(settled: unknown): { input: number; output: number } | undefined {
   const usage = (settled as { usage?: { inputTokens?: unknown; outputTokens?: unknown } } | null)?.usage
   if (usage === undefined || typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') return undefined
   return { input: usage.inputTokens, output: usage.outputTokens }

@@ -39,6 +39,10 @@ function absentFace(message: string): MndtFace {
     remember: refuse,
     shareMission: refuse,
     shareMemory: refuse,
+    members: refuse,
+    grantMember: refuse,
+    revokeMember: refuse,
+    usage: refuse,
     connectors: refuse,
   }
 }
@@ -75,6 +79,10 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
     approveBrief: async id => (await raw(() => mounted.approveBrief(id))) as never,
     remember: async (scope, kind, text) => (await raw(() => mounted.remember(scope, kind, text))) as never,
     shareMission: async (id, visibility) => (await raw(() => mounted.shareMission(id, visibility))) as never,
+    members: async () => (await raw(() => mounted.members())) as never,
+    grantMember: async (subject, role) => (await raw(() => mounted.grantMember(subject, role))) as never,
+    revokeMember: async subject => (await raw(() => mounted.revokeMember(subject))) as never,
+    usage: async () => (await raw(() => mounted.usage())) as never,
     shareMemory: async (id, scope) => (await raw(() => mounted.shareMemory(id, scope))) as never,
     connectors: async () => {
       const answer = await mounted.connectors()
@@ -105,6 +113,10 @@ function face(ctx: ClientContext): MndtFace {
     approveBrief: briefId => route(next => next.approveBrief(briefId)),
     remember: (scope, kind, text) => route(next => next.remember(scope, kind, text)),
     shareMission: (id, visibility) => route(next => next.shareMission(id, visibility)),
+    members: () => route(next => next.members()),
+    grantMember: (subject, role) => route(next => next.grantMember(subject, role)),
+    revokeMember: subject => route(next => next.revokeMember(subject)),
+    usage: () => route(next => next.usage()),
     shareMemory: (id, scope) => route(next => next.shareMemory(id, scope)),
     connectors: () => route(next => next.connectors()),
   }

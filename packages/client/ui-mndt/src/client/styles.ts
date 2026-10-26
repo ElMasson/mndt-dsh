@@ -106,4 +106,6 @@ export const CSS = `
   display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
   border: 1px solid var(--mndt-border); color: var(--mndt-muted); font-size: 10px; font-weight: 500;
 }
+
+.mndt-usage { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--mndt-muted); }
 `

@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-workflow'
 import { startMndtApi } from './api.ts'
 import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
-import { can } from './policy.ts'
+import { can, roleOf } from './policy.ts'
 import { authorityGrants, localGrants } from './grants.ts'
 import { DshMissionRunner } from './runner.ts'
 
@@ -88,6 +88,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         runner,
         identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
         grants: this.grants,
+        ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
         port,
         ...(host === undefined || host === '' ? {} : { host }),
@@ -225,9 +226,13 @@ export class WorkbenchGateway extends TypertRemoteService {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
       const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: table.reason }
+      const role = table.ok ? roleOf(table.grants, this.identity) : undefined
       const page: PageState = {
         you: this.identity,
         canWrite: decision.allowed,
+        ...(role === undefined ? {} : { role }),
+        canAdmin: table.ok && can(table.grants, this.identity, 'rights.write').allowed,
+        canShare: table.ok && can(table.grants, this.identity, 'sharing.write').allowed,
         missions: snapshot.missions.slice(0, 30),
         briefs: snapshot.briefs.slice(0, 30),
         approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),

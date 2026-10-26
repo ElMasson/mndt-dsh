@@ -44,7 +44,14 @@ export interface Mission {
   readonly finishedAt?: string
   /** Why it failed, in the runtime's own words. Never a generic excuse. */
   readonly error?: string
-  readonly tokens?: { readonly input: number; readonly output: number }
+  readonly tokens?: {
+    readonly input: number
+    readonly output: number
+    /** Cached input tokens read back by the provider. */
+    readonly cacheRead?: number
+    /** Input tokens written to the provider cache. */
+    readonly cacheWrite?: number
+  }
   readonly briefId?: string
 }
 

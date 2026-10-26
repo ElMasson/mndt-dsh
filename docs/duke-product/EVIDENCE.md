@@ -86,6 +86,10 @@ preuve est une ligne ouverte, pas une reussite.
 | Automatisation d equipe | 17 missions d equipe visibles par le compte en lecture | verification du 26 octobre |
 | Page | trois perimetres (tout, mes elements, equipe), etiquettes prive/equipe, boutons de partage | captures page-hybrid-shared.png et page-hybrid-mine.png |
 
+| Autorite centrale branchee | le produit lit la table par /governance/snapshot : duke owner, contact viewer | verification du 26 octobre |
+| Changement de role sans redeploiement | contact promu operator puis remis viewer via l autorite, role et canWrite suivis a chaque fois | verification du 26 octobre |
+| Ecran des membres | liste lue a l autorite, ajout et retrait reserves a rights.write, lecteur refuse 403 | verification et capture |
+| Jetons par personne | mission de controle : 795 en entree, 742 en sortie, 16 512 lus en cache ; agregat par personne et table equipe pour les admins | verification du 26 octobre |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

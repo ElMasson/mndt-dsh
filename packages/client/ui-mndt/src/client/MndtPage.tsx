@@ -53,9 +53,33 @@ export interface MemoryRow {
 }
 
 /** What one read returns. */
+export interface UsageRow {
+  readonly user: string
+  readonly missions: number
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+}
+
+export interface UsageReport {
+  readonly mine: UsageRow
+  readonly team: readonly UsageRow[]
+  readonly canAdmin: boolean
+}
+
+export interface MemberRow {
+  readonly subject: string
+  readonly role: string
+}
+
+/** What one read returns. */
 export interface PageStateRow {
   readonly you: string
   readonly canWrite: boolean
+  readonly role?: string
+  readonly canAdmin?: boolean
+  readonly canShare?: boolean
   readonly missions: readonly MissionRow[]
   readonly briefs: readonly BriefRow[]
   readonly approvals: readonly ApprovalRow[]
@@ -86,6 +110,10 @@ export interface MndtFace {
   shareMission(missionId: string, visibility: 'team' | 'private'): Promise<OutcomeRow<MissionRow>>
   shareMemory(memoryId: string, scope: 'user' | 'team'): Promise<OutcomeRow<MemoryRow>>
   connectors(): Promise<readonly ConnectorRow[]>
+  members(): Promise<readonly MemberRow[]>
+  grantMember(subject: string, role: 'viewer' | 'operator' | 'admin' | 'owner'): Promise<OutcomeRow<MemberRow>>
+  revokeMember(subject: string): Promise<OutcomeRow<MemberRow>>
+  usage(): Promise<UsageReport>
 }
 
 /** What the page receives from its plugin. */
@@ -109,6 +137,10 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [note, setNote] = useState('')
   const [kind, setKind] = useState<'fact' | 'decision' | 'preference'>('fact')
   const [connectors, setConnectors] = useState<readonly ConnectorRow[]>([])
+  const [members, setMembers] = useState<readonly MemberRow[]>([])
+  const [memberEmail, setMemberEmail] = useState('')
+  const [memberRole, setMemberRole] = useState<'viewer' | 'operator' | 'admin' | 'owner'>('viewer')
+  const [usage, setUsage] = useState<UsageReport | null>(null)
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
@@ -123,6 +155,8 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
     try {
       setState(await api.state())
       setConnectors(await api.connectors().catch(() => []))
+      setMembers(await api.members().catch(() => []))
+      setUsage(await api.usage().catch(() => null))
       setError(null)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
@@ -174,7 +208,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span className="mndt-pill" data-tone="id" title={t('you')}>{state.you}</span>
-          <span className="mndt-pill" data-tone={state.canWrite ? 'write' : undefined}>{state.canWrite ? t('writer') : t('readOnly')}</span>
+          <span className="mndt-pill" data-tone={state.canWrite ? 'write' : undefined}>{state.role ?? (state.canWrite ? t('writer') : t('readOnly'))}</span>
           <select className="mndt-input mndt-filter" aria-label={t('filterLabel')} value={filter} onChange={(event) => { setFilter(event.target.value as typeof filter) }}>
             <option value="visible">{t('filterVisible')}</option>
             <option value="mine">{t('filterMine')}</option>
@@ -335,6 +369,113 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   </div>
                 </details>
               ))}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('members')}</h2>
+              <span className="mndt-count">{members.length}</span>
+            </div>
+            <div className="mndt-card-body">
+              {members.length === 0 && <p className="mndt-empty">{t('noMembers')}</p>}
+              {members.map(member => (
+                <div className="mndt-row" key={member.subject}>
+                  <div className="mndt-row-head">
+                    <span className="mndt-row-title">{member.subject}</span>
+                    <span className="mndt-row-meta">{member.role}</span>
+                  </div>
+                  {state.canAdmin === true && (
+                    <div className="mndt-row-actions">
+                      <button
+                        className="mndt-button"
+                        data-variant="danger"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          void act('revoke', async () => {
+                            const result = await api.revokeMember(member.subject)
+                            if (!result.ok) throw new Error(result.error ?? 'refused')
+                          })
+                        }}
+                      >
+                        {t('removeMember')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {state.canAdmin === true && (
+                <div className="mndt-row-actions">
+                  <input
+                    className="mndt-input"
+                    placeholder={t('memberEmail')}
+                    value={memberEmail}
+                    onChange={(event) => { setMemberEmail(event.target.value) }}
+                    aria-label={t('memberEmail')}
+                  />
+                  <select className="mndt-input" value={memberRole} onChange={(event) => { setMemberRole(event.target.value as typeof memberRole) }} aria-label={t('memberRole')}>
+                    <option value="viewer">viewer</option>
+                    <option value="operator">operator</option>
+                    <option value="admin">admin</option>
+                    <option value="owner">owner</option>
+                  </select>
+                  <button
+                    className="mndt-button"
+                    data-variant="primary"
+                    disabled={busy !== null || memberEmail.trim() === ''}
+                    onClick={() => {
+                      void act('grant', async () => {
+                        const result = await api.grantMember(memberEmail.trim(), memberRole)
+                        if (!result.ok) throw new Error(result.error ?? 'refused')
+                        setMemberEmail('')
+                      })
+                    }}
+                  >
+                    {t('addMember')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('usageTitle')}</h2>
+              <span className="mndt-count">{usage === null ? '—' : usage.mine.missions}</span>
+            </div>
+            <div className="mndt-card-body">
+              {usage === null && <p className="mndt-empty">{t('noUsage')}</p>}
+              {usage !== null && (
+                <>
+                  <div className="mndt-row">
+                    <div className="mndt-row-head">
+                      <span className="mndt-row-title">{t('usageMine')}</span>
+                      <span className="mndt-row-meta">{usage.mine.user}</span>
+                    </div>
+                    <div className="mndt-usage">
+                      <span>{t('usageInput')} {usage.mine.input}</span>
+                      <span>{t('usageOutput')} {usage.mine.output}</span>
+                      <span>{t('usageCacheRead')} {usage.mine.cacheRead}</span>
+                      <span>{t('usageCacheWrite')} {usage.mine.cacheWrite}</span>
+                    </div>
+                  </div>
+                  {usage.team.length > 0 && usage.team.map(row => (
+                    <div className="mndt-row" key={row.user}>
+                      <div className="mndt-row-head">
+                        <span className="mndt-row-title">{row.user}</span>
+                        <span className="mndt-row-meta">{row.missions}</span>
+                      </div>
+                      <div className="mndt-usage">
+                        <span>{t('usageInput')} {row.input}</span>
+                        <span>{t('usageOutput')} {row.output}</span>
+                        <span>{t('usageCacheRead')} {row.cacheRead}</span>
+                        <span>{t('usageCacheWrite')} {row.cacheWrite}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {usage.team.length === 0 && <p className="mndt-empty">{t('usageTeamOnlyAdmins')}</p>}
+                </>
+              )}
             </div>
           </section>
 
