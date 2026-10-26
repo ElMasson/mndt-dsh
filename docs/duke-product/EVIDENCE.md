@@ -90,6 +90,9 @@ preuve est une ligne ouverte, pas une reussite.
 | Changement de role sans redeploiement | contact promu operator puis remis viewer via l autorite, role et canWrite suivis a chaque fois | verification du 26 octobre |
 | Ecran des membres | liste lue a l autorite, ajout et retrait reserves a rights.write, lecteur refuse 403 | verification et capture |
 | Jetons par personne | mission de controle : 795 en entree, 742 en sortie, 16 512 lus en cache ; agregat par personne et table equipe pour les admins | verification du 26 octobre |
+| Connecteur Office365 monte | 4 connecteurs lus par le produit : approvals, attio, office365, workbench_facts | verification du 26 octobre |
+| Lecture reelle de la boite | mission DSH : deux derniers courriers avec sujets et expediteurs reels, aucun envoi | verification du 26 octobre |
+| Jeton Office365 protege | /data/mndt/live/mcp-auth/office365.json, mode 600, rafraichi a la demande, jamais affiche | verification du 26 octobre |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
