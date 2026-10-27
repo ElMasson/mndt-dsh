@@ -576,3 +576,22 @@ portes passent, le code de sortie est 0, et l image `88548b6ae295` est celle qui
 tourne en production. La bascule s est faite en chargeant l archive, en retaguant
 `local`, en recreant le workbench, puis en purgeant l ancienne image : sante ok,
 machine ok, lecteur 403, shell d une personne 200, 0 echec aux controles.
+## Rotation des jetons internes
+
+Faite le 27 octobre 2026, en production, sans deconnexion des personnes.
+
+```
+jeton machines      nouveau, ecrit dans /data/mndt/live/machines.env
+                    machines, workbench et passerelle recrees
+jeton central       regenere par la recreation du workbench
+jetons de shell     supprimes puis republies au redemarrage de chaque shell
+autorite            non tourne : le jeton est emis par le service de gouvernance
+```
+
+Sauvegarde avant rotation dans `/data/mndt/rotation`, avec les empreintes des
+fichiers. Retour arriere : restaurer `machines.env`, recreer machines, workbench
+et passerelle, puis supprimer les jetons de shell et redemarrer les shells.
+
+Verifications apres rotation : sante ok, sidecar 200 avec le nouveau jeton,
+capture machine 67 241 octets, pages de duke et smarion a 200, navigateur pilote
+ok, bureau ok avec capture de 104 324 caracteres, controles a 0 echec.

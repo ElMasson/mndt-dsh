@@ -125,6 +125,9 @@ preuve est une ligne ouverte, pas une reussite.
 
 | Office365, agenda reel | mission mis_600bad4fbcd848d19c08 : rendez-vous des 28 et 29 octobre, salles Teams | brief de la mission, 27 octobre |
 
+| Rotation des jetons internes | machines, central et shells tournes ; ancienne empreinte differente de la nouvelle ; pages 200 apres reprise | 27 octobre, /data/mndt/rotation |
+| Jetons de shell republies | les deux empreintes changent, gateway repond 200 sans redemarrage manuel | 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
