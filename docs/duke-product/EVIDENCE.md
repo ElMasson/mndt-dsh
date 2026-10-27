@@ -112,6 +112,9 @@ preuve est une ligne ouverte, pas une reussite.
 | Image propre construite depuis la source | commit 21106d7, 7 portes sur 7, code de sortie 0, image 88548b6ae295 | 27 octobre |
 | Image propre en service | workbench recree sur l image construite, sante ok, machine ok, lecteur 403, shell duke 200, 0 echec | 27 octobre |
 
+| Session navigateur interactive | goto, fill, click, text, screenshot sur httpbin.org ; formulaire envoye avec "Duke Analytics" | browser-form-submitted.png |
+| Refus et fermeture | lecteur 403 sur les operations ; stop ne laisse aucun conteneur browser- | 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

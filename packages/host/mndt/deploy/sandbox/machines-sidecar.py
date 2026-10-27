@@ -29,6 +29,8 @@ SHELLS_ROOT = os.environ.get('SHELLS_ROOT', '/state/shells')
 SHELLS_ROOT_HOST = os.environ.get('SHELLS_ROOT_HOST', SHELLS_ROOT)
 SHELLS_SEED = os.environ.get('SHELLS_SEED', '/seed/profiles/web')
 SHELL_IMAGE = os.environ.get('SHELL_IMAGE', 'mndt-workbench:local')
+BROWSER_AGENT_IMAGE = os.environ.get('BROWSER_AGENT_IMAGE', 'mndt-browser-agent:local')
+BROWSER_AGENT_PORT = int(os.environ.get('BROWSER_AGENT_PORT', '9223'))
 # Two sessions at once at most on this host, and one per person: the server has
 # four vCPU and the browser sessions are the heaviest thing it runs.
 MAX_CONCURRENT = int(os.environ.get('MACHINES_MAX_CONCURRENT', '2'))
@@ -108,6 +110,54 @@ def claim(identity):
 def release(identity):
     with _ACTIVE_LOCK:
         _ACTIVE[identity] = max(0, _ACTIVE.get(identity, 0) - 1)
+
+
+def browser_name(identity):
+    return 'browser-' + shell_slug(identity)
+
+
+def ensure_browser(identity):
+    """Start the person's interactive browser if needed.
+
+    The session lives until it is stopped: a person can open a page, fill a form
+    and read the result across several calls. It is read only, has no capability
+    and holds a single Chromium.
+    """
+    name = browser_name(identity)
+    running = docker('inspect', name, '--format', '{{.State.Running}}').stdout.strip()
+    if running == 'true':
+        return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': TOKEN}
+    docker('rm', '-f', name)
+    docker(
+        'run', '-d', '--name', name,
+        '--network', 'mndt-front_front',
+        '--read-only',
+        '--tmpfs', '/tmp:rw,size=512m',
+        '--tmpfs', '/dev/shm:rw,size=256m',
+        '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges',
+        '--user', '1000:1000',
+        '--pids-limit', '256',
+        '--memory', '1g',
+        '--cpus', '1',
+        '-e', 'AGENT_TOKEN=' + TOKEN,
+        '-e', 'AGENT_PORT=' + str(BROWSER_AGENT_PORT),
+        BROWSER_AGENT_IMAGE,
+        timeout=60,
+    )
+    for _ in range(30):
+        probe = ("fetch('http://127.0.0.1:" + str(BROWSER_AGENT_PORT) + "/health', { headers: { 'x-agent-token': process.env.AGENT_TOKEN } })"
+                 + ".then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))")
+        health = docker('exec', name, 'node', '-e', probe, timeout=20)
+        if health.returncode == 0:
+            return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': TOKEN}
+        time.sleep(2)
+    return {'ok': False, 'identity': identity, 'error': 'the browser agent did not answer'}
+
+
+def stop_browser(identity):
+    docker('rm', '-f', browser_name(identity))
+    return {'ok': True, 'identity': identity, 'stopped': True}
 
 
 def shell_slug(identity):
@@ -222,12 +272,22 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b'{}')
         except (ValueError, TypeError):
             return self.reply(400, {'error': 'a JSON body is required'})
-        if self.path != '/capture':
-            return self.reply(404, {'error': 'unknown path'})
         identity = str(body.get('identity', '')).strip().lower()
-        url = str(body.get('url', '')).strip()
         if not IDENTITY.match(identity):
             return self.reply(400, {'error': 'identity must be an email address'})
+        if self.path == '/browsers/start':
+            try:
+                result = ensure_browser(identity)
+            except subprocess.TimeoutExpired:
+                return self.reply(504, {'error': 'the browser agent did not start in time'})
+            except Exception as error:  # noqa: BLE001 - the reason goes back to the caller
+                return self.reply(500, {'error': str(error)})
+            return self.reply(200 if result.get('ok') is True else 502, result)
+        if self.path == '/browsers/stop':
+            return self.reply(200, stop_browser(identity))
+        if self.path != '/capture':
+            return self.reply(404, {'error': 'unknown path'})
+        url = str(body.get('url', '')).strip()
         if not URL.match(url):
             return self.reply(400, {'error': 'url must start with http:// or https://'})
         blocked = claim(identity)
