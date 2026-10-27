@@ -99,6 +99,9 @@ preuve est une ligne ouverte, pas une reussite.
 | Isolation verifiee | non root, racine en lecture seule, cap-drop ALL, no-new-privileges, 768 Mo, 128 processus, 1 vCPU | docker inspect du 27 octobre |
 | Machine branchee au produit | POST /machines/capture par duke : ok, 67 241 octets, 25 secondes ; lecteur 403 ; aucune session restante | machine-capture-duke.png |
 | Disque de production assaini | /data de 97 % a 72 %, 26 Go libres, une seule image workbench, Tellus intact | 27 octobre |
+| Un shell par personne | duke et smarion : deux instances, deux pages 200, identite correcte a l API centrale | verification du 27 octobre |
+| Sessions cloisonnees | partagee 2 elements, duke 0, smarion 0 ; repertoires et jetons distincts | verification du 27 octobre |
+| Passerelle par identite | x-forwarded-email vers l instance de la personne, cookie de session propre, reprise si le jeton tourne | verification du 27 octobre |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

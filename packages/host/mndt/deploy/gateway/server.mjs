@@ -27,12 +27,17 @@ const PORT = Number(process.env.PORT ?? 8080)
 const WORKBENCH = process.env.WORKBENCH ?? 'http://host.docker.internal:3111'
 const API = process.env.API ?? 'http://host.docker.internal:8795'
 const TOKEN_FILE = process.env.TOKEN_FILE ?? '/state/web-token'
+const SHELLS_URL = (process.env.SHELLS_URL ?? process.env.MNDT_MACHINES_URL ?? '').replace(/\/$/, '')
+const MACHINES_TOKEN = process.env.MACHINES_TOKEN ?? ''
+const SHELL_TTL_MS = 5 * 60 * 1000
 const API_PREFIX = '/mndt-api'
 const GATEWAY_COOKIE = 'mndt-session'
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /** Sessions this gateway opened, keyed by its own cookie value. */
 const sessions = new Map()
+/** Shell targets per identity, so a page load does not ask every time. */
+const shells = new Map()
 
 let cachedToken = ''
 let cachedAt = 0
@@ -124,14 +129,37 @@ function firstHeader(value) {
 }
 
 /**
+ * Ask the machine service for this person's own shell, starting it if needed.
+ * @param email - identity the sign-on proxy proved.
+ * @returns the shell base URL and its launch token, or undefined when unavailable.
+ */
+async function shellFor(email) {
+  const known = shells.get(email)
+  if (known !== undefined && Date.now() - known.at < SHELL_TTL_MS) return known
+  try {
+    const answer = await fetch(`${SHELLS_URL}/shells/ensure?identity=${encodeURIComponent(email)}`, {
+      headers: { 'x-machine-token': MACHINES_TOKEN },
+    })
+    const body = await answer.json()
+    if (!answer.ok || body.ok !== true) return undefined
+    const found = { base: `http://${body.host}:3111`, token: String(body.token ?? ''), at: Date.now() }
+    shells.set(email, found)
+    return found
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Exchange the launch token for a shell session, server-side.
  * @param req - incoming request, used to copy the authority the browser used.
+ * @param base - shell base URL.
  * @param token - launch token.
  * @returns the shell cookie, or an empty string when the exchange failed.
  */
-function openShellSession(req, token) {
+function openShellSession(req, base, token) {
   return new Promise((resolve) => {
-    const parts = targetOf(WORKBENCH)
+    const parts = targetOf(base)
     const headers = {}
     for (const name of ['host', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-email', 'x-forwarded-user']) {
       const value = req.headers[name]
@@ -157,10 +185,15 @@ function openShellSession(req, token) {
   })
 }
 
-/** @param cookie - shell cookie. @param email - identity the proxy proved. */
-function rememberSession(cookie, email) {
+/**
+ * @param cookie - shell cookie.
+ * @param email - identity the proxy proved.
+ * @param base - shell base URL this session belongs to.
+ * @returns the gateway session id.
+ */
+function rememberSession(cookie, email, base) {
   const id = randomUUID()
-  sessions.set(id, { cookie, email, at: Date.now() })
+  sessions.set(id, { cookie, email, base, at: Date.now() })
   return id
 }
 
@@ -187,18 +220,56 @@ const server = createServer((req, res) => {
   const token = launchToken()
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
+  // A person proven by the sign-on proxy gets their own shell when the machine
+  // service is configured. Otherwise the shared workbench keeps serving the
+  // local checks, which carry no identity.
+  const perPerson = email !== '' && SHELLS_URL !== ''
   if (session !== undefined && (email === '' || session.email === email)) {
-    forward(req, res, WORKBENCH, `${url.pathname}${url.search}`, session.cookie)
+    forward(req, res, session.base ?? WORKBENCH, `${url.pathname}${url.search}`, session.cookie)
+    return
+  }
+  if (perPerson) {
+    void shellFor(email).then(async (found) => {
+      if (found === undefined) {
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('gateway: no shell is available for this person')
+        return
+      }
+      let base = found.base
+      let shellCookie = await openShellSession(req, base, found.token)
+      // A restarted shell rotates its launch token: drop the cached one and ask
+      // once more before reporting a failure.
+      if (shellCookie === '') {
+        shells.delete(email)
+        const fresh = await shellFor(email)
+        if (fresh !== undefined) {
+          base = fresh.base
+          shellCookie = await openShellSession(req, base, fresh.token)
+        }
+      }
+      if (shellCookie === '') {
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('gateway: the shell did not open a session')
+        return
+      }
+      const id = rememberSession(shellCookie, email, base)
+      res.writeHead(302, {
+        location: url.pathname,
+        'set-cookie': sessionCookie(id),
+        'cache-control': 'no-store',
+      })
+      res.end()
+    })
     return
   }
   if (email !== '' && token !== '') {
-    void openShellSession(req, token).then((shellCookie) => {
+    void openShellSession(req, WORKBENCH, token).then((shellCookie) => {
       if (shellCookie === '') {
         res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
         res.end('gateway: the workbench did not open a session')
         return
       }
-      const id = rememberSession(shellCookie, email)
+      const id = rememberSession(shellCookie, email, WORKBENCH)
       res.writeHead(302, {
         location: url.pathname,
         'set-cookie': sessionCookie(id),
@@ -225,7 +296,7 @@ server.on('upgrade', (req, socket, head) => {
   const cookies = cookiesOf(req.headers.cookie)
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
-  const parts = targetOf(WORKBENCH)
+  const parts = targetOf(session?.base ?? WORKBENCH)
   const headers = { ...req.headers }
   if (session !== undefined) headers.cookie = session.cookie
   if (typeof req.headers.host === 'string' && req.headers.host !== '') {

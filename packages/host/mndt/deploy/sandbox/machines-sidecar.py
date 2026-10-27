@@ -20,8 +20,14 @@ import subprocess
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 TOKEN = os.environ.get('MACHINES_TOKEN', '')
+SHELLS_ROOT = os.environ.get('SHELLS_ROOT', '/state/shells')
+# As for captures, Docker resolves a bind source on the host, not in this container.
+SHELLS_ROOT_HOST = os.environ.get('SHELLS_ROOT_HOST', SHELLS_ROOT)
+SHELLS_SEED = os.environ.get('SHELLS_SEED', '/seed/profiles/web')
+SHELL_IMAGE = os.environ.get('SHELL_IMAGE', 'mndt-workbench:local')
 IMAGE = os.environ.get('MACHINES_IMAGE', 'mndt-browser:test')
 OUT = os.environ.get('MACHINES_OUT', '/state/machines')
 # Docker resolves a bind source on the host, so the sidecar keeps the host path
@@ -77,6 +83,66 @@ def capture(identity, url):
     }
 
 
+def shell_slug(identity):
+    return re.sub(r'[^a-z0-9]+', '-', identity.lower()).strip('-')
+
+
+def shell_token(identity):
+    path = os.path.join(SHELLS_ROOT, shell_slug(identity), 'web-token')
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return handle.read().strip()
+    except OSError:
+        return ''
+
+
+def ensure_shell(identity):
+    """Start the person's own shell if needed, and return where to reach it.
+
+    Each shell gets its own /state volume, seeded from the shared web profile, so
+    sessions, storages and the launch token belong to that person alone. The
+    product API stays central: this instance carries no API port.
+    """
+    slug = shell_slug(identity)
+    name = 'shell-' + slug
+    home = os.path.join(SHELLS_ROOT, slug)
+    profile = os.path.join(home, 'home', 'profiles', 'web')
+    if not os.path.exists(os.path.join(profile, 'cordis.patch.yml')):
+        os.makedirs(profile, exist_ok=True)
+        if os.path.isdir(SHELLS_SEED):
+            subprocess.run(['cp', '-r', SHELLS_SEED + '/.', profile + '/'], check=False)
+    running = docker('inspect', name, '--format', '{{.State.Running}}').stdout.strip()
+    if running != 'true':
+        docker('rm', '-f', name)
+        docker(
+            'run', '-d', '--name', name,
+            '--network', 'mndt-front_front',
+            '--restart', 'unless-stopped',
+            '--cap-drop', 'ALL',
+            '--security-opt', 'no-new-privileges',
+            '--pids-limit', '256',
+            '--memory', '768m',
+            '--cpus', '1',
+            '-e', 'DSH_HOME=/state/home',
+            '-e', 'DSH_MNDT_IDENTITY=' + identity,
+            '-e', 'DSH_MNDT_WEB_TOKEN_FILE=/state/web-token',
+            '-e', 'HOME=/tmp',
+            '-e', 'TMPDIR=/tmp',
+            '-e', 'PUBLIC_URL=https://mndt.duke-analytics.com/',
+            '-e', 'TRUSTED_HOST=mndt.duke-analytics.com',
+            '-v', os.path.join(SHELLS_ROOT_HOST, slug) + ':/state',
+            '--entrypoint', 'sh',
+            SHELL_IMAGE, '/app/workbench-entrypoint.sh',
+            timeout=60,
+        )
+    for _ in range(45):
+        token = shell_token(identity)
+        if token != '':
+            return {'ok': True, 'identity': identity, 'host': name, 'token': token}
+        time.sleep(2)
+    return {'ok': False, 'identity': identity, 'error': 'the shell did not publish a launch token'}
+
+
 def sessions():
     result = docker('ps', '--filter', 'name=mndt-browser-', '--format', '{{.Names}}\t{{.Status}}')
     rows = []
@@ -107,6 +173,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(403, {'error': 'a machine token is required'})
         if self.path == '/health':
             return self.reply(200, {'ok': True, 'image': IMAGE})
+        if self.path.startswith('/shells/ensure'):
+            query = parse_qs(urlparse(self.path).query)
+            identity = str((query.get('identity') or [''])[0]).strip().lower()
+            if not IDENTITY.match(identity):
+                return self.reply(400, {'error': 'identity must be an email address'})
+            try:
+                result = ensure_shell(identity)
+            except Exception as error:  # noqa: BLE001 - the reason goes back to the caller
+                return self.reply(500, {'error': str(error)})
+            return self.reply(200 if result.get('ok') is True else 502, result)
         if self.path == '/sessions':
             return self.reply(200, {'sessions': sessions()})
         return self.reply(404, {'error': 'unknown path'})

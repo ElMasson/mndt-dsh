@@ -557,3 +557,15 @@ Regles tenues par ce depot :
 Verification faite le 27 octobre : apres suppression de cinq images hors service
 et purge du cache, `/data` est passe de 97 % a 72 %, soit 26 Go libres, et les
 controles sont restes a 0 echec.
+## Un shell par personne
+
+La passerelle ne sert plus une instance unique : elle demande au sidecar l instance
+de la personne que le proxy a prouvee, puis route la page vers elle. L API produit
+reste centrale. Le service `machines` porte donc deux roles : capture navigateur
+et creation des shells, et son compose monte le socket Docker, `/data/mndt/shells`
+et `/seed/profiles` en lecture seule. La passerelle lit `machines.env` pour le
+jeton et l adresse du sidecar.
+
+Verification faite le 27 octobre : deux personnes, deux instances, deux pages 200,
+sessions separees, identite correcte cote API, 0 echec aux controles. Detail dans
+`docs/duke-product/SHELLS.md`.
