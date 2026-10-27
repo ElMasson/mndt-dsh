@@ -1,0 +1,30 @@
+# A browser in a box, for one person at a time.
+#
+# Chromium only, no shell utilities a mission could pivot with, and no package
+# manager left behind. The container is meant to run with:
+#   --read-only --tmpfs /tmp --tmpfs /home/browser --cap-drop ALL
+#   --security-opt no-new-privileges --user 10001 --pids-limit 128
+#   --memory 768m --cpus 1
+# so a page that misbehaves cannot reach the host or the other sessions.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        fonts-liberation \
+        fonts-dejavu-core \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 browser \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin browser
+
+USER 10001:10001
+WORKDIR /home/browser
+ENV HOME=/tmp
+
+# One screenshot of the URL it is given, written where the caller says. Chromium
+# runs without zygote and without the crash reporter: both need helpers that a
+# read-only container cannot start, and neither is useful for a capture.
+ENTRYPOINT ["chromium", "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--disable-extensions", "--disable-crash-reporter", "--disable-breakpad", "--no-zygote", "--hide-scrollbars", "--user-data-dir=/tmp/chrome", "--crash-dumps-dir=/tmp/crashes", "--virtual-time-budget=8000", "--window-size=1280,800"]
+CMD ["--screenshot=/out/screenshot.png", "about:blank"]

@@ -95,6 +95,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Jeton Office365 protege | /data/mndt/live/mcp-auth/office365.json, mode 600, rafraichi a la demande, jamais affiche | verification du 26 octobre |
 | Heure du briefing reglable | 06:30 vers 06:15 par l API, fichier sur disque, survit au redemarrage, lecteur 403, heure invalide 400 | verification du 26 octobre |
 | Visite guidee | sept etapes, du role a l automatisation, fermeture et memoire cote navigateur | capture page-tour.png |
+| Session navigateur isolee | deux identites, deux captures reelles de example.com, conteneurs supprimes | sandbox-browser-duke.png |
+| Isolation verifiee | non root, racine en lecture seule, cap-drop ALL, no-new-privileges, 768 Mo, 128 processus, 1 vCPU | docker inspect du 27 octobre |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
