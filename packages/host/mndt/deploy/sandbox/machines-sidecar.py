@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,13 @@ SHELLS_ROOT = os.environ.get('SHELLS_ROOT', '/state/shells')
 SHELLS_ROOT_HOST = os.environ.get('SHELLS_ROOT_HOST', SHELLS_ROOT)
 SHELLS_SEED = os.environ.get('SHELLS_SEED', '/seed/profiles/web')
 SHELL_IMAGE = os.environ.get('SHELL_IMAGE', 'mndt-workbench:local')
+# Two sessions at once at most on this host, and one per person: the server has
+# four vCPU and the browser sessions are the heaviest thing it runs.
+MAX_CONCURRENT = int(os.environ.get('MACHINES_MAX_CONCURRENT', '2'))
+MAX_PER_IDENTITY = int(os.environ.get('MACHINES_PER_IDENTITY', '1'))
+
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE = {}
 IMAGE = os.environ.get('MACHINES_IMAGE', 'mndt-browser:test')
 OUT = os.environ.get('MACHINES_OUT', '/state/machines')
 # Docker resolves a bind source on the host, so the sidecar keeps the host path
@@ -81,6 +89,25 @@ def capture(identity, url):
         'seconds': round(time.time() - started, 1),
         'png': base64.b64encode(payload).decode('ascii'),
     }
+
+
+def claim(identity):
+    """Reserve one browser session for this person.
+
+    @returns None when the session may start, or the reason it may not.
+    """
+    with _ACTIVE_LOCK:
+        if _ACTIVE.get(identity, 0) >= MAX_PER_IDENTITY:
+            return 'this person already has a session running'
+        if sum(_ACTIVE.values()) >= MAX_CONCURRENT:
+            return 'the server is already running the maximum number of sessions'
+        _ACTIVE[identity] = _ACTIVE.get(identity, 0) + 1
+    return None
+
+
+def release(identity):
+    with _ACTIVE_LOCK:
+        _ACTIVE[identity] = max(0, _ACTIVE.get(identity, 0) - 1)
 
 
 def shell_slug(identity):
@@ -203,12 +230,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {'error': 'identity must be an email address'})
         if not URL.match(url):
             return self.reply(400, {'error': 'url must start with http:// or https://'})
+        blocked = claim(identity)
+        if blocked is not None:
+            return self.reply(429, {'error': blocked})
         try:
             return self.reply(200, capture(identity, url))
         except subprocess.TimeoutExpired:
             return self.reply(504, {'error': 'the session did not finish within 90 seconds'})
         except Exception as error:  # noqa: BLE001 - the reason goes back to the caller
             return self.reply(500, {'error': str(error)})
+        finally:
+            release(identity)
 
     def log_message(self, *_args):
         return
