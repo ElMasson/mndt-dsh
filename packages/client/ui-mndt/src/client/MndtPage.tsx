@@ -61,6 +61,15 @@ export interface MachineShot {
   readonly png: string
 }
 
+export interface BrowserAnswer {
+  readonly ok?: boolean
+  readonly png?: string
+  readonly text?: string
+  readonly url?: string
+  readonly title?: string
+  readonly error?: string
+}
+
 export interface ScheduleRow {
   readonly at: string | null
 }
@@ -129,6 +138,8 @@ export interface MndtFace {
   schedule(): Promise<ScheduleRow>
   setSchedule(at: string): Promise<ScheduleRow>
   machineCapture(url: string): Promise<MachineShot>
+  browserAct(input: Record<string, unknown>): Promise<BrowserAnswer>
+  browserStop(): Promise<BrowserAnswer>
 }
 
 /** What the page receives from its plugin. */
@@ -160,7 +171,11 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [scheduleAt, setScheduleAt] = useState('06:30')
   const [tourOpen, setTourOpen] = useState(false)
   const [machineUrl, setMachineUrl] = useState('https://example.com')
-  const [machineShot, setMachineShot] = useState<MachineShot | null>(null)
+  const [browserPng, setBrowserPng] = useState<string | null>(null)
+  const [browserText, setBrowserText] = useState('')
+  const [browserError, setBrowserError] = useState('')
+  const [selector, setSelector] = useState('input[name=custname]')
+  const [fillText, setFillText] = useState('')
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
@@ -542,7 +557,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
           <section className="mndt-card">
             <div className="mndt-card-head">
               <h2 className="mndt-card-title">{t('machineTitle')}</h2>
-              <span className="mndt-count">{machineShot === null ? '—' : `${machineShot.seconds}s`}</span>
+              <span className="mndt-count">{browserPng === null ? '—' : 'session'}</span>
             </div>
             <div className="mndt-card-body">
               <p className="mndt-empty">{t('machineHint')}</p>
@@ -559,21 +574,93 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   data-variant="primary"
                   disabled={!state.canWrite || busy !== null}
                   onClick={() => {
-                    void act('machine', async () => {
-                      const shot = await api.machineCapture(machineUrl)
-                      setMachineShot(shot)
+                    void act('browser', async () => {
+                      setBrowserError('')
+                      const answer = await api.browserAct({ op: 'goto', url: machineUrl })
+                      if (answer.error !== undefined) setBrowserError(answer.error)
+                      const shot = await api.browserAct({ op: 'screenshot' })
+                      if (shot.png !== undefined) setBrowserPng(shot.png)
                     })
                   }}
                 >
-                  {t('machineCapture')}
+                  {t('browserOpen')}
+                </button>
+                <button
+                  className="mndt-button"
+                  disabled={!state.canWrite || busy !== null}
+                  onClick={() => {
+                    void act('browser', async () => {
+                      setBrowserError('')
+                      const shot = await api.browserAct({ op: 'screenshot' })
+                      if (shot.png !== undefined) setBrowserPng(shot.png)
+                      if (shot.error !== undefined) setBrowserError(shot.error)
+                    })
+                  }}
+                >
+                  {t('browserCapture')}
+                </button>
+                <button
+                  className="mndt-button"
+                  disabled={!state.canWrite || busy !== null}
+                  onClick={() => {
+                    void act('browser', async () => {
+                      await api.browserStop()
+                      setBrowserPng(null)
+                      setBrowserText('')
+                    })
+                  }}
+                >
+                  {t('browserClose')}
                 </button>
               </div>
-              {machineShot !== null && (
-                <img
-                  className="mndt-shot"
-                  alt={t('machineTitle')}
-                  src={`data:image/png;base64,${machineShot.png}`}
+              <div className="mndt-row-actions">
+                <input
+                  className="mndt-input"
+                  value={selector}
+                  disabled={!state.canWrite || busy !== null}
+                  onChange={(event) => { setSelector(event.target.value) }}
+                  aria-label={t('browserSelector')}
                 />
+                <input
+                  className="mndt-input"
+                  value={fillText}
+                  disabled={!state.canWrite || busy !== null}
+                  onChange={(event) => { setFillText(event.target.value) }}
+                  aria-label={t('browserText')}
+                />
+                <button
+                  className="mndt-button"
+                  disabled={!state.canWrite || busy !== null}
+                  onClick={() => {
+                    void act('browser', async () => {
+                      setBrowserError('')
+                      const answer = await api.browserAct({ op: 'fill', selector, text: fillText })
+                      if (answer.error !== undefined) setBrowserError(answer.error)
+                    })
+                  }}
+                >
+                  {t('browserFill')}
+                </button>
+                <button
+                  className="mndt-button"
+                  disabled={!state.canWrite || busy !== null}
+                  onClick={() => {
+                    void act('browser', async () => {
+                      setBrowserError('')
+                      const answer = await api.browserAct({ op: 'click', selector })
+                      if (answer.error !== undefined) setBrowserError(answer.error)
+                      const read = await api.browserAct({ op: 'text' })
+                      if (read.text !== undefined) setBrowserText(read.text)
+                    })
+                  }}
+                >
+                  {t('browserClick')}
+                </button>
+              </div>
+              {browserError !== '' && <p className="mndt-error">{browserError}</p>}
+              {browserText !== '' && <pre className="mndt-browser-text">{browserText.slice(0, 1200)}</pre>}
+              {browserPng !== null && (
+                <img className="mndt-shot" alt={t('machineTitle')} src={`data:image/png;base64,${browserPng}`} />
               )}
             </div>
           </section>

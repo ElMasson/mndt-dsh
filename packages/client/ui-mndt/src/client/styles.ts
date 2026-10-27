@@ -126,4 +126,8 @@ export const CSS = `
 .mndt-tour-spacer { flex: 1; }
 
 .mndt-shot { display: block; width: 100%; height: auto; margin-top: 10px; border-radius: 10px; border: 1px solid var(--mndt-border); }
+
+.mndt-error { margin: 8px 0 0; font-size: 12px; color: #b3261e; }
+.mndt-browser-text { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 10px;
+  background: var(--mndt-surface-alt, #f4f2ee); font-size: 11px; line-height: 1.4; white-space: pre-wrap; }
 `

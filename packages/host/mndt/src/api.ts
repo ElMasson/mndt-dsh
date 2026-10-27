@@ -353,8 +353,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           .catch(() => undefined)
         if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
         if (!started.ok) return respond(502, started.body)
-        const host = String(started.body.host ?? '')
-        const token = String(started.body.token ?? '')
+        const host = typeof started.body.host === 'string' ? started.body.host : ''
+        const token = typeof started.body.token === 'string' ? started.body.token : ''
         if (host === '') return respond(502, { error: 'the browser agent did not provide a host' })
         const op = typeof input.op === 'string' ? input.op : ''
         if (op === '') return respond(400, { error: 'op is required' })

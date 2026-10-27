@@ -118,5 +118,12 @@ Le conteneur de session est en lecture seule, sans capacite, sans root, avec 1 G
 de memoire, 256 processus et un CPU au plus. La session vit jusqu a sa fermeture,
 mais l hote ne tolere que deux sessions navigateur a la fois.
 
-Ce qui manque encore cote experience : la carte de la page ne propose que la
-capture unique. Les operations existent dans l API, pas encore dans l interface.
+La carte de la page expose maintenant ces operations : une adresse et Ouvrir,
+Capturer, Fermer, puis un selecteur et un texte avec Saisir et Cliquer et lire. Le
+resultat de la lecture apparait sous la carte, avec la capture. La meme case
+selecteur sert a designer le champ a remplir puis l element a cliquer, ce qui est
+la seule gymnastique demandee.
+
+Preuve du 27 octobre, depuis la page de duke : ouvrir le formulaire httpbin,
+saisir "Duke depuis la carte", cliquer sur form button, lire la reponse. Le texte
+affiche contient "custname": "Duke depuis la carte".

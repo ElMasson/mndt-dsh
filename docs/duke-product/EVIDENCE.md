@@ -115,6 +115,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Session navigateur interactive | goto, fill, click, text, screenshot sur httpbin.org ; formulaire envoye avec "Duke Analytics" | browser-form-submitted.png |
 | Refus et fermeture | lecteur 403 sur les operations ; stop ne laisse aucun conteneur browser- | 27 octobre |
 
+| Navigation depuis la carte | ouvrir, saisir, cliquer et lire dans la page ; reponse avec "Duke depuis la carte" | browser-card.png |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
