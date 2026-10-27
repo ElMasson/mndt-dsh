@@ -123,6 +123,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Office365, lecture reelle | mission mis_257f0e481daf4937aabc : deux courriers de la boite duke, expediteurs et sujets | brief de la mission, 27 octobre |
 | Bureau, capture apres chargement | 16 220 caracteres, formulaire plein ecran, capture non vide | 27 octobre |
 
+| Office365, agenda reel | mission mis_600bad4fbcd848d19c08 : rendez-vous des 28 et 29 octobre, salles Teams | brief de la mission, 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

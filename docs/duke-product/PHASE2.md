@@ -13,7 +13,8 @@ Date de la revue : 27 octobre 2026, production `mndt.duke-analytics.com`.
 | Machine isolee, browser use | `goto`, `fill`, `click`, `text`, `screenshot` sur httpbin, formulaire envoye avec `custname` | fait |
 | Machine isolee, computer use | bureau Xvfb, souris `click` 200,28 et clavier `type` "Duke au bureau", formulaire envoye | fait |
 | Quotas | deux demandes pour une personne, une 200 une 429 ; trois personnes, deux 200 une 429 | fait |
-| Office365 reel | mission `mis_257f0e481daf4937aabc` : deux courriers reels lus dans la boite duke, sujets et expediteurs | fait |
+| Office365 courriers | mission `mis_257f0e481daf4937aabc` : deux courriers reels lus dans la boite duke, sujets et expediteurs | fait |
+| Office365 agenda | mission `mis_600bad4fbcd848d19c08` : rendez-vous reels des 28 et 29 octobre, dont Morning roadshow DUKE et DAILY SPRINT | fait |
 | Shell par personne | `duke` et `smarion` a 200, deux conteneurs, deux `/state`, deux jetons | fait |
 | Planification depuis la page | 06:30 lu et reecrit, lecteur refuse 403, survit au redemarrage | fait |
 | Onboarding guide | sept etapes, visite guidee dans la page, etat coche | fait |
