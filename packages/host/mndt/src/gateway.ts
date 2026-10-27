@@ -93,6 +93,9 @@ export class WorkbenchGateway extends TypertRemoteService {
         identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
         grants: this.grants,
         schedulePath: this.schedulePath,
+        ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
+          ? {}
+          : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
         port,

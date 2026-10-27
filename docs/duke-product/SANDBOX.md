@@ -1,20 +1,31 @@
 # Machine par personne
 
 Une machine par personne veut dire, dans ce produit, un conteneur ephemere et
-durci par session. Le navigateur y est seul, sans outil de shell, sans gestionnaire
-de paquets, etrien ne survit a la session.
+durci par session, cree a la demande depuis la page. Le navigateur y est seul,
+sans outil de shell, sans gestionnaire de paquets, et rien ne survit a la session.
 
-## Ce qui a ete construit et prouve
+## Ce qui est en service
 
 ```
-image          mndt-browser:test, Debian slim + Chromium, utilisateur 10001
-entree         une seule capture d URL, ecrite la ou l appelant la demande
-session        nommee par identite et par seconde, supprimee a la sortie
-preuve         deux sessions distinctes (duke, sara), deux PNG de 67 241 octets,
-               aucun conteneur restant apres les captures
+page          carte Machine : une adresse, un bouton, la capture affichee
+API           GET /machines (sessions en cours), POST /machines/capture
+droits        lancer une session demande workflows.write ; un lecteur recoit 403
+sidecar       mndt-machines, seul a voir le socket Docker, sur le reseau front
+image         mndt-browser:test, Debian slim + Chromium, utilisateur 10001
+nettoyage     la session est supprimee a la sortie, capture reussie ou non
 ```
 
-Proprietes verifiees par `docker inspect` pendant une session :
+Preuves du 27 octobre, en production :
+
+```
+capture duke      ok, 67 241 octets, 25 secondes
+capture lecteur   403
+sessions          aucune apres la capture
+disque            /data inchange, 72 %
+controles         0 echec
+```
+
+## L'isolation, telle qu'elle est vraiment
 
 ```
 user=10001:10001        non root
@@ -26,30 +37,29 @@ pids=128                128 processus au plus
 nanocpus=1000000000     1 vCPU
 ```
 
-## Ce que cela garantit, et ce que cela ne garantit pas
-
-Garanti : le code qui tourne dans la session ne peut pas ecrire hors de ses deux
-volumes temporaires, ne peut pas elever ses privileges, ne peut pas voir les
-fichiers d une autre personne, et disparait a la fin de la session.
+Garanti : le code de la session ne peut pas ecrire hors de ses deux volumes
+temporaires, ne peut pas elever ses privileges, ne voit pas les fichiers d une
+autre personne, et disparait a la fin.
 
 Pas garanti : c'est un conteneur, pas une machine virtuelle. Le noyau est partage
 avec l hote. Pour une frontiere materielle, la trajectoire est Firecracker ou
-Kata, sur une machine plus grande que ce serveur (4 vCPU, 8 Go, 3,8 Go de disque).
+Kata, sur une machine plus grande que ce serveur (4 vCPU, 8 Go, disque partage
+avec Tellus).
 
-## Etat actuel et suite
+## Ce qui manque encore
 
-Aujourd hui la session se lance par un script d exploitation :
+1. Une duree de vie par session et un quota par personne, pour que deux demandes
+   simultanees ne se marchent pas dessus.
+2. Le mode interactif : aujourd hui une capture, pas encore une navigation
+   pilotee pas a pas par l agent.
+3. La même chose en microVM quand la machine cible sera dimensionnee.
+
+## Utilisation directe, hors produit
 
 ```
 bash packages/host/mndt/deploy/sandbox/sandbox-browser.sh \
   duke@datanalysis.re https://example.com /tmp/duke.png
 ```
 
-Reste a faire pour que ce soit une fonctionnalite du produit :
-
-1. une route `/machines` qui cree, liste et arrete une session par identite ;
-2. une carte dans la page qui montre la session en cours et sa derniere capture ;
-3. une duree de vie et un quota par personne, pour que deux sessions ne se
-   marchent pas dessus.
-
-La capture de reference : `docs/duke-product/evidence/sandbox-browser-duke.png`.
+Captures de reference : `evidence/sandbox-browser-duke.png` et
+`evidence/machine-capture-duke.png`.

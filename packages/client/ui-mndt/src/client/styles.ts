@@ -124,4 +124,6 @@ export const CSS = `
 .mndt-tour-body { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--mndt-muted); }
 .mndt-tour-actions { display: flex; align-items: center; gap: 8px; }
 .mndt-tour-spacer { flex: 1; }
+
+.mndt-shot { display: block; width: 100%; height: auto; margin-top: 10px; border-radius: 10px; border: 1px solid var(--mndt-border); }
 `

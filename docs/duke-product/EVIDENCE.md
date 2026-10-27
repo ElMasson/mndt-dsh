@@ -97,6 +97,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Visite guidee | sept etapes, du role a l automatisation, fermeture et memoire cote navigateur | capture page-tour.png |
 | Session navigateur isolee | deux identites, deux captures reelles de example.com, conteneurs supprimes | sandbox-browser-duke.png |
 | Isolation verifiee | non root, racine en lecture seule, cap-drop ALL, no-new-privileges, 768 Mo, 128 processus, 1 vCPU | docker inspect du 27 octobre |
+| Machine branchee au produit | POST /machines/capture par duke : ok, 67 241 octets, 25 secondes ; lecteur 403 ; aucune session restante | machine-capture-duke.png |
+| Disque de production assaini | /data de 97 % a 72 %, 26 Go libres, une seule image workbench, Tellus intact | 27 octobre |
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

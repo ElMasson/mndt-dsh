@@ -54,6 +54,13 @@ export interface MemoryRow {
 }
 
 /** What one read returns. */
+export interface MachineShot {
+  readonly ok: boolean
+  readonly bytes: number
+  readonly seconds: number
+  readonly png: string
+}
+
 export interface ScheduleRow {
   readonly at: string | null
 }
@@ -121,6 +128,7 @@ export interface MndtFace {
   usage(): Promise<UsageReport>
   schedule(): Promise<ScheduleRow>
   setSchedule(at: string): Promise<ScheduleRow>
+  machineCapture(url: string): Promise<MachineShot>
 }
 
 /** What the page receives from its plugin. */
@@ -151,6 +159,8 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [schedule, setSchedule] = useState<ScheduleRow | null>(null)
   const [scheduleAt, setScheduleAt] = useState('06:30')
   const [tourOpen, setTourOpen] = useState(false)
+  const [machineUrl, setMachineUrl] = useState('https://example.com')
+  const [machineShot, setMachineShot] = useState<MachineShot | null>(null)
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
   useEffect(() => {
@@ -525,6 +535,45 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   ))}
                   {usage.team.length === 0 && <p className="mndt-empty">{t('usageTeamOnlyAdmins')}</p>}
                 </>
+              )}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('machineTitle')}</h2>
+              <span className="mndt-count">{machineShot === null ? '—' : `${machineShot.seconds}s`}</span>
+            </div>
+            <div className="mndt-card-body">
+              <p className="mndt-empty">{t('machineHint')}</p>
+              <div className="mndt-row-actions">
+                <input
+                  className="mndt-input"
+                  value={machineUrl}
+                  disabled={!state.canWrite || busy !== null}
+                  onChange={(event) => { setMachineUrl(event.target.value) }}
+                  aria-label={t('machineUrl')}
+                />
+                <button
+                  className="mndt-button"
+                  data-variant="primary"
+                  disabled={!state.canWrite || busy !== null}
+                  onClick={() => {
+                    void act('machine', async () => {
+                      const shot = await api.machineCapture(machineUrl)
+                      setMachineShot(shot)
+                    })
+                  }}
+                >
+                  {t('machineCapture')}
+                </button>
+              </div>
+              {machineShot !== null && (
+                <img
+                  className="mndt-shot"
+                  alt={t('machineTitle')}
+                  src={`data:image/png;base64,${machineShot.png}`}
+                />
               )}
             </div>
           </section>

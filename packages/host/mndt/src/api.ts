@@ -73,6 +73,8 @@ export interface MndtApiOptions {
   readonly authority?: { readonly baseUrl: string; readonly token: string }
   /** The briefing schedule file, editable from the page. */
   readonly schedulePath?: string
+  /** The machine sidecar: one browser session per person. */
+  readonly machines?: { readonly baseUrl: string; readonly token: string }
   readonly service: WorkbenchService
   readonly runner: MissionRunner
   readonly identity: IdentityOptions
@@ -306,6 +308,47 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           createdBy: identity,
         })
         return respond(201, { memory: note })
+      }
+
+      if (request.method === 'GET' && path === '/machines') {
+        const denied = await authorise(identity, 'rights.read')
+        if (denied !== undefined) return denied
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service' })
+        const answer = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/sessions`, {
+          headers: { 'x-machine-token': machines.token },
+        }).catch(() => undefined)
+        if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        return respond(answer.status, body)
+      }
+
+      if (request.method === 'POST' && path === '/machines/capture') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service' })
+        const input = parseBody(request.body)
+        const url = typeof input.url === 'string' ? input.url.trim() : ''
+        if (!/^https?:\/\/[^\s]+$/.test(url)) return respond(400, { error: 'url must start with http:// or https://' })
+        let answer: Response
+        try {
+          answer = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/capture`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+            body: JSON.stringify({ identity, url }),
+          })
+        } catch (error) {
+          return respond(502, { error: `the machine service is unreachable: ${messageOf(error)}` })
+        }
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        if (!answer.ok) return respond(answer.status, body)
+        return respond(200, {
+          ok: true,
+          bytes: body.bytes,
+          seconds: body.seconds,
+          png: body.png,
+        })
       }
 
       if (request.method === 'GET' && path === '/schedule') {

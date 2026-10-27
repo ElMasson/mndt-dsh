@@ -9,6 +9,7 @@
 import type {
   ApprovalRow,
   MemberRow,
+  MachineShot,
   ScheduleRow,
   UsageReport,
   BriefRow,
@@ -113,6 +114,7 @@ export function createHttpFace(): MndtFace {
     }),
     usage: async () => (await bodyOf<UsageReport>(await call('/usage'))),
     schedule: async () => (await bodyOf<ScheduleRow>(await call('/schedule'))),
+    machineCapture: async url => (await bodyOf<MachineShot>(await call('/machines/capture', { method: 'POST', body: JSON.stringify({ url }) }))),
     setSchedule: async at => (await bodyOf<ScheduleRow>(await call('/schedule', { method: 'POST', body: JSON.stringify({ at }) }))),
     revokeMember: subject => outcomeOf(async () => {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
