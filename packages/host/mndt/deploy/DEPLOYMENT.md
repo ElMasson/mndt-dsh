@@ -537,3 +537,23 @@ Production reverifiee : seize controles, redirection publique vers Microsoft.
 pour écrire ; il ne doit être accordé qu'au conteneur dédié, monté en lecture
 seule sur tout ce qui n'est pas son état. Un refus de ce worker doit rester
 visible comme un échec de mission, jamais comme un brief vide.
+
+## Disque partage avec Tellus
+
+Le volume `/data` fait 92 Go et porte aussi PostgreSQL, Tellus et les sauvegardes.
+Une image workbench pese 4,9 Go, un build en consomme environ 2 Go de plus, et le
+cache de build Docker a deja atteint 18 Go. Au-dela de 90 % d occupation, les
+deploiements mndt sont bloques et Tellus devient risque.
+
+Regles tenues par ce depot :
+
+1. Une seule image workbench en service. Avant de construire la suivante,
+   `prune-workbench.sh` supprime les tags qui ne pointent pas vers l image du
+   conteneur en cours. Il ne touche jamais un autre depot.
+2. Le cache de build se purge par age, pas en bloc :
+   `prune-workbench.sh --cache` retire ce qui a plus de 24 heures.
+3. Avant tout deploiement : `df -h /data` doit montrer au moins 14 Go libres.
+
+Verification faite le 27 octobre : apres suppression de cinq images hors service
+et purge du cache, `/data` est passe de 97 % a 72 %, soit 26 Go libres, et les
+controles sont restes a 0 echec.
