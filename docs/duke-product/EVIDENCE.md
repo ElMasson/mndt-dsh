@@ -104,6 +104,9 @@ preuve est une ligne ouverte, pas une reussite.
 | Passerelle par identite | x-forwarded-email vers l instance de la personne, cookie de session propre, reprise si le jeton tourne | verification du 27 octobre |
 | Quota par personne et global | deux demandes pour duke : une 200 une 429 ; trois personnes : deux 200 une 429 | verification du 27 octobre |
 
+| Page servie par l instance de duke | identite duke@datanalysis.re, role owner, aucune session locale, donnees produit centrales | page-per-person-shell.png |
+| Membres a jour sur cette page | duke owner, contact viewer, smarion operator | page-per-person-shell.png |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
