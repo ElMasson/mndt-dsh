@@ -102,6 +102,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Un shell par personne | duke et smarion : deux instances, deux pages 200, identite correcte a l API centrale | verification du 27 octobre |
 | Sessions cloisonnees | partagee 2 elements, duke 0, smarion 0 ; repertoires et jetons distincts | verification du 27 octobre |
 | Passerelle par identite | x-forwarded-email vers l instance de la personne, cookie de session propre, reprise si le jeton tourne | verification du 27 octobre |
+| Quota par personne et global | deux demandes pour duke : une 200 une 429 ; trois personnes : deux 200 une 429 | verification du 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

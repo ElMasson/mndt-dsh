@@ -63,3 +63,22 @@ bash packages/host/mndt/deploy/sandbox/sandbox-browser.sh \
 
 Captures de reference : `evidence/sandbox-browser-duke.png` et
 `evidence/machine-capture-duke.png`.
+
+## Quotas et duree de vie
+
+Une session de navigateur est ephemere par construction : elle meurt a la fin de
+la capture. Deux limites empechent en plus deux demandes de se marcher dessus :
+
+```
+par personne      1 session a la fois ; la deuxieme repond 429
+au total          2 sessions a la fois sur ce serveur ; la troisieme repond 429
+duree de vie      celle du conteneur, 90 secondes maximum, puis suppression
+```
+
+Preuves du 27 octobre, en production :
+
+```
+deux demandes simultanees pour duke    une 200, une 429
+trois personnes en meme temps          duke 200, smarion 200, contact 429
+message du refus                       explicite, en clair, pas une erreur muette
+```
