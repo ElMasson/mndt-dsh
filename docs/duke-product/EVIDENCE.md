@@ -107,6 +107,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Page servie par l instance de duke | identite duke@datanalysis.re, role owner, aucune session locale, donnees produit centrales | page-per-person-shell.png |
 | Membres a jour sur cette page | duke owner, contact viewer, smarion operator | page-per-person-shell.png |
 
+| Rotation du jeton de shell | instance de smarion redemarree sans toucher la passerelle, page 200 apres reprise | verification du 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
