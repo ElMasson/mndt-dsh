@@ -120,6 +120,9 @@ preuve est une ligne ouverte, pas une reussite.
 | Bureau isole, computer use | open, click, type, key, screenshot ; formulaire envoye avec "Duke au bureau" depuis Xvfb | desktop-typed.png, desktop-submitted.png |
 | Carte bureau | ouvrir, cliquer, saisir, Entree, fermer, capture affichee dans la page | desktop-card.png |
 
+| Office365, lecture reelle | mission mis_257f0e481daf4937aabc : deux courriers de la boite duke, expediteurs et sujets | brief de la mission, 27 octobre |
+| Bureau, capture apres chargement | 16 220 caracteres, formulaire plein ecran, capture non vide | 27 octobre |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne
