@@ -569,3 +569,10 @@ jeton et l adresse du sidecar.
 Verification faite le 27 octobre : deux personnes, deux instances, deux pages 200,
 sessions separees, identite correcte cote API, 0 echec aux controles. Detail dans
 `docs/duke-product/SHELLS.md`.
+## Image construite depuis la source
+
+Le 27 octobre, l image a ete construite depuis le commit `21106d7` : les sept
+portes passent, le code de sortie est 0, et l image `88548b6ae295` est celle qui
+tourne en production. La bascule s est faite en chargeant l archive, en retaguant
+`local`, en recreant le workbench, puis en purgeant l ancienne image : sante ok,
+machine ok, lecteur 403, shell d une personne 200, 0 echec aux controles.
