@@ -1,0 +1,27 @@
+# A small Linux desktop, one per person: Xvfb screen, Chromium, xdotool.
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        xvfb \
+        x11-utils \
+        xdotool \
+        openbox \
+        imagemagick \
+        chromium \
+        fonts-liberation \
+        fonts-dejavu-core \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY desktop-agent.mjs /app/desktop-agent.mjs
+COPY desktop-entrypoint.sh /app/desktop-entrypoint.sh
+RUN chmod +x /app/desktop-entrypoint.sh
+
+ENV HOME=/tmp \
+    DISPLAY=:99 \
+    DESKTOP_PORT=9224
+
+EXPOSE 9224
+ENTRYPOINT ["/app/desktop-entrypoint.sh"]

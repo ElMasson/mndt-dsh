@@ -118,6 +118,8 @@ export function createHttpFace(): MndtFace {
     machineCapture: async url => (await bodyOf<MachineShot>(await call('/machines/capture', { method: 'POST', body: JSON.stringify({ url }) }))),
     browserAct: async input => (await bodyOf<BrowserAnswer>(await call('/machines/browser/act', { method: 'POST', body: JSON.stringify(input) }))),
     browserStop: async () => (await bodyOf<BrowserAnswer>(await call('/machines/browser/stop', { method: 'POST', body: JSON.stringify({}) }))),
+    desktopAct: async input => (await bodyOf<BrowserAnswer>(await call('/machines/desktop/act', { method: 'POST', body: JSON.stringify(input) }))),
+    desktopStop: async () => (await bodyOf<BrowserAnswer>(await call('/machines/desktop/stop', { method: 'POST', body: JSON.stringify({}) }))),
     setSchedule: async at => (await bodyOf<ScheduleRow>(await call('/schedule', { method: 'POST', body: JSON.stringify({ at }) }))),
     revokeMember: subject => outcomeOf(async () => {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })

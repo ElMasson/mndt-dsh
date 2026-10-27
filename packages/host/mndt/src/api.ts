@@ -323,6 +323,70 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(answer.status, body)
       }
 
+      if (request.method === 'POST' && path === '/machines/desktop/start') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service' })
+        const answer = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/desktops/start`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+          body: JSON.stringify({ identity }),
+        }).catch(() => undefined)
+        if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        if (!answer.ok) return respond(answer.status, body)
+        return respond(200, { ok: true, started: true })
+      }
+
+      if (request.method === 'POST' && path === '/machines/desktop/act') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service' })
+        const input = parseBody(request.body)
+        const started = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/desktops/start`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+          body: JSON.stringify({ identity }),
+        }).then(async answer => ({ ok: answer.ok, body: await answer.json().catch(() => ({})) as Record<string, unknown> }))
+          .catch(() => undefined)
+        if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
+        if (!started.ok) return respond(502, started.body)
+        const host = typeof started.body.host === 'string' ? started.body.host : ''
+        const token = typeof started.body.token === 'string' ? started.body.token : ''
+        if (host === '') return respond(502, { error: 'the desktop agent did not provide a host' })
+        const op = typeof input.op === 'string' ? input.op : ''
+        if (op === '') return respond(400, { error: 'op is required' })
+        let answer: Response
+        try {
+          answer = await fetch(`http://${host}:9224/`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-agent-token': token },
+            body: JSON.stringify(input),
+          })
+        } catch (error) {
+          return respond(502, { error: `the desktop agent is unreachable: ${messageOf(error)}` })
+        }
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        return respond(answer.status, body)
+      }
+
+      if (request.method === 'POST' && path === '/machines/desktop/stop') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service' })
+        const answer = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/desktops/stop`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+          body: JSON.stringify({ identity }),
+        }).catch(() => undefined)
+        if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        return respond(answer.status, body)
+      }
+
       if (request.method === 'POST' && path === '/machines/browser/start') {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied

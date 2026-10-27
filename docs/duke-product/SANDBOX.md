@@ -127,3 +127,41 @@ la seule gymnastique demandee.
 Preuve du 27 octobre, depuis la page de duke : ouvrir le formulaire httpbin,
 saisir "Duke depuis la carte", cliquer sur form button, lire la reponse. Le texte
 affiche contient "custname": "Duke depuis la carte".
+
+## Le bureau isole, computer use
+
+En plus du navigateur pilote, chaque personne peut ouvrir un vrai bureau Linux :
+un ecran Xvfb de 1280 par 800, un gestionnaire de fenetres, Chromium en plein
+ecran, et quatre operations.
+
+```
+open        ouvre une adresse dans Chromium du bureau
+screenshot  capture l ecran tel quel
+click       deplace la souris et clique aux coordonnees donnees
+type        tape du texte au clavier
+key         appuie sur une touche, Entree par exemple
+stop        detruit le bureau
+```
+
+Le conteneur est en lecture seule, sans capacite, sans root, avec 1 Go de memoire,
+256 processus, un CPU, et un disque temporaire de 1 Go. La session vit jusqu a sa
+fermeture. C est la meme porte que le navigateur : le produit verifie
+`workflows.write`, demande l instance au sidecar, puis parle a l agent.
+
+Preuve du 27 octobre, en production, depuis le bureau de duke :
+
+```
+open        https://httpbin.org/forms/post
+screenshot  bureau-first.png, formulaire affiche en plein ecran
+click       200,28  puis type "Duke au bureau"
+screenshot  desktop-typed.png, le champ contient "Duke au bureau"
+click       50,604  sur Submit order
+screenshot  desktop-submitted.png, httpbin renvoie custname "Duke au bureau"
+```
+
+Ce que cela prouve : un vrai ecran, une vraie souris, un vrai clavier, une requete
+reseau partie du serveur. Ce n est pas une capture simulee ni un DOM manipule.
+
+Limites : pas d audio, pas de plusieurs fenetres applicatives installees, et pas
+encore de bureau accessible en VNC depuis le navigateur de la personne. Le pilotage
+se fait par l API et par la carte.

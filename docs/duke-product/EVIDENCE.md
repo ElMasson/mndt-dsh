@@ -117,6 +117,9 @@ preuve est une ligne ouverte, pas une reussite.
 
 | Navigation depuis la carte | ouvrir, saisir, cliquer et lire dans la page ; reponse avec "Duke depuis la carte" | browser-card.png |
 
+| Bureau isole, computer use | open, click, type, key, screenshot ; formulaire envoye avec "Duke au bureau" depuis Xvfb | desktop-typed.png, desktop-submitted.png |
+| Carte bureau | ouvrir, cliquer, saisir, Entree, fermer, capture affichee dans la page | desktop-card.png |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

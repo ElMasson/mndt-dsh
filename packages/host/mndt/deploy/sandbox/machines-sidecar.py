@@ -31,6 +31,8 @@ SHELLS_SEED = os.environ.get('SHELLS_SEED', '/seed/profiles/web')
 SHELL_IMAGE = os.environ.get('SHELL_IMAGE', 'mndt-workbench:local')
 BROWSER_AGENT_IMAGE = os.environ.get('BROWSER_AGENT_IMAGE', 'mndt-browser-agent:local')
 BROWSER_AGENT_PORT = int(os.environ.get('BROWSER_AGENT_PORT', '9223'))
+DESKTOP_IMAGE = os.environ.get('DESKTOP_IMAGE', 'mndt-desktop:local')
+DESKTOP_PORT = int(os.environ.get('DESKTOP_PORT', '9224'))
 # Two sessions at once at most on this host, and one per person: the server has
 # four vCPU and the browser sessions are the heaviest thing it runs.
 MAX_CONCURRENT = int(os.environ.get('MACHINES_MAX_CONCURRENT', '2'))
@@ -110,6 +112,52 @@ def claim(identity):
 def release(identity):
     with _ACTIVE_LOCK:
         _ACTIVE[identity] = max(0, _ACTIVE.get(identity, 0) - 1)
+
+
+def desktop_name(identity):
+    return 'desktop-' + shell_slug(identity)
+
+
+def ensure_desktop(identity):
+    """Start the person's desktop if it is not already up.
+
+    A screen, a window manager and Chromium, reachable only through the agent.
+    """
+    name = desktop_name(identity)
+    running = docker('inspect', name, '--format', '{{.State.Running}}').stdout.strip()
+    if running == 'true':
+        return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': TOKEN}
+    docker('rm', '-f', name)
+    docker(
+        'run', '-d', '--name', name,
+        '--network', 'mndt-front_front',
+        '--read-only',
+        '--tmpfs', '/tmp:rw,size=1g',
+        '--tmpfs', '/dev/shm:rw,size=256m',
+        '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges',
+        '--user', '1000:1000',
+        '--pids-limit', '256',
+        '--memory', '1g',
+        '--cpus', '1',
+        '-e', 'DESKTOP_TOKEN=' + TOKEN,
+        '-e', 'DESKTOP_PORT=' + str(DESKTOP_PORT),
+        DESKTOP_IMAGE,
+        timeout=60,
+    )
+    for _ in range(30):
+        probe = ("fetch('http://127.0.0.1:" + str(DESKTOP_PORT) + "/health', { headers: { 'x-agent-token': process.env.DESKTOP_TOKEN } })"
+                 + ".then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))")
+        health = docker('exec', name, 'node', '-e', probe, timeout=20)
+        if health.returncode == 0:
+            return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': TOKEN}
+        time.sleep(2)
+    return {'ok': False, 'identity': identity, 'error': 'the desktop agent did not answer'}
+
+
+def stop_desktop(identity):
+    docker('rm', '-f', desktop_name(identity))
+    return {'ok': True, 'identity': identity, 'stopped': True}
 
 
 def browser_name(identity):
@@ -285,6 +333,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200 if result.get('ok') is True else 502, result)
         if self.path == '/browsers/stop':
             return self.reply(200, stop_browser(identity))
+        if self.path == '/desktops/start':
+            try:
+                result = ensure_desktop(identity)
+            except subprocess.TimeoutExpired:
+                return self.reply(504, {'error': 'the desktop agent did not start in time'})
+            except Exception as error:  # noqa: BLE001 - the reason goes back to the caller
+                return self.reply(500, {'error': str(error)})
+            return self.reply(200 if result.get('ok') is True else 502, result)
+        if self.path == '/desktops/stop':
+            return self.reply(200, stop_desktop(identity))
         if self.path != '/capture':
             return self.reply(404, {'error': 'unknown path'})
         url = str(body.get('url', '')).strip()

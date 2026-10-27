@@ -139,6 +139,8 @@ export interface MndtFace {
   setSchedule(at: string): Promise<ScheduleRow>
   machineCapture(url: string): Promise<MachineShot>
   browserAct(input: Record<string, unknown>): Promise<BrowserAnswer>
+  desktopAct(input: Record<string, unknown>): Promise<BrowserAnswer>
+  desktopStop(): Promise<BrowserAnswer>
   browserStop(): Promise<BrowserAnswer>
 }
 
@@ -173,8 +175,13 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [machineUrl, setMachineUrl] = useState('https://example.com')
   const [browserPng, setBrowserPng] = useState<string | null>(null)
   const [browserText, setBrowserText] = useState('')
+  const [desktopError, setDesktopError] = useState('')
   const [browserError, setBrowserError] = useState('')
   const [selector, setSelector] = useState('input[name=custname]')
+  const [desktopPng, setDesktopPng] = useState<string | null>(null)
+  const [desktopX, setDesktopX] = useState('200')
+  const [desktopY, setDesktopY] = useState('28')
+  const [desktopText, setDesktopText] = useState('')
   const [fillText, setFillText] = useState('')
   const [filter, setFilter] = useState<'visible' | 'mine' | 'team'>('visible')
 
@@ -657,6 +664,55 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   {t('browserClick')}
                 </button>
               </div>
+              <div className="mndt-row-actions">
+                <input className="mndt-input" value={desktopX} aria-label="desktopX" disabled={!state.canWrite || busy !== null} onChange={(event) => { setDesktopX(event.target.value) }} />
+                <input className="mndt-input" value={desktopY} aria-label="desktopY" disabled={!state.canWrite || busy !== null} onChange={(event) => { setDesktopY(event.target.value) }} />
+                <input className="mndt-input" value={desktopText} aria-label="desktopText" placeholder="texte" disabled={!state.canWrite || busy !== null} onChange={(event) => { setDesktopText(event.target.value) }} />
+                <button className="mndt-button" data-variant="primary" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('desktop', async () => {
+                    setDesktopError('')
+                    const opened = await api.desktopAct({ op: 'open', url: machineUrl })
+                    if (opened.error !== undefined) setDesktopError(opened.error)
+                    const shot = await api.desktopAct({ op: 'screenshot' })
+                    if (shot.png !== undefined) setDesktopPng(shot.png)
+                  })
+                }}>{t('desktopOpen')}</button>
+                <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('desktop', async () => {
+                    setDesktopError('')
+                    const answer = await api.desktopAct({ op: 'click', x: Number(desktopX), y: Number(desktopY) })
+                    if (answer.error !== undefined) setDesktopError(answer.error)
+                    const shot = await api.desktopAct({ op: 'screenshot' })
+                    if (shot.png !== undefined) setDesktopPng(shot.png)
+                  })
+                }}>{t('desktopClick')}</button>
+                <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('desktop', async () => {
+                    setDesktopError('')
+                    const answer = await api.desktopAct({ op: 'type', text: desktopText })
+                    if (answer.error !== undefined) setDesktopError(answer.error)
+                    const shot = await api.desktopAct({ op: 'screenshot' })
+                    if (shot.png !== undefined) setDesktopPng(shot.png)
+                  })
+                }}>{t('desktopType')}</button>
+                <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('desktop', async () => {
+                    await api.desktopAct({ op: 'key', key: 'Return' })
+                    const shot = await api.desktopAct({ op: 'screenshot' })
+                    if (shot.png !== undefined) setDesktopPng(shot.png)
+                  })
+                }}>{t('desktopEnter')}</button>
+                <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('desktop', async () => {
+                    await api.desktopStop()
+                    setDesktopPng(null)
+                  })
+                }}>{t('desktopClose')}</button>
+              </div>
+              {desktopError !== '' && <p className="mndt-error">{desktopError}</p>}
+              {desktopPng !== null && (
+                <img className="mndt-shot" alt={t('desktopTitle')} src={`data:image/png;base64,${desktopPng}`} />
+              )}
               {browserError !== '' && <p className="mndt-error">{browserError}</p>}
               {browserText !== '' && <pre className="mndt-browser-text">{browserText.slice(0, 1200)}</pre>}
               {browserPng !== null && (
