@@ -12,8 +12,8 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { MndtIcon } from './MndtIcon.tsx'
-import { MndtPage } from './MndtPage.tsx'
-import type { MndtFace, MndtPageProps } from './MndtPage.tsx'
+import { CollabPage } from './CollabPage.tsx'
+import type { MndtFace } from './MndtPage.tsx'
 import { available, createHttpFace } from './httpFace.ts'
 import { CSS } from './styles.ts'
 import { en, zh } from './locales.ts'
@@ -176,8 +176,8 @@ export function apply(ctx: ClientContext): void {
     name: 'main',
     key: 'mndt',
     locale: NS,
-    inject: (): MndtPageProps => ({ t, api: face(ctx) }),
-  }, MndtPage))
+    inject: () => ({ api: face(ctx) }),
+  }, CollabPage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
     id: 'mndt',
