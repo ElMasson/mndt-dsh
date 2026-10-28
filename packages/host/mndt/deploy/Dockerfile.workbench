@@ -12,6 +12,9 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm exec tsx scripts/generate-typert.ts
 ARG COMMIT=local
 ENV DSH_CLIENT_COMMIT_HASH=${COMMIT}
+# This fork ships the mndt brand: the window title must not depend on a caller
+# spelling DSH_CLIENT_TITLE, and the locale brand string is mndt as well.
+ENV DSH_CLIENT_TITLE=mndt
 ENV NODE_OPTIONS="--experimental-strip-types --max-old-space-size=6144"
 # Print the compiler's own diagnostics when a gate fails, so the build log
 # carries the real reason instead of only a summary.
