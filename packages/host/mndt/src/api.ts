@@ -186,7 +186,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/mandates') {
-        const denied = await authorise(identity, 'workflows.write')
+        // Proposing a delegation is a governance act, not a daily action.
+        const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
         if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })

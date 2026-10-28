@@ -208,6 +208,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [mandateCap, setMandateCap] = useState('2')
   const [mandateExpiry, setMandateExpiry] = useState('')
   const [mandateError, setMandateError] = useState('')
+  const [mandateFilter, setMandateFilter] = useState<'all' | 'active' | 'proposed' | 'retired'>('all')
   const [browserError, setBrowserError] = useState('')
   const [selector, setSelector] = useState('input[name=custname]')
   const [desktopPng, setDesktopPng] = useState<string | null>(null)
@@ -772,8 +773,18 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
               <span className="mndt-count">{(state.mandates ?? []).length}</span>
             </div>
             <div className="mndt-card-body">
-              {(state.mandates ?? []).length === 0 && <p className="mndt-empty">{t('mandateNone')}</p>}
-              {(state.mandates ?? []).map(mandate => (
+              <div className="mndt-row-actions">
+                {(['all', 'active', 'proposed', 'retired'] as const).map(choice => (
+                  <button
+                    key={choice}
+                    className="mndt-button"
+                    data-variant={mandateFilter === choice ? 'primary' : undefined}
+                    onClick={() => { setMandateFilter(choice) }}
+                  >{t(choice === 'all' ? 'mandateAll' : choice === 'active' ? 'mandateActive' : choice === 'proposed' ? 'mandateProposed' : 'mandateRetired')}</button>
+                ))}
+              </div>
+              {(state.mandates ?? []).filter(mandate => mandateFilter === 'all' || mandate.state === mandateFilter).length === 0 && <p className="mndt-empty">{t('mandateNone')}</p>}
+              {(state.mandates ?? []).filter(mandate => mandateFilter === 'all' || mandate.state === mandateFilter).map(mandate => (
                 <div className="mndt-row" key={mandate.id}>
                   <div>
                     <span className="mndt-row-title">{mandate.delegant} vers {mandate.delegataire}</span>
@@ -792,7 +803,7 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                         })
                       }}>{t('mandateSign')}</button>
                     )}
-                    {mandate.state !== 'retired' && (
+                    {(state.canAdmin === true || mandate.delegant === state.you) && mandate.state !== 'retired' && (
                       <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
                         void act('mandate', async () => {
                           setMandateError('')
@@ -804,30 +815,28 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
                   </div>
                 </div>
               ))}
-              <div className="mndt-row-actions">
-                <input className="mndt-input mndt-form-input" value={mandateDelegataire} aria-label="mandateDelegataire" placeholder={t('mandateDelegataire')} disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateDelegataire(event.target.value) }} />
-                <input className="mndt-input mndt-form-input" value={mandatePurpose} aria-label="mandatePurpose" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandatePurpose(event.target.value) }} />
-                <input className="mndt-input mndt-form-input" value={mandateCap} aria-label="mandateCap" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateCap(event.target.value) }} />
-                <input className="mndt-input mndt-form-input" type="date" value={mandateExpiry} aria-label="mandateExpiry" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateExpiry(event.target.value) }} />
-                <button className="mndt-button" data-variant="primary" disabled={!state.canWrite || busy !== null} onClick={() => {
-                  void act('mandate', async () => {
-                    setMandateError('')
-                    const answer = await api.createMandate({
-                      delegataire: mandateDelegataire,
-                      purpose: mandatePurpose,
-                      dailyCap: Number(mandateCap),
-                      ...(mandateExpiry === '' ? {} : { expiresOn: mandateExpiry }),
+              {state.canAdmin === true && (
+                <div className="mndt-row-actions">
+                  <input className="mndt-input mndt-form-input" value={mandateDelegataire} aria-label="mandateDelegataire" placeholder={t('mandateDelegataire')} disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateDelegataire(event.target.value) }} />
+                  <input className="mndt-input mndt-form-input" value={mandatePurpose} aria-label="mandatePurpose" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandatePurpose(event.target.value) }} />
+                  <input className="mndt-input mndt-form-input" value={mandateCap} aria-label="mandateCap" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateCap(event.target.value) }} />
+                  <input className="mndt-input mndt-form-input" type="date" value={mandateExpiry} aria-label="mandateExpiry" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateExpiry(event.target.value) }} />
+                  <button className="mndt-button" data-variant="primary" disabled={!state.canWrite || busy !== null} onClick={() => {
+                    void act('mandate', async () => {
+                      setMandateError('')
+                      const answer = await api.createMandate({
+                        delegataire: mandateDelegataire,
+                        purpose: mandatePurpose,
+                        dailyCap: Number(mandateCap),
+                        ...(mandateExpiry === '' ? {} : { expiresOn: mandateExpiry }),
+                      })
+                      if (answer.error !== undefined) setMandateError(answer.error)
                     })
-                    if (answer.error !== undefined) setMandateError(answer.error)
-                  })
-                }}>{t('mandateCreate')}</button>
-                {state.canAdmin === true && (
-                  <>
-                    <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('csv') }}>{t('mandateCsv')}</button>
-                    <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('json') }}>{t('mandateJson')}</button>
-                  </>
-                )}
-              </div>
+                  }}>{t('mandateCreate')}</button>
+                  <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('csv') }}>{t('mandateCsv')}</button>
+                  <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('json') }}>{t('mandateJson')}</button>
+                </div>
+              )}
               {mandateError !== '' && <p className="mndt-error">{mandateError}</p>}
             </div>
           </section>
