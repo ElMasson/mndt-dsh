@@ -10,25 +10,27 @@ export const CSS = `
   --mndt-canvas: #F6F4F1;
   --mndt-card: #FFFFFF;
   --mndt-border: #E2E4E9;
-  --mndt-text: #1B1D22;
-  --mndt-muted: #6B7180;
+  --mndt-text: #0C0F17;
+  --mndt-muted: #5A6475;
   --mndt-accent: #4B5CFF;
   --mndt-accent-soft: #EDEFFF;
   --mndt-warm: #FDF3E2;
   --mndt-warm-border: #F0DDBB;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 28px 32px 48px;
+  gap: 16px;
+  padding: 24px 28px 48px;
   background: var(--mndt-canvas);
   color: var(--mndt-text);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
   min-height: 100%;
   overflow-y: auto;
 }
 
 .mndt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.mndt-title { margin: 0; font-family: "Space Grotesk", Inter, sans-serif; font-size: 30px; letter-spacing: -0.02em; }
+.mndt-title { margin: 0; font-family: "Space Grotesk", Inter, sans-serif; font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
 .mndt-sub { margin: 6px 0 0; color: var(--mndt-muted); font-size: 14px; }
 
 .mndt-pill {
@@ -46,11 +48,11 @@ export const CSS = `
 .mndt-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 @media (max-width: 1100px) { .mndt-grid { grid-template-columns: minmax(0, 1fr); } }
 
-.mndt-card { background: var(--mndt-card); border: 1px solid var(--mndt-border); border-radius: 14px; overflow: hidden; }
-.mndt-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--mndt-border); }
-.mndt-card-title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+.mndt-card { background: var(--mndt-card); border: 1px solid var(--mndt-border); border-radius: 16px; overflow: hidden; }
+.mndt-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--mndt-border); }
+.mndt-card-title { margin: 0; font-family: "Space Grotesk", Inter, sans-serif; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
 .mndt-count { font-size: 11px; color: var(--mndt-muted); }
-.mndt-card-body { padding: 8px 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+.mndt-card-body { padding: 10px 18px 16px; display: flex; flex-direction: column; gap: 10px; }
 .mndt-empty { margin: 6px 0; color: var(--mndt-muted); font-size: 13px; }
 
 .mndt-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px dashed var(--mndt-border); }
@@ -63,15 +65,17 @@ export const CSS = `
 
 .mndt-button {
   border: 1px solid var(--mndt-border); background: var(--mndt-card); color: var(--mndt-text);
-  border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer;
+  border-radius: 12px; padding: 7px 14px; font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.mndt-button[data-variant="primary"] { background: var(--mndt-text); color: #fff; border-color: var(--mndt-text); }
+.mndt-button[data-variant="primary"] { background: #0C0F17; color: #fff; border-color: #0C0F17; }
+.mndt-button:hover { background: #F0EFED; }
+.mndt-button[data-variant="primary"]:hover { background: #121722; border-color: #121722; }
 .mndt-button[data-variant="danger"] { color: #B23A2E; border-color: #EED2CE; }
 .mndt-button:disabled { opacity: 0.55; cursor: default; }
 
 .mndt-input {
-  border: 1px solid var(--mndt-border); border-radius: 8px; padding: 6px 9px;
-  font-size: 12.5px; background: #fff; color: var(--mndt-text); min-width: 0;
+  border: 1px solid var(--mndt-border); border-radius: 10px; padding: 7px 10px;
+  font-size: 13.5px; background: #fff; color: var(--mndt-text); min-width: 0;
 }
 .mndt-textarea { min-height: 54px; resize: vertical; }
 
@@ -126,7 +130,7 @@ export const CSS = `
 .mndt-tour-actions { display: flex; align-items: center; gap: 8px; }
 .mndt-tour-spacer { flex: 1; }
 
-.mndt-shot { display: block; width: 100%; height: auto; margin-top: 10px; border-radius: 10px; border: 1px solid var(--mndt-border); }
+.mndt-shot { display: block; width: 100%; height: auto; margin-top: 10px; border-radius: 12px; border: 1px solid var(--mndt-border); }
 
 .mndt-error { margin: 8px 0 0; font-size: 12px; color: #b3261e; }
 .mndt-browser-text { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 10px;
