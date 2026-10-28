@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline'
 const MACHINES = (process.env.MACHINES_URL ?? 'http://machines:8796').replace(/\/$/, '')
 const TOKEN = process.env.MACHINES_TOKEN ?? ''
 const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? ''
+const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
 
 const sessions = { browser: undefined, desktop: undefined }
@@ -90,6 +91,77 @@ function render(payload) {
       : 'ok'
   content.push({ type: 'text', text })
   return { content }
+}
+
+/**
+ * The actor of this call, from the published mission record or the environment.
+ * @returns the actor.
+ */
+async function currentActor() {
+  return (await actorNow()) || IDENTITY
+}
+
+/**
+ * Ask the product for a human decision before a sensitive machine action.
+ * @param kind - spend, publish, delete or send-email.
+ * @param title - what the person is deciding.
+ * @param detail - what the machine is about to do.
+ * @returns the approval id and state.
+ */
+async function requestApproval(kind, title, detail) {
+  const actor = await currentActor()
+  if (actor === '') throw new Error('the person is not configured')
+  const record = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
+  const missionId = record.trim() === '' ? undefined : JSON.parse(record).missionId
+  const answer = await fetch(`${API}/approvals`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-email': actor },
+    body: JSON.stringify({
+      kind,
+      title,
+      payload: { note: detail, url: '' },
+      ...(typeof missionId === 'string' && missionId !== '' ? { missionId } : {}),
+    }),
+  })
+  const body = await answer.json().catch(() => ({}))
+  if (!answer.ok || body.approval === undefined) throw new Error(body.error ?? `the product refused the approval (${answer.status})`)
+  return body.approval
+}
+
+/**
+ * Read one approval and check it belongs to this person and was approved.
+ * @param approvalId - the approval id.
+ * @returns the approval.
+ */
+async function approvedFor(approvalId) {
+  const actor = await currentActor()
+  const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
+  const body = await answer.json().catch(() => ({}))
+  const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
+  if (found === undefined) throw new Error(`no approval ${approvalId}`)
+  if (found.requestedBy !== actor) throw new Error('this approval was requested by another person')
+  if (found.state !== 'approved') throw new Error(`the approval is ${found.state}, not approved`)
+  return found
+}
+
+/**
+ * Wait for a pending decision.
+ * @param approvalId - the approval id.
+ * @param timeoutSeconds - how long to wait.
+ * @returns the decided approval.
+ */
+async function awaitApproval(approvalId, timeoutSeconds) {
+  const actor = await currentActor()
+  const deadline = Date.now() + Math.max(5, Math.min(timeoutSeconds, 600)) * 1000
+  for (;;) {
+    const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
+    const body = await answer.json().catch(() => ({}))
+    const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
+    if (found === undefined) throw new Error(`no approval ${approvalId}`)
+    if (found.state !== 'pending') return found
+    if (Date.now() >= deadline) return found
+    await new Promise(resolve => setTimeout(resolve, 4000))
+  }
 }
 
 const tools = [
@@ -197,6 +269,60 @@ const tools = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'machine_request_approval',
+    description: 'Demande une decision humaine avant une action sensible sur la machine (soumettre un formulaire, payer, publier, supprimer). Rend l identifiant de la demande.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['spend', 'publish', 'delete', 'send-email'], description: 'nature de l action sensible' },
+        title: { type: 'string', description: 'ce que la personne doit decider, en une phrase' },
+        detail: { type: 'string', description: 'ce que la machine va faire exactement' },
+      },
+      required: ['kind', 'title'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'machine_await_approval',
+    description: 'Attend la decision humaine sur une demande d approbation, puis rend son etat.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        approval_id: { type: 'string', description: 'identifiant rendu par machine_request_approval' },
+        timeout_seconds: { type: 'number', description: 'attente maximale, 120 secondes par defaut' },
+      },
+      required: ['approval_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'machine_browser_submit',
+    description: 'Valide une action sensible dans le navigateur : clic sur le bouton ou le lien donne, uniquement apres une approbation humaine accordee.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'selecteur CSS du bouton ou du lien qui engage l action' },
+        approval_id: { type: 'string', description: 'approbation accordee par la personne' },
+      },
+      required: ['selector', 'approval_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'machine_desktop_submit',
+    description: 'Valide une action sensible sur le bureau : clic aux coordonnees donnees, uniquement apres une approbation humaine accordee.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'abscisse en pixels' },
+        y: { type: 'number', description: 'ordonnee en pixels' },
+        approval_id: { type: 'string', description: 'approbation accordee par la personne' },
+      },
+      required: ['x', 'y', 'approval_id'],
+      additionalProperties: false,
+    },
+  },
 ]
 
 /** @param name - tool name. @param args - tool arguments. @returns MCP result. */
@@ -235,6 +361,24 @@ async function call(name, args) {
     }
     case 'machine_desktop_screenshot':
       return render(await act('desktop', { op: 'screenshot' }))
+    case 'machine_request_approval': {
+      const approval = await requestApproval(String(args.kind ?? 'spend'), String(args.title ?? ''), String(args.detail ?? ''))
+      return { content: [{ type: 'text', text: `approbation ${approval.id} : ${approval.state}` }] }
+    }
+    case 'machine_await_approval': {
+      const decided = await awaitApproval(String(args.approval_id ?? ''), Number(args.timeout_seconds ?? 120))
+      return { content: [{ type: 'text', text: `approbation ${decided.id} : ${decided.state}` }] }
+    }
+    case 'machine_browser_submit': {
+      await approvedFor(String(args.approval_id ?? ''))
+      await act('browser', { op: 'click', selector: String(args.selector ?? '') })
+      return render(await act('browser', { op: 'text' }))
+    }
+    case 'machine_desktop_submit': {
+      await approvedFor(String(args.approval_id ?? ''))
+      await act('desktop', { op: 'click', x: Number(args.x ?? 0), y: Number(args.y ?? 0) })
+      return render(await act('desktop', { op: 'screenshot' }))
+    }
     case 'machine_close': {
       const which = String(args.target ?? 'both')
       if (which !== 'desktop') await act('browser', { op: 'stop' }).catch(() => undefined)
