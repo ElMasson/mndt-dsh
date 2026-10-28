@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
 import type { Mission, MissionResult } from './core/index.ts'
+import { clearActor, publishActor } from './machine-tools.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -54,6 +55,8 @@ interface WorkflowEngineLike {
 export class DshMissionRunner {
   readonly #ctx: Context
   readonly #options: DshRunnerOptions
+  /** Missions run one at a time so the published actor cannot race. */
+  #queue: Promise<unknown> = Promise.resolve()
 
   /** @param ctx - the host context. @param options - optional framing. */
   constructor(ctx: Context, options: DshRunnerOptions = {}) {
@@ -67,6 +70,17 @@ export class DshMissionRunner {
    * @returns the title and markdown the child produced.
    */
   async run(mission: Mission): Promise<MissionResult> {
+    const next = this.#queue.then(() => this.#run(mission), () => this.#run(mission))
+    this.#queue = next.catch(() => undefined)
+    return next
+  }
+
+  /**
+   * Run one mission with the actor published for the machine tools.
+   * @param mission - the mission.
+   * @returns the title and markdown the child produced.
+   */
+  async #run(mission: Mission): Promise<MissionResult> {
     const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
     if (engine === undefined) {
       throw new Error('mndt: this host does not mount the workflow engine, so a mission cannot run')
@@ -78,6 +92,7 @@ export class DshMissionRunner {
       sessionId: mission.id as never,
       ...(selection === undefined ? {} : { agentOptions: { provider: selection.provider, model: selection.model } }),
     })
+    await publishActor(mission.createdBy, mission.id)
     const childSessionId = created.agent.session.header.id
     const failures: string[] = []
     // Usage arrives on `assistant/message` events, one per model step; the
@@ -129,6 +144,7 @@ export class DshMissionRunner {
     } finally {
       stopAgentEnd()
       stopTurnEnd()
+      await clearActor()
       await created.dispose()
     }
   }

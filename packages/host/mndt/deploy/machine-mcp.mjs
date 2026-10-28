@@ -8,30 +8,51 @@
  * fallback. Nothing here sends mail, buys, or publishes, so the tools are
  * ordinary actions and every call is logged in the session.
  */
+import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const MACHINES = (process.env.MACHINES_URL ?? 'http://machines:8796').replace(/\/$/, '')
 const TOKEN = process.env.MACHINES_TOKEN ?? ''
 const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? ''
+const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
 
 const sessions = { browser: undefined, desktop: undefined }
 
+/**
+ * Who the current call acts for: a running mission publishes its actor, an
+ * interactive shell carries its own identity in the environment.
+ * @returns the actor, or the empty string when neither is available.
+ */
+async function actorNow() {
+  if (ACTOR_FILE === '') return IDENTITY
+  const raw = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
+  if (raw.trim() === '') return IDENTITY
+  try {
+    const record = JSON.parse(raw)
+    return typeof record.actor === 'string' && record.actor !== '' ? record.actor : IDENTITY
+  } catch {
+    return IDENTITY
+  }
+}
+
 /** @param kind - browser or desktop. @returns the live session, starting one. */
 async function session(kind) {
+  const actor = await actorNow()
   const cached = sessions[kind]
-  if (cached !== undefined) return cached
+  if (cached !== undefined && cached.actor === actor) return cached
+  sessions[kind] = undefined
   if (TOKEN === '') throw new Error('the machine service token is not configured')
-  if (IDENTITY === '') throw new Error('the person is not configured')
+  if (actor === '') throw new Error('the person is not configured')
   const answer = await fetch(`${MACHINES}/${kind}s/start`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-machine-token': TOKEN },
-    body: JSON.stringify({ identity: IDENTITY }),
+    body: JSON.stringify({ identity: actor }),
   })
   const body = await answer.json().catch(() => ({}))
   if (!answer.ok || typeof body.host !== 'string') {
     throw new Error(body.error ?? `the machine service refused to start a ${kind}`)
   }
-  const live = { host: body.host, token: String(body.token ?? TOKEN), port: kind === 'browser' ? 9223 : 9224 }
+  const live = { actor, host: body.host, token: String(body.token ?? TOKEN), port: kind === 'browser' ? 9223 : 9224 }
   sessions[kind] = live
   return live
 }
