@@ -27,6 +27,10 @@ import type {
   WorkbenchState,
 } from './types.ts'
 import type { WorkbenchStore } from './store.ts'
+import type { Mandate } from './types.ts'
+import type { MandateDraft } from '../mandates.ts'
+import { draftRefusal, signRefusal } from '../mandates.ts'
+import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -34,6 +38,7 @@ export interface MissionRequest {
   readonly prompt: string
   readonly createdBy: string
   readonly visibility?: Visibility
+  readonly mandateId?: string
 }
 
 /** What a runtime reports when a run finishes. */
@@ -100,7 +105,10 @@ export class WorkbenchService {
   /** @returns the loaded state, loading it once. */
   async #ready(): Promise<WorkbenchState> {
     if (!this.#loaded) {
-      this.#state = await this.#options.store.load()
+      const loaded = await this.#options.store.load()
+      // Older state files predate mandates; they read as no mandates, never as a crash.
+      const mandates = (loaded as { mandates?: readonly Mandate[] }).mandates ?? []
+      this.#state = { ...loaded, mandates }
       this.#loaded = true
     }
     return this.#state
@@ -149,6 +157,7 @@ export class WorkbenchService {
       createdBy: request.createdBy.trim(),
       visibility: request.visibility ?? 'team',
       createdAt: this.#at(),
+      ...(request.mandateId === undefined ? {} : { mandateId: request.mandateId }),
     }
     return this.#write(state => ({
       state: { ...state, missions: [mission, ...state.missions] },
@@ -452,6 +461,132 @@ export class WorkbenchService {
    */
   async events(limit = 100): Promise<readonly WorkbenchEvent[]> {
     return (await this.#ready()).events.slice(-limit)
+  }
+
+  /**
+   * Read every mandate.
+   * @returns the mandates, newest first.
+   */
+  async mandates(): Promise<readonly Mandate[]> {
+    return (await this.#ready()).mandates
+  }
+
+  /**
+   * Read one mandate.
+   * @param id - mandate id.
+   * @returns the mandate, or undefined.
+   */
+  async mandate(id: string): Promise<Mandate | undefined> {
+    return (await this.#ready()).mandates.find(candidate => candidate.id === id)
+  }
+
+  /**
+   * Propose a mandate. It authorises nothing until somebody else signs it.
+   * @param draft - delegant, delegataire, perimeter, cap and expiry.
+   * @returns the proposed mandate.
+   */
+  createMandate(draft: MandateDraft): Promise<Mandate> {
+    const today = this.#at().slice(0, 10)
+    const refusal = draftRefusal(draft, today)
+    if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    const mandate: Mandate = {
+      id: this.#id('mnd'),
+      delegant: draft.delegant.trim(),
+      delegataire: draft.delegataire.trim(),
+      purpose: draft.purpose.trim(),
+      connectors: [...draft.connectors],
+      missionKinds: [...draft.missionKinds],
+      dailyCap: draft.dailyCap,
+      expiresOn: draft.expiresOn,
+      state: 'proposed',
+      createdAt: this.#at(),
+    }
+    return this.#write(state => ({
+      state: { ...state, mandates: [mandate, ...state.mandates] },
+      event: { at: mandate.createdAt, actor: mandate.delegant, action: 'mandate.proposed', subject: mandate.id, detail: mandate.delegataire },
+      value: mandate,
+    }))
+  }
+
+  /**
+   * Countersign a mandate, which is what makes it take effect.
+   * @param id - mandate id.
+   * @param actor - the signer.
+   * @param role - the signer's role.
+   * @returns the active mandate.
+   */
+  signMandate(id: string, actor: string, role: Role | undefined): Promise<Mandate> {
+    return this.#write((state) => {
+      const mandate = state.mandates.find(candidate => candidate.id === id)
+      if (mandate === undefined) throw new Error(`no mandate ${id}`)
+      const today = this.#at().slice(0, 10)
+      const refusal = signRefusal(mandate, actor, role, today)
+      if (refusal !== undefined) throw new Error(refusal)
+      const at = this.#at()
+      const next: Mandate = { ...mandate, state: 'active', signedBy: actor, signedAt: at }
+      return {
+        state: { ...state, mandates: state.mandates.map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'mandate.signed', subject: id, detail: mandate.delegataire },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Retract a mandate. The delegant, an owner or an admin can do it.
+   * @param id - mandate id.
+   * @param actor - who retracts.
+   * @param role - that person's role.
+   * @returns the retired mandate.
+   */
+  retireMandate(id: string, actor: string, role: Role | undefined): Promise<Mandate> {
+    return this.#write((state) => {
+      const mandate = state.mandates.find(candidate => candidate.id === id)
+      if (mandate === undefined) throw new Error(`no mandate ${id}`)
+      if (mandate.state === 'retired') throw new Error('this mandate is already retired')
+      if (actor !== mandate.delegant && role !== 'owner' && role !== 'admin') {
+        throw new Error(`${actor} can neither retract this mandate nor administer mandates`)
+      }
+      const at = this.#at()
+      const next: Mandate = { ...mandate, state: 'retired', retiredBy: actor, retiredAt: at }
+      return {
+        state: { ...state, mandates: state.mandates.map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'mandate.retired', subject: id, detail: mandate.delegataire },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Count the missions a mandate has already carried today.
+   * @param mandateId - mandate id.
+   * @param delegataire - the person the mandate belongs to.
+   * @returns how many missions ran under it today.
+   */
+  async missionsToday(mandateId: string, delegataire: string): Promise<number> {
+    const day = this.#at().slice(0, 10)
+    const state = await this.#ready()
+    return state.missions.filter(mission =>
+      mission.mandateId === mandateId
+      && mission.createdBy === delegataire
+      && mission.createdAt.slice(0, 10) === day).length
+  }
+
+  /**
+   * Write down a refusal, so the journal shows what did not happen and why.
+   * @param actor - who was refused.
+   * @param subject - what was attempted.
+   * @param reason - the reason, in words.
+   * @param mandateId - the mandate involved, when there is one.
+   * @returns nothing.
+   */
+  async recordRefusal(actor: string, subject: string, reason: string, mandateId?: string): Promise<void> {
+    const detail = mandateId === undefined ? reason : `${reason} (mandate ${mandateId})`
+    await this.#write(state => ({
+      state,
+      event: { at: this.#at(), actor, action: 'mission.refused', subject, detail },
+      value: undefined,
+    }))
   }
 
   /** @returns the whole state, for a page that wants one read. */

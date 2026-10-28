@@ -128,6 +128,13 @@ preuve est une ligne ouverte, pas une reussite.
 | Rotation des jetons internes | machines, central et shells tournes ; ancienne empreinte differente de la nouvelle ; pages 200 apres reprise | 27 octobre, /data/mndt/rotation |
 | Jetons de shell republies | les deux empreintes changent, gateway repond 200 sans redemarrage manuel | 27 octobre |
 
+| Mandat, contresignature | duke ne peut pas signer son propre mandat (403) ; gouvernance le signe (200, active) | mission mnd_2a2537e15ce742ad9aa5, 28 octobre |
+| Mandat, application des regles | hors perimetre 403, mission autorisee done, plafond 403, apres retrait 403 | memes appels, journal |
+| Journal, acces et export | proprietaire 200 en JSON et CSV, lecteur 403, refus ecrits avec motif | journal 91 lignes, 28 octobre |
+| Carte Mandats | liste, etat, plafond, echeance, signataire, formulaire et exports | mandates-card.png |
+
+| Mandat, perimetre de connecteurs | mandat sans attio refuse une mission account-review (403), mandat complet l accepte (done) | 28 octobre, journal |
+
 ## 9. Limites connues, dites explicitement
 
 - Le shell reste un espace de travail partage : ses sessions et ses fichiers ne

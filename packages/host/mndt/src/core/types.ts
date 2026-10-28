@@ -53,6 +53,8 @@ export interface Mission {
     readonly cacheWrite?: number
   }
   readonly briefId?: string
+  /** The mandate this mission runs under, when it runs under one. */
+  readonly mandateId?: string
 }
 
 /** What a mission produced, meant to be read by a person. */
@@ -127,6 +129,30 @@ export interface WorkbenchEvent {
   readonly detail?: string
 }
 
+/** Where a delegation mandate stands. `expired` is computed from its date. */
+export type MandateState = 'proposed' | 'active' | 'expired' | 'retired'
+
+/**
+ * One bounded permission: this person lends these connectors, read only, for
+ * this many missions a day, until this date, once somebody else signs it.
+ */
+export interface Mandate {
+  readonly id: string
+  readonly delegant: string
+  readonly delegataire: string
+  readonly purpose: string
+  readonly connectors: readonly string[]
+  readonly missionKinds: readonly MissionKind[]
+  readonly dailyCap: number
+  readonly expiresOn: string
+  readonly state: MandateState
+  readonly createdAt: string
+  readonly signedBy?: string
+  readonly signedAt?: string
+  readonly retiredBy?: string
+  readonly retiredAt?: string
+}
+
 /** Everything the product persists. */
 export interface WorkbenchState {
   readonly version: 1
@@ -135,6 +161,7 @@ export interface WorkbenchState {
   readonly memories: readonly MemoryNote[]
   readonly approvals: readonly Approval[]
   readonly events: readonly WorkbenchEvent[]
+  readonly mandates: readonly Mandate[]
 }
 
 /** A state with nothing in it. */
@@ -145,6 +172,7 @@ export const emptyState: WorkbenchState = {
   memories: [],
   approvals: [],
   events: [],
+  mandates: [],
 }
 
 const missionKinds: readonly MissionKind[] = [

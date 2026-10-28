@@ -20,6 +20,8 @@ import type {
   MndtFace,
   OutcomeRow,
   PageStateRow,
+  MandateRow,
+  JournalAnswer,
 } from './MndtPage.tsx'
 
 /** Where the gateway mounts the API on the page origin. */
@@ -121,6 +123,19 @@ export function createHttpFace(): MndtFace {
     desktopAct: async input => (await bodyOf<BrowserAnswer>(await call('/machines/desktop/act', { method: 'POST', body: JSON.stringify(input) }))),
     desktopStop: async () => (await bodyOf<BrowserAnswer>(await call('/machines/desktop/stop', { method: 'POST', body: JSON.stringify({}) }))),
     setSchedule: async at => (await bodyOf<ScheduleRow>(await call('/schedule', { method: 'POST', body: JSON.stringify({ at }) }))),
+    createMandate: input => outcomeOf(async () => {
+      const body = await bodyOf<MandateRow>(await post('/mandates', input))
+      return body
+    }),
+    signMandate: id => outcomeOf(async () => {
+      const body = await bodyOf<MandateRow>(await post(`/mandates/${encodeURIComponent(id)}/sign`, {}))
+      return body
+    }),
+    retireMandate: id => outcomeOf(async () => {
+      const body = await bodyOf<MandateRow>(await post(`/mandates/${encodeURIComponent(id)}/retire`, {}))
+      return body
+    }),
+    journal: async format => (await bodyOf<JournalAnswer>(await call(`/journal?format=${format}`))),
     revokeMember: subject => outcomeOf(async () => {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
       return { subject, role: 'none' }

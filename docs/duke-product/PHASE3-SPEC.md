@@ -59,3 +59,7 @@ plus rien, meme si la session de l'agent est encore ouverte.
 - Signature a deux niveaux.
 
 Ces points viennent apres, une fois le mandat et le journal en production.
+
+## Mise en service
+
+Le 28 octobre 2026, voir [PHASE3.md](PHASE3.md) pour la preuve et les limites.

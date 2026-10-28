@@ -58,7 +58,8 @@ export const CSS = `
 .mndt-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .mndt-row-title { font-size: 13.5px; font-weight: 550; }
 .mndt-row-meta { color: var(--mndt-muted); font-size: 11.5px; }
-.mndt-row-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
+.mndt-row-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; flex-wrap: wrap; }
+.mndt-form-input { min-width: 130px; }
 
 .mndt-button {
   border: 1px solid var(--mndt-border); background: var(--mndt-card); color: var(--mndt-text);

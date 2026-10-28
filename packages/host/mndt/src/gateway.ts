@@ -253,6 +253,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
         memories: snapshot.memories.slice(0, 20),
         events: snapshot.events.slice(-40),
+        mandates: snapshot.mandates,
       }
       return JSON.stringify({ ok: true, page })
     } catch (error) {

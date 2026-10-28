@@ -23,6 +23,7 @@ import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, writeFile } from 'node:fs/promises'
 import { can, roleOf } from './policy.ts'
 import type { GrantSource } from './policy.ts'
+import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
 
 /** One request as the handler sees it. */
@@ -96,6 +97,28 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** @returns today, as a plain date the mandate rules can compare. */
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/** @param days - how far ahead. @returns that date, as a plain date. */
+function daysAhead(days: number): string {
+  const at = new Date()
+  at.setUTCDate(at.getUTCDate() + days)
+  return at.toISOString().slice(0, 10)
+}
+
+/** @param events - the journal. @returns it as CSV with a header line. */
+function journalCsv(events: readonly WorkbenchEvent[]): string {
+  const cell = (value: string | undefined): string => `"${(value ?? '').replaceAll('"', '""')}"`
+  const lines = ['at,actor,action,subject,detail']
+  for (const event of events) {
+    lines.push([event.at, event.actor, event.action, event.subject, event.detail ?? ''].map(cell).join(','))
+  }
+  return `${lines.join('\n')}\n`
+}
+
 /**
  * Build the handler.
  * @param options - service, runner, identity and rights.
@@ -146,8 +169,90 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.slice(-40),
+          mandates: snapshot.mandates
+            .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+            .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
         }
         return respond(200, { page })
+      }
+
+      if (request.method === 'GET' && path === '/mandates') {
+        const table = await grants.grants()
+        const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
+        const mandates = (await service.mandates())
+          .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+          .map(mandate => ({ ...mandate, state: mandateState(mandate, today()) }))
+        return respond(200, { mandates })
+      }
+
+      if (request.method === 'POST' && path === '/mandates') {
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        const input = parseBody(request.body)
+        const canAdmin = can(table.grants, identity, 'rights.write').allowed
+        const delegant = typeof input.delegant === 'string' && canAdmin ? input.delegant : identity
+        const delegataire = typeof input.delegataire === 'string' ? input.delegataire : ''
+        if (!can(table.grants, delegant, 'workflows.write').allowed) {
+          return respond(403, { error: `${delegant} cannot delegate: they do not hold workflows.write` })
+        }
+        if (!can(table.grants, delegataire, 'workflows.write').allowed) {
+          return respond(400, { error: `${delegataire || 'that person'} cannot receive a mandate: they do not hold workflows.write` })
+        }
+        const purpose = typeof input.purpose === 'string' && input.purpose.trim() !== '' ? input.purpose : 'preparation de dossiers'
+        const connectors = Array.isArray(input.connectors)
+          ? input.connectors.filter((value): value is string => typeof value === 'string')
+          : ['office365', 'attio']
+        const kinds = Array.isArray(input.missionKinds)
+          ? input.missionKinds.filter(value => isMissionKind(value))
+          : (['briefing', 'custom'] as const)
+        const dailyCap = typeof input.dailyCap === 'number' ? input.dailyCap : 3
+        const expiresOn = typeof input.expiresOn === 'string' ? input.expiresOn : daysAhead(30)
+        try {
+          const mandate = await service.createMandate({
+            delegant, delegataire, purpose, connectors, missionKinds: kinds, dailyCap, expiresOn,
+          })
+          return respond(201, mandate)
+        } catch (error) {
+          return respond(400, { error: messageOf(error) })
+        }
+      }
+
+      if (request.method === 'POST' && path.startsWith('/mandates/') && path.endsWith('/sign')) {
+        const id = path.slice('/mandates/'.length, -'/sign'.length)
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        try {
+          const mandate = await service.signMandate(id, identity, roleOf(table.grants, identity))
+          return respond(200, mandate)
+        } catch (error) {
+          return respond(403, { error: messageOf(error) })
+        }
+      }
+
+      if (request.method === 'POST' && path.startsWith('/mandates/') && path.endsWith('/retire')) {
+        const id = path.slice('/mandates/'.length, -'/retire'.length)
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        try {
+          const mandate = await service.retireMandate(id, identity, roleOf(table.grants, identity))
+          return respond(200, mandate)
+        } catch (error) {
+          return respond(403, { error: messageOf(error) })
+        }
+      }
+
+      if (request.method === 'GET' && path === '/journal') {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const events = await service.events(500)
+        if (request.query?.format === 'csv') return respond(200, { format: 'csv', filename: 'journal.csv', text: journalCsv(events) })
+        return respond(200, { format: 'json', entries: events })
       }
 
       if (request.method === 'GET' && path === '/missions') {
@@ -163,10 +268,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const kind = input.kind
         if (!isMissionKind(kind)) return respond(400, { error: `unknown mission kind: ${String(kind)}` })
         const prompt = typeof input.prompt === 'string' ? input.prompt : ''
+        const mandateId = typeof input.mandateId === 'string' && input.mandateId !== '' ? input.mandateId : undefined
+        if (mandateId !== undefined) {
+          const mandate = await service.mandate(mandateId)
+          if (mandate === undefined) return respond(404, { error: `no mandate ${mandateId}` })
+          const usedToday = await service.missionsToday(mandateId, mandate.delegataire)
+          const refusal = missionRefusal(mandate, { identity, kind, usedToday }, today())
+          if (refusal !== undefined) {
+            await service.recordRefusal(identity, kind, refusal, mandateId)
+            return respond(403, { error: refusal })
+          }
+        }
         // Hybrid model: a mission a person starts is personal until they share
         // it. Automated missions are created by the service with 'team'.
         const visibility: Visibility = input.visibility === 'team' ? 'team' : 'private'
-        const mission = await service.createMission({ kind, prompt, createdBy: identity, visibility })
+        const mission = await service.createMission({
+          kind, prompt, createdBy: identity, visibility, ...(mandateId === undefined ? {} : { mandateId }),
+        })
         const started = await service.startMission(mission.id, 'pending')
         try {
           const result = await runner.run(started)

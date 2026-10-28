@@ -16,6 +16,8 @@ export type {
   MemoryKind,
   MemoryNote,
   MemoryScope,
+  Mandate,
+  MandateState,
   Mission,
   MissionKind,
   MissionStatus,
@@ -46,6 +48,7 @@ export interface PageState {
   readonly approvals: readonly import('./core/types.ts').Approval[]
   readonly memories: readonly import('./core/types.ts').MemoryNote[]
   readonly events: readonly import('./core/types.ts').WorkbenchEvent[]
+  readonly mandates: readonly import('./core/types.ts').Mandate[]
 }
 
 /** What a mission run produced. */

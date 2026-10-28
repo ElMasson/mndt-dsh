@@ -105,6 +105,29 @@ export interface PageStateRow {
   readonly briefs: readonly BriefRow[]
   readonly approvals: readonly ApprovalRow[]
   readonly memories: readonly MemoryRow[]
+  readonly mandates?: readonly MandateRow[]
+}
+
+/** One delegation mandate as the page reads it. */
+export interface MandateRow {
+  readonly id: string
+  readonly delegant: string
+  readonly delegataire: string
+  readonly purpose: string
+  readonly connectors: readonly string[]
+  readonly missionKinds: readonly string[]
+  readonly dailyCap: number
+  readonly expiresOn: string
+  readonly state: string
+  readonly signedBy?: string
+}
+
+/** What the journal export returns. */
+export interface JournalAnswer {
+  readonly format?: string
+  readonly text?: string
+  readonly entries?: readonly Record<string, unknown>[]
+  readonly error?: string
 }
 
 /** One outcome as the Host reports it. */
@@ -142,6 +165,10 @@ export interface MndtFace {
   desktopAct(input: Record<string, unknown>): Promise<BrowserAnswer>
   desktopStop(): Promise<BrowserAnswer>
   browserStop(): Promise<BrowserAnswer>
+  createMandate(input: Record<string, unknown>): Promise<OutcomeRow<MandateRow>>
+  signMandate(id: string): Promise<OutcomeRow<MandateRow>>
+  retireMandate(id: string): Promise<OutcomeRow<MandateRow>>
+  journal(format: 'csv' | 'json'): Promise<JournalAnswer>
 }
 
 /** What the page receives from its plugin. */
@@ -176,6 +203,11 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
   const [browserPng, setBrowserPng] = useState<string | null>(null)
   const [browserText, setBrowserText] = useState('')
   const [desktopError, setDesktopError] = useState('')
+  const [mandateDelegataire, setMandateDelegataire] = useState('')
+  const [mandatePurpose, setMandatePurpose] = useState('preparation de dossiers')
+  const [mandateCap, setMandateCap] = useState('2')
+  const [mandateExpiry, setMandateExpiry] = useState('')
+  const [mandateError, setMandateError] = useState('')
   const [browserError, setBrowserError] = useState('')
   const [selector, setSelector] = useState('input[name=custname]')
   const [desktopPng, setDesktopPng] = useState<string | null>(null)
@@ -221,6 +253,19 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
     } finally {
       setBusy(null)
     }
+  }
+
+  /** Download the journal, as the admins asked: CSV for a spreadsheet, JSON for a tool. */
+  const exportJournal = async (format: 'csv' | 'json'): Promise<void> => {
+    const answer = await api.journal(format)
+    const text = format === 'csv' ? (answer.text ?? '') : JSON.stringify(answer.entries ?? [], null, 2)
+    const blob = new Blob([text], { type: format === 'csv' ? 'text/csv' : 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = format === 'csv' ? 'journal.csv' : 'journal.json'
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   const mine = (createdBy: string | undefined): boolean => createdBy === state?.you
@@ -718,6 +763,72 @@ export function MndtPage({ t, api }: MndtPageProps): React.ReactElement {
               {browserPng !== null && (
                 <img className="mndt-shot" alt={t('machineTitle')} src={`data:image/png;base64,${browserPng}`} />
               )}
+            </div>
+          </section>
+
+          <section className="mndt-card">
+            <div className="mndt-card-head">
+              <h2 className="mndt-card-title">{t('mandateTitle')}</h2>
+              <span className="mndt-count">{(state.mandates ?? []).length}</span>
+            </div>
+            <div className="mndt-card-body">
+              {(state.mandates ?? []).length === 0 && <p className="mndt-empty">{t('mandateNone')}</p>}
+              {(state.mandates ?? []).map(mandate => (
+                <div className="mndt-row" key={mandate.id}>
+                  <div>
+                    <span className="mndt-row-title">{mandate.delegant} vers {mandate.delegataire}</span>
+                    <p className="mndt-row-meta">
+                      {mandate.purpose} · {mandate.state} · {mandate.dailyCap} par jour · jusqu au {mandate.expiresOn}
+                      {mandate.signedBy === undefined ? '' : ` · signe par ${mandate.signedBy}`}
+                    </p>
+                  </div>
+                  <div className="mndt-row-actions">
+                    {state.canAdmin === true && mandate.state === 'proposed' && (
+                      <button className="mndt-button" disabled={busy !== null} onClick={() => {
+                        void act('mandate', async () => {
+                          setMandateError('')
+                          const answer = await api.signMandate(mandate.id)
+                          if (answer.error !== undefined) setMandateError(answer.error)
+                        })
+                      }}>{t('mandateSign')}</button>
+                    )}
+                    {mandate.state !== 'retired' && (
+                      <button className="mndt-button" disabled={!state.canWrite || busy !== null} onClick={() => {
+                        void act('mandate', async () => {
+                          setMandateError('')
+                          const answer = await api.retireMandate(mandate.id)
+                          if (answer.error !== undefined) setMandateError(answer.error)
+                        })
+                      }}>{t('mandateRetire')}</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div className="mndt-row-actions">
+                <input className="mndt-input mndt-form-input" value={mandateDelegataire} aria-label="mandateDelegataire" placeholder={t('mandateDelegataire')} disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateDelegataire(event.target.value) }} />
+                <input className="mndt-input mndt-form-input" value={mandatePurpose} aria-label="mandatePurpose" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandatePurpose(event.target.value) }} />
+                <input className="mndt-input mndt-form-input" value={mandateCap} aria-label="mandateCap" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateCap(event.target.value) }} />
+                <input className="mndt-input mndt-form-input" type="date" value={mandateExpiry} aria-label="mandateExpiry" disabled={!state.canWrite || busy !== null} onChange={(event) => { setMandateExpiry(event.target.value) }} />
+                <button className="mndt-button" data-variant="primary" disabled={!state.canWrite || busy !== null} onClick={() => {
+                  void act('mandate', async () => {
+                    setMandateError('')
+                    const answer = await api.createMandate({
+                      delegataire: mandateDelegataire,
+                      purpose: mandatePurpose,
+                      dailyCap: Number(mandateCap),
+                      ...(mandateExpiry === '' ? {} : { expiresOn: mandateExpiry }),
+                    })
+                    if (answer.error !== undefined) setMandateError(answer.error)
+                  })
+                }}>{t('mandateCreate')}</button>
+                {state.canAdmin === true && (
+                  <>
+                    <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('csv') }}>{t('mandateCsv')}</button>
+                    <button className="mndt-button" disabled={busy !== null} onClick={() => { void exportJournal('json') }}>{t('mandateJson')}</button>
+                  </>
+                )}
+              </div>
+              {mandateError !== '' && <p className="mndt-error">{mandateError}</p>}
             </div>
           </section>
 

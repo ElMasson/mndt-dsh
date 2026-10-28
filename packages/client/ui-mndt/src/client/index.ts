@@ -50,6 +50,10 @@ function absentFace(message: string): MndtFace {
     browserStop: refuse,
     desktopAct: refuse,
     desktopStop: refuse,
+    createMandate: refuse,
+    signMandate: refuse,
+    retireMandate: refuse,
+    journal: refuse,
     connectors: refuse,
   }
 }
@@ -96,6 +100,10 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
     browserAct: async input => await raw(() => mounted.browserAct(input)),
     desktopAct: async input => await raw(() => mounted.desktopAct(input)),
     desktopStop: async () => await raw(() => mounted.desktopStop()),
+    createMandate: async input => (await raw(() => mounted.createMandate(input))) as never,
+    signMandate: async id => (await raw(() => mounted.signMandate(id))) as never,
+    retireMandate: async id => (await raw(() => mounted.retireMandate(id))) as never,
+    journal: async format => await raw(() => mounted.journal(format)),
     browserStop: async () => await raw(() => mounted.browserStop()),
     shareMemory: async (id, scope) => (await raw(() => mounted.shareMemory(id, scope))) as never,
     connectors: async () => {
@@ -137,6 +145,10 @@ function face(ctx: ClientContext): MndtFace {
     browserAct: input => route(next => next.browserAct(input)),
     desktopAct: input => route(next => next.desktopAct(input)),
     desktopStop: () => route(next => next.desktopStop()),
+    createMandate: input => route(next => next.createMandate(input)),
+    signMandate: id => route(next => next.signMandate(id)),
+    retireMandate: id => route(next => next.retireMandate(id)),
+    journal: format => route(next => next.journal(format)),
     browserStop: () => route(next => next.browserStop()),
     shareMemory: (id, scope) => route(next => next.shareMemory(id, scope)),
     connectors: () => route(next => next.connectors()),
