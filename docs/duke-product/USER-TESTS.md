@@ -1,65 +1,191 @@
-# Tests utilisateurs, front end
+# Session de test utilisateurs, v0.9
 
-Protocole pour Stephane (duke, owner) et Sara (smarion, operator).
+Date visée : vendredi 30 octobre 2026, après-midi. Durée : 45 minutes par personne,
+3 personnes, en présentiel ou visio avec partage d écran.
 
-Adresse : https://mndt.duke-analytics.com
+Objet : vérifier que l espace de collaboration est compris sans explication, que les
+mandats et les approbations sont lisibles, et que le lancement d une mission depuis un
+canal est naturel.
 
-Chacun se connecte avec son adresse. Pas de mot de passe a saisir ici.
+## 0. Accès pour les testeurs
 
-Duree : 15 a 20 minutes par personne, a faire separement.
+Adresse : https://mndt.duke-analytics.com, dans Chrome ou Edge, plein écran. La connexion
+se fait avec l adresse professionnelle, sans mot de passe supplémentaire.
 
-## Avant de commencer
+Si la page affiche « Get started », cliquer, puis appuyer sur Échap, puis cliquer
+« This morning ». Le premier chargement peut prendre quinze à trente secondes.
 
-- Utilisez Chrome ou Edge, plein ecran.
-- Si la page affiche « Get started », cliquez, puis appuyez sur Echap pour fermer
-  le choix d espace, puis cliquez « This morning ».
-- Le brief du matin peut mettre quelques secondes a s afficher.
+## 1. Périmètre annoncé aux testeurs
 
-## Parcours de Stephane, owner
+Dans le périmètre :
 
-| Etape | Action | Attendu |
+- lire le fil d équipe, ouvrir un brief ;
+- parcourir les canaux de mandat et lire le panneau de contexte ;
+- lancer une mission depuis un canal et suivre son état ;
+- approuver ou refuser une demande avec un motif ;
+- comprendre qui peut décider et qui ne peut pas.
+
+Hors périmètre, à annoncer dès l accueil : recherche globale, vue Activité,
+notifications, non-lus, messagerie directe, application mobile, édition de post.
+
+## 2. Comptes et rôles préparés
+
+| Personne | Rôle | Ce qu elle doit pouvoir faire |
 |---|---|---|
-| 1 | Ouvrir la page | Le brief du matin, les cartes Missions, Approbations, Membres |
-| 2 | Lancer « Visite guidee » | Les etapes defilent, la visite se ferme |
-| 3 | Carte Mandats, bouton Actifs | Un mandat actif vers smarion, 3 missions par jour, signe par gouvernance |
-| 4 | Bouton En attente | Un mandat propose, avec le bouton Contresigner visible |
-| 5 | Contresigner le mandat en attente | Il passe actif, ou un message explique le refus |
-| 6 | Journal CSV puis Journal JSON | Un fichier se telecharge, il contient des lignes horodatees |
-| 7 | Carte Machine de travail, URL https://httpbin.org/forms/post, Ouvrir | La capture de la page apparait dans la carte |
-| 8 | Fermer la session navigateur | La capture disparait |
-| 9 | Carte Membres | Les roles sont visibles, vous pouvez ajouter quelqu un |
-| 10 | Carte Planification | 06:30, bouton Enregistrer |
+| duke@datanalysis.re | owner | tout, décider les approbations des autres |
+| gouvernance@datanalysis.re | admin | décider les approbations, ne pas voir les missions privées des autres |
+| smarion@datanalysis.re | operator | lire, lancer ses missions, ne pas décider une approbation |
+| contact@datanalysis.re | viewer | lecture seule, aucun bouton de décision |
 
-## Parcours de Sara, operator
+## 3. Préparation, côté animateur, avant la session
 
-| Etape | Action | Attendu |
-|---|---|---|
-| 1 | Ouvrir la page | La page s ouvre, le role operator est reconnu |
-| 2 | Lancer « Visite guidee » | Les etapes defilent |
-| 3 | Carte Mandats | Vous voyez les mandats qui vous concernent, filtres Tous, Actifs, En attente, Retires |
-| 4 | Verifier l absence de commandes d administration | Pas de formulaire de creation, pas de Journal, pas de Contresigner, pas de bouton Retirer sur les mandats |
-| 5 | Carte Machine de travail, URL https://example.com, Ouvrir | La capture apparait, vous pouvez fermer |
-| 6 | Ouvrir le bureau, puis capturer | Un ecran s affiche, la capture revient dans la carte |
-| 7 | Carte Connecteurs | Quatre connecteurs montes |
-| 8 | Carte Jetons consommes | Vous voyez votre consommation, pas le detail de l equipe |
+1. Ne déployer aucune image pendant la session.
+2. Ouvrir une page avec chaque compte pour créer les shells à l avance. Vérifier que les
+   quatre pages affichent l espace en moins de 20 secondes.
+3. Vérifier l état de démonstration : 2 mandats actifs, 1 mission terminée avec brief,
+   2 approbations en attente dont une demandée par duke et une par gouvernance.
+4. Vérifier que la boîte de réception n est pas modifiée par la session : les missions de
+   test ne doivent rien envoyer.
+5. Préparer l enregistrement d écran et la grille d observation imprimée.
 
-## Ce qui est normal aujourd hui
+## 4. Déroulé
 
-- Un mandat cree reste « En attente » tant qu un admin ne l a pas contresigne.
-  La contresignature se fait avec le compte de gouvernance, pas depuis la page.
-- Lancer une mission sous mandat n est pas encore dans la page, c est une
-  commande API. Ne le cherchez pas.
-- Le bureau affiche un ecran vide tant qu aucune adresse n est ouverte.
-- Dans la carte navigateur, le champ selecteur sert a la fois pour Saisir et pour
-  Cliquer et lire. Il faut le changer entre les deux actions.
-- Les mandats de test precedents apparaissent en Retires, c est le filtre qui
-  nettoie la vue.
+| Temps | Étape |
+|---|---|
+| 0 à 5 min | Accueil, périmètre, consentement à l enregistrement |
+| 5 à 10 min | Scénario 1, découverte libre, aucune aide |
+| 10 à 30 min | Scénarios 2 à 6, une consigne à la fois |
+| 30 à 38 min | Scénarios 7 et 8, décision impossible et ségrégation |
+| 38 à 45 min | Débrief, questions, mini questionnaire |
 
-## Ce que je veux recueillir
+Règle d or : l animateur ne montre pas. Il lit la consigne, laisse faire, note l hésitation
+et le temps. Il n intervient qu après 60 secondes de blocage complet.
 
-Pour chaque etape : clair, confus, ou bloquant. Notez surtout :
+## 5. Scénarios
 
-- les mots qui ne sont pas compris (mandat, delegataire, contre-signature) ;
-- ce que vous cherchez et que vous ne trouvez pas ;
-- les actions qui prennent trop de temps ;
-- toute erreur affichee, avec une capture.
+### Scénario 1, découverte, 3 minutes
+
+Consigne : « Ouvrez cette page. Regardez-la 30 secondes. Dites-moi ce que vous comprenez
+de l endroit où vous êtes. »
+
+Observer : nomme-t-il les canaux, les mandats, les approbations, les personnes et les agents ?
+Demande-t-il où sont les messages ? Croit-il que c est une messagerie ?
+
+Réussite : il cite au moins deux des trois entités, mandat, mission, approbation.
+
+### Scénario 2, lire le fil d équipe, 3 minutes
+
+Consigne : « Trouvez la dernière mission terminée et dites-moi ce qu elle a produit. »
+
+Observer : repère-t-il la carte de mission, le bouton Ouvrir le brief, l auteur, l état ?
+Lit-il le brief déplié sans se perdre ?
+
+Réussite : il ouvre le brief et résume une phrase du contenu.
+
+### Scénario 3, comprendre un mandat, 4 minutes
+
+Consigne : « Ouvrez le canal Reporting marketing hebdomadaire. Dites-moi qui agit pour qui,
+jusqu à quand, et ce qui est autorisé. »
+
+Observer : lit-il le panneau de droite ? Comprend-il la limite de missions par jour et les
+connecteurs autorisés ? Le nom du canal suffit-il ou faut-il ouvrir le contexte ?
+
+Réussite : il cite le mandant, le délégataire, l échéance et une limite.
+
+### Scénario 4, lancer une mission, 6 minutes
+
+Consigne : « Lancez une mission courte depuis ce canal : demandez un point sur les
+connecteurs, sans envoi de courriel. Suivez son état, puis ouvrez le résultat. »
+
+Observer : trouve-t-il le composeur, choisit-il le bon type, comprend-il que la mission
+démarre en privé, remarque-t-il le rafraîchissement du fil, attend-il correctement ?
+
+Réussite : mission lancée, état vu, brief ouvert, aucun envoi réel.
+
+### Scénario 5, approuver, 4 minutes
+
+Consigne, avec le compte duke : « Une demande de gouvernance attend. Décidez-la, puis
+expliquez ce qui vient de se passer. »
+
+Observer : comprend-il qu il a le droit de décider ? Cherche-t-il la décision dans une autre
+page ? La ligne d historique est-elle remarquée ?
+
+Réussite : décision prise, compteur décrémenté, il explique que la décision est tracée.
+
+### Scénario 6, la règle du demandeur, 4 minutes
+
+Consigne : « Regardez la demande que vous avez vous-même créée. Pouvez-vous la décider ?
+Expliquez pourquoi. »
+
+Observer : identifie-t-il la carte demandée par lui-même ? Comprend-il que l autre humain
+doit décider ? Le message d explication est-il lu ?
+
+Réussite : il nomme la règle « le demandeur ne décide pas sa propre demande ».
+
+### Scénario 7, décider en tant qu opérateur, 4 minutes
+
+Consigne, avec le compte smarion : « Essayez de décider une demande. »
+
+Observer : voit-il les boutons désactivés, comprend-il pourquoi ? Le libellé « Seul un owner
+ou un admin peut décider » est-il suffisant ?
+
+Réussite : il explique la limite sans se sentir bloqué par un bug.
+
+### Scénario 8, ségrégation, 3 minutes
+
+Consigne, avec smarion : « Voyez-vous le brief de la mission de duke ? Et gouvernance voit-il
+vos missions privées ? »
+
+Observer : comprend-il la notion de mission privée contre mission partagée à l équipe ?
+
+Réussite : il constate que les briefs privés des autres ne sont pas visibles.
+
+## 6. Grille d observation
+
+Pour chaque scénario, noter :
+
+| Colonne | Valeur |
+|---|---|
+| temps | secondes jusqu à la première action correcte |
+| hésitations | nombre et moment |
+| mots employés | ses mots, pas les nôtres |
+| attente manquante | ce qu il a cherché et qui n existe pas |
+| erreur | action fausse, avec description |
+| réussite | oui, non, avec aide |
+
+Noter aussi trois phrases verbatim par personne, sans les corriger.
+
+## 7. Questions de fin
+
+1. En un mot, cet espace sert à quoi ?
+2. Quelle différence entre un canal de mandat et le canal d équipe ?
+3. Qu est-ce qui manque le plus ?
+4. Auriez-vous confiance pour laisser un agent travailler ici ? Pourquoi ?
+5. Sur une échelle de 1 à 5, à quel point est-ce facile à prendre en main ?
+
+## 8. Mini questionnaire, 5 items, échelle 1 à 5
+
+1. Je comprends ce que je vois sans explication.
+2. Je sais où lancer une mission.
+3. Je sais où décider une approbation.
+4. Je comprends qui peut faire quoi.
+5. Je retrouverais cet espace si je revenais demain.
+
+## 9. Critères de succès de la session
+
+- 80 pour cent des scénarios réussis sans aide.
+- Au plus trois frictions majeures, avec une correction priorisée pour chacune.
+- Au moins deux testeurs sur trois décrivent correctement le lien mandat, mission,
+  approbation.
+- Aucun testeur ne conclut que c est une messagerie.
+
+## 10. Après la session
+
+Consigner les résultats dans ce fichier, section Résultats, avec les verbatim et les
+frictions classées : compréhension, navigation, confiance, manque fonctionnel. Chaque
+friction devient soit une correction de la v1, soit une réponse explicite dans le guide
+d utilisation.
+
+## Résultats
+
+À remplir après la session du 30 octobre.

@@ -188,6 +188,15 @@ function humansOf(state: CollabState): readonly MemberRow[] {
   return state.members ?? []
 }
 
+/** @param subject - the identifier an event points at. @returns a readable label. */
+function subjectLabel(subject: string): string {
+  if (subject.startsWith('mis_')) return 'une mission'
+  if (subject.startsWith('apr_')) return 'une approbation'
+  if (subject.startsWith('mnd_')) return 'un mandat'
+  if (subject.startsWith('brf_')) return 'un brief'
+  return subject
+}
+
 /** @param action - the journal action. @returns a readable sentence. */
 function sentenceOf(action: string): string {
   const table: Record<string, string> = {
@@ -200,6 +209,8 @@ function sentenceOf(action: string): string {
     'mission.refused': 'mission refusee',
     'approval.requested': 'approbation demandee',
     'approval.decided': 'approbation decidee',
+    'approval.approved': 'approbation approuvee',
+    'approval.rejected': 'approbation refusee',
     'mandate.proposed': 'mandat propose',
     'mandate.signed': 'mandat signe',
     'mandate.retired': 'mandat retire',
@@ -253,11 +264,10 @@ export function CollabPage({ api }: CollabPageProps) {
     ? undefined
     : (state.mandates ?? []).find(candidate => `mandate:${candidate.id}` === channel.id)
 
-  const decide = async (id: string, decision: 'approved' | 'rejected'): Promise<void> => {
-    let reason: string | undefined
-    if (decision === 'rejected') {
-      reason = window.prompt('Motif du refus, il est conserve dans le journal') ?? undefined
-      if (reason === undefined || reason.trim() === '') return
+  const decide = async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<void> => {
+    if (decision === 'rejected' && (reason === undefined || reason.trim() === '')) {
+      setError('un motif est requis pour refuser une approbation')
+      return
     }
     setBusy(id)
     try {
@@ -390,7 +400,7 @@ export function CollabPage({ api }: CollabPageProps) {
                   isYou={post.body.kind === 'approval' && post.body.author === state.you}
                   open={openBriefs.has(post.id)}
                   onToggle={() => { toggleBrief(post.id) }}
-                  onDecide={(id, decision) => { void decide(id, decision) }}
+                  onDecide={(id, decision, reason) => { void decide(id, decision, reason) }}
                 />
               </div>
             )
@@ -458,7 +468,7 @@ export function CollabPage({ api }: CollabPageProps) {
                 <div key={agent} className="mndt-person">
                   <span className="mndt-avatar" data-agent="true">{agent.slice(0, 1).toUpperCase()}</span>
                   <span className="mndt-person-name">{agent}</span>
-                  <span className="mndt-person-role">agent</span>
+                  <span className="mndt-person-role">{state.missions.some(mission => mission.createdBy === agent && (mission.status === 'running' || mission.status === 'queued')) ? 'agent, en mission' : 'agent, disponible'}</span>
                 </div>
               ))}
             </section>
@@ -508,18 +518,20 @@ function PostView(props: {
   isYou: boolean
   open: boolean
   onToggle(): void
-  onDecide(id: string, decision: 'approved' | 'rejected'): void
+  onDecide(id: string, decision: 'approved' | 'rejected', reason?: string): void
 }) {
   const { post, busy, canDecide, isYou, open } = props
+  const [refusing, setRefusing] = useState(false)
+  const [reason, setReason] = useState('')
   const toggle = (): void => { props.onToggle() }
-  const decide = (id: string, decision: 'approved' | 'rejected'): void => { props.onDecide(id, decision) }
+  const decide = (id: string, decision: 'approved' | 'rejected', why?: string): void => { props.onDecide(id, decision, why) }
   const body = post.body
   if (body.kind === 'event') {
     return (
       <div className="mndt-event-post">
         <span className="mndt-event-time">{clockOf(body.at)}</span>
         <span className="mndt-event-actor">{body.actor}</span>
-        <span className="mndt-event-text">{sentenceOf(body.action)} : {body.subject}</span>
+        <span className="mndt-event-text">{sentenceOf(body.action)} : {subjectLabel(body.subject)}</span>
       </div>
     )
   }
@@ -541,15 +553,41 @@ function PostView(props: {
             disabled={!canDecide || isYou || busy === body.id}
             onClick={() => { decide(body.id, 'approved') }}
           >Approuver</button>
-          <button
-            type="button"
-            className="mndt-button"
-            disabled={!canDecide || isYou || busy === body.id}
-            onClick={() => { decide(body.id, 'rejected') }}
-          >Refuser</button>
+          {refusing ? undefined : (
+            <button
+              type="button"
+              className="mndt-button"
+              disabled={!canDecide || isYou || busy === body.id}
+              onClick={() => { setRefusing(true) }}
+            >Refuser</button>
+          )}
           {isYou ? <span className="mndt-post-note">Vous avez demande cette decision, un autre humain la prend.</span> : undefined}
           {!isYou && !canDecide ? <span className="mndt-post-note">Seul un owner ou un admin peut decider.</span> : undefined}
         </div>
+        {refusing ? (
+          <div className="mndt-refusal">
+            <textarea
+              className="mndt-input"
+              placeholder="Motif du refus, conserve dans le journal"
+              value={reason}
+              onChange={(event) => { setReason(event.target.value) }}
+            />
+            <div className="mndt-post-actions">
+              <button
+                type="button"
+                className="mndt-button"
+                data-variant="primary"
+                disabled={reason.trim() === ''}
+                onClick={() => { decide(body.id, 'rejected', reason.trim()); setRefusing(false) }}
+              >Confirmer le refus</button>
+              <button
+                type="button"
+                className="mndt-button"
+                onClick={() => { setRefusing(false); setReason('') }}
+              >Annuler</button>
+            </div>
+          </div>
+        ) : undefined}
       </article>
     )
   }

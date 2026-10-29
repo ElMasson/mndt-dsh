@@ -219,6 +219,7 @@ export class WorkbenchService {
         status: 'draft',
         createdBy: mission.createdBy,
         createdAt: at,
+        visibility: mission.visibility,
       }
       const next: Mission = {
         ...mission,

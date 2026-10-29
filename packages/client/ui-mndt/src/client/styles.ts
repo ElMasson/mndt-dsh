@@ -274,4 +274,7 @@ export const CSS = `
 .mndt-composer-row .mndt-input { max-width: 240px; }
 .mndt-check { display: inline-flex; align-items: center; gap: 6px; color: var(--mndt-muted); font-size: 12px; }
 .mndt-check input { accent-color: #0C0F17; }
+
+.mndt-refusal { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 0; }
+.mndt-refusal .mndt-input { min-height: 56px; width: 100%; }
 `
