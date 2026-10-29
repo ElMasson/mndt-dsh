@@ -149,3 +149,25 @@ preuve est une ligne ouverte, pas une reussite.
   le permettra. Le code source, lui, est complet et les paquets se compilent.
 - La cle du modele est stockee sur le serveur dans un fichier protege ; elle est
   a faire tourner apres les tests.
+
+## 10. Espace de collaboration, recette du 29 octobre
+
+| Point | Constat mesure | Preuve |
+|---|---|---|
+| Trois colonnes et fil | canaux a gauche, fil structure au centre, contexte du mandat a droite | collab-demo-duke.png |
+| Langage visuel Lovable | fond `rgb(246,244,241)`, texte Inter, titres Space Grotesk, cartes 16 px, boutons 12 px | styles calcules dans le navigateur, collab-acceptance.png |
+| Composeur de mission | mission visible 6 s apres le clic, terminee en 22 s, brief consultable | collab-dry-run.png |
+| Cartes d approbation decisionnelles | gouvernance decide une demande de duke, compteur de 3 a 2 | collab-approval-decide.png |
+| Roles | operateur : boutons grises, opacite 0,4, raison affichee ; lecteur : aucun bouton actif, composeur desactive | collab-demo-smarion.png, collab-viewer.png |
+| Confidentialite des briefs | le brief d une mission privee n apparait pas chez les autres, verifie sur trois comptes par `/state` | 29 octobre, requetes API |
+| Outils machine en mission | le brief cite `machine_browser_open`, `machine_browser_read`, `machine_close` et le titre « Example Domain » lu | collab-acceptance-machine.png, conteneur `browser-duke-datanalysis-re` |
+| Garde-fou des actions sensibles | approbation en attente refusee, approbation accordee qui execute le clic | 28 octobre, chemins inchanges depuis |
+| Production | `/health` a 200, racine en 302 vers la connexion Microsoft | 29 octobre, 18 h 55 |
+| Deploiement par couches | les fichiers de page viennent d un montage, verifies dans le conteneur par recherche du texte servi | 29 octobre, `grep` dans le conteneur |
+
+Incident du 29 octobre, pour memoire : trois shells de test laisses ouverts, environ
+3,4 Go de memoire, et quatre deploiements par commit d image ont sature le disque et le
+demon Docker. Le site est reste injoignable une partie de l apres-midi. Retablissement par
+arret force des shells, redemarrage du workbench, passage au deploiement par couches
+montees et limite memoire des shells ramenee a 1 Go. Etat final a 19 h : charge 2,2,
+3,9 Go de memoire disponible, sante workbench a 200, aucun shell actif.
