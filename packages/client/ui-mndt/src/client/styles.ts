@@ -269,4 +269,9 @@ export const CSS = `
   .mndt-collab { grid-template-columns: 220px minmax(0, 1fr); }
   .mndt-context { display: none; }
 }
+
+.mndt-composer-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mndt-composer-row .mndt-input { max-width: 240px; }
+.mndt-check { display: inline-flex; align-items: center; gap: 6px; color: var(--mndt-muted); font-size: 12px; }
+.mndt-check input { accent-color: #0C0F17; }
 `

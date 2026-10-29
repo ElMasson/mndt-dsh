@@ -207,6 +207,17 @@ function sentenceOf(action: string): string {
   return table[action] ?? action
 }
 
+/** The missions a person can launch from a channel. */
+const MISSION_KINDS = [
+  { value: 'custom', label: 'Demande libre' },
+  { value: 'briefing', label: 'Briefing du matin' },
+  { value: 'meeting-prep', label: 'Preparation de reunion' },
+  { value: 'account-review', label: 'Revue de compte' },
+  { value: 'invoice-chase', label: 'Relance de facture' },
+  { value: 'signal-watch', label: 'Veille de signaux' },
+  { value: 'weekly-synthesis', label: 'Synthese hebdomadaire' },
+] as const
+
 /** @param props - the face the Host exposes. */
 export interface CollabPageProps {
   readonly api: MndtFace
@@ -218,6 +229,10 @@ export function CollabPage({ api }: CollabPageProps) {
   const [channelId, setChannelId] = useState('team')
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [openBriefs, setOpenBriefs] = useState<ReadonlySet<string>>(new Set())
+  const [prompt, setPrompt] = useState('')
+  const [kind, setKind] = useState('custom')
+  const [share, setShare] = useState(false)
+  const [launching, setLaunching] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -252,6 +267,30 @@ export function CollabPage({ api }: CollabPageProps) {
       setError(failure instanceof Error ? failure.message : String(failure))
     } finally {
       setBusy(undefined)
+    }
+  }
+
+  const launch = async (): Promise<void> => {
+    if (prompt.trim() === '' || launching) return
+    const request = prompt.trim()
+    setLaunching(true)
+    setError(undefined)
+    setPrompt('')
+    // The Host answers once the mission settled, which can take minutes. The
+    // mission exists as soon as it is accepted, so the feed is refreshed while
+    // the call is still running instead of waiting in silence.
+    const timer = setInterval(() => { void load() }, 5000)
+    try {
+      const outcome = await api.runMission(kind, request)
+      if (!outcome.ok) throw new Error(outcome.error ?? 'la mission a ete refusee')
+      const mission = outcome.value?.mission
+      if (share && mission !== undefined) await api.shareMission(mission.id, 'team')
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      clearInterval(timer)
+      setLaunching(false)
+      await load()
     }
   }
 
@@ -327,6 +366,7 @@ export function CollabPage({ api }: CollabPageProps) {
             <p className="mndt-channel-subject">{channel?.subject}</p>
           </div>
           <div className="mndt-channel-head-side">
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>Rafraichir</button>
             {mandate === undefined ? undefined : <span className="mndt-pill" data-tone="state">{mandate.state}</span>}
             <span className="mndt-pill" data-tone="id">{posts.length} posts</span>
             {pending > 0 ? <span className="mndt-pill" data-tone="write">{pending} a decider</span> : undefined}
@@ -360,13 +400,35 @@ export function CollabPage({ api }: CollabPageProps) {
         <div className="mndt-composer">
           <div className="mndt-composer-frame">
             <div className="mndt-composer-line">
-              <span className="mndt-composer-hint">Ecrivez dans {channel?.kind === 'mandate' ? channel.name : `# ${channel?.name ?? 'equipe'}`}.</span>
-              <span className="mndt-composer-note">Le composeur qui lance une mission arrive a l etape P2.</span>
+              <span className="mndt-composer-hint">Lancer une mission dans {channel?.kind === 'mandate' ? channel.name : `# ${channel?.name ?? 'equipe'}`}.</span>
+              <span className="mndt-composer-note">Elle demarre en prive ; cochez le partage pour la montrer a l equipe.</span>
             </div>
-            <textarea className="mndt-input mndt-composer-input" placeholder="Une note ou une mission..." disabled />
+            <div className="mndt-composer-row">
+              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label="Type de mission">
+                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {state.canShare === true ? (
+                <label className="mndt-check">
+                  <input type="checkbox" checked={share} onChange={(event) => { setShare(event.target.checked) }} />
+                  partager a l equipe
+                </label>
+              ) : undefined}
+            </div>
+            <textarea
+              className="mndt-input mndt-composer-input"
+              placeholder="Ce que vous voulez obtenir, en une phrase."
+              value={prompt}
+              onChange={(event) => { setPrompt(event.target.value) }}
+            />
             <div className="mndt-composer-actions">
-              <button type="button" className="mndt-button" disabled>Note</button>
-              <button type="button" className="mndt-button" data-variant="primary" disabled>Lancer une mission</button>
+              <span className="mndt-role">{prompt.trim().length} caracteres</span>
+              <button
+                type="button"
+                className="mndt-button"
+                data-variant="primary"
+                disabled={launching || prompt.trim() === ''}
+                onClick={() => { void launch() }}
+              >{launching ? 'Lancement...' : 'Lancer une mission'}</button>
             </div>
           </div>
         </div>
