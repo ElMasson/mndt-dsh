@@ -277,4 +277,8 @@ export const CSS = `
 
 .mndt-refusal { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 0; }
 .mndt-refusal .mndt-input { min-height: 56px; width: 100%; }
+
+.mndt-button:disabled { opacity: 0.4; cursor: not-allowed; }
+.mndt-button[data-variant="primary"]:disabled { background: #E2E4E9; border-color: #E2E4E9; color: #5A6475; }
+.mndt-button:disabled:hover { background: #E2E4E9; border-color: #E2E4E9; color: #5A6475; }
 `
