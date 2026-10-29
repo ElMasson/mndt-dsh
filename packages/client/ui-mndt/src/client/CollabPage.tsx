@@ -51,6 +51,11 @@ interface Post {
   readonly body: PostBody
 }
 
+/** @param count - a number. @param singular - the word for one. @param plural - the word for several. @returns the right word. */
+function word(count: number, singular: string, plural: string): string {
+  return count > 1 ? plural : singular
+}
+
 /** @param at - ISO time. @returns a short French clock. */
 function clockOf(at: string): string {
   const date = new Date(at)
@@ -378,7 +383,7 @@ export function CollabPage({ api }: CollabPageProps) {
           <div className="mndt-channel-head-side">
             <button type="button" className="mndt-button" onClick={() => { void load() }}>Rafraichir</button>
             {mandate === undefined ? undefined : <span className="mndt-pill" data-tone="state">{mandate.state}</span>}
-            <span className="mndt-pill" data-tone="id">{posts.length} posts</span>
+            <span className="mndt-pill" data-tone="id">{posts.length} {word(posts.length, 'post', 'posts')}</span>
             {pending > 0 ? <span className="mndt-pill" data-tone="write">{pending} a decider</span> : undefined}
           </div>
         </header>
@@ -429,14 +434,15 @@ export function CollabPage({ api }: CollabPageProps) {
               placeholder="Ce que vous voulez obtenir, en une phrase."
               value={prompt}
               onChange={(event) => { setPrompt(event.target.value) }}
+              disabled={!state.canWrite}
             />
             <div className="mndt-composer-actions">
-              <span className="mndt-role">{prompt.trim().length} caracteres</span>
+              <span className="mndt-role">{!state.canWrite ? 'lecture seule' : `${prompt.trim().length} caracteres`}</span>
               <button
                 type="button"
                 className="mndt-button"
                 data-variant="primary"
-                disabled={launching || prompt.trim() === ''}
+                disabled={!state.canWrite || launching || prompt.trim() === ''}
                 onClick={() => { void launch() }}
               >{launching ? 'Lancement...' : 'Lancer une mission'}</button>
             </div>
@@ -450,7 +456,7 @@ export function CollabPage({ api }: CollabPageProps) {
             <h2 className="mndt-context-title">Espace</h2>
             <section className="mndt-context-block">
               <div className="mndt-context-label">Vue</div>
-              <p className="mndt-context-value">{posts.length} posts sur ce canal, {state.missions.length} missions, {state.briefs.length} briefs.</p>
+              <p className="mndt-context-value">{posts.length} {word(posts.length, 'post', 'posts')} sur ce canal, {state.missions.length} {word(state.missions.length, 'mission', 'missions')}, {state.briefs.length} {word(state.briefs.length, 'brief', 'briefs')}.</p>
             </section>
             <section className="mndt-context-block">
               <div className="mndt-context-label">Humains</div>
@@ -464,7 +470,7 @@ export function CollabPage({ api }: CollabPageProps) {
             </section>
             <section className="mndt-context-block">
               <div className="mndt-context-label">Agents</div>
-              {agents.length === 0 ? <p className="mndt-context-value">Aucun agent n a encore signe un brief sur ce canal.</p> : agents.map(agent => (
+              {agents.length === 0 ? <p className="mndt-context-value">Les agents apparaissent ici des qu ils ont produit un brief.</p> : agents.map(agent => (
                 <div key={agent} className="mndt-person">
                   <span className="mndt-avatar" data-agent="true">{agent.slice(0, 1).toUpperCase()}</span>
                   <span className="mndt-person-name">{agent}</span>
@@ -497,7 +503,7 @@ export function CollabPage({ api }: CollabPageProps) {
             </section>
             <section className="mndt-context-block">
               <div className="mndt-context-label">Missions liees</div>
-              <p className="mndt-context-value">{posts.filter(post => post.body.kind === 'mission').length} missions sur ce mandat.</p>
+              <p className="mndt-context-value">{posts.filter(post => post.body.kind === 'mission').length} {word(posts.filter(post => post.body.kind === 'mission').length, 'mission', 'missions')} sur ce mandat.</p>
             </section>
             <section className="mndt-context-block">
               <div className="mndt-context-label">Approbations</div>
