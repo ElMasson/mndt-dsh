@@ -161,6 +161,8 @@ preuve est une ligne ouverte, pas une reussite.
 | Roles | operateur : boutons grises, opacite 0,4, raison affichee ; lecteur : aucun bouton actif, composeur desactive | collab-demo-smarion.png, collab-viewer.png |
 | Confidentialite des briefs | le brief d une mission privee n apparait pas chez les autres, verifie sur trois comptes par `/state` | 29 octobre, requetes API |
 | Outils machine en mission | le brief cite `machine_browser_open`, `machine_browser_read`, `machine_close` et le titre « Example Domain » lu | collab-acceptance-machine.png, conteneur `browser-duke-datanalysis-re` |
+| Outils bureau en mission | le brief cite `machine_desktop_open`, `machine_desktop_screenshot`, `machine_close` et la page « Microsoft, Sign in » capturee en 1280x800 | collab-acceptance-desktop.png, conteneur `desktop-duke-datanalysis-re` |
+| Presence des agents | `scheduler` apparait dans la liste des agents avec l etat « agent, disponible » et son brief de briefing est rendu en titres et tableaux | collab-agent-presence.png |
 | Garde-fou des actions sensibles | approbation en attente refusee, approbation accordee qui execute le clic | 28 octobre, chemins inchanges depuis |
 | Production | `/health` a 200, racine en 302 vers la connexion Microsoft | 29 octobre, 18 h 55 |
 | Deploiement par couches | les fichiers de page viennent d un montage, verifies dans le conteneur par recherche du texte servi | 29 octobre, `grep` dans le conteneur |

@@ -281,4 +281,16 @@ export const CSS = `
 .mndt-button:disabled { opacity: 0.4; cursor: not-allowed; }
 .mndt-button[data-variant="primary"]:disabled { background: #E2E4E9; border-color: #E2E4E9; color: #5A6475; }
 .mndt-button:disabled:hover { background: #E2E4E9; border-color: #E2E4E9; color: #5A6475; }
+
+.mndt-brief-body { display: block; font-size: 14px; line-height: 1.55; color: var(--mndt-text); }
+.mndt-brief-body h3 { font-family: "Space Grotesk", Inter, sans-serif; font-size: 17px; margin: 16px 0 8px; letter-spacing: -0.01em; }
+.mndt-brief-body h4 { font-family: "Space Grotesk", Inter, sans-serif; font-size: 15px; margin: 14px 0 6px; }
+.mndt-brief-body p { margin: 8px 0; }
+.mndt-brief-body ul { margin: 8px 0 8px 18px; padding: 0; }
+.mndt-brief-body li { margin: 3px 0; }
+.mndt-brief-body code { background: #F0EFED; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.mndt-brief-body table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+.mndt-brief-body th, .mndt-brief-body td { border-bottom: 1px solid #E2E4E9; padding: 6px 8px; text-align: left; vertical-align: top; }
+.mndt-brief-body th { font-weight: 600; background: #F0EFED; }
+.mndt-feed { padding-bottom: 170px; }
 `
