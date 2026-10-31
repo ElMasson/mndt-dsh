@@ -190,3 +190,34 @@ Deploiement du connecteur : copie du fichier dans `/data/mndt/live/tools/`, ajou
 `MNDT_ACTOR_FILE=/state/mission-actor.json` dans `connectors/approvals.env`, puis
 `docker compose up -d --force-recreate workbench`. Sans cette recreation, le processus
 MCP garde l ancien code et l ancienne identite.
+
+## 12. Recette autonome du 1er novembre, trois identites
+
+Suite executee par `docs/duke-product/acceptance/mndt-suite.mjs`, resultat archive dans
+`docs/duke-product/acceptance/suite-2026-11-01.json`. Chaque identite ouvre la page,
+mesure, puis ferme son contexte.
+
+| Mesure | duke, owner | gouvernance, admin | smarion, operator |
+|---|---|---|---|
+| Page chargee | oui | oui | oui |
+| Fond | rgb(246, 244, 241) | rgb(246, 244, 241) | rgb(246, 244, 241) |
+| Police des titres | Space Grotesk | Space Grotesk | Space Grotesk |
+| Canaux | 5 | 5 | 5 |
+| Personnes au panneau | 5 | 5 | 5 |
+| Agents au panneau | 1 | 1 | 1 |
+| Lignes d activite | 23 | 23 | 23 |
+| Lignes humaines | 14 | 14 | 14 |
+| Resultats de recherche | 2 | 2 | 2 |
+| Bandeau de mandat | oui | oui | oui |
+| Panneau de contexte | oui | oui | oui |
+
+Garde de la boite aux lettres, meme recette : une mission de gouvernance demandant la
+lecture d un mail repond que la boite appartient a duke et refuse l acces, sans rien lire ;
+une mission de duke lit le dernier mail et en cite l objet. Preuve : deux missions creees
+le 1er novembre a 00 h 19, briefs correspondants, connecteur office365 garde par
+`OFFICE365_OWNER` et par le fichier d acteur de mission.
+
+Etat du serveur apres nettoyage : charge 6,1 juste apres l arret des trois shells, sante
+workbench a 200, aucun shell actif, espace disque inchange a 3,8 Go libres. Les scripts de
+sonde de `/root` sont retires, le script de deploiement `/root/deploy-layers.sh` est
+restaure depuis le depot.
