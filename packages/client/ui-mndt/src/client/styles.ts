@@ -313,4 +313,7 @@ export const CSS = `
 
 .mndt-mandate-band { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; padding: 8px 10px; background: #F0EFED; border-radius: 10px; font-size: 12.5px; color: #0C0F17; }
 .mndt-mandate-band strong { font-weight: 600; }
+
+.mndt-event-button { width: 100%; text-align: left; background: transparent; border: none; cursor: pointer; border-radius: 8px; }
+.mndt-event-button:hover { background: #F0EFED; }
 `

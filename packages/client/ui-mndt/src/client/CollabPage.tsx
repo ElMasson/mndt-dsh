@@ -456,6 +456,36 @@ export function CollabPage({ api }: CollabPageProps) {
     }
     return hits.slice(0, 40)
   })()
+  const openEvent = (subject: string): void => {
+    if (subject.startsWith('mis_')) {
+      const mission = state.missions.find(candidate => candidate.id === subject)
+      if (mission === undefined) return
+      setChannelId(mission.mandateId === undefined ? 'team' : `mandate:${mission.mandateId}`)
+      setView('channel')
+      setOpenBriefs(previous => new Set([...previous, `mission:${mission.id}`]))
+      return
+    }
+    if (subject.startsWith('brf_')) {
+      const brief = state.briefs.find(candidate => candidate.id === subject)
+      const mission = state.missions.find(candidate => candidate.id === brief?.missionId)
+      if (mission !== undefined) { openSubjectToMission(mission.id); return }
+      return
+    }
+    if (subject.startsWith('mnd_')) {
+      setChannelId(`mandate:${subject}`)
+      setView('channel')
+      return
+    }
+    setChannelId('team')
+    setView('channel')
+  }
+  const openSubjectToMission = (missionId: string): void => {
+    const mission = state.missions.find(candidate => candidate.id === missionId)
+    if (mission === undefined) return
+    setChannelId(mission.mandateId === undefined ? 'team' : `mandate:${mission.mandateId}`)
+    setView('channel')
+    setOpenBriefs(previous => new Set([...previous, `mission:${mission.id}`]))
+  }
   const exportActivity = (): void => {
     const rows: string[][] = [['heure', 'acteur', 'action', 'objet', 'detail']]
     for (const event of filteredEvents) {
@@ -656,11 +686,11 @@ export function CollabPage({ api }: CollabPageProps) {
             return (
               <div key={`${event.at}-${index}`}>
                 {newDay ? <div className="mndt-day">{dayOf(event.at)}</div> : undefined}
-                <div className="mndt-event-post">
+                <button type="button" className="mndt-event-post mndt-event-button" onClick={() => { openEvent(event.subject) }}>
                   <span className="mndt-event-time">{clockOf(event.at)}</span>
                   <span className="mndt-event-actor" data-agent={isHuman(event.actor) ? 'false' : 'true'}>{event.actor}</span>
                   <span className="mndt-event-text">{sentenceOf(event.action)} : {subjectLabel(event.subject)}</span>
-                </div>
+                </button>
               </div>
             )
           })}
