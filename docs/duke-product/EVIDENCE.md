@@ -173,3 +173,20 @@ demon Docker. Le site est reste injoignable une partie de l apres-midi. Retablis
 arret force des shells, redemarrage du workbench, passage au deploiement par couches
 montees et limite memoire des shells ramenee a 1 Go. Etat final a 19 h : charge 2,2,
 3,9 Go de memoire disponible, sante workbench a 200, aucun shell actif.
+
+## 11. Manques v1 combles le 31 octobre
+
+| Livraison | Constat mesure | Preuve |
+|---|---|---|
+| Vue Activite | liste du journal groupee par jour, filtre Tout, Humains, Agents, Moi, export CSV telechargeable | collab-activity.png, 46 lignes au total, 9 lignes avec le filtre Agents, CSV recu avec entete heure, acteur, action, objet, detail |
+| Recherche globale | Ctrl K ouvre la palette, 4 resultats pour marketing, Entree ouvre le canal du mandat avec son panneau, une recherche example.com ouvre le brief de la mission | collab-search.png, verification navigateur du 31 octobre |
+| Non-lus | badge bleu sur les canaux non consultes, efface a l ouverture | collab-unread.png, badge 2 puis 9+ avant lecture, disparition apres ouverture |
+| Bandeau de mandat | sous l en-tete du canal, les faits lisibles sans cliquer : qui donne, a qui, jusqu a quand, combien, quel perimetre | collab-mandate-band.png |
+| Identite des connecteurs | une mission lancee par gouvernance cree une approbation demandee par gouvernance, plus par la personne configuree dans l environnement | mission mis_792714d20d9f4cd689e1, approbation apr_b7613eff766a4c97882a, requestedBy gouvernance@datanalysis.re |
+
+Le connecteur approvals lit desormais le fichier d acteur publie par le runner
+(`/state/mission-actor.json`), avec repli sur MNDT_ACTOR pour les appels hors mission.
+Deploiement du connecteur : copie du fichier dans `/data/mndt/live/tools/`, ajout de
+`MNDT_ACTOR_FILE=/state/mission-actor.json` dans `connectors/approvals.env`, puis
+`docker compose up -d --force-recreate workbench`. Sans cette recreation, le processus
+MCP garde l ancien code et l ancienne identite.
