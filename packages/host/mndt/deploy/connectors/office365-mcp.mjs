@@ -15,9 +15,40 @@ import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const TOKEN_FILE = process.env.OFFICE365_TOKEN_FILE ?? '/state/mcp-auth/office365.json'
+const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
+const OWNER = process.env.OFFICE365_OWNER ?? ''
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
 let cached = null
+
+/**
+ * Who the current call acts for: the running mission publishes its actor, an
+ * interactive call falls back to the configured mailbox owner.
+ * @returns the actor, or the empty string.
+ */
+async function actorNow() {
+  if (ACTOR_FILE === '') return ''
+  const raw = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
+  try {
+    const record = JSON.parse(raw)
+    return typeof record.actor === 'string' ? record.actor : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Refuse a human mission that is not the mailbox owner. An agent mission (no
+ * at sign in the identity) may read the mailbox because it acts for the team.
+ * @returns nothing, or throws a readable refusal.
+ */
+async function guard() {
+  if (OWNER === '') return
+  const actor = await actorNow()
+  if (actor === '' || !actor.includes('@')) return
+  if (actor.toLowerCase() === OWNER.toLowerCase()) return
+  throw new Error(`the mailbox belongs to ${OWNER}; a mission by ${actor} cannot read it`)
+}
 
 /** @returns the stored tokens, read once per process start. */
 async function stored() {
@@ -110,6 +141,7 @@ function countOf(args, fallback) {
 
 /** @param name - tool name. @param args - arguments. @returns text for the model. */
 async function run(name, args) {
+  await guard()
   if (name === 'mail_recent') {
     const body = await graph('/me/messages', {
       $top: String(countOf(args, 5)),
