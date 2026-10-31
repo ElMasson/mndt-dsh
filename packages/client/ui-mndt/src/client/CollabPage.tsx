@@ -244,12 +244,14 @@ export function CollabPage({ api }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
+  const [view, setView] = useState<'channel' | 'activity'>('channel')
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [openBriefs, setOpenBriefs] = useState<ReadonlySet<string>>(new Set())
   const [prompt, setPrompt] = useState('')
   const [kind, setKind] = useState('custom')
   const [share, setShare] = useState(false)
   const [launching, setLaunching] = useState(false)
+  const [activityFilter, setActivityFilter] = useState<'all' | 'humans' | 'agents' | 'me'>('all')
 
   const load = useCallback(async () => {
     try {
@@ -326,13 +328,50 @@ export function CollabPage({ api }: CollabPageProps) {
   const pending = state.approvals.length
   const humans = humansOf(state)
   const agents = [...new Set(state.missions.map(mission => mission.createdBy))].filter(subject => subject !== state.you && !humans.some(human => human.subject === subject) && !subject.includes('@'))
+  const activity = [...(state.events ?? [])].sort((a, b) => timeOf(b.at) - timeOf(a.at))
+  const isHuman = (actor: string): boolean => humans.some(human => human.subject === actor) || actor.includes('@')
+  const filteredEvents = activity.filter((event) => {
+    if (activityFilter === 'me') return event.actor === state.you
+    if (activityFilter === 'humans') return isHuman(event.actor)
+    if (activityFilter === 'agents') return !isHuman(event.actor)
+    return true
+  })
+  const exportActivity = (): void => {
+    const rows: string[][] = [['heure', 'acteur', 'action', 'objet', 'detail']]
+    for (const event of filteredEvents) {
+      rows.push([new Date(event.at).toISOString(), event.actor, sentenceOf(event.action), subjectLabel(event.subject), event.detail ?? ''])
+    }
+    const csv = rows.map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `mndt-activite-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
-    <div className="mndt mndt-collab">
+    <div className="mndt mndt-collab" data-view={view}>
       <aside className="mndt-channels" aria-label="Canaux">
         <div className="mndt-channels-head">
           <span className="mndt-channels-title">mndt</span>
           <span className="mndt-channels-workspace">Duke Analytics</span>
+        </div>
+        <div className="mndt-channel-group">
+          <div className="mndt-channel-group-head">
+            <span>Vues</span>
+          </div>
+          <button
+            type="button"
+            className="mndt-channel"
+            data-active={view === 'activity'}
+            onClick={() => { setView('activity') }}
+          >
+            <span className="mndt-channel-hash">{'\u2261'}</span>
+            <span className="mndt-channel-name">Activite</span>
+            <span className="mndt-channel-badge">{activity.length}</span>
+          </button>
         </div>
         {['team', 'mandate', 'system'].map((kind) => {
           const group = channels.filter(candidate => candidate.kind === kind)
@@ -350,7 +389,7 @@ export function CollabPage({ api }: CollabPageProps) {
                   type="button"
                   className="mndt-channel"
                   data-active={candidate.id === channel?.id}
-                  onClick={() => { setChannelId(candidate.id) }}
+                  onClick={() => { setChannelId(candidate.id); setView('channel') }}
                 >
                   <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
                   <span className="mndt-channel-name">{candidate.name}</span>
@@ -373,7 +412,7 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </aside>
 
-      <section className="mndt-main">
+      <section className="mndt-main" style={{ display: view === 'activity' ? 'none' : undefined }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
             <h1 className="mndt-channel-title">
@@ -451,7 +490,48 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </section>
 
-      <aside className="mndt-context" aria-label="Contexte">
+      <section className="mndt-main mndt-activity" style={{ display: view === 'activity' ? undefined : 'none' }}>
+        <header className="mndt-channel-head">
+          <div className="mndt-channel-head-main">
+            <h1 className="mndt-channel-title">Activite</h1>
+            <p className="mndt-channel-subject">Tout ce qui s est passe dans Duke Analytics, du plus recent au plus ancien.</p>
+          </div>
+          <div className="mndt-channel-head-side">
+            <select
+              className="mndt-input"
+              value={activityFilter}
+              onChange={(event) => { setActivityFilter(event.target.value as 'all' | 'humans' | 'agents' | 'me') }}
+              aria-label="Filtrer l activite"
+            >
+              <option value="all">Tout</option>
+              <option value="humans">Humains</option>
+              <option value="agents">Agents</option>
+              <option value="me">Moi</option>
+            </select>
+            <button type="button" className="mndt-button" onClick={exportActivity}>Exporter en CSV</button>
+            <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
+          </div>
+        </header>
+        <div className="mndt-feed">
+          {filteredEvents.length === 0 ? <p className="mndt-empty">Aucune ligne pour ce filtre.</p> : undefined}
+          {filteredEvents.map((event, index) => {
+            const previous = filteredEvents[index - 1]
+            const newDay = previous === undefined || dayOf(previous.at) !== dayOf(event.at)
+            return (
+              <div key={`${event.at}-${index}`}>
+                {newDay ? <div className="mndt-day">{dayOf(event.at)}</div> : undefined}
+                <div className="mndt-event-post">
+                  <span className="mndt-event-time">{clockOf(event.at)}</span>
+                  <span className="mndt-event-actor" data-agent={isHuman(event.actor) ? 'false' : 'true'}>{event.actor}</span>
+                  <span className="mndt-event-text">{sentenceOf(event.action)} : {subjectLabel(event.subject)}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      <aside className="mndt-context" aria-label="Contexte" style={{ display: view === 'activity' ? 'none' : undefined }}>
         {mandate === undefined ? (
           <>
             <h2 className="mndt-context-title">Espace</h2>

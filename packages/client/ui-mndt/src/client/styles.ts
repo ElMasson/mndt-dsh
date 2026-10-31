@@ -293,4 +293,7 @@ export const CSS = `
 .mndt-brief-body th, .mndt-brief-body td { border-bottom: 1px solid #E2E4E9; padding: 6px 8px; text-align: left; vertical-align: top; }
 .mndt-brief-body th { font-weight: 600; background: #F0EFED; }
 .mndt-feed { padding-bottom: 170px; }
+
+.mndt-collab[data-view="activity"] { grid-template-columns: 264px minmax(0, 1fr); }
+.mndt-event-actor[data-agent="true"] { color: #3445D1; font-weight: 500; }
 `
