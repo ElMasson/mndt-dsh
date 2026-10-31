@@ -7,13 +7,33 @@
  * decide its own request: the decision tool is only exposed when the deployment
  * explicitly allows it, which the server side does not.
  *
- * Environment: MNDT_API (product API base), MNDT_ACTOR (who the mission acts for).
+ * Environment: MNDT_API (product API base), MNDT_ACTOR (fallback identity),
+ * MNDT_ACTOR_FILE (record a running mission publishes per call).
  */
+import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR = process.env.MNDT_ACTOR ?? 'duke@datanalysis.re'
+const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
 const MAY_DECIDE = process.env.MNDT_APPROVALS_ALLOW_DECIDE === '1'
+
+/**
+ * Who the current call acts for: the running mission publishes its actor, an
+ * interactive call falls back to the configured person.
+ * @returns the actor, or the configured identity.
+ */
+async function actorNow() {
+  if (ACTOR_FILE === '') return ACTOR
+  const raw = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
+  try {
+    const record = JSON.parse(raw)
+    if (typeof record.actor === 'string' && record.actor !== '') return record.actor
+  } catch {
+    return ACTOR
+  }
+  return ACTOR
+}
 
 const KINDS = ['send-email', 'publish', 'spend', 'delete']
 
@@ -21,7 +41,7 @@ const KINDS = ['send-email', 'publish', 'spend', 'delete']
 async function call(path, init = {}) {
   const response = await fetch(`${API}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', 'x-forwarded-email': ACTOR, ...(init.headers ?? {}) },
+    headers: { 'content-type': 'application/json', ...(init.headers ?? {}), 'x-forwarded-email': await actorNow() },
   })
   const text = await response.text()
   let body
