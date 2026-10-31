@@ -28,6 +28,14 @@ interface CollabState extends PageStateRow {
   readonly approvals: readonly (PageStateRow['approvals'][number] & { readonly missionId?: string })[]
 }
 
+/** One result in the global search. */
+interface SearchHit {
+  readonly id: string
+  readonly kind: 'channel' | 'mission' | 'brief' | 'approval' | 'mandate' | 'person'
+  readonly label: string
+  readonly detail: string
+}
+
 /** One selectable channel. */
 interface Channel {
   readonly id: string
@@ -252,6 +260,8 @@ export function CollabPage({ api }: CollabPageProps) {
   const [share, setShare] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [activityFilter, setActivityFilter] = useState<'all' | 'humans' | 'agents' | 'me'>('all')
+  const [search, setSearch] = useState<string | undefined>(undefined)
+  const [searchIndex, setSearchIndex] = useState(0)
 
   const load = useCallback(async () => {
     try {
@@ -264,6 +274,19 @@ export function CollabPage({ api }: CollabPageProps) {
   }, [api])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setSearch('')
+        setSearchIndex(0)
+      }
+      if (event.key === 'Escape') setSearch(undefined)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('keydown', onKey) }
+  }, [])
 
   const channels = useMemo(() => (state === undefined ? [] : channelsOf(state)), [state])
   const channel = channels.find(candidate => candidate.id === channelId) ?? channels[0]
@@ -336,6 +359,63 @@ export function CollabPage({ api }: CollabPageProps) {
     if (activityFilter === 'agents') return !isHuman(event.actor)
     return true
   })
+  const openSearchHit = (hit: SearchHit): void => {
+    setSearch(undefined)
+    if (hit.kind === 'channel' || hit.kind === 'mandate') {
+      setChannelId(hit.kind === 'mandate' ? `mandate:${hit.id}` : hit.id)
+      setView('channel')
+      return
+    }
+    if (hit.kind === 'mission' || hit.kind === 'brief') {
+      const mission = hit.kind === 'mission'
+        ? state.missions.find(candidate => candidate.id === hit.id)
+        : state.missions.find(candidate => candidate.id === state.briefs.find(brief => brief.id === hit.id)?.missionId)
+      if (mission === undefined) return
+      setChannelId(mission.mandateId === undefined ? 'team' : `mandate:${mission.mandateId}`)
+      setView('channel')
+      setOpenBriefs(previous => new Set([...previous, `mission:${mission.id}`]))
+      return
+    }
+    setChannelId('team')
+    setView('channel')
+  }
+  const searchHits: SearchHit[] = (() => {
+    const needle = (search ?? '').trim().toLowerCase()
+    if (needle === '') return []
+    const hits: SearchHit[] = []
+    for (const candidate of channels) {
+      if (candidate.name.toLowerCase().includes(needle)) hits.push({ id: candidate.id, kind: 'channel', label: candidate.name, detail: candidate.subject })
+    }
+    for (const mission of state.missions) {
+      if (mission.prompt.toLowerCase().includes(needle) || mission.id.toLowerCase().includes(needle)) {
+        hits.push({ id: mission.id, kind: 'mission', label: mission.prompt.slice(0, 90), detail: `${mission.kind}, ${mission.status}, par ${mission.createdBy}` })
+      }
+    }
+    for (const brief of state.briefs) {
+      const heading = brief.markdown.split('\n').map(line => line.replace(/^#+\s*/, '').trim()).find(line => line !== '') ?? brief.id
+      if (brief.markdown.toLowerCase().includes(needle) || brief.id.toLowerCase().includes(needle)) {
+        hits.push({ id: brief.id, kind: 'brief', label: heading.slice(0, 90), detail: 'brief' })
+      }
+    }
+    for (const approval of state.approvals) {
+      if (approval.title.toLowerCase().includes(needle) || approval.id.toLowerCase().includes(needle)) {
+        hits.push({ id: approval.id, kind: 'approval', label: approval.title, detail: `${approval.kind}, demandee par ${approval.requestedBy}` })
+      }
+    }
+    for (const mandate of state.mandates ?? []) {
+      const label = mandate.purpose === '' ? mandate.id : mandate.purpose
+      if (label.toLowerCase().includes(needle) || mandate.id.toLowerCase().includes(needle)) {
+        hits.push({ id: mandate.id, kind: 'mandate', label, detail: `${mandate.delegant} vers ${mandate.delegataire}, echeance ${mandate.expiresOn}` })
+      }
+    }
+    for (const human of humans) {
+      if (human.subject.toLowerCase().includes(needle)) hits.push({ id: human.subject, kind: 'person', label: human.subject, detail: human.role })
+    }
+    for (const agent of agents) {
+      if (agent.toLowerCase().includes(needle)) hits.push({ id: agent, kind: 'person', label: agent, detail: 'agent' })
+    }
+    return hits.slice(0, 40)
+  })()
   const exportActivity = (): void => {
     const rows: string[][] = [['heure', 'acteur', 'action', 'objet', 'detail']]
     for (const event of filteredEvents) {
@@ -358,6 +438,10 @@ export function CollabPage({ api }: CollabPageProps) {
           <span className="mndt-channels-title">mndt</span>
           <span className="mndt-channels-workspace">Duke Analytics</span>
         </div>
+        <button type="button" className="mndt-search-open" onClick={() => { setSearch(''); setSearchIndex(0) }}>
+          <span>Rechercher</span>
+          <kbd>Ctrl K</kbd>
+        </button>
         <div className="mndt-channel-group">
           <div className="mndt-channel-group-head">
             <span>Vues</span>
@@ -593,6 +677,42 @@ export function CollabPage({ api }: CollabPageProps) {
           </>
         )}
       </aside>
+      {search === undefined ? undefined : (
+        <div className="mndt-search-overlay" role="dialog" aria-modal="true" aria-label="Recherche">
+          <div className="mndt-search-box">
+            <input
+              className="mndt-input mndt-search-input"
+              value={search}
+              autoFocus
+              placeholder="Chercher une mission, un brief, une approbation, un mandat, une personne."
+              onChange={(event) => { setSearch(event.target.value); setSearchIndex(0) }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setSearch(undefined)
+                else if (event.key === 'ArrowDown') { event.preventDefault(); setSearchIndex(previous => Math.min(previous + 1, Math.max(searchHits.length - 1, 0))) }
+                else if (event.key === 'ArrowUp') { event.preventDefault(); setSearchIndex(previous => Math.max(previous - 1, 0)) }
+                else if (event.key === 'Enter') { const hit = searchHits[searchIndex]; if (hit !== undefined) openSearchHit(hit) }
+              }}
+            />
+            <div className="mndt-search-results">
+              {searchHits.length === 0 ? <p className="mndt-empty">{search.trim() === '' ? 'Tapez un mot pour chercher.' : 'Aucun resultat.'}</p> : undefined}
+              {searchHits.map((hit, index) => (
+                <button
+                  key={`${hit.kind}-${hit.id}`}
+                  type="button"
+                  className="mndt-search-row"
+                  data-active={index === searchIndex}
+                  onMouseEnter={() => { setSearchIndex(index) }}
+                  onClick={() => { openSearchHit(hit) }}
+                >
+                  <span className="mndt-search-kind">{hit.kind}</span>
+                  <span className="mndt-search-label">{hit.label}</span>
+                  <span className="mndt-search-detail">{hit.detail}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
