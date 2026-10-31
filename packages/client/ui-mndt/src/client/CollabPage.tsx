@@ -547,6 +547,14 @@ export function CollabPage({ api }: CollabPageProps) {
               {channel?.kind === 'mandate' ? channel.name : `# ${channel?.name ?? 'equipe'}`}
             </h1>
             <p className="mndt-channel-subject">{channel?.subject}</p>
+            {mandate === undefined ? undefined : (
+              <div className="mndt-mandate-band">
+                <span>Donne par <strong>{mandate.delegant}</strong> a <strong>{mandate.delegataire}</strong></span>
+                <span>jusqu au {mandate.expiresOn}</span>
+                <span>{mandate.dailyCap} missions par jour</span>
+                <span>perimetre : {mandate.missionKinds.join(', ') || 'aucun type'}</span>
+              </div>
+            )}
           </div>
           <div className="mndt-channel-head-side">
             <button type="button" className="mndt-button" onClick={() => { void load() }}>Rafraichir</button>

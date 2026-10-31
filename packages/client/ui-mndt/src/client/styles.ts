@@ -310,4 +310,7 @@ export const CSS = `
 .mndt-search-detail { grid-column: 2; overflow: hidden; font-size: 12px; color: #5A6475; text-overflow: ellipsis; white-space: nowrap; }
 
 .mndt-channel-unread { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #4B5CFF; color: #FFFFFF; font-size: 11px; font-weight: 600; }
+
+.mndt-mandate-band { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; padding: 8px 10px; background: #F0EFED; border-radius: 10px; font-size: 12.5px; color: #0C0F17; }
+.mndt-mandate-band strong { font-weight: 600; }
 `
