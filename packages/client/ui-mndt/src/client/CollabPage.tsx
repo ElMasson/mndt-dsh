@@ -262,6 +262,7 @@ export function CollabPage({ api }: CollabPageProps) {
   const [activityFilter, setActivityFilter] = useState<'all' | 'humans' | 'agents' | 'me'>('all')
   const [search, setSearch] = useState<string | undefined>(undefined)
   const [searchIndex, setSearchIndex] = useState(0)
+  const [seen, setSeen] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     try {
@@ -289,7 +290,41 @@ export function CollabPage({ api }: CollabPageProps) {
   }, [])
 
   const channels = useMemo(() => (state === undefined ? [] : channelsOf(state)), [state])
+  const storageKey = state === undefined ? undefined : `mndt.seen.${state.you}`
+
+  useEffect(() => {
+    if (storageKey === undefined) return
+    const raw = window.localStorage.getItem(storageKey)
+    if (raw !== null) {
+      try {
+        setSeen(JSON.parse(raw) as Record<string, string>)
+        return
+      } catch {
+        window.localStorage.removeItem(storageKey)
+      }
+    }
+    const now = new Date().toISOString()
+    const fresh: Record<string, string> = {}
+    for (const candidate of channels) fresh[candidate.id] = now
+    window.localStorage.setItem(storageKey, JSON.stringify(fresh))
+    setSeen(fresh)
+  }, [storageKey, channels])
   const channel = channels.find(candidate => candidate.id === channelId) ?? channels[0]
+
+  useEffect(() => {
+    if (storageKey === undefined || channel === undefined) return
+    const key = storageKey
+    const channelKey = channel.id
+    setSeen((previous) => {
+      if (previous[channelKey] !== undefined) {
+        const last = timeOf(previous[channelKey])
+        if (Date.now() - last < 5000) return previous
+      }
+      const next = { ...previous, [channelKey]: new Date().toISOString() }
+      window.localStorage.setItem(key, JSON.stringify(next))
+      return next
+    })
+  }, [storageKey, channel])
   const posts = useMemo(() => (state === undefined || channel === undefined ? [] : feedOf(state, channel)), [state, channel])
   const mandate = state === undefined || channel?.kind !== 'mandate'
     ? undefined
@@ -351,6 +386,11 @@ export function CollabPage({ api }: CollabPageProps) {
   const pending = state.approvals.length
   const humans = humansOf(state)
   const agents = [...new Set(state.missions.map(mission => mission.createdBy))].filter(subject => subject !== state.you && !humans.some(human => human.subject === subject) && !subject.includes('@'))
+  const unreadOf = (candidate: Channel): number => {
+    const last = seen[candidate.id]
+    if (last === undefined) return 0
+    return feedOf(state, candidate).filter(post => timeOf(post.at) > timeOf(last)).length
+  }
   const activity = [...(state.events ?? [])].sort((a, b) => timeOf(b.at) - timeOf(a.at))
   const isHuman = (actor: string): boolean => humans.some(human => human.subject === actor) || actor.includes('@')
   const filteredEvents = activity.filter((event) => {
@@ -467,19 +507,23 @@ export function CollabPage({ api }: CollabPageProps) {
                 <span>{label}</span>
                 <span className="mndt-channel-group-count">{group.length}</span>
               </div>
-              {group.map(candidate => (
-                <button
-                  key={candidate.id}
-                  type="button"
-                  className="mndt-channel"
-                  data-active={candidate.id === channel?.id}
-                  onClick={() => { setChannelId(candidate.id); setView('channel') }}
-                >
-                  <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
-                  <span className="mndt-channel-name">{candidate.name}</span>
-                  {candidate.badge !== undefined && candidate.badge > 0 ? <span className="mndt-channel-badge">{candidate.badge}</span> : undefined}
-                </button>
-              ))}
+              {group.map((candidate) => {
+                const unread = unreadOf(candidate)
+                return (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    className="mndt-channel"
+                    data-active={candidate.id === channel?.id}
+                    onClick={() => { setChannelId(candidate.id); setView('channel') }}
+                  >
+                    <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
+                    <span className="mndt-channel-name">{candidate.name}</span>
+                    {candidate.badge !== undefined && candidate.badge > 0 ? <span className="mndt-channel-badge">{candidate.badge}</span> : undefined}
+                    {unread === 0 ? undefined : <span className="mndt-channel-unread">{unread > 9 ? '9+' : unread}</span>}
+                  </button>
+                )
+              })}
             </div>
           )
         })}
