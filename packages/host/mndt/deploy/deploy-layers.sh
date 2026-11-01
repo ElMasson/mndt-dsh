@@ -42,4 +42,7 @@ done
 sleep 8
 curl -s -m 5 "http://127.0.0.1:${MNDT_WORKBENCH_PORT:-8795}/health" || true
 echo ""
+if [ -x /root/warm-shells.sh ]; then
+  sh /root/warm-shells.sh || echo "prechauffage ignore"
+fi
 echo "deploiement termine, shells supprimes, ils se recreent a la premiere visite"

@@ -138,7 +138,23 @@ processus en memoire sur l ancien etat.
 
 La recreation du workbench supprime les shells. Le premier visiteur paie leur creation :
 mesure du 1er novembre, 91 secondes avant le DOM pret et plus de quatre minutes sans espace
-visible sur un premier chargement, contre 2 secondes et 7,8 secondes a chaud. Avant une
-demonstration ou une recette, ouvrir la page une fois par personne, attendre l espace de
-collaboration, puis verifier qu un rechargement passe sous dix secondes. Un premier
-chargement lent n est pas une panne du produit, c est le shell qui se cree.
+visible sur un premier chargement, contre 2 secondes et 7,8 secondes a chaud.
+
+Le script `warm-shells.sh`, copie dans `/root`, cree le shell avant toute visite reelle. Il
+est appele automatiquement par `deploy-layers.sh` a la fin du deploiement, apres le controle
+de sante. Il interroge la passerelle avec l en-tete de la personne et compte un code 2xx ou
+3xx comme un succes, en reessayant jusqu a quatre fois. La creation elle-meme prend environ
+140 secondes, donc le deploiement dure deux a trois minutes de plus ; c est le prix d une
+premiere visite rapide.
+
+Identite par defaut : `duke@datanalysis.re`. Autres identites :
+`WARM_IDENTITIES="duke@datanalysis.re gouvernance@datanalysis.re smarion@datanalysis.re" sh warm-shells.sh`,
+ou en arguments : `sh warm-shells.sh contact@datanalysis.re`.
+
+Mesure apres prechauffage, sur un premier chargement de navigateur : 2,2 secondes de DOM pret
+et 6,9 secondes jusqu a l espace de collaboration. Sans prechauffage : 91 secondes et plus de
+quatre minutes. Un premier chargement lent sans prechauffage n est pas une panne du produit,
+c est le shell qui se cree.
+
+Verification manuelle, une fois le deploiement termine :
+`docker ps --format '{{.Names}}' | grep '^shell-'` doit lister le shell prechauffe.

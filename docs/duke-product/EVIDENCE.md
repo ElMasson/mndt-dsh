@@ -294,3 +294,22 @@ Preuve : collab-a11y-focus.png.
 
 **Etat de chargement.** L ecran d attente porte maintenant un role `status` et une annonce
 polie, pour qu un lecteur d ecran signale l attente au lieu de rester muet.
+
+## 17. Demarrage a froid corrige par prechauffage, 1er novembre a 02 h 50
+
+Le demarrage lent n etait pas la page : c est la creation du shell, faite au premier
+visiteur. Un script de prechauffage la declenche maintenant pendant le deploiement.
+
+| Mesure | Avant prechauffage | Apres prechauffage |
+|---|---|---|
+| Creation du shell (cote serveur) | payee par le premier visiteur | 138 s pendant le deploiement |
+| DOM pret, premiere visite navigateur | 91 s | 2,2 s |
+| Espace de collaboration visible | non atteint en 252 s | 6,9 s |
+
+Le script `warm-shells.sh` interroge la passerelle avec l en-tete de duke et compte un 302
+comme un succes, avec quatre tentatives. Il est appele par `deploy-layers.sh` juste apres le
+controle de sante. Deux executions independantes ont donne 137 s et 138 s de creation, puis
+2,2 s et 6,9 s pour la premiere visite reelle.
+
+Reserve : le prechauffage ne couvre par defaut que duke. Pour une recette avec plusieurs
+personnes, passer les trois identites a `warm-shells.sh` avant d ouvrir les navigateurs.
