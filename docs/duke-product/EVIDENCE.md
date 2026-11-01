@@ -338,3 +338,11 @@ visible par les trois identites.
 Limite de cette preuve : ce sont des controles automatises, pas des personnes. La recette
 humaine est preparee, avec un parcours court de quinze minutes et les resultats partiels du
 30 octobre, mais elle n a pas encore ete jouee sur cet etat.
+
+## 19. Mobile sans barre rognee, 1er novembre a 03 h 30
+
+La reserve du tour precedent est levee. Sous 820 px, la liste des canaux disparait au profit
+d un selecteur dans l en-tete, accompagne d un bouton Activite et du bouton Rafraichir.
+Mesure a 390 sur 844 : largeur du document 390, aucun debordement, liste des canaux masquee,
+barre mobile visible, choix d un canal met a jour le titre et le bandeau, bouton Activite
+ouvre la vue avec 14 lignes. Preuves : collab-mobile-select.png et collab-mobile-activity.png.

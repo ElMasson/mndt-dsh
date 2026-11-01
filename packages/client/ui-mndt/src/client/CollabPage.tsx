@@ -617,6 +617,12 @@ export function CollabPage({ api }: CollabPageProps) {
             )}
           </div>
           <div className="mndt-channel-head-side">
+            <div className="mndt-mobile-bar">
+              <select className="mndt-input" value={channelId} onChange={(event) => { setChannelId(event.target.value); setView('channel') }} aria-label="Choisir un canal">
+                {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+              </select>
+              <button type="button" className="mndt-button" onClick={() => { setView(view === 'activity' ? 'channel' : 'activity') }}>{view === 'activity' ? 'Retour au canal' : 'Activite'}</button>
+            </div>
             <button type="button" className="mndt-button" onClick={() => { void load() }}>Rafraichir</button>
             {mandate === undefined ? undefined : <span className="mndt-pill" data-tone="state">{mandate.state}</span>}
             <span className="mndt-pill" data-tone="id">{posts.length} {word(posts.length, 'post', 'posts')}</span>
