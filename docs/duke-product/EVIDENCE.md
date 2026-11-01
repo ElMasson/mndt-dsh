@@ -242,3 +242,15 @@ Controles de segregation, tous vrais a l execution : les 3 missions privees de d
 pas visibles par smarion, la mission privee de smarion n est pas visible par duke, et les
 3 missions d equipe sont visibles par les trois identites. Aucune ecriture dans cette suite,
 seulement des lectures.
+
+## 14. Passe mobile, 1er novembre a 01 h 50
+
+Fenetre de 390 sur 844, ouverte en desktop puis redimensionnee pour eviter le parcours de
+connexion. Mesures : largeur du document 390 pour une fenetre de 390, donc aucun debordement
+horizontal ; barre de canaux en ligne de 45 px de haut au dessus du fil ; composeur visible ;
+bandeau de mandat visible sur le canal du mandat ; 23 lignes dans la vue Activite.
+
+Deux reserves honnetes : la barre laterale du shell DSH reste fixe a gauche et rogne le
+premier bouton de canal quand la barre est defilee, et le controle automatique de visibilite
+du fil a renvoye faux alors que les cartes sont bien rendues sur la capture, donc je retiens
+la capture, pas ce controle. Preuves : collab-mobile.png et collab-mobile-activity.png.
