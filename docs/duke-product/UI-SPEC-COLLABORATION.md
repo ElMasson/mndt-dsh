@@ -425,3 +425,40 @@ permanence.
 
 Le critere de reussite est simple : une personne qui arrive sait, sans cliquer, qui
 travaille avec qui, sous quel mandat, et quelle decision l attend.
+
+---
+
+## 16. Etat livre au 1er novembre 2026
+
+Les quatre phases sont livrees en production, et la phase P3 a ete completee apres la
+premiere recette.
+
+| Phase | Etat | Preuve |
+|---|---|---|
+| P0, coquille | livre | trois colonnes, canaux derives des mandats, collab-demo-duke.png |
+| P1, decision | livre | carte d approbation, refus motive, collab-approval-decide.png |
+| P2, ecriture | livre | mission lancee depuis le composeur, brief rendu en document, collab-dry-run.png |
+| P3, activite | livre et complete | collab-activity.png, collab-search.png, collab-unread.png |
+| Contexte du mandat | livre et renforce | bandeau au dessus du fil, collab-mandate-band.png |
+| Identite par mission | livre | approbation demandee par gouvernance, garde de la boite office365 |
+
+Ajouts posterieurs a la specification initiale, tous mesures :
+
+1. Le brief est rendu comme un document : titres, listes, tableaux, citations.
+2. Le bandeau de mandat affiche les quatre faits sans clic : mandant, delegataire,
+   echeance, limite, perimetre.
+3. La vue Activite se filtre par personne et par canal, s exporte en CSV, et chaque ligne
+   ouvre la mission qu elle designe.
+4. La recherche Ctrl K couvre canaux, missions, briefs, approbations, mandats et personnes.
+5. Les non-lus sont comptes par canal et se remettent a zero a l ouverture, ou d un clic
+   avec « tout marquer comme lu ».
+6. Un humain ne peut pas lire la boite d un autre a travers une mission, et une mission
+   ne decide jamais sa propre approbation.
+
+Reste ouvert, assume et hors de cette version : messages directs avec un agent, reactions,
+edition et suppression de post, canaux libres, notifications par mail, mode demo. La
+recherche porte sur l etat charge en memoire, pas encore sur un index serveur, ce qui
+convient a l echelle actuelle et devra etre revu au dela de quelques milliers d objets.
+
+La recette utilisateur reste a faire avec les personnes, sur la base du protocole
+`USER-TESTS.md` et des observations deja notees dans `USER-TESTS-RESULTS.md`.

@@ -64,3 +64,45 @@ d une minute et n ajoute pas de couche disque.
 4. La séparation des identités est vérifiée par l API `/state` avec deux en-têtes
    `x-forwarded-email` différents : le brief d une mission privée d une personne ne doit
    jamais apparaître chez une autre.
+
+---
+
+# Mettre à jour un connecteur MCP
+
+Un connecteur est un petit serveur Node qui tourne dans le workbench. Il ne fait pas partie
+de la couche `ui-mndt` ni de `host-mndt`, et il n est pas relu quand la couche change : il
+faut recopier le fichier puis recréer le workbench, sinon le processus garde l ancien code.
+
+## Fichiers et emplacements
+
+| Connecteur | Script dans le depot | Copie sur le serveur | Variables |
+|---|---|---|---|
+| approvals | `packages/host/mndt/deploy/connectors/approvals-mcp.mjs` | `/data/mndt/live/tools/approvals-mcp.mjs` | `MNDT_API`, `MNDT_ACTOR`, `MNDT_ACTOR_FILE` |
+| office365 | `packages/host/mndt/deploy/connectors/office365-mcp.mjs` | `/data/mndt/live/connectors/office365-mcp.mjs` | `OFFICE365_TOKEN_FILE`, `MNDT_ACTOR_FILE`, `OFFICE365_OWNER` |
+| facts | `packages/host/mndt/deploy/connectors/facts-mcp.mjs` | `/data/mndt/live/tools/facts-mcp.mjs` | aucune |
+
+Les variables vivent dans `/data/mndt/live/connectors/<nom>.env`, en mode 600.
+
+## Procedure
+
+1. Copier le script depuis le depot vers l emplacement du tableau.
+2. Completer le fichier d environnement si une variable nouvelle apparait. Exemple pour
+   l identite par mission :
+   `MNDT_ACTOR_FILE=/state/mission-actor.json`, et `OFFICE365_OWNER=duke@datanalysis.re`
+   pour la garde de la boite.
+3. Verifier la syntaxe : `node --check <chemin>`.
+4. Recreer le workbench : `cd /opt/mndt-front && docker compose up -d --force-recreate workbench`.
+5. Attendre `curl -s http://127.0.0.1:8795/health` -> `{"ok":true}`.
+
+## Verifier l identite par mission
+
+1. Lancer une mission avec l en-tete d une autre personne :
+   `POST /missions` avec `x-forwarded-email: gouvernance@datanalysis.re`, demande d une
+   approbation de type publish.
+2. Lire `/approvals?state=all` : le champ `requestedBy` doit porter l identite de la mission,
+   pas celle de l environnement.
+3. Pour la boite : une mission d une personne autre que le proprietaire doit recevoir un
+   refus explicite, sans lecture. Une mission du proprietaire lit normalement.
+
+Sans l etape 4, le processus MCP reste celui d avant et les tests semblent sans effet. C est
+le piege principal de cette procedure.
