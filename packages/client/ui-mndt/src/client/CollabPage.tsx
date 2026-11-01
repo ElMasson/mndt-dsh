@@ -381,7 +381,7 @@ export function CollabPage({ api }: CollabPageProps) {
   }
 
   if (state === undefined) {
-    return <div className="mndt mndt-loading">{error === undefined ? 'Chargement de l espace...' : error}</div>
+    return <div className="mndt mndt-loading" role="status" aria-live="polite">{error === undefined ? 'Chargement de l espace...' : error}</div>
   }
 
   const pending = state.approvals.length
@@ -511,6 +511,10 @@ export function CollabPage({ api }: CollabPageProps) {
     setChannelId(mission.mandateId === undefined ? 'team' : `mandate:${mission.mandateId}`)
     setView('channel')
     setOpenBriefs(previous => new Set([...previous, `mission:${mission.id}`]))
+    window.setTimeout(() => {
+      const card = document.querySelector(`.mndt-post-card[data-mission="mission:${mission.id}"]`)
+      card?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 350)
   }
   const exportActivity = (): void => {
     const rows: string[][] = [['heure', 'acteur', 'action', 'objet', 'detail']]
@@ -997,7 +1001,7 @@ function PostView(props: {
     )
   }
   return (
-    <article className="mndt-post-card" data-kind="mission">
+    <article className="mndt-post-card" data-kind="mission" data-mission={post.id}>
       <div className="mndt-post-head">
         <span className="mndt-post-kind">Mission {body.title}</span>
         <span className="mndt-role" data-agent={body.author.includes('@') ? undefined : 'true'}>{body.author}</span>

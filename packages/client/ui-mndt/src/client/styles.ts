@@ -339,4 +339,9 @@ export const CSS = `
   .mndt-composer { padding: 6px 10px 10px; }
   .mndt-channel-name { max-width: 110px; }
 }
+
+.mndt button:focus-visible, .mndt input:focus-visible, .mndt select:focus-visible, .mndt textarea:focus-visible {
+  outline: 2px solid #3445D1;
+  outline-offset: 2px;
+}
 `

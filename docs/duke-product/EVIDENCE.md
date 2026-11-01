@@ -279,3 +279,18 @@ Preuve : collab-demo-clean.png, 19 posts, 3 missions et 3 briefs dans le panneau
 **Sauvegarde.** Copie manuelle avant modification :
 `/data/mndt/backups/state-20261101T010230Z.json`, 71 346 octets, lisible. La procedure de
 restauration est dans `DEPLOY-LAYERS.md`.
+
+## 16. Focus clavier et ouverture directe sur le brief, 1er novembre a 02 h 25
+
+**Focus clavier.** En tabulant depuis l exterieur jusqu a la zone de collaboration, le
+premier controle atteint est le bouton de recherche, avec un contour mesure a 2 px, plein,
+couleur rgb(52, 69, 209). Le style est desormais explicite pour tous les boutons, champs,
+listes et zones de texte de la page.
+
+**Ouverture directe.** Un clic sur une ligne d activite de type mission ouvre le canal, ouvre
+le brief de la mission et fait defiler la carte au centre de la fenetre. Mesure : un brief
+ouvert, carte a 194 px du haut dans une fenetre de 1000 px, donc visible sans chercher.
+Preuve : collab-a11y-focus.png.
+
+**Etat de chargement.** L ecran d attente porte maintenant un role `status` et une annonce
+polie, pour qu un lecteur d ecran signale l attente au lieu de rester muet.
