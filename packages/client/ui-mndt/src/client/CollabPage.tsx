@@ -260,6 +260,7 @@ export function CollabPage({ api }: CollabPageProps) {
   const [share, setShare] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [activityFilter, setActivityFilter] = useState<'all' | 'humans' | 'agents' | 'me'>('all')
+  const [activityChannel, setActivityChannel] = useState('all')
   const [search, setSearch] = useState<string | undefined>(undefined)
   const [searchIndex, setSearchIndex] = useState(0)
   const [seen, setSeen] = useState<Record<string, string>>({})
@@ -393,12 +394,37 @@ export function CollabPage({ api }: CollabPageProps) {
   }
   const activity = [...(state.events ?? [])].sort((a, b) => timeOf(b.at) - timeOf(a.at))
   const isHuman = (actor: string): boolean => humans.some(human => human.subject === actor) || actor.includes('@')
+  const channelOfEvent = (subject: string): string => {
+    if (subject.startsWith('mis_')) {
+      const mission = state.missions.find(candidate => candidate.id === subject)
+      if (mission === undefined) return 'system'
+      return mission.mandateId === undefined ? 'team' : `mandate:${mission.mandateId}`
+    }
+    if (subject.startsWith('brf_')) {
+      const brief = state.briefs.find(candidate => candidate.id === subject)
+      return brief?.missionId === undefined ? 'system' : channelOfEvent(brief.missionId)
+    }
+    if (subject.startsWith('apr_')) {
+      const approval = state.approvals.find(candidate => candidate.id === subject)
+      return approval?.missionId === undefined ? 'team' : channelOfEvent(approval.missionId)
+    }
+    if (subject.startsWith('mnd_')) return `mandate:${subject}`
+    return 'system'
+  }
   const filteredEvents = activity.filter((event) => {
+    if (activityChannel !== 'all' && channelOfEvent(event.subject) !== activityChannel) return false
     if (activityFilter === 'me') return event.actor === state.you
     if (activityFilter === 'humans') return isHuman(event.actor)
     if (activityFilter === 'agents') return !isHuman(event.actor)
     return true
   })
+  const markAllRead = (): void => {
+    const now = new Date().toISOString()
+    const next: Record<string, string> = { ...seen }
+    for (const candidate of channels) next[candidate.id] = now
+    if (storageKey !== undefined) window.localStorage.setItem(storageKey, JSON.stringify(next))
+    setSeen(next)
+  }
   const openSearchHit = (hit: SearchHit): void => {
     setSearch(undefined)
     if (hit.kind === 'channel' || hit.kind === 'mandate') {
@@ -663,6 +689,10 @@ export function CollabPage({ api }: CollabPageProps) {
             <p className="mndt-channel-subject">Tout ce qui s est passe dans Duke Analytics, du plus recent au plus ancien.</p>
           </div>
           <div className="mndt-channel-head-side">
+            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label="Filtrer par canal">
+              <option value="all">Tous les canaux</option>
+              {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+            </select>
             <select
               className="mndt-input"
               value={activityFilter}
@@ -674,6 +704,7 @@ export function CollabPage({ api }: CollabPageProps) {
               <option value="agents">Agents</option>
               <option value="me">Moi</option>
             </select>
+            <button type="button" className="mndt-button" onClick={markAllRead}>Tout marquer comme lu</button>
             <button type="button" className="mndt-button" onClick={exportActivity}>Exporter en CSV</button>
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
           </div>
