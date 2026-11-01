@@ -346,3 +346,14 @@ d un selecteur dans l en-tete, accompagne d un bouton Activite et du bouton Rafr
 Mesure a 390 sur 844 : largeur du document 390, aucun debordement, liste des canaux masquee,
 barre mobile visible, choix d un canal met a jour le titre et le bandeau, bouton Activite
 ouvre la vue avec 14 lignes. Preuves : collab-mobile-select.png et collab-mobile-activity.png.
+
+## 20. Panne simulee et reprise, 1er novembre a 04 h 00
+
+Panne simulee en bloquant l appel `/state` dans le navigateur. La page affiche un message en
+francais, « L espace n a pas repondu. Verifiez la connexion, puis reessayez. », avec un bouton
+Reessayer. Une fois l appel retabli, un clic sur Reessayer recharge l espace complet, 5 cartes
+affichees. Aucune page blanche, aucune erreur technique brute affichee.
+
+Mesure : erreur affichee oui, message francais oui, reprise apres clic oui, 5 cartes apres
+reprise. Le texte brut « Failed to fetch » a ete remplace par ce message apres une premiere
+execution qui l affichait.

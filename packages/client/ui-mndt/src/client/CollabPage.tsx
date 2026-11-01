@@ -271,7 +271,8 @@ export function CollabPage({ api }: CollabPageProps) {
       setState({ ...next, members })
       setError(undefined)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      const message = failure instanceof Error ? failure.message : String(failure)
+      setError(/failed to fetch|networkerror|load failed/i.test(message) ? 'L espace n a pas repondu. Verifiez la connexion, puis reessayez.' : message)
     }
   }, [api])
 
@@ -381,7 +382,16 @@ export function CollabPage({ api }: CollabPageProps) {
   }
 
   if (state === undefined) {
-    return <div className="mndt mndt-loading" role="status" aria-live="polite">{error === undefined ? 'Chargement de l espace...' : error}</div>
+    return (
+      <div className="mndt mndt-loading" role="status" aria-live="polite">
+        {error === undefined ? 'Chargement de l espace...' : (
+          <div className="mndt-error mndt-error-banner">
+            <p>{error}</p>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>Reessayer</button>
+          </div>
+        )}
+      </div>
+    )
   }
 
   const pending = state.approvals.length
@@ -630,7 +640,12 @@ export function CollabPage({ api }: CollabPageProps) {
           </div>
         </header>
 
-        {error === undefined ? undefined : <div className="mndt-error">{error}</div>}
+        {error === undefined ? undefined : (
+          <div className="mndt-error mndt-error-banner">
+            <span>{error}</span>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>Reessayer</button>
+          </div>
+        )}
 
         <div className="mndt-feed">
           {posts.length === 0 ? <p className="mndt-empty">Rien dans ce canal pour le moment.</p> : undefined}
@@ -1018,7 +1033,7 @@ function PostView(props: {
       <div className="mndt-post-actions">
         <span className="mndt-tag">{body.visibility === 'team' ? 'equipe' : 'privee'}</span>
         {body.mandate === undefined ? undefined : <span className="mndt-tag">{body.mandate.slice(0, 32)}</span>}
-        {body.error === undefined ? undefined : <span className="mndt-error">{body.error}</span>}
+        {body.error === undefined ? undefined : <span className="mndt-error mndt-error-banner">{body.error}</span>}
         {body.brief === undefined ? undefined : (
           <button type="button" className="mndt-button" onClick={toggle}>{open ? 'Masquer le brief' : 'Ouvrir le brief'}</button>
         )}

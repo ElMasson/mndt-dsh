@@ -81,6 +81,9 @@ export const CSS = `
 
 .mndt-markdown { font-size: 12.8px; line-height: 1.55; color: var(--mndt-text); white-space: pre-wrap; }
 .mndt-error { color: #B23A2E; font-size: 12px; }
+.mndt-error-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mndt-error-banner p { margin: 0; }
+
 .mndt-note { font-size: 12.5px; }
 .mndt-note-meta { color: var(--mndt-muted); font-size: 11px; }
 .mndt-details summary { cursor: pointer; font-size: 13px; font-weight: 550; }
