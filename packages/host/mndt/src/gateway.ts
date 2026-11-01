@@ -7,7 +7,6 @@
  * starts the HTTP face only when the deployment gives it a port.
  */
 import { join, dirname } from 'node:path'
-import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,6 +24,8 @@ import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
 import { authorityGrants, localGrants } from './grants.ts'
 import { DshMissionRunner } from './runner.ts'
+import { dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import type { Automation } from './automations.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -58,6 +59,8 @@ export class WorkbenchGateway extends TypertRemoteService {
   private readonly statePath: string
   /** Where the editable briefing schedule lives; the API writes it, the poller reads it. */
   private readonly schedulePath: string
+  /** The automation registry: the poller reads it, the API writes it. */
+  private readonly automationsPath: string
 
   /**
    * @param ctx - owning context.
@@ -67,6 +70,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     super(ctx, 'mndt')
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
     this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
+    this.automationsPath = join(dirname(this.statePath), 'automations.json')
     this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath) })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
@@ -77,7 +81,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       ? authorityGrants({ baseUrl, token })
       : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
-    this.#scheduleBriefing(ctx)
+    this.#scheduleAutomations(ctx)
     this.#reconcileInterrupted(ctx)
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
@@ -93,6 +97,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
         grants: this.grants,
         schedulePath: this.schedulePath,
+        automationsPath: this.automationsPath,
         ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
           ? {}
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
@@ -136,78 +141,71 @@ export class WorkbenchGateway extends TypertRemoteService {
   }
 
   /**
-   * Run the morning briefing on a schedule.
+   * Run the scheduled automations.
    *
-   * The hour is read from a small file the page can edit, so a change needs no
-   * deploy and survives a restart. A run already in flight is never doubled.
-   * `DSH_MNDT_BRIEFING_EVERY_MS` keeps a fixed interval for proving the path
-   * quickly; the daily hour is what runs in production.
-   * @param ctx - the host context, which owns the timer lifecycle.
+   * The registry is read at every tick, so a change made from the page needs no
+   * restart and survives one. A run already in flight for an item is never
+   * doubled. Three failures in a row suspend the item, with the reason kept in
+   * the registry for the page to show.
+   * @param ctx - the host context, which owns the timer lifecycle and the runner.
    */
-  #scheduleBriefing(ctx: Context): void {
+  #scheduleAutomations(ctx: Context): void {
+    const running = new Set<string>()
     const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
-    const envAt = process.env.DSH_MNDT_BRIEFING_AT
-    let running = false
-    const fire = (): void => {
-      if (running) return
-      running = true
+    const legacyAt = process.env.DSH_MNDT_BRIEFING_AT
+    const persist = async (patch: (item: Automation) => Automation): Promise<void> => {
+      const current = await readAutomations(this.automationsPath, legacyAt)
+      await writeAutomations(this.automationsPath, current.map(patch))
+    }
+    const fire = (item: Automation): void => {
+      running.add(item.id)
       void (async () => {
         try {
-          const mission = await this.service.createMission({
-            kind: 'briefing',
-            prompt: 'Briefing du matin : agenda, courriers sans réponse, comptes à risque, échéances, réunions du jour. '
-              + 'Consulte les outils de lecture des connecteurs montés, par exemple Attio et Office365 en lecture, et cite ce que tu lis réellement. '
-              + 'Si une rubrique n\'a aucune source accessible, dis-le au lieu de l\'inventer.',
-            createdBy: 'scheduler',
-          })
-          await this.service.startMission(mission.id, 'scheduled')
-          try {
-            const outcome = await new DshMissionRunner(ctx).run(mission)
-            await this.service.completeMission(mission.id, outcome)
-            ctx.logger.info(`mndt: scheduled briefing ${mission.id} done`)
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error)
-            await this.service.failMission(mission.id, reason).catch(() => undefined)
-            ctx.logger.error(`mndt: scheduled briefing failed: ${reason}`)
+          const outcome = await runAutomation(this.service, new DshMissionRunner(ctx), item)
+          const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
+          const patch: Partial<Automation> = {
+            lastMissionId: outcome.missionId,
+            lastOutcome: outcome.outcome,
+            failures,
+            ...(failures >= 3 ? { enabled: false } : {}),
           }
+          await persist(candidate => (candidate.id === item.id ? { ...candidate, ...patch } : candidate))
+          if (outcome.outcome === 'done') ctx.logger.info(`mndt: automation ${item.id} done as ${outcome.missionId}`)
+          else ctx.logger.error(`mndt: automation ${item.id} ${outcome.outcome}`)
+        } catch (error) {
+          ctx.logger.error(`mndt: automation ${item.id} could not run: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
-          running = false
+          running.delete(item.id)
+        }
+      })()
+    }
+    const tick = (): void => {
+      void (async () => {
+        try {
+          let items = await readAutomations(this.automationsPath, legacyAt)
+          if (Number.isFinite(every) && every > 0) {
+            const minutes = Math.max(1, Math.round(every / 60_000))
+            if (!items.some(item => item.id === 'auto_briefing' && item.everyMinutes === minutes)) {
+              await writeAutomations(this.automationsPath, items.map(item => item.id === 'auto_briefing' ? { ...item, everyMinutes: minutes, enabled: true } : item))
+              items = await readAutomations(this.automationsPath, legacyAt)
+            }
+          }
+          const now = new Date()
+          for (const item of dueAutomations(items, now)) {
+            if (running.has(item.id)) continue
+            await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
+            fire(item)
+          }
+        } catch (error) {
+          ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
         }
       })()
     }
     ctx.effect(() => {
-      if (Number.isFinite(every)) {
-        const handle = setInterval(fire, every)
-        return () => { clearInterval(handle) }
-      }
-      // Poll once a minute: the file may change at any time, including while the
-      // workbench is running, and a restart must keep honouring it.
-      if (envAt === undefined) {
-        void readFile(this.schedulePath, 'utf8').catch(() => undefined)
-      }
-      const tick = (): void => {
-        void (async () => {
-          try {
-            const raw = await readFile(this.schedulePath, 'utf8').catch(() => '')
-            let record: { at?: unknown; lastFiredDate?: unknown } = {}
-            if (raw.trim() !== '') record = JSON.parse(raw) as typeof record
-            const at = typeof record.at === 'string' ? record.at : envAt
-            if (typeof at !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) return
-            const now = new Date()
-            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-            const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-            if (clock !== at || record.lastFiredDate === today) return
-            await writeFile(this.schedulePath, JSON.stringify({ at, lastFiredDate: today }), 'utf8')
-            fire()
-          } catch (error) {
-            ctx.logger.warn(`mndt: could not read the briefing schedule: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        })()
-      }
       const handle = setInterval(tick, 30_000)
       tick()
       return () => { clearInterval(handle) }
-    }, 'mndt: scheduled briefing')
+    }, 'mndt: scheduled automations')
   }
 
   /** @returns the mounted MCP connectors. */

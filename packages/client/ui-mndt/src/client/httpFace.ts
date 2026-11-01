@@ -22,6 +22,8 @@ import type {
   PageStateRow,
   MandateRow,
   JournalAnswer,
+  AutomationRow,
+  AutomationsAnswer,
 } from './face.ts'
 
 /** Where the gateway mounts the API on the page origin. */
@@ -136,6 +138,19 @@ export function createHttpFace(): MndtFace {
       return body
     }),
     journal: async format => (await bodyOf<JournalAnswer>(await call(`/journal?format=${format}`))),
+    automations: async () => (await bodyOf<AutomationsAnswer>(await call('/automations'))),
+    saveAutomation: input => outcomeOf(async () => {
+      const body = await bodyOf<{ automation: AutomationRow }>(await post('/automations', input))
+      return body.automation
+    }),
+    toggleAutomation: (id, enabled) => outcomeOf(async () => {
+      const body = await bodyOf<{ automation: AutomationRow }>(await post(`/automations/${encodeURIComponent(id)}/toggle`, { enabled }))
+      return body.automation
+    }),
+    runAutomationNow: id => outcomeOf(async () => {
+      const body = await bodyOf<{ outcome: string; mission?: MissionRow }>(await post(`/automations/${encodeURIComponent(id)}/run`, {}))
+      return { outcome: body.outcome, ...(body.mission === undefined ? {} : { mission: body.mission }) }
+    }),
     revokeMember: subject => outcomeOf(async () => {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
       return { subject, role: 'none' }

@@ -18,6 +18,8 @@ import type {
   Visibility,
 } from './core/index.ts'
 import type { WorkbenchService, MissionResult } from './core/index.ts'
+import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import type { Automation } from './automations.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -74,6 +76,8 @@ export interface MndtApiOptions {
   readonly authority?: { readonly baseUrl: string; readonly token: string }
   /** The briefing schedule file, editable from the page. */
   readonly schedulePath?: string
+  /** The automation registry, editable from the page. */
+  readonly automationsPath?: string
   /** The machine sidecar: one browser session per person. */
   readonly machines?: { readonly baseUrl: string; readonly token: string }
   readonly service: WorkbenchService
@@ -600,7 +604,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       if (request.method === 'GET' && path === '/schedule') {
         let at: string | undefined = process.env.DSH_MNDT_BRIEFING_AT
-        if (options.schedulePath !== undefined) {
+        if (options.automationsPath !== undefined) {
+          const items = await readAutomations(options.automationsPath).catch(() => [])
+          const briefing = items.find(item => item.id === 'auto_briefing')
+          if (briefing !== undefined) at = briefing.at
+        }
+        if (at === undefined && options.schedulePath !== undefined) {
           const raw = await readFile(options.schedulePath, 'utf8').catch(() => '')
           if (raw.trim() !== '') {
             const record = JSON.parse(raw) as { at?: unknown; lastFiredDate?: unknown }
@@ -622,7 +631,75 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(503, { error: 'this deployment has no writable schedule' })
         }
         await writeFile(options.schedulePath, JSON.stringify({ at }), 'utf8')
+        if (options.automationsPath !== undefined) {
+          const items = await readAutomations(options.automationsPath).catch(() => [])
+          await writeAutomations(options.automationsPath, items.map(item => (item.id === 'auto_briefing' ? { ...item, at } : item)))
+        }
         return respond(200, { at })
+      }
+
+      if (request.method === 'GET' && path === '/automations') {
+        if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
+        const items = await readAutomations(options.automationsPath)
+        const table = await grants.grants()
+        const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
+        return respond(200, { items, canAdmin })
+      }
+
+      if (request.method === 'POST' && path === '/automations') {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
+        const items = await readAutomations(options.automationsPath)
+        const input = parseBody(request.body)
+        const id = typeof input.id === 'string' ? input.id : undefined
+        const existing = id === undefined ? undefined : items.find(item => item.id === id)
+        const proposed = normalise({
+          ...(existing ?? {}),
+          ...input,
+          ...(id === undefined ? {} : { id }),
+          createdBy: existing?.createdBy ?? identity,
+        })
+        if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
+        const next = existing === undefined ? [...items, proposed] : items.map(item => (item.id === proposed.id ? proposed : item))
+        await writeAutomations(options.automationsPath, next)
+        return respond(existing === undefined ? 201 : 200, { automation: proposed })
+      }
+
+      if (request.method === 'POST' && /^\/automations\/[^/]+\/toggle$/.test(path)) {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
+        const id = path.split('/')[2] ?? ''
+        const input = parseBody(request.body)
+        if (typeof input.enabled !== 'boolean') return respond(400, { error: 'enabled must be true or false' })
+        const items = await readAutomations(options.automationsPath)
+        if (!items.some(item => item.id === id)) return respond(404, { error: `no automation ${id}` })
+        const next = items.map(item => (item.id === id ? { ...item, enabled: input.enabled === true } : item))
+        await writeAutomations(options.automationsPath, next)
+        return respond(200, { automation: next.find(item => item.id === id) })
+      }
+
+      if (request.method === 'POST' && /^\/automations\/[^/]+\/run$/.test(path)) {
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
+        const id = path.split('/')[2] ?? ''
+        const items = await readAutomations(options.automationsPath)
+        const item = items.find(candidate => candidate.id === id)
+        if (item === undefined) return respond(404, { error: `no automation ${id}` })
+        const outcome = await runAutomation(service, runner, item)
+        const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
+        const patch: Partial<Automation> = {
+          lastMissionId: outcome.missionId,
+          lastOutcome: outcome.outcome,
+          failures,
+          ...(failures >= 3 ? { enabled: false } : {}),
+        }
+        const updated = items.map(candidate => (candidate.id === id ? { ...candidate, ...patch } : candidate))
+        await writeAutomations(options.automationsPath, updated)
+        const mission = await service.getMission(outcome.missionId)
+        return respond(200, { mission, outcome: outcome.outcome })
       }
 
       if (request.method === 'GET' && path === '/usage') {

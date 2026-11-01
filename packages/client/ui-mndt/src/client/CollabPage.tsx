@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { MemberRow, MndtFace, MandateRow, PageStateRow } from './face.ts'
+import type { AutomationsAnswer, MemberRow, MndtFace, MandateRow, PageStateRow } from './face.ts'
 
 /** One journal line as the Host reports it. */
 interface EventRow {
@@ -252,7 +252,7 @@ export function CollabPage({ api }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<'channel' | 'activity'>('channel')
+  const [view, setView] = useState<'channel' | 'activity' | 'automations'>('channel')
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [openBriefs, setOpenBriefs] = useState<ReadonlySet<string>>(new Set())
   const [prompt, setPrompt] = useState('')
@@ -277,6 +277,58 @@ export function CollabPage({ api }: CollabPageProps) {
   }, [api])
 
   useEffect(() => { void load() }, [load])
+
+  const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
+  const [automationError, setAutomationError] = useState<string | undefined>(undefined)
+  const [automationBusy, setAutomationBusy] = useState<string | undefined>(undefined)
+  const [automationNotice, setAutomationNotice] = useState<string | undefined>(undefined)
+
+  /** Read the automation registry, seeded on the Host side. */
+  const loadAutomations = useCallback(async () => {
+    try {
+      setAutomations(await api.automations())
+      setAutomationError(undefined)
+    } catch (failure) {
+      setAutomationError(failure instanceof Error ? failure.message : String(failure))
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (view === 'automations' && automations === undefined) void loadAutomations()
+  }, [view, automations, loadAutomations])
+
+  /** @param id - automation. @param enabled - target state. */
+  const toggleAutomation = async (id: string, enabled: boolean): Promise<void> => {
+    setAutomationBusy(id)
+    setAutomationNotice(undefined)
+    try {
+      const result = await api.toggleAutomation(id, enabled)
+      if (!result.ok) setAutomationError(result.error ?? 'le changement a ete refuse')
+      else await loadAutomations()
+    } catch (failure) {
+      setAutomationError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAutomationBusy(undefined)
+    }
+  }
+
+  /** @param id - automation to run now, synchronously. */
+  const runAutomationNow = async (id: string): Promise<void> => {
+    setAutomationBusy(id)
+    setAutomationNotice(undefined)
+    try {
+      const result = await api.runAutomationNow(id)
+      if (!result.ok) setAutomationError(result.error ?? 'l execution a ete refusee')
+      else {
+        setAutomationNotice(`Execution terminee : ${result.value?.outcome ?? 'ok'}`)
+        await loadAutomations()
+      }
+    } catch (failure) {
+      setAutomationError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAutomationBusy(undefined)
+    }
+  }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -566,6 +618,16 @@ export function CollabPage({ api }: CollabPageProps) {
             <span className="mndt-channel-name">Activite</span>
             <span className="mndt-channel-badge">{activity.length}</span>
           </button>
+          <button
+            type="button"
+            className="mndt-channel"
+            data-active={view === 'automations'}
+            onClick={() => { setView('automations') }}
+          >
+            <span className="mndt-channel-hash">{'\u2699'}</span>
+            <span className="mndt-channel-name">Automatisations</span>
+            <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
+          </button>
         </div>
         {['team', 'mandate', 'system'].map((kind) => {
           const group = channels.filter(candidate => candidate.kind === kind)
@@ -610,7 +672,7 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </aside>
 
-      <section className="mndt-main" style={{ display: view === 'activity' ? 'none' : undefined }}>
+      <section className="mndt-main" style={{ display: view === 'channel' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
             <h1 className="mndt-channel-title">
@@ -707,6 +769,61 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </section>
 
+      <section className="mndt-main mndt-automations" style={{ display: view === 'automations' ? undefined : 'none' }}>
+        <header className="mndt-channel-head">
+          <div className="mndt-channel-head-main">
+            <h1 className="mndt-channel-title">Automatisations</h1>
+            <p className="mndt-channel-subject">
+              Des missions planifiees, sans conversation. Elles ne decident rien et n envoient rien.
+            </p>
+          </div>
+          <div className="mndt-channel-head-side">
+            <button type="button" className="mndt-button" onClick={() => { void loadAutomations() }}>Rafraichir</button>
+            <span className="mndt-pill" data-tone="id">{automations?.items.length ?? 0} planifiees</span>
+          </div>
+        </header>
+        {automationError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{automationError}</span></div>}
+        {automationNotice === undefined ? undefined : <p className="mndt-empty">{automationNotice}</p>}
+        <div className="mndt-feed">
+          {(automations?.items ?? []).map(item => (
+            <article key={item.id} className="mndt-post-card" data-kind="automation">
+              <div className="mndt-post-head">
+                <span className="mndt-post-kind">{item.name}</span>
+                <span className="mndt-pill" data-tone="state">{item.enabled ? 'active' : 'suspendue'}</span>
+                <span className="mndt-pill" data-tone="id">{item.at} chaque jour</span>
+                <span className="mndt-post-time">{item.kind}</span>
+              </div>
+              <p className="mndt-post-body">{item.prompt}</p>
+              <div className="mndt-post-actions">
+                {item.lastFiredDate === undefined ? undefined : <span className="mndt-tag">derniere : {item.lastFiredDate}</span>}
+                {item.lastOutcome === undefined ? undefined : <span className="mndt-tag">{item.lastOutcome}</span>}
+                {automations?.canAdmin !== true ? undefined : (
+                  <>
+                    <button
+                      type="button"
+                      className="mndt-button"
+                      disabled={automationBusy === item.id}
+                      onClick={() => { void runAutomationNow(item.id) }}
+                    >
+                      {automationBusy === item.id ? 'En cours...' : 'Executer maintenant'}
+                    </button>
+                    <button
+                      type="button"
+                      className="mndt-button"
+                      disabled={automationBusy === item.id}
+                      onClick={() => { void toggleAutomation(item.id, !item.enabled) }}
+                    >
+                      {item.enabled ? 'Suspendre' : 'Activer'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))}
+          {automations !== undefined && automations.items.length === 0 ? <p className="mndt-empty">Aucune automatisation.</p> : undefined}
+        </div>
+      </section>
+
       <section className="mndt-main mndt-activity" style={{ display: view === 'activity' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
@@ -753,7 +870,7 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </section>
 
-      <aside className="mndt-context" aria-label="Contexte" style={{ display: view === 'activity' ? 'none' : undefined }}>
+      <aside className="mndt-context" aria-label="Contexte" style={{ display: view === 'channel' ? undefined : 'none' }}>
         {mandate === undefined ? (
           <>
             <h2 className="mndt-context-title">Espace</h2>

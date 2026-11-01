@@ -405,3 +405,32 @@ comportement de production est identique, avec une seule page a maintenir.
 
 Commande de verification des references restantes : `rg -n "MndtPage" packages` ne doit plus
 rien retourner.
+
+## 24. Automatisations planifiees livrees, 1er novembre a 17 h 35
+
+Le minuteur code en dur du briefing laisse la place a un registre d automatisations.
+
+Ce qui est livre : registre `automations.json` a cote de l etat, lecture et ecriture par
+l API, minuteur unique qui lance les executions dues, suspension automatique apres trois
+echecs consecutifs, et une vue Automatisations dans la page avec activer, suspendre et
+executer maintenant.
+
+Mesures de verification, sur la production :
+
+| Controle | Resultat |
+|---|---|
+| Registre au premier demarrage | 3 automatisations, briefing repris a 06:30 depuis l ancien fichier |
+| Lecture par duke | 3 elements, droit d edition vrai |
+| Lecture par smarion | 3 elements, droit d edition faux |
+| Suspension et reactivation | etat de la carte passe de active a suspendue |
+| Vue navigateur | 3 cartes nommees, badge du menu a 1 active |
+| Execution reelle | mission `mis_6b758889d8f847e7a649` terminee en 3 s, brief `brf_8913c98b95c84af8831b` cree |
+| Apres nettoyage | etat restaure, 4 missions, 4 briefs, 2 approbations, 2 mandats |
+
+Tests unitaires ajoutes : 9 cas sur la normalisation, l horloge, les jours autorises,
+l intervalle de test, l amorcage du registre, l execution reussie et l echec qui laisse une
+mission en erreur avec sa raison.
+
+Reserve : le texte des automatisations est fixe a la creation, il n y a pas encore d edition
+du prompt dans la page. Le modele reste celui de la session ; voir AUTOMATIONS.md pour la
+question du vLLM Qwen, non installe sur ce serveur.

@@ -53,6 +53,10 @@ function absentFace(message: string): MndtFace {
     signMandate: refuse,
     retireMandate: refuse,
     journal: refuse,
+    automations: refuse,
+    saveAutomation: refuse,
+    toggleAutomation: refuse,
+    runAutomationNow: refuse,
     connectors: refuse,
   }
 }
@@ -103,6 +107,10 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
     signMandate: async id => (await raw(() => mounted.signMandate(id))) as never,
     retireMandate: async id => (await raw(() => mounted.retireMandate(id))) as never,
     journal: async format => await raw(() => mounted.journal(format)),
+    automations: async () => (await raw(() => mounted.automations())) as never,
+    saveAutomation: async input => (await raw(() => mounted.saveAutomation(input))) as never,
+    toggleAutomation: async (id, enabled) => (await raw(() => mounted.toggleAutomation(id, enabled))) as never,
+    runAutomationNow: async id => (await raw(() => mounted.runAutomationNow(id))) as never,
     browserStop: async () => await raw(() => mounted.browserStop()),
     shareMemory: async (id, scope) => (await raw(() => mounted.shareMemory(id, scope))) as never,
     connectors: async () => {
@@ -148,6 +156,10 @@ function face(ctx: ClientContext): MndtFace {
     signMandate: id => route(next => next.signMandate(id)),
     retireMandate: id => route(next => next.retireMandate(id)),
     journal: format => route(next => next.journal(format)),
+    automations: () => route(next => next.automations()),
+    saveAutomation: input => route(next => next.saveAutomation(input)),
+    toggleAutomation: (id, enabled) => route(next => next.toggleAutomation(id, enabled)),
+    runAutomationNow: id => route(next => next.runAutomationNow(id)),
     browserStop: () => route(next => next.browserStop()),
     shareMemory: (id, scope) => route(next => next.shareMemory(id, scope)),
     connectors: () => route(next => next.connectors()),

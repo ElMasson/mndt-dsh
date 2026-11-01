@@ -107,6 +107,17 @@ redemarrages.
   consecutifs, avec une raison visible dans l interface.
 - Toute action sensible demandee par une automatisation passe par une approbation.
 
+## 4.4 Etat livre au 1er novembre
+
+Le registre, l API et l interface sont livres et verifies en production : lecture, creation,
+suspension, reactivation, execution immediate. Une execution reelle a produit une mission
+terminee et un brief en 3 secondes, puis l etat de demonstration a ete restaure.
+
+Reste a faire dans cet ordre : les trois automatisations par defaut au dessus sont dans le
+registre (briefing actif, relance et echeances suspendues), l edition du prompt dans la page,
+et les automatisations sans LLM (sauvegarde, sante) qui vivront en scripts systeme et non
+dans le registre.
+
 ## 5. Ordre de livraison propose
 
 1. Registre, API, execution planifiee generalisee, journalisation du resultat.

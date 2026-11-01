@@ -143,6 +143,28 @@ export interface ConnectorRow {
   readonly enabled: boolean
 }
 
+/** One scheduled automation as the page reads it. */
+export interface AutomationRow {
+  readonly id: string
+  readonly name: string
+  readonly kind: string
+  readonly prompt: string
+  readonly at: string
+  readonly days?: readonly number[]
+  readonly enabled: boolean
+  readonly createdBy: string
+  readonly lastFiredDate?: string
+  readonly lastMissionId?: string
+  readonly lastOutcome?: string
+  readonly failures?: number
+}
+
+/** The registry, with the right to edit it. */
+export interface AutomationsAnswer {
+  readonly items: readonly AutomationRow[]
+  readonly canAdmin: boolean
+}
+
 /** The Host face this page needs. */
 export interface MndtFace {
   state(): Promise<PageStateRow>
@@ -168,4 +190,8 @@ export interface MndtFace {
   signMandate(id: string): Promise<OutcomeRow<MandateRow>>
   retireMandate(id: string): Promise<OutcomeRow<MandateRow>>
   journal(format: 'csv' | 'json'): Promise<JournalAnswer>
+  automations(): Promise<AutomationsAnswer>
+  saveAutomation(input: Record<string, unknown>): Promise<OutcomeRow<AutomationRow>>
+  toggleAutomation(id: string, enabled: boolean): Promise<OutcomeRow<AutomationRow>>
+  runAutomationNow(id: string): Promise<OutcomeRow<{ readonly outcome: string; readonly mission?: MissionRow }>>
 }

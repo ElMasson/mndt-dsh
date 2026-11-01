@@ -297,7 +297,7 @@ export const CSS = `
 .mndt-brief-body th { font-weight: 600; background: #F0EFED; }
 .mndt-feed { padding-bottom: 170px; }
 
-.mndt-collab[data-view="activity"] { grid-template-columns: 264px minmax(0, 1fr); }
+.mndt-collab[data-view="activity"], .mndt-collab[data-view="automations"] { grid-template-columns: 264px minmax(0, 1fr); }
 .mndt-event-actor[data-agent="true"] { color: #3445D1; font-weight: 500; }
 
 .mndt-search-open { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: calc(100% - 24px); margin: 6px 12px 8px; padding: 7px 10px; font-size: 12.5px; color: #5A6475; background: #F6F4F1; border: 1px solid #E2E4E9; border-radius: 10px; cursor: pointer; }
@@ -324,7 +324,7 @@ export const CSS = `
 .mndt-mobile-bar { display: none; gap: 6px; align-items: center; width: 100%; }
 .mndt-mobile-bar .mndt-input { max-width: 200px; }
 @media (max-width: 820px) {
-  .mndt-collab, .mndt-collab[data-view="activity"] { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+  .mndt-collab, .mndt-collab[data-view="activity"], .mndt-collab[data-view="automations"] { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
   .mndt-channels { display: none; }
   .mndt-mobile-bar { display: flex; }
   .mndt-channel-head { flex-wrap: wrap; align-items: flex-start; padding: 10px 14px; }
