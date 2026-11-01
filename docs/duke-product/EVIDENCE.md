@@ -357,3 +357,36 @@ affichees. Aucune page blanche, aucune erreur technique brute affichee.
 Mesure : erreur affichee oui, message francais oui, reprise apres clic oui, 5 cartes apres
 reprise. Le texte brut « Failed to fetch » a ete remplace par ce message apres une premiere
 execution qui l affichait.
+
+## 21. Verification finale de l etat en production, 1er novembre a 04 h 12
+
+Dernier passage des trois suites, sur l etat exactement servi par
+https://mndt.duke-analytics.com apres la livraison de la gestion d erreur. Archives :
+`acceptance/mndt-suite-final.json`, `acceptance/mobile-final.json`,
+`acceptance/api-suite-final.json`.
+
+Suite navigateur, trois identites : page chargee, 5 canaux, 5 personnes et 1 agent au
+panneau, 14 lignes d activite dont 11 humaines, 2 resultats de recherche, bandeau de mandat
+et panneau de contexte visibles. Identique pour duke, gouvernance et smarion.
+
+Suite mobile a 390 : aucun debordement, canaux masques, barre mobile visible, choix d un
+canal met a jour le titre et le bandeau, vue Activite ouverte avec 14 lignes.
+
+Suite API : duke owner, gouvernance admin, smarion operator sans droit admin ; 3 missions
+pour duke, 1 pour gouvernance, 2 pour smarion ; 2 approbations, 2 mandats ; les trois
+controles de segregation sont vrais.
+
+Ce que ces preuves ne disent pas : elles sont automatisees, pas humaines. La recette avec
+des personnes reste a jouer sur cet etat, avec le parcours court de `USER-TESTS.md`. Les
+resultats partiels du 30 octobre sont dans `USER-TESTS-RESULTS.md`.
+
+## 22. Limites connues a la fin de la nuit
+
+1. Le prechauffage des shells ne couvre par defaut que duke. Pour trois personnes, lancer
+   `sh warm-shells.sh` avec les trois identites avant la session.
+2. La recherche porte sur l etat charge en memoire. Au dela de quelques milliers d objets,
+   il faudra un index serveur.
+3. Le shell DSH garde sa barre laterale fixe, qui reduit la largeur utile sur mobile ; la
+   page s y adapte, mais l espace restant est etroit.
+4. Aucune notification hors de la page : pas de mail, pas de push. C est volontaire dans
+   cette version.

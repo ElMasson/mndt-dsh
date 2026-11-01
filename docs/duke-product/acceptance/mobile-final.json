@@ -1,0 +1,13 @@
+{
+  "largeur": {
+    "inner": 390,
+    "scroll": 390
+  },
+  "debordement": false,
+  "canauxMasques": true,
+  "barreMobileVisible": true,
+  "titreApresChoix": "Reporting marketing hebdomadaire - smarion",
+  "bandeau": true,
+  "lignesActivite": 14,
+  "activiteVisible": true
+}
