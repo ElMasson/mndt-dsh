@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { MemberRow, MndtFace, MandateRow, PageStateRow } from './MndtPage.tsx'
+import type { MemberRow, MndtFace, MandateRow, PageStateRow } from './face.ts'
 
 /** One journal line as the Host reports it. */
 interface EventRow {

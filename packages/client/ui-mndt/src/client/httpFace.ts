@@ -22,7 +22,7 @@ import type {
   PageStateRow,
   MandateRow,
   JournalAnswer,
-} from './MndtPage.tsx'
+} from './face.ts'
 
 /** Where the gateway mounts the API on the page origin. */
 const BASE = '/mndt-api'

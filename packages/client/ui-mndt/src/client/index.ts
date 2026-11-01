@@ -13,7 +13,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { MndtIcon } from './MndtIcon.tsx'
 import { CollabPage } from './CollabPage.tsx'
-import type { MndtFace } from './MndtPage.tsx'
+import type { MndtFace } from './face.ts'
 import { available, createHttpFace } from './httpFace.ts'
 import { CSS } from './styles.ts'
 import { en, zh } from './locales.ts'
@@ -23,7 +23,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap { mndt: MndtKey }
 }
 
-export { MndtPage } from './MndtPage.tsx'
 export type { MndtKey } from './locales.ts'
 
 const NS = 'mndt'

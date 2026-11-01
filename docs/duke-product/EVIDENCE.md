@@ -390,3 +390,18 @@ resultats partiels du 30 octobre sont dans `USER-TESTS-RESULTS.md`.
    page s y adapte, mais l espace restant est etroit.
 4. Aucune notification hors de la page : pas de mail, pas de push. C est volontaire dans
    cette version.
+
+## 23. Retrait de la page en doublon, 1er novembre a 17 h 05
+
+`MndtPage.tsx` n etait plus monte nulle part : `index.ts` enregistre `CollabPage` sur le slot
+principal, et la seule reference restante etait son export public. Les types qu il portait
+sont deplaces dans `face.ts`, puis la page et ses deux composants internes, `Onboarding.tsx`
+et `GuidedTour.tsx`, sont supprimes.
+
+Suppression nette : 52 Ko de source en moins (page 43 Ko, accompagnement 9 Ko), aucune
+dependance restante, `tsc` et le lint passent, build client OK. Verification navigateur
+apres deploiement : 5 canaux, barre mobile masquee sur desktop, 6 cartes affichees. Le
+comportement de production est identique, avec une seule page a maintenir.
+
+Commande de verification des references restantes : `rg -n "MndtPage" packages` ne doit plus
+rien retourner.
