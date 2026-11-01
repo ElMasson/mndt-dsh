@@ -254,3 +254,28 @@ Deux reserves honnetes : la barre laterale du shell DSH reste fixe a gauche et r
 premier bouton de canal quand la barre est defilee, et le controle automatique de visibilite
 du fil a renvoye faux alors que les cartes sont bien rendues sur la capture, donc je retiens
 la capture, pas ce controle. Preuves : collab-mobile.png et collab-mobile-activity.png.
+
+## 15. Latence percue, jeu de demonstration nettoye, sauvegarde, 1er novembre a 02 h 10
+
+**Latence.** Mesuree au navigateur, du debut de navigation jusqu a l espace de collaboration
+visible, apres recreation du workbench.
+
+| Moment | DOM pret | Espace visible | Conclusion |
+|---|---|---|---|
+| Premier chargement apres recreation | 91 s | non atteint en 252 s | le premier visiteur paie la creation du shell |
+| Rechargement a chaud | 2,0 s | 7,8 s | usage normal |
+
+Le premier chargement est donc lent, et il n est pas acceptable pour une recette avec des
+personnes. Ce n est pas la page mais la creation du conteneur de shell. La parade retenue :
+ouvrir la page une fois par personne avant une demonstration ou une recette, puis verifier
+que le rechargement est sous dix secondes. C est ecrit dans le runbook de deploiement.
+
+**Jeu de demonstration.** L etat contenait trois briefings identiques du scheduler et deux
+missions de test. Nettoye : 4 missions, 4 briefs, 2 approbations, 2 mandats. Le canal equipe
+montre maintenant un briefing de l agent, une mission navigateur de duke, une approbation
+actionnable demandee par gouvernance et une approbation volontairement bloquee pour duke.
+Preuve : collab-demo-clean.png, 19 posts, 3 missions et 3 briefs dans le panneau.
+
+**Sauvegarde.** Copie manuelle avant modification :
+`/data/mndt/backups/state-20261101T010230Z.json`, 71 346 octets, lisible. La procedure de
+restauration est dans `DEPLOY-LAYERS.md`.

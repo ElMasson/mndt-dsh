@@ -106,3 +106,39 @@ Les variables vivent dans `/data/mndt/live/connectors/<nom>.env`, en mode 600.
 
 Sans l etape 4, le processus MCP reste celui d avant et les tests semblent sans effet. C est
 le piege principal de cette procedure.
+
+---
+
+# Sauvegarder et restaurer l etat
+
+L etat vit dans `/data/mndt/live/state.json` : missions, briefs, approbations, mandats,
+membres, journal. Une modification manuelle se fait toujours apres une copie.
+
+## Sauvegarder
+
+```sh
+mkdir -p /data/mndt/backups
+cp /data/mndt/live/state.json /data/mndt/backups/state-$(date -u +%Y%m%dT%H%M%SZ).json
+ls -l /data/mndt/backups
+```
+
+## Restaurer
+
+```sh
+cp /data/mndt/backups/state-20261101T010230Z.json /data/mndt/live/state.json
+cd /opt/mndt-front && docker compose up -d --force-recreate workbench
+curl -s http://127.0.0.1:8795/health
+```
+
+Puis verifier avec `/state` et trois en-tetes differents que les missions privees sont
+toujours invisibles aux autres. Une restauration sans recreation du workbench laisse le
+processus en memoire sur l ancien etat.
+
+## Prechauffer apres un deploiement
+
+La recreation du workbench supprime les shells. Le premier visiteur paie leur creation :
+mesure du 1er novembre, 91 secondes avant le DOM pret et plus de quatre minutes sans espace
+visible sur un premier chargement, contre 2 secondes et 7,8 secondes a chaud. Avant une
+demonstration ou une recette, ouvrir la page une fois par personne, attendre l espace de
+collaboration, puis verifier qu un rechargement passe sous dix secondes. Un premier
+chargement lent n est pas une panne du produit, c est le shell qui se cree.
