@@ -1,0 +1,45 @@
+{
+  "identities": {
+    "duke@datanalysis.re": {
+      "role": "owner",
+      "canWrite": true,
+      "canAdmin": true,
+      "missions": 6,
+      "briefs": 6,
+      "approvals": 2,
+      "mandates": 2
+    },
+    "gouvernance@datanalysis.re": {
+      "role": "admin",
+      "canWrite": true,
+      "canAdmin": true,
+      "missions": 3,
+      "briefs": 3,
+      "approvals": 2,
+      "mandates": 2
+    },
+    "smarion@datanalysis.re": {
+      "role": "operator",
+      "canWrite": true,
+      "canAdmin": false,
+      "missions": 4,
+      "briefs": 4,
+      "approvals": 2,
+      "mandates": 2
+    }
+  },
+  "checks": {
+    "duke_private_not_visible_to_smarion": true,
+    "smarion_private_not_visible_to_duke": true,
+    "agent_team_mission_visible_to_all": true,
+    "private_counts": {
+      "duke@datanalysis.re": 3,
+      "smarion@datanalysis.re": 1
+    },
+    "team_mission_ids": [
+      "mis_124b9ec7600d4cce93be",
+      "mis_ce3220812b574eb6a3cc",
+      "mis_dc6de9bd8f3f4628a5e3"
+    ]
+  }
+}

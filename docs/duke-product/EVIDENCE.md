@@ -221,3 +221,24 @@ Etat du serveur apres nettoyage : charge 6,1 juste apres l arret des trois shell
 workbench a 200, aucun shell actif, espace disque inchange a 3,8 Go libres. Les scripts de
 sonde de `/root` sont retires, le script de deploiement `/root/deploy-layers.sh` est
 restaure depuis le depot.
+
+## 13. Filtres d activite et segregation par API, 1er novembre
+
+Vue Activite, filtre par canal : 23 lignes au total, 4 lignes quand on choisit le canal du
+mandat Reporting marketing, et le bouton « Tout marquer comme lu » fait passer les badges
+de non-lus de 2 a 0. Preuve : collab-activity-filters.png, verification navigateur du
+1er novembre a 01 h 12.
+
+Suite d API en lecture seule, `docs/duke-product/acceptance/api-suite.py`, resultat archive
+dans `docs/duke-product/acceptance/api-suite-2026-11-01.json`.
+
+| Identite | Role | Ecriture | Admin | Missions | Briefs | Approbations | Mandats |
+|---|---|---|---|---|---|---|---|
+| duke | owner | oui | oui | 6 | 6 | 2 | 2 |
+| gouvernance | admin | oui | oui | 3 | 3 | 2 | 2 |
+| smarion | operator | oui | non | 4 | 4 | 2 | 2 |
+
+Controles de segregation, tous vrais a l execution : les 3 missions privees de duke ne sont
+pas visibles par smarion, la mission privee de smarion n est pas visible par duke, et les
+3 missions d equipe sont visibles par les trois identites. Aucune ecriture dans cette suite,
+seulement des lectures.
