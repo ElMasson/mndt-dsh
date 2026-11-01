@@ -1,0 +1,47 @@
+[
+  {
+    "identity": "duke@datanalysis.re",
+    "chargement": true,
+    "fond": "rgb(246, 244, 241)",
+    "policeTitre": "Space Grotesk",
+    "canaux": 5,
+    "humainsPanneau": 5,
+    "agentsPanneau": 1,
+    "lignesActivite": 14,
+    "lignesHumains": 11,
+    "resultatsRecherche": 2,
+    "bandeauMandat": true,
+    "contexteVisible": true,
+    "bandeauTexte": "Donne par duke@datanalysis.re a smarion@datanalysis.re | jusqu au 2026-11-30 | 3 missions par jour | perimetre : briefing, weekly-synthesis,"
+  },
+  {
+    "identity": "gouvernance@datanalysis.re",
+    "chargement": true,
+    "fond": "rgb(246, 244, 241)",
+    "policeTitre": "Space Grotesk",
+    "canaux": 5,
+    "humainsPanneau": 5,
+    "agentsPanneau": 1,
+    "lignesActivite": 14,
+    "lignesHumains": 11,
+    "resultatsRecherche": 2,
+    "bandeauMandat": true,
+    "contexteVisible": true,
+    "bandeauTexte": "Donne par duke@datanalysis.re a smarion@datanalysis.re | jusqu au 2026-11-30 | 3 missions par jour | perimetre : briefing, weekly-synthesis,"
+  },
+  {
+    "identity": "smarion@datanalysis.re",
+    "chargement": true,
+    "fond": "rgb(246, 244, 241)",
+    "policeTitre": "Space Grotesk",
+    "canaux": 5,
+    "humainsPanneau": 5,
+    "agentsPanneau": 1,
+    "lignesActivite": 14,
+    "lignesHumains": 11,
+    "resultatsRecherche": 2,
+    "bandeauMandat": true,
+    "contexteVisible": true,
+    "bandeauTexte": "Donne par duke@datanalysis.re a smarion@datanalysis.re | jusqu au 2026-11-30 | 3 missions par jour | perimetre : briefing, weekly-synthesis,"
+  }
+]

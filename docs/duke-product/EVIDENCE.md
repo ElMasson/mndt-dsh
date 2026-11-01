@@ -313,3 +313,28 @@ controle de sante. Deux executions independantes ont donne 137 s et 138 s de cre
 
 Reserve : le prechauffage ne couvre par defaut que duke. Pour une recette avec plusieurs
 personnes, passer les trois identites a `warm-shells.sh` avant d ouvrir les navigateurs.
+
+## 18. Recette finale sur le jeu nettoye, 1er novembre a 03 h 15
+
+Suite navigateur et suite API reexecutees apres le nettoyage et le prechauffage. Resultats
+archives dans `acceptance/mndt-suite-final.json` et `acceptance/api-suite-final.json`.
+
+| Mesure | duke | gouvernance | smarion |
+|---|---|---|---|
+| Page chargee | oui | oui | oui |
+| Canaux | 5 | 5 | 5 |
+| Personnes et agents au panneau | 5 et 1 | 5 et 1 | 5 et 1 |
+| Lignes d activite | 14 | 14 | 14 |
+| Lignes humaines | 11 | 11 | 11 |
+| Resultats de recherche | 2 | 2 | 2 |
+| Bandeau de mandat et panneau de contexte | oui | oui | oui |
+
+Suite API : duke owner, gouvernance admin, smarion operator sans droit admin ; 3 missions
+pour duke, 1 pour gouvernance, 2 pour smarion ; 2 approbations et 2 mandats. Les trois
+controles de segregation sont vrais : les missions privees de duke restent invisibles a
+smarion, celle de smarion reste invisible a duke, et la mission d equipe du scheduler est
+visible par les trois identites.
+
+Limite de cette preuve : ce sont des controles automatises, pas des personnes. La recette
+humaine est preparee, avec un parcours court de quinze minutes et les resultats partiels du
+30 octobre, mais elle n a pas encore ete jouee sur cet etat.
