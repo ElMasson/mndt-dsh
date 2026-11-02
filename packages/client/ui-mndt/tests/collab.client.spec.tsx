@@ -143,7 +143,15 @@ describe('collaboration page', () => {
 
   it('opens the administration view, grants a role and proposes a mandate', async () => {
     const grantMember = vi.fn(async (subject: string, role: string) => ({ ok: true, value: { subject, role } }))
-    const createMandate = vi.fn(async () => ({ ok: true, value: { id: 'mnd_9', purpose: 'Reporting' } }))
+    const createMandate = vi.fn(async (input: Record<string, unknown>) => ({
+      ok: true,
+      value: {
+        id: 'mnd_9', delegant: 'duke@datanalysis.re', delegataire: 'smarion@datanalysis.re',
+        purpose: typeof input.purpose === 'string' ? input.purpose : 'Reporting',
+        connectors: ['office365'], missionKinds: ['custom'],
+        dailyCap: 3, expiresOn: '2026-12-31', state: 'proposed',
+      },
+    }))
     const api = fakeFace({
       members: async () => [
         { subject: 'duke@datanalysis.re', role: 'owner' },
