@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MISSION_KINDS, channelsOf, clockOf, dayOf, feedOf, humansOf, missionPost, sentenceOf, subjectLabel, timeOf, word,
 } from '../src/client/feed.ts'
+import { translate } from '../src/client/locales.ts'
 import type { Channel, CollabState } from '../src/client/feed.ts'
 
 /** @returns a state with two mandates, one approval and a journal. */
@@ -216,14 +217,14 @@ describe('feed edge cases', () => {
 
 describe('journal wording', () => {
   it('turns a subject and an action into something a person reads', () => {
-    expect(subjectLabel('mis_123')).toBe('une mission')
-    expect(subjectLabel('brf_123')).toBe('un brief')
-    expect(subjectLabel('mnd_123')).toBe('un mandat')
-    expect(subjectLabel('apr_123')).toBe('une approbation')
-    expect(subjectLabel('inconnu')).toBe('inconnu')
-    expect(sentenceOf('mission.done')).toBe('mission terminee')
-    expect(sentenceOf('approval.rejected')).toBe('approbation refusee')
-    expect(sentenceOf('autre.action')).toBe('autre.action')
+    expect(subjectLabel('mis_123', translate)).toBe('une mission')
+    expect(subjectLabel('brf_123', translate)).toBe('un brief')
+    expect(subjectLabel('mnd_123', translate)).toBe('un mandat')
+    expect(subjectLabel('apr_123', translate)).toBe('une approbation')
+    expect(subjectLabel('inconnu', translate)).toBe('inconnu')
+    expect(sentenceOf('mission.done', translate)).toBe('mission terminee')
+    expect(sentenceOf('approval.rejected', translate)).toBe('approbation refusee')
+    expect(sentenceOf('autre.action', translate)).toBe('autre.action')
   })
 
   it('formats a clock, a day and plural words', () => {

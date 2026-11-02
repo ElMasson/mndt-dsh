@@ -585,3 +585,26 @@ archiver. Planification installee le dimanche a 03:23 UTC.
 
 Journalisation et metriques : `GET /metrics` pour les compteurs, `watch.log` pour la
 surveillance, `docker logs` et `backup.log` pour les traces d execution. Aucun mail.
+
+## 31. Copie de la page possedee par les locales, 2 novembre a 15 h 40
+
+`pnpm run verify-client-ui-i18n` refusait 138 chaines codees en dur dans la page de
+collaboration et 3 dans la marque. La page passe desormais par le seat de traduction.
+
+| Controle | Avant | Apres |
+|---|---|---|
+| Chaines en dur dans ui-mndt | 138 | 0 |
+| Chaines en dur dans ui-brand-mndt | 3 | 0 |
+| Porte i18n | echec | 1081 fichiers sources conformes |
+| Messages ajoutes au dictionnaire | 0 | 143, en francais avec leurs cles typees |
+| Tests client mndt | 46 | 46, dont un test de substitution |
+| Tests client marque | 6 | 7 |
+
+Les textes visibles restent identiques : la sonde navigateur du 2 novembre a 15 h 40 lit
+« Lancer une mission dans # equipe. », la vue Administration et ses 4 personnes, sans
+erreur JavaScript. Capture `collab-i18n.png`.
+
+Details : la page recoit un seat `t` optionnel et retombe sur le dictionnaire francais
+quand il manque, ce qui garde les tests directs simples ; les aides du fil (libelles
+d evenements, types de mission) prennent le meme seat ; les marques de la barre laterale
+sont decoratives et portent un alt vide, le nom etant deja du texte.

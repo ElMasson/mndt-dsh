@@ -9,6 +9,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace } from './face.ts'
+import { translate } from './locales.ts'
+import type { MndtTranslate } from './locales.ts'
 
 import {
   MISSION_KINDS, channelsOf, clockOf, dayOf, feedOf, humansOf, sentenceOf, subjectLabel, timeOf, word,
@@ -18,9 +20,11 @@ import type { Channel, CollabState, Post, SearchHit } from './feed.ts'
 /** @param props - the face the Host exposes. */
 export interface CollabPageProps {
   readonly api: MndtFace
+  /** The locale seat; the page falls back to French when it is absent. */
+  readonly t?: MndtTranslate
 }
 
-export function CollabPage({ api }: CollabPageProps) {
+export function CollabPage({ api, t = translate }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
@@ -341,10 +345,10 @@ export function CollabPage({ api }: CollabPageProps) {
   if (state === undefined) {
     return (
       <div className="mndt mndt-loading" role="status" aria-live="polite">
-        {error === undefined ? 'Chargement de l espace...' : (
+        {error === undefined ? t('ui.chargement-de-l-espace') : (
           <div className="mndt-error mndt-error-banner">
             <p>{error}</p>
-            <button type="button" className="mndt-button" onClick={() => { void load() }}>Reessayer</button>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.reessayer')}</button>
           </div>
         )}
       </div>
@@ -486,7 +490,7 @@ export function CollabPage({ api }: CollabPageProps) {
   const exportActivity = (): void => {
     const rows: string[][] = [['heure', 'acteur', 'action', 'objet', 'detail']]
     for (const event of filteredEvents) {
-      rows.push([new Date(event.at).toISOString(), event.actor, sentenceOf(event.action), subjectLabel(event.subject), event.detail ?? ''])
+      rows.push([new Date(event.at).toISOString(), event.actor, sentenceOf(event.action, t), subjectLabel(event.subject, t), event.detail ?? ''])
     }
     const csv = rows.map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
@@ -500,18 +504,18 @@ export function CollabPage({ api }: CollabPageProps) {
 
   return (
     <div className="mndt mndt-collab" data-view={view}>
-      <aside className="mndt-channels" aria-label="Canaux">
+      <aside className="mndt-channels" aria-label={t('ui.canaux')}>
         <div className="mndt-channels-head">
-          <span className="mndt-channels-title">mndt</span>
-          <span className="mndt-channels-workspace">Duke Analytics</span>
+          <span className="mndt-channels-title">{t('ui.mndt')}</span>
+          <span className="mndt-channels-workspace">{t('ui.duke-analytics')}</span>
         </div>
         <button type="button" className="mndt-search-open" onClick={() => { setSearch(''); setSearchIndex(0) }}>
-          <span>Rechercher</span>
-          <kbd>Ctrl K</kbd>
+          <span>{t('ui.rechercher')}</span>
+          <kbd>{t('ui.ctrl-k')}</kbd>
         </button>
         <div className="mndt-channel-group">
           <div className="mndt-channel-group-head">
-            <span>Vues</span>
+            <span>{t('ui.vues')}</span>
           </div>
           <button
             type="button"
@@ -520,7 +524,7 @@ export function CollabPage({ api }: CollabPageProps) {
             onClick={() => { setView('activity') }}
           >
             <span className="mndt-channel-hash">{'\u2261'}</span>
-            <span className="mndt-channel-name">Activite</span>
+            <span className="mndt-channel-name">{t('ui.activite')}</span>
             <span className="mndt-channel-badge">{activity.length}</span>
           </button>
           <button
@@ -530,7 +534,7 @@ export function CollabPage({ api }: CollabPageProps) {
             onClick={() => { setView('automations') }}
           >
             <span className="mndt-channel-hash">{'\u2699'}</span>
-            <span className="mndt-channel-name">Automatisations</span>
+            <span className="mndt-channel-name">{t('ui.automatisations')}</span>
             <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
           </button>
           {state.canAdmin !== true ? undefined : (
@@ -541,14 +545,14 @@ export function CollabPage({ api }: CollabPageProps) {
               onClick={() => { setView('admin') }}
             >
               <span className="mndt-channel-hash">{'\u2699'}</span>
-              <span className="mndt-channel-name">Administration</span>
+              <span className="mndt-channel-name">{t('ui.administration')}</span>
             </button>
           )}
         </div>
         {['team', 'mandate', 'system'].map((kind) => {
           const group = channels.filter(candidate => candidate.kind === kind)
           if (group.length === 0) return undefined
-          const label = kind === 'team' ? 'Equipe' : kind === 'mandate' ? 'Mandats' : 'Systeme'
+          const label = kind === 'team' ? t('ui.equipe') : kind === 'mandate' ? t('ui.mandats') : t('ui.systeme')
           return (
             <div key={kind} className="mndt-channel-group">
               <div className="mndt-channel-group-head">
@@ -579,11 +583,11 @@ export function CollabPage({ api }: CollabPageProps) {
           <div className="mndt-presence">
             <span className="mndt-dot" data-state="available" />
             <span>{state.you}</span>
-            <span className="mndt-role">{state.role ?? 'membre'}</span>
+            <span className="mndt-role">{state.role ?? t('ui.membre')}</span>
           </div>
           <div className="mndt-presence">
             <span className="mndt-dot" data-state="working" />
-            <span>{pending} decision{pending > 1 ? 's' : ''} en attente</span>
+            <span>{pending} {t('ui.decision')}{pending > 1 ? t('ui.s') : ''} {t('ui.en-attente')}</span>
           </div>
         </div>
       </aside>
@@ -597,36 +601,36 @@ export function CollabPage({ api }: CollabPageProps) {
             <p className="mndt-channel-subject">{channel?.subject}</p>
             {mandate === undefined ? undefined : (
               <div className="mndt-mandate-band">
-                <span>Donne par <strong>{mandate.delegant}</strong> a <strong>{mandate.delegataire}</strong></span>
-                <span>jusqu au {mandate.expiresOn}</span>
-                <span>{mandate.dailyCap} missions par jour</span>
-                <span>perimetre : {mandate.missionKinds.join(', ') || 'aucun type'}</span>
+                <span>{t('ui.donne-par')} <strong>{mandate.delegant}</strong> {t('ui.a')} <strong>{mandate.delegataire}</strong></span>
+                <span>{t('ui.jusqu-au')} {mandate.expiresOn}</span>
+                <span>{mandate.dailyCap} {t('ui.missions-par-jour')}</span>
+                <span>{t('ui.perimetre')} {mandate.missionKinds.join(', ') || t('ui.aucun-type')}</span>
               </div>
             )}
           </div>
           <div className="mndt-channel-head-side">
             <div className="mndt-mobile-bar">
-              <select className="mndt-input" value={channelId} onChange={(event) => { setChannelId(event.target.value); setView('channel') }} aria-label="Choisir un canal">
+              <select className="mndt-input" value={channelId} onChange={(event) => { setChannelId(event.target.value); setView('channel') }} aria-label={t('ui.choisir-un-canal')}>
                 {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
               </select>
-              <button type="button" className="mndt-button" onClick={() => { setView(view === 'activity' ? 'channel' : 'activity') }}>{view === 'activity' ? 'Retour au canal' : 'Activite'}</button>
+              <button type="button" className="mndt-button" onClick={() => { setView(view === 'activity' ? 'channel' : 'activity') }}>{view === 'activity' ? t('ui.retour-au-canal') : t('ui.activite')}</button>
             </div>
-            <button type="button" className="mndt-button" onClick={() => { void load() }}>Rafraichir</button>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.rafraichir')}</button>
             {mandate === undefined ? undefined : <span className="mndt-pill" data-tone="state">{mandate.state}</span>}
             <span className="mndt-pill" data-tone="id">{posts.length} {word(posts.length, 'post', 'posts')}</span>
-            {pending > 0 ? <span className="mndt-pill" data-tone="write">{pending} a decider</span> : undefined}
+            {pending > 0 ? <span className="mndt-pill" data-tone="write">{pending} {t('ui.a-decider')}</span> : undefined}
           </div>
         </header>
 
         {error === undefined ? undefined : (
           <div className="mndt-error mndt-error-banner">
             <span>{error}</span>
-            <button type="button" className="mndt-button" onClick={() => { void load() }}>Reessayer</button>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.reessayer')}</button>
           </div>
         )}
 
         <div className="mndt-feed">
-          {posts.length === 0 ? <p className="mndt-empty">Rien dans ce canal pour le moment.</p> : undefined}
+          {posts.length === 0 ? <p className="mndt-empty">{t('ui.rien-dans-ce-canal-pour-le-moment')}</p> : undefined}
           {posts.map((post, index) => {
             const previous = posts[index - 1]
             const newDay = previous === undefined || dayOf(previous.at) !== dayOf(post.at)
@@ -635,6 +639,7 @@ export function CollabPage({ api }: CollabPageProps) {
                 {newDay ? <div className="mndt-day">{dayOf(post.at)}</div> : undefined}
                 <PostView
                   post={post}
+                  t={t}
                   busy={busy}
                   canDecide={state.canAdmin === true}
                   isYou={post.body.kind === 'approval' && post.body.author === state.you}
@@ -650,36 +655,36 @@ export function CollabPage({ api }: CollabPageProps) {
         <div className="mndt-composer">
           <div className="mndt-composer-frame">
             <div className="mndt-composer-line">
-              <span className="mndt-composer-hint">Lancer une mission dans {channel?.kind === 'mandate' ? channel.name : `# ${channel?.name ?? 'equipe'}`}.</span>
-              <span className="mndt-composer-note">Elle demarre en prive ; cochez le partage pour la montrer a l equipe.</span>
+              <span className="mndt-composer-hint">{t('ui.lancer-une-mission-dans')} {channel?.kind === 'mandate' ? channel.name : `# ${channel?.name ?? 'equipe'}`}.</span>
+              <span className="mndt-composer-note">{t('ui.elle-demarre-en-prive-cochez-le-partage')}</span>
             </div>
             <div className="mndt-composer-row">
-              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label="Type de mission">
-                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label={t('ui.type-de-mission')}>
+                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
               </select>
               {state.canShare === true ? (
                 <label className="mndt-check">
                   <input type="checkbox" checked={share} onChange={(event) => { setShare(event.target.checked) }} />
-                  partager a l equipe
+                  {t('ui.partager-a-l-equipe')}
                 </label>
               ) : undefined}
             </div>
             <textarea
               className="mndt-input mndt-composer-input"
-              placeholder="Ce que vous voulez obtenir, en une phrase."
+              placeholder={t('ui.ce-que-vous-voulez-obtenir-en-une')}
               value={prompt}
               onChange={(event) => { setPrompt(event.target.value) }}
               disabled={!state.canWrite}
             />
             <div className="mndt-composer-actions">
-              <span className="mndt-role">{!state.canWrite ? 'lecture seule' : `${prompt.trim().length} caracteres`}</span>
+              <span className="mndt-role">{!state.canWrite ? t('ui.lecture-seule') : t('ui.caracteres', { count: prompt.trim().length })}</span>
               <button
                 type="button"
                 className="mndt-button"
                 data-variant="primary"
                 disabled={!state.canWrite || launching || prompt.trim() === ''}
                 onClick={() => { void launch() }}
-              >{launching ? 'Lancement...' : 'Lancer une mission'}</button>
+              >{launching ? t('ui.lancement') : t('ui.lancer-une-mission')}</button>
             </div>
           </div>
         </div>
@@ -688,14 +693,14 @@ export function CollabPage({ api }: CollabPageProps) {
       <section className="mndt-main mndt-automations" style={{ display: view === 'automations' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
-            <h1 className="mndt-channel-title">Automatisations</h1>
+            <h1 className="mndt-channel-title">{t('ui.automatisations')}</h1>
             <p className="mndt-channel-subject">
-              Des missions planifiees, sans conversation. Elles ne decident rien et n envoient rien.
+              {t('ui.des-missions-planifiees-sans-conversation-elles-ne')}
             </p>
           </div>
           <div className="mndt-channel-head-side">
-            <button type="button" className="mndt-button" onClick={() => { void loadAutomations() }}>Rafraichir</button>
-            <span className="mndt-pill" data-tone="id">{automations?.items.length ?? 0} planifiees</span>
+            <button type="button" className="mndt-button" onClick={() => { void loadAutomations() }}>{t('ui.rafraichir')}</button>
+            <span className="mndt-pill" data-tone="id">{automations?.items.length ?? 0} {t('ui.planifiees')}</span>
           </div>
         </header>
         {automationError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{automationError}</span></div>}
@@ -705,13 +710,13 @@ export function CollabPage({ api }: CollabPageProps) {
             <article key={item.id} className="mndt-post-card" data-kind="automation">
               <div className="mndt-post-head">
                 <span className="mndt-post-kind">{item.name}</span>
-                <span className="mndt-pill" data-tone="state">{item.enabled ? 'active' : 'suspendue'}</span>
-                <span className="mndt-pill" data-tone="id">{item.at} chaque jour</span>
+                <span className="mndt-pill" data-tone="state">{item.enabled ? t('ui.active') : t('ui.suspendue')}</span>
+                <span className="mndt-pill" data-tone="id">{item.at} {t('ui.chaque-jour')}</span>
                 <span className="mndt-post-time">{item.kind}</span>
               </div>
               <p className="mndt-post-body">{item.prompt}</p>
               <div className="mndt-post-actions">
-                {item.lastFiredDate === undefined ? undefined : <span className="mndt-tag">derniere : {item.lastFiredDate}</span>}
+                {item.lastFiredDate === undefined ? undefined : <span className="mndt-tag">{t('ui.derniere')} {item.lastFiredDate}</span>}
                 {item.lastOutcome === undefined ? undefined : <span className="mndt-tag">{item.lastOutcome}</span>}
                 {automations?.canAdmin !== true ? undefined : (
                   <>
@@ -721,7 +726,7 @@ export function CollabPage({ api }: CollabPageProps) {
                       disabled={automationBusy === item.id}
                       onClick={() => { void runAutomationNow(item.id) }}
                     >
-                      {automationBusy === item.id ? 'En cours...' : 'Executer maintenant'}
+                      {automationBusy === item.id ? t('ui.en-cours') : t('ui.executer-maintenant')}
                     </button>
                     <button
                       type="button"
@@ -729,26 +734,26 @@ export function CollabPage({ api }: CollabPageProps) {
                       disabled={automationBusy === item.id}
                       onClick={() => { void toggleAutomation(item.id, !item.enabled) }}
                     >
-                      {item.enabled ? 'Suspendre' : 'Activer'}
+                      {item.enabled ? t('ui.suspendre') : t('ui.activer')}
                     </button>
                   </>
                 )}
               </div>
             </article>
           ))}
-          {automations !== undefined && automations.items.length === 0 ? <p className="mndt-empty">Aucune automatisation.</p> : undefined}
+          {automations !== undefined && automations.items.length === 0 ? <p className="mndt-empty">{t('ui.aucune-automatisation')}</p> : undefined}
         </div>
       </section>
 
       <section className="mndt-main mndt-admin" style={{ display: view === 'admin' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
-            <h1 className="mndt-channel-title">Administration</h1>
-            <p className="mndt-channel-subject">Les personnes, leurs droits et les mandats en cours.</p>
+            <h1 className="mndt-channel-title">{t('ui.administration')}</h1>
+            <p className="mndt-channel-subject">{t('ui.les-personnes-leurs-droits-et-les-mandats')}</p>
           </div>
           <div className="mndt-channel-head-side">
-            <button type="button" className="mndt-button" onClick={() => { void loadAdmin() }}>Rafraichir</button>
-            <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0} personnes</span>
+            <button type="button" className="mndt-button" onClick={() => { void loadAdmin() }}>{t('ui.rafraichir')}</button>
+            <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0} {t('ui.personnes')}</span>
           </div>
         </header>
         {adminError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{adminError}</span></div>}
@@ -756,7 +761,7 @@ export function CollabPage({ api }: CollabPageProps) {
         <div className="mndt-feed">
           <article className="mndt-post-card" data-kind="members">
             <div className="mndt-post-head">
-              <span className="mndt-post-kind">Personnes et droits</span>
+              <span className="mndt-post-kind">{t('ui.personnes-et-droits')}</span>
               <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0}</span>
             </div>
             <div className="mndt-post-body">
@@ -765,7 +770,7 @@ export function CollabPage({ api }: CollabPageProps) {
                   <span className="mndt-tag">{member.subject}</span>
                   <select
                     className="mndt-input"
-                    aria-label={`role de ${member.subject}`}
+                    aria-label={t('ui.role-de-personne', { name: member.subject })}
                     value={member.role}
                     disabled={adminBusy === `grant:${member.subject}`}
                     onChange={(event) => { void changeMemberRole(member.subject, event.target.value as MemberRole) }}
@@ -778,80 +783,80 @@ export function CollabPage({ api }: CollabPageProps) {
                     disabled={adminBusy === `revoke:${member.subject}`}
                     onClick={() => { void revokeMemberNow(member.subject) }}
                   >
-                    Retirer
+                    {t('ui.retirer')}
                   </button>
                 </div>
               ))}
-              {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">Aucune personne.</p> : undefined}
+              {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">{t('ui.aucune-personne')}</p> : undefined}
             </div>
             <div className="mndt-post-actions">
               <input
                 className="mndt-input"
-                aria-label="adresse de la personne a accorder"
-                placeholder="prenom@datanalysis.re"
+                aria-label={t('ui.adresse-de-la-personne-a-accorder')}
+                placeholder={t('ui.prenom-datanalysis-re')}
                 value={grantEmail}
                 onChange={(event) => { setGrantEmail(event.target.value) }}
               />
               <select
                 className="mndt-input"
-                aria-label="role a accorder"
+                aria-label={t('ui.role-a-accorder')}
                 value={grantRole}
                 onChange={(event) => { setGrantRole(event.target.value as MemberRole) }}
               >
                 {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
               </select>
               <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
-                Accorder
+                {t('ui.accorder')}
               </button>
             </div>
           </article>
 
           <article className="mndt-post-card" data-kind="mandates">
             <div className="mndt-post-head">
-              <span className="mndt-post-kind">Mandats</span>
+              <span className="mndt-post-kind">{t('ui.mandats')}</span>
               <span className="mndt-pill" data-tone="id">{(state.mandates ?? []).length}</span>
             </div>
             <div className="mndt-post-body">
               {(state.mandates ?? []).map(item => (
                 <div key={item.id} className="mndt-post-actions">
                   <span className="mndt-tag">{item.purpose === '' ? item.id : item.purpose}</span>
-                  <span className="mndt-post-time">{item.delegant} vers {item.delegataire}</span>
+                  <span className="mndt-post-time">{item.delegant} {t('ui.vers')} {item.delegataire}</span>
                   <span className="mndt-pill" data-tone="state">{item.state}</span>
-                  <span className="mndt-post-time">echeance {item.expiresOn}</span>
+                  <span className="mndt-post-time">{t('ui.echeance')} {item.expiresOn}</span>
                   {item.state !== 'proposed' ? undefined : (
-                    <button type="button" className="mndt-button" disabled={adminBusy === `sign:${item.id}`} onClick={() => { void settleMandate(item.id, 'sign') }}>Signer</button>
+                    <button type="button" className="mndt-button" disabled={adminBusy === `sign:${item.id}`} onClick={() => { void settleMandate(item.id, 'sign') }}>{t('ui.signer')}</button>
                   )}
                   {item.state === 'retired' ? undefined : (
-                    <button type="button" className="mndt-button" disabled={adminBusy === `retire:${item.id}`} onClick={() => { void settleMandate(item.id, 'retire') }}>Retirer</button>
+                    <button type="button" className="mndt-button" disabled={adminBusy === `retire:${item.id}`} onClick={() => { void settleMandate(item.id, 'retire') }}>{t('ui.retirer')}</button>
                   )}
                 </div>
               ))}
-              <p className="mndt-empty">Un mandat se propose, se signe par le delegant, puis se retire a l echeance.</p>
+              <p className="mndt-empty">{t('ui.un-mandat-se-propose-se-signe-par')}</p>
             </div>
             <div className="mndt-post-actions">
               <input
                 className="mndt-input"
-                aria-label="objet du mandat"
-                placeholder="objet du mandat"
+                aria-label={t('ui.objet-du-mandat')}
+                placeholder={t('ui.objet-du-mandat')}
                 value={mandatePurpose}
                 onChange={(event) => { setMandatePurpose(event.target.value) }}
               />
               <input
                 className="mndt-input"
-                aria-label="delegataire du mandat"
-                placeholder="prenom@datanalysis.re"
+                aria-label={t('ui.delegataire-du-mandat')}
+                placeholder={t('ui.prenom-datanalysis-re')}
                 value={mandateDelegate}
                 onChange={(event) => { setMandateDelegate(event.target.value) }}
               />
               <input
                 className="mndt-input"
-                aria-label="echeance du mandat"
+                aria-label={t('ui.echeance-du-mandat')}
                 type="date"
                 value={mandateUntil}
                 onChange={(event) => { setMandateUntil(event.target.value) }}
               />
               <button type="button" className="mndt-button" disabled={adminBusy === 'mandate'} onClick={() => { void proposeMandate() }}>
-                Proposer
+                {t('ui.proposer')}
               </button>
             </div>
           </article>
@@ -860,32 +865,32 @@ export function CollabPage({ api }: CollabPageProps) {
       <section className="mndt-main mndt-activity" style={{ display: view === 'activity' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">
-            <h1 className="mndt-channel-title">Activite</h1>
-            <p className="mndt-channel-subject">Tout ce qui s est passe dans Duke Analytics, du plus recent au plus ancien.</p>
+            <h1 className="mndt-channel-title">{t('ui.activite')}</h1>
+            <p className="mndt-channel-subject">{t('ui.tout-ce-qui-s-est-passe-dans')}</p>
           </div>
           <div className="mndt-channel-head-side">
-            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label="Filtrer par canal">
-              <option value="all">Tous les canaux</option>
+            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label={t('ui.filtrer-par-canal')}>
+              <option value="all">{t('ui.tous-les-canaux')}</option>
               {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
             </select>
             <select
               className="mndt-input"
               value={activityFilter}
               onChange={(event) => { setActivityFilter(event.target.value as 'all' | 'humans' | 'agents' | 'me') }}
-              aria-label="Filtrer l activite"
+              aria-label={t('ui.filtrer-l-activite')}
             >
-              <option value="all">Tout</option>
-              <option value="humans">Humains</option>
-              <option value="agents">Agents</option>
-              <option value="me">Moi</option>
+              <option value="all">{t('ui.tout')}</option>
+              <option value="humans">{t('ui.humains')}</option>
+              <option value="agents">{t('ui.agents')}</option>
+              <option value="me">{t('ui.moi')}</option>
             </select>
-            <button type="button" className="mndt-button" onClick={markAllRead}>Tout marquer comme lu</button>
-            <button type="button" className="mndt-button" onClick={exportActivity}>Exporter en CSV</button>
+            <button type="button" className="mndt-button" onClick={markAllRead}>{t('ui.tout-marquer-comme-lu')}</button>
+            <button type="button" className="mndt-button" onClick={exportActivity}>{t('ui.exporter-en-csv')}</button>
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
           </div>
         </header>
         <div className="mndt-feed">
-          {filteredEvents.length === 0 ? <p className="mndt-empty">Aucune ligne pour ce filtre.</p> : undefined}
+          {filteredEvents.length === 0 ? <p className="mndt-empty">{t('ui.aucune-ligne-pour-ce-filtre')}</p> : undefined}
           {filteredEvents.map((event, index) => {
             const previous = filteredEvents[index - 1]
             const newDay = previous === undefined || dayOf(previous.at) !== dayOf(event.at)
@@ -895,7 +900,7 @@ export function CollabPage({ api }: CollabPageProps) {
                 <button type="button" className="mndt-event-post mndt-event-button" onClick={() => { openEvent(event.subject) }}>
                   <span className="mndt-event-time">{clockOf(event.at)}</span>
                   <span className="mndt-event-actor" data-agent={isHuman(event.actor) ? 'false' : 'true'}>{event.actor}</span>
-                  <span className="mndt-event-text">{sentenceOf(event.action)} : {subjectLabel(event.subject)}</span>
+                  <span className="mndt-event-text">{sentenceOf(event.action, t)} : {subjectLabel(event.subject, t)}</span>
                 </button>
               </div>
             )
@@ -903,17 +908,17 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </section>
 
-      <aside className="mndt-context" aria-label="Contexte" style={{ display: view === 'channel' ? undefined : 'none' }}>
+      <aside className="mndt-context" aria-label={t('ui.contexte')} style={{ display: view === 'channel' ? undefined : 'none' }}>
         {mandate === undefined ? (
           <>
-            <h2 className="mndt-context-title">Espace</h2>
+            <h2 className="mndt-context-title">{t('ui.espace')}</h2>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Vue</div>
-              <p className="mndt-context-value">{posts.length} {word(posts.length, 'post', 'posts')} sur ce canal, {state.missions.length} {word(state.missions.length, 'mission', 'missions')}, {state.briefs.length} {word(state.briefs.length, 'brief', 'briefs')}.</p>
+              <div className="mndt-context-label">{t('ui.vue')}</div>
+              <p className="mndt-context-value">{posts.length} {word(posts.length, 'post', 'posts')} {t('ui.sur-ce-canal')} {state.missions.length} {word(state.missions.length, 'mission', 'missions')}, {state.briefs.length} {word(state.briefs.length, 'brief', 'briefs')}.</p>
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Humains</div>
-              {humans.length === 0 ? <p className="mndt-context-value">La liste des membres se charge avec le panneau Membres.</p> : humans.map(human => (
+              <div className="mndt-context-label">{t('ui.humains')}</div>
+              {humans.length === 0 ? <p className="mndt-context-value">{t('ui.la-liste-des-membres-se-charge-avec')}</p> : humans.map(human => (
                 <div key={human.subject} className="mndt-person">
                   <span className="mndt-avatar">{human.subject.slice(0, 1).toUpperCase()}</span>
                   <span className="mndt-person-name">{human.subject}</span>
@@ -922,57 +927,57 @@ export function CollabPage({ api }: CollabPageProps) {
               ))}
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Agents</div>
-              {agents.length === 0 ? <p className="mndt-context-value">Les agents apparaissent ici des qu ils ont produit un brief.</p> : agents.map(agent => (
+              <div className="mndt-context-label">{t('ui.agents')}</div>
+              {agents.length === 0 ? <p className="mndt-context-value">{t('ui.les-agents-apparaissent-ici-des-qu-ils')}</p> : agents.map(agent => (
                 <div key={agent} className="mndt-person">
                   <span className="mndt-avatar" data-agent="true">{agent.slice(0, 1).toUpperCase()}</span>
                   <span className="mndt-person-name">{agent}</span>
-                  <span className="mndt-person-role">{state.missions.some(mission => mission.createdBy === agent && (mission.status === 'running' || mission.status === 'queued')) ? 'agent, en mission' : 'agent, disponible'}</span>
+                  <span className="mndt-person-role">{state.missions.some(mission => mission.createdBy === agent && (mission.status === 'running' || mission.status === 'queued')) ? t('ui.agent-en-mission') : t('ui.agent-disponible')}</span>
                 </div>
               ))}
             </section>
           </>
         ) : (
           <>
-            <h2 className="mndt-context-title">Mandat</h2>
+            <h2 className="mndt-context-title">{t('ui.mandat')}</h2>
             <section className="mndt-context-block">
               <div className="mndt-context-grid">
-                <span className="mndt-context-label">Mandant</span><span className="mndt-context-value">{mandate.delegant}</span>
-                <span className="mndt-context-label">Delegataire</span><span className="mndt-context-value">{mandate.delegataire}</span>
-                <span className="mndt-context-label">Etat</span><span className="mndt-context-value">{mandate.state}{mandate.signedBy === undefined ? '' : ` par ${mandate.signedBy}`}</span>
-                <span className="mndt-context-label">Echeance</span><span className="mndt-context-value">{mandate.expiresOn}</span>
-                <span className="mndt-context-label">Limite</span><span className="mndt-context-value">{mandate.dailyCap} missions par jour</span>
+                <span className="mndt-context-label">{t('ui.mandant')}</span><span className="mndt-context-value">{mandate.delegant}</span>
+                <span className="mndt-context-label">{t('ui.delegataire')}</span><span className="mndt-context-value">{mandate.delegataire}</span>
+                <span className="mndt-context-label">{t('ui.etat')}</span><span className="mndt-context-value">{mandate.state}{mandate.signedBy === undefined ? '' : ` ${t('ui.par')} ${mandate.signedBy}`}</span>
+                <span className="mndt-context-label">{t('ui.echeance-2')}</span><span className="mndt-context-value">{mandate.expiresOn}</span>
+                <span className="mndt-context-label">{t('ui.limite')}</span><span className="mndt-context-value">{mandate.dailyCap} {t('ui.missions-par-jour')}</span>
               </div>
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Perimetre</div>
-              <p className="mndt-context-value">{mandate.missionKinds.join(', ') || 'aucune mission autorisee'}</p>
+              <div className="mndt-context-label">{t('ui.perimetre-2')}</div>
+              <p className="mndt-context-value">{mandate.missionKinds.join(', ') || t('ui.aucune-mission-autorisee')}</p>
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Connecteurs autorises</div>
+              <div className="mndt-context-label">{t('ui.connecteurs-autorises')}</div>
               <div className="mndt-tags">
                 {mandate.connectors.map(connector => <span key={connector} className="mndt-tag">{connector}</span>)}
               </div>
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Missions liees</div>
-              <p className="mndt-context-value">{posts.filter(post => post.body.kind === 'mission').length} {word(posts.filter(post => post.body.kind === 'mission').length, 'mission', 'missions')} sur ce mandat.</p>
+              <div className="mndt-context-label">{t('ui.missions-liees')}</div>
+              <p className="mndt-context-value">{posts.filter(post => post.body.kind === 'mission').length} {word(posts.filter(post => post.body.kind === 'mission').length, 'mission', 'missions')} {t('ui.sur-ce-mandat')}</p>
             </section>
             <section className="mndt-context-block">
-              <div className="mndt-context-label">Approbations</div>
-              <p className="mndt-context-value">{state.approvals.filter(approval => approval.missionId !== undefined && state.missions.some(mission => mission.id === approval.missionId && mission.mandateId === mandate.id)).length} en attente.</p>
+              <div className="mndt-context-label">{t('ui.approbations')}</div>
+              <p className="mndt-context-value">{state.approvals.filter(approval => approval.missionId !== undefined && state.missions.some(mission => mission.id === approval.missionId && mission.mandateId === mandate.id)).length} {t('ui.en-attente-2')}</p>
             </section>
           </>
         )}
       </aside>
       {search === undefined ? undefined : (
-        <div className="mndt-search-overlay" role="dialog" aria-modal="true" aria-label="Recherche">
+        <div className="mndt-search-overlay" role="dialog" aria-modal="true" aria-label={t('ui.recherche')}>
           <div className="mndt-search-box">
             <input
               className="mndt-input mndt-search-input"
               value={search}
               autoFocus
-              placeholder="Chercher une mission, un brief, une approbation, un mandat, une personne."
+              placeholder={t('ui.chercher-une-mission-un-brief-une-approbation')}
               onChange={(event) => { setSearch(event.target.value); setSearchIndex(0) }}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') setSearch(undefined)
@@ -982,7 +987,7 @@ export function CollabPage({ api }: CollabPageProps) {
               }}
             />
             <div className="mndt-search-results">
-              {searchHits.length === 0 ? <p className="mndt-empty">{search.trim() === '' ? 'Tapez un mot pour chercher.' : 'Aucun resultat.'}</p> : undefined}
+              {searchHits.length === 0 ? <p className="mndt-empty">{search.trim() === '' ? t('ui.tapez-un-mot-pour-chercher') : t('ui.aucun-resultat')}</p> : undefined}
               {searchHits.map((hit, index) => (
                 <button
                   key={`${hit.kind}-${hit.id}`}
@@ -1079,6 +1084,7 @@ function renderBrief(markdown: string): ReactNode[] {
 /** One post in the feed. */
 function PostView(props: {
   post: Post
+  t: MndtTranslate
   busy: string | undefined
   canDecide: boolean
   isYou: boolean
@@ -1086,7 +1092,7 @@ function PostView(props: {
   onToggle(): void
   onDecide(id: string, decision: 'approved' | 'rejected', reason?: string): void
 }) {
-  const { post, busy, canDecide, isYou, open } = props
+  const { post, t, busy, canDecide, isYou, open } = props
   const [refusing, setRefusing] = useState(false)
   const [reason, setReason] = useState('')
   const toggle = (): void => { props.onToggle() }
@@ -1097,7 +1103,7 @@ function PostView(props: {
       <div className="mndt-event-post">
         <span className="mndt-event-time">{clockOf(body.at)}</span>
         <span className="mndt-event-actor">{body.actor}</span>
-        <span className="mndt-event-text">{sentenceOf(body.action)} : {subjectLabel(body.subject)}</span>
+        <span className="mndt-event-text">{sentenceOf(body.action, t)} : {subjectLabel(body.subject, t)}</span>
       </div>
     )
   }
@@ -1105,12 +1111,12 @@ function PostView(props: {
     return (
       <article className="mndt-post-card" data-kind="approval">
         <div className="mndt-post-head">
-          <span className="mndt-post-kind">Approbation requise</span>
+          <span className="mndt-post-kind">{t('ui.approbation-requise')}</span>
           <span className="mndt-pill" data-tone="write">{body.approvalKind}</span>
           <span className="mndt-post-time">{clockOf(body.at)}</span>
         </div>
         <p className="mndt-post-title">{body.title}</p>
-        <p className="mndt-post-meta">demandee par {body.author}</p>
+        <p className="mndt-post-meta">{t('ui.demandee-par')} {body.author}</p>
         <div className="mndt-post-actions">
           <button
             type="button"
@@ -1118,23 +1124,23 @@ function PostView(props: {
             data-variant="primary"
             disabled={!canDecide || isYou || busy === body.id}
             onClick={() => { decide(body.id, 'approved') }}
-          >Approuver</button>
+          >{t('ui.approuver')}</button>
           {refusing ? undefined : (
             <button
               type="button"
               className="mndt-button"
               disabled={!canDecide || isYou || busy === body.id}
               onClick={() => { setRefusing(true) }}
-            >Refuser</button>
+            >{t('ui.refuser')}</button>
           )}
-          {isYou ? <span className="mndt-post-note">Vous avez demande cette decision, un autre humain la prend.</span> : undefined}
-          {!isYou && !canDecide ? <span className="mndt-post-note">Seul un owner ou un admin peut decider.</span> : undefined}
+          {isYou ? <span className="mndt-post-note">{t('ui.vous-avez-demande-cette-decision-un-autre')}</span> : undefined}
+          {!isYou && !canDecide ? <span className="mndt-post-note">{t('ui.seul-un-owner-ou-un-admin-peut')}</span> : undefined}
         </div>
         {refusing ? (
           <div className="mndt-refusal">
             <textarea
               className="mndt-input"
-              placeholder="Motif du refus, conserve dans le journal"
+              placeholder={t('ui.motif-du-refus-conserve-dans-le-journal')}
               value={reason}
               onChange={(event) => { setReason(event.target.value) }}
             />
@@ -1145,12 +1151,12 @@ function PostView(props: {
                 data-variant="primary"
                 disabled={reason.trim() === ''}
                 onClick={() => { decide(body.id, 'rejected', reason.trim()); setRefusing(false) }}
-              >Confirmer le refus</button>
+              >{t('ui.confirmer-le-refus')}</button>
               <button
                 type="button"
                 className="mndt-button"
                 onClick={() => { setRefusing(false); setReason('') }}
-              >Annuler</button>
+              >{t('ui.annuler')}</button>
             </div>
           </div>
         ) : undefined}
@@ -1162,8 +1168,8 @@ function PostView(props: {
     return (
       <article className="mndt-post-card" data-kind="brief">
         <div className="mndt-post-head">
-          <span className="mndt-post-kind">Brief</span>
-          <span className="mndt-role">agent</span>
+          <span className="mndt-post-kind">{t('ui.brief')}</span>
+          <span className="mndt-role">{t('ui.agent')}</span>
           <span className="mndt-post-time">{clockOf(body.at)}</span>
         </div>
         <p className="mndt-post-title">{body.title}</p>
@@ -1174,18 +1180,18 @@ function PostView(props: {
   return (
     <article className="mndt-post-card" data-kind="mission" data-mission={post.id}>
       <div className="mndt-post-head">
-        <span className="mndt-post-kind">Mission {body.title}</span>
+        <span className="mndt-post-kind">{t('ui.mission')} {body.title}</span>
         <span className="mndt-role" data-agent={body.author.includes('@') ? undefined : 'true'}>{body.author}</span>
         <span className="mndt-pill" data-tone="state">{body.status}</span>
         <span className="mndt-post-time">{clockOf(body.at)}</span>
       </div>
       <p className="mndt-post-body">{body.prompt}</p>
       <div className="mndt-post-actions">
-        <span className="mndt-tag">{body.visibility === 'team' ? 'equipe' : 'privee'}</span>
+        <span className="mndt-tag">{body.visibility === 'team' ? t('ui.equipe-2') : t('ui.privee')}</span>
         {body.mandate === undefined ? undefined : <span className="mndt-tag">{body.mandate.slice(0, 32)}</span>}
         {body.error === undefined ? undefined : <span className="mndt-error mndt-error-banner">{body.error}</span>}
         {body.brief === undefined ? undefined : (
-          <button type="button" className="mndt-button" onClick={toggle}>{open ? 'Masquer le brief' : 'Ouvrir le brief'}</button>
+          <button type="button" className="mndt-button" onClick={toggle}>{open ? t('ui.masquer-le-brief') : t('ui.ouvrir-le-brief')}</button>
         )}
       </div>
       {open && body.brief !== undefined ? <div className="mndt-brief-body">{renderBrief(body.brief.markdown)}</div> : undefined}

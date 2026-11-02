@@ -19,7 +19,7 @@ export function MndtBrandMark({ size }: SidebarBrandMarkOwnerProps) {
   return (
     <img
       src={symbol}
-      alt="mndt"
+      alt=""
       height={height}
       width={Math.round(height * SYMBOL_RATIO)}
       style={{ display: 'block', objectFit: 'contain' }}
@@ -36,7 +36,7 @@ export function MndtBrandName() {
   return (
     <img
       src={wordmark}
-      alt="mndt"
+      alt=""
       height={height}
       width={Math.round(height * WORDMARK_RATIO)}
       style={{ display: 'block', objectFit: 'contain' }}
@@ -61,7 +61,7 @@ export function MndtHeroMark({ size, className }: HeroBrandMarkOwnerProps) {
     >
       <img
         src={symbol}
-        alt="mndt"
+        alt=""
         height={height}
         width={Math.round(height * SYMBOL_RATIO)}
         style={{ display: 'block', objectFit: 'contain' }}

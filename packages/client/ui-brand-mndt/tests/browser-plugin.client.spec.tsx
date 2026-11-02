@@ -92,7 +92,7 @@ describe('mndt browser-brand plugin', () => {
     const mark = render(<MndtBrandMark size={24} />)
     const markImage = mark.container.querySelector('img')
     expect(markImage?.getAttribute('height')).toBe('19')
-    expect(markImage?.getAttribute('alt')).toBe('mndt')
+    expect(markImage?.getAttribute('alt')).toBe('')
     // The bundler inlines a small asset and emits a URL for a larger one; both
     // mean the same thing here, so the assertion accepts the mndt symbol either way.
     expect(markImage?.getAttribute('src')).toMatch(/(^data:image\/png;base64,|mndt-symbol\.png$)/)
@@ -100,6 +100,6 @@ describe('mndt browser-brand plugin', () => {
     expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('27')
 
     const name = render(<MndtBrandName />)
-    expect(name.container.querySelector('img')?.getAttribute('alt')).toBe('mndt')
+    expect(name.container.querySelector('img')?.getAttribute('alt')).toBe('')
   })
 })

@@ -4,6 +4,8 @@
  * Channels, feed composition and journal wording are computed here so the
  * component stays about rendering, and so the rules can be tested directly.
  */
+import type { MndtKey, MndtTranslate } from './locales.ts'
+
 import type { MemberRow, MandateRow, PageStateRow } from './face.ts'
 
 /** One journal line as the Host reports it. */
@@ -213,42 +215,43 @@ export function humansOf(state: CollabState): readonly MemberRow[] {
 }
 
 /** @param subject - the identifier an event points at. @returns a readable label. */
-export function subjectLabel(subject: string): string {
-  if (subject.startsWith('mis_')) return 'une mission'
-  if (subject.startsWith('apr_')) return 'une approbation'
-  if (subject.startsWith('mnd_')) return 'un mandat'
-  if (subject.startsWith('brf_')) return 'un brief'
+export function subjectLabel(subject: string, t: MndtTranslate): string {
+  if (subject.startsWith('mis_')) return t('ui.une-mission')
+  if (subject.startsWith('apr_')) return t('ui.une-approbation')
+  if (subject.startsWith('mnd_')) return t('ui.un-mandat')
+  if (subject.startsWith('brf_')) return t('ui.un-brief')
   return subject
 }
 
 /** @param action - the journal action. @returns a readable sentence. */
-export function sentenceOf(action: string): string {
-  const table: Record<string, string> = {
-    'mission.created': 'mission lancee',
-    'mission.started': 'mission lancee',
-    'mission.queued': 'mission mise en file',
-    'mission.done': 'mission terminee',
-    'mission.completed': 'mission terminee',
-    'mission.failed': 'mission echouee',
-    'mission.refused': 'mission refusee',
-    'approval.requested': 'approbation demandee',
-    'approval.decided': 'approbation decidee',
-    'approval.approved': 'approbation approuvee',
-    'approval.rejected': 'approbation refusee',
-    'mandate.proposed': 'mandat propose',
-    'mandate.signed': 'mandat signe',
-    'mandate.retired': 'mandat retire',
+export function sentenceOf(action: string, t: MndtTranslate): string {
+  const table: Record<string, MndtKey> = {
+    'mission.created': 'ui.mission-lancee',
+    'mission.started': 'ui.mission-lancee',
+    'mission.queued': 'ui.mission-mise-en-file',
+    'mission.done': 'ui.mission-terminee',
+    'mission.completed': 'ui.mission-terminee',
+    'mission.failed': 'ui.mission-echouee',
+    'mission.refused': 'ui.mission-refusee',
+    'approval.requested': 'ui.approbation-demandee',
+    'approval.decided': 'ui.approbation-decidee',
+    'approval.approved': 'ui.approbation-approuvee',
+    'approval.rejected': 'ui.approbation-refusee',
+    'mandate.proposed': 'ui.mandat-propose',
+    'mandate.signed': 'ui.mandat-signe',
+    'mandate.retired': 'ui.mandat-retire',
   }
-  return table[action] ?? action
+  const key = table[action]
+  return key === undefined ? action : t(key)
 }
 
 /** The missions a person can launch from a channel. */
 export const MISSION_KINDS = [
-  { value: 'custom', label: 'Demande libre' },
-  { value: 'briefing', label: 'Briefing du matin' },
-  { value: 'meeting-prep', label: 'Preparation de reunion' },
-  { value: 'account-review', label: 'Revue de compte' },
-  { value: 'invoice-chase', label: 'Relance de facture' },
-  { value: 'signal-watch', label: 'Veille de signaux' },
-  { value: 'weekly-synthesis', label: 'Synthese hebdomadaire' },
-] as const
+  { value: 'custom', label: 'ui.demande-libre' },
+  { value: 'briefing', label: 'ui.briefing-du-matin' },
+  { value: 'meeting-prep', label: 'ui.preparation-de-reunion' },
+  { value: 'account-review', label: 'ui.revue-de-compte' },
+  { value: 'invoice-chase', label: 'ui.relance-de-facture' },
+  { value: 'signal-watch', label: 'ui.veille-de-signaux' },
+  { value: 'weekly-synthesis', label: 'ui.synthese-hebdomadaire' },
+] as const satisfies readonly { readonly value: string; readonly label: MndtKey }[]

@@ -187,7 +187,7 @@ export function apply(ctx: ClientContext): void {
     name: 'main',
     key: 'mndt',
     locale: NS,
-    inject: () => ({ api: face(ctx) }),
+    inject: () => ({ api: face(ctx), t: ctx.locale.bind(NS) }),
   }, CollabPage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
