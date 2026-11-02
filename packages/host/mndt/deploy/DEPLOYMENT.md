@@ -595,3 +595,25 @@ et passerelle, puis supprimer les jetons de shell et redemarrer les shells.
 Verifications apres rotation : sante ok, sidecar 200 avec le nouveau jeton,
 capture machine 67 241 octets, pages de duke et smarion a 200, navigateur pilote
 ok, bureau ok avec capture de 104 324 caracteres, controles a 0 echec.
+
+## Exploitation courante
+
+Trois scripts vivent dans `deploy/` et sont installes dans `/data/mndt/bin/` sur le serveur.
+
+| Script | Role | Planification |
+|---|---|---|
+| `backup-state.sh` | copie validee de `state.json` et `automations.json`, retention 14 jours | tous les jours a 02:17 UTC |
+| `restore-state.sh` | valide une copie, restaure avec `--apply` uniquement | a la main |
+| `watch-mndt.sh` | sante, metriques, disque, approbations trop vieilles | toutes les 10 minutes |
+
+```sh
+install -m 755 backup-state.sh restore-state.sh watch-mndt.sh /data/mndt/bin/
+/data/mndt/bin/backup-state.sh
+/data/mndt/bin/restore-state.sh "$(ls -t /data/mndt/backups/state-*.json | head -1)"
+/data/mndt/bin/watch-mndt.sh || true
+tail -2 /data/mndt/monitor/watch.log
+```
+
+`GET /metrics` publie les compteurs de production pour un tableau de bord ou une sonde.
+L alerting reste dans le journal et le code de sortie : aucun mail n est envoye sans
+accord explicite.

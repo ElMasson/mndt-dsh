@@ -14,7 +14,7 @@ function fakeRunner(markdown = '## Points du jour\n\nRien de bloquant.'): Missio
 }
 
 /** An API wired for tests, with a real service in memory. */
-function bench(runner: MissionRunner = fakeRunner()) {
+function bench(runner: MissionRunner = fakeRunner(), operator?: string) {
   const service = new WorkbenchService({ store: new MemoryStore() })
   const api = createMndtApi({
     service,
@@ -23,6 +23,7 @@ function bench(runner: MissionRunner = fakeRunner()) {
       tokens: {
         'tok-owner': { user: owner },
         'tok-viewer': { user: viewer },
+        ...(operator === undefined ? {} : { 'tok-operator': { user: operator } }),
       },
     },
     grants: {
@@ -31,6 +32,7 @@ function bench(runner: MissionRunner = fakeRunner()) {
         grants: [
           { subject: owner, role: 'owner' },
           { subject: viewer, role: 'viewer' },
+          ...(operator === undefined ? [] : [{ subject: operator, role: 'admin' as const }]),
         ],
       }),
     },
@@ -40,6 +42,7 @@ function bench(runner: MissionRunner = fakeRunner()) {
 }
 
 const asOwner = { authorization: 'Bearer tok-owner' }
+const asOperator = { authorization: 'Bearer tok-operator' }
 const asViewer = { authorization: 'Bearer tok-viewer' }
 
 describe('duke api', () => {
@@ -47,6 +50,43 @@ describe('duke api', () => {
     const { api } = bench()
     const response = await api({ method: 'GET', path: '/health' })
     expect(response.status).toBe(200)
+  })
+
+  it('applies the daily cap of a mandate to its delegate', async () => {
+    const operator = 'smarion@datanalysis.re'
+    const { api } = bench(fakeRunner(), operator)
+    const created = await api({
+      method: 'POST', path: '/mandates', ...asOwner,
+      body: JSON.stringify({ delegataire: operator, purpose: 'cadre', dailyCap: 1, expiresOn: '2027-01-31' }),
+    })
+    expect(created.status).toBe(201)
+    const mandate = (created.body as { id: string }).id
+    const signed = await api({ method: 'POST', path: `/mandates/${mandate}/sign`, ...asOperator, body: JSON.stringify({}) })
+    expect(signed.status).toBe(200)
+    const first = await api({
+      method: 'POST', path: '/missions', ...asOperator,
+      body: JSON.stringify({ kind: 'custom', prompt: 'premier', mandateId: mandate }),
+    })
+    expect(first.status).toBe(201)
+    const second = await api({
+      method: 'POST', path: '/missions', ...asOperator,
+      body: JSON.stringify({ kind: 'custom', prompt: 'second', mandateId: mandate }),
+    })
+    expect(second.status).toBe(403)
+    const reason = (second.body as { error?: string }).error ?? ''
+    expect(reason.length).toBeGreaterThan(0)
+    expect(reason.toLowerCase()).toContain('daily limit')
+  })
+
+  it('publishes a small metrics document for monitoring', async () => {
+    const { api } = bench()
+    const response = await api({ method: 'GET', path: '/metrics', ...asOwner })
+    expect(response.status).toBe(200)
+    const metrics = response.body as { up: number; missions: { done: number }; approvalsPending: number; automationsEnabled: number }
+    expect(metrics.up).toBe(1)
+    expect(typeof metrics.missions.done).toBe('number')
+    expect(metrics.approvalsPending).toBeGreaterThanOrEqual(0)
+    expect(typeof metrics.automationsEnabled).toBe('number')
   })
 
   it('serves the page state to the person the proxy proved, with their own rights', async () => {

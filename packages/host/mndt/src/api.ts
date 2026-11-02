@@ -153,6 +153,33 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     try {
       if (request.method === 'GET' && path === '/me') return respond(200, { you: identity })
 
+      if (request.method === 'GET' && path === '/metrics') {
+        const snapshot = await service.snapshot()
+        const now = Date.now()
+        const count = (status: MissionStatus): number => snapshot.missions.filter(mission => mission.status === status).length
+        const pending = snapshot.approvals.filter(approval => approval.state === 'pending')
+        const ages = pending
+          .map(approval => (now - Date.parse(approval.requestedAt)) / 3_600_000)
+          .filter(hours => Number.isFinite(hours))
+        let automationsEnabled = 0
+        if (options.automationsPath !== undefined) {
+          const items = await readAutomations(options.automationsPath).catch(() => [])
+          automationsEnabled = items.filter(item => item.enabled).length
+        }
+        const todayDate = today()
+        const activeMandates = snapshot.mandates.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        return respond(200, {
+          up: 1,
+          uptimeSeconds: Math.round(process.uptime()),
+          missions: { queued: count('queued'), running: count('running'), done: count('done'), failed: count('failed') },
+          briefs: snapshot.briefs.length,
+          approvalsPending: pending.length,
+          oldestApprovalHours: ages.length === 0 ? 0 : Math.round(Math.max(...ages)),
+          activeMandates,
+          automationsEnabled,
+          lastEventAt: snapshot.events.at(-1)?.at ?? null,
+        })
+      }
       if (request.method === 'GET' && path === '/state') {
         const snapshot = await service.snapshot()
         const table = await grants.grants()

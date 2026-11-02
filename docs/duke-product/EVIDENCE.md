@@ -514,3 +514,60 @@ production. Les ecritures sont couvertes par un test de composant : il verifie l
 l objet et le delegataire du formulaire.
 
 Etat des suites : client 45 tests, couverture 100 % sur les fichiers gated ; host 54 tests.
+
+## 29. Exploitation : metriques, sauvegarde planifiee, restauration testee, surveillance
+
+### Metriques
+
+Une route `GET /metrics` repond en JSON, sans dependance : compteurs de missions par
+etat, briefs, approbations en attente et age de la plus vieille, mandats actifs,
+automatisations actives, dernier evenement et uptime.
+
+Mesure en production le 2 novembre a 14 h 58 UTC :
+
+```json
+{"up":1,"uptimeSeconds":1650,"missions":{"queued":0,"running":0,"done":6,"failed":0},
+ "briefs":6,"approvalsPending":2,"oldestApprovalHours":99,"activeMandates":2,
+ "automationsEnabled":1,"lastEventAt":"2026-11-02T06:31:52.096Z"}
+```
+
+### Sauvegarde et restauration
+
+`packages/host/mndt/deploy/backup-state.sh` copie l etat et le registre des
+automatisations, valide chaque copie comme JSON, garde quatorze jours et journalise.
+`restore-state.sh` valide une copie sans rien ecrire, et ne restaure qu avec `--apply`,
+apres avoir mis l etat courant de cote.
+
+Sauvegarde reelle du 2 novembre a 14:58 UTC : `state-20261102T145830Z.json` (69 212 octets)
+et `automations-20261102T145830Z.json` (1 439 octets). Restauration testee sur cette copie :
+6 missions, 6 briefs, 2 approbations, 2 mandats, 20 evenements, aucune ecriture.
+
+### Surveillance
+
+`watch-mndt.sh` interroge la sante et les metriques, lit le disque et ecrit une ligne
+horodatee dans `/data/mndt/monitor/watch.log`. Il sort en erreur sur anomalie ; cron le
+lance toutes les dix minutes. Alerting : le journal et le code de sortie, sans envoi de
+mail, conformement a la consigne.
+
+Premiere ligne, et anomalie reelle qu elle signale :
+
+```
+2026-11-02T14:58:30Z approbations sante=200 disque=80% en_attente=2 plus_vieille=99 terminees=6
+```
+
+Deux approbations attendent une decision depuis 99 heures. C est exactement ce que la
+surveillance doit faire remonter avant que quelqu un ne s en apercoive par hasard.
+
+### Planification installee
+
+```
+17 2 * * * /data/mndt/bin/backup-state.sh >> /data/mndt/backups/backup.log 2>&1
+*/10 * * * * /data/mndt/bin/watch-mndt.sh
+```
+
+### Quotas
+
+Un test d API verifie le quota de bout en bout : un mandat a une mission par jour, la
+premiere passe, la seconde est refusee avec « daily limit reached: 1 of 1 missions ».
+La signature d un mandat par son propre delegant est refusee : il faut un autre
+administrateur. Suite du Host : 56 tests.
