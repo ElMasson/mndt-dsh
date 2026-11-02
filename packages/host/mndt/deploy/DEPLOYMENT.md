@@ -617,3 +617,10 @@ tail -2 /data/mndt/monitor/watch.log
 `GET /metrics` publie les compteurs de production pour un tableau de bord ou une sonde.
 L alerting reste dans le journal et le code de sortie : aucun mail n est envoye sans
 accord explicite.
+
+L archivage du journal est planifie le dimanche a 03:23 UTC :
+
+```sh
+/data/mndt/bin/archive-state.sh --days 60             # simulation
+/data/mndt/bin/archive-state.sh --days 60 --apply     # ecriture
+```

@@ -571,3 +571,17 @@ Un test d API verifie le quota de bout en bout : un mandat a une mission par jou
 premiere passe, la seconde est refusee avec « daily limit reached: 1 of 1 missions ».
 La signature d un mandat par son propre delegant est refusee : il faut un autre
 administrateur. Suite du Host : 56 tests.
+
+## 30. Archivage du journal, 2 novembre a 15 h 10
+
+Le journal grossit sans limite. `archive-state.sh` deplace les evenements plus vieux que
+soixante jours dans `/data/mndt/archive/journal-<annee>.jsonl` et laisse l etat courant
+avec l histoire recente. Un mode simulation affiche ce qui partirait sans rien ecrire.
+
+Test sur un etat synthetique de cinq evenements : trois anterieurs a soixante jours, deux
+recents. Resultat : trois lignes archivees, deux evenements conserves, etat reecrit
+atomiquement. Simulation sur la production : 20 evenements, aucun anterieur, rien a
+archiver. Planification installee le dimanche a 03:23 UTC.
+
+Journalisation et metriques : `GET /metrics` pour les compteurs, `watch.log` pour la
+surveillance, `docker logs` et `backup.log` pour les traces d execution. Aucun mail.
