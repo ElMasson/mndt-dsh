@@ -33,6 +33,8 @@ function absentFace(message: string): MndtFace {
   return {
     state: refuse,
     runMission: refuse,
+    cancelMission: refuse,
+    retryMission: refuse,
     decide: refuse,
     approveBrief: refuse,
     remember: refuse,
@@ -89,6 +91,8 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
       return parsed.page as never
     },
     runMission: async (kind, prompt) => (await raw(() => mounted.runMission(kind, prompt))) as never,
+    cancelMission: async id => (await raw(() => mounted.cancelMission(id))) as never,
+    retryMission: async id => (await raw(() => mounted.retryMission(id))) as never,
     decide: async (id, decision, reason) => (await raw(() => mounted.decide(id, decision, reason))) as never,
     approveBrief: async id => (await raw(() => mounted.approveBrief(id))) as never,
     remember: async (scope, kind, text) => (await raw(() => mounted.remember(scope, kind, text))) as never,
@@ -138,6 +142,8 @@ function face(ctx: ClientContext): MndtFace {
   return {
     state: () => route(next => next.state()),
     runMission: (kind, prompt) => route(next => next.runMission(kind, prompt)),
+    cancelMission: id => route(next => next.cancelMission(id)),
+    retryMission: id => route(next => next.retryMission(id)),
     decide: (approvalId, decision, reason) => route(next => next.decide(approvalId, decision, reason)),
     approveBrief: briefId => route(next => next.approveBrief(briefId)),
     remember: (scope, kind, text) => route(next => next.remember(scope, kind, text)),

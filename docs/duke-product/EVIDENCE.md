@@ -608,3 +608,24 @@ Details : la page recoit un seat `t` optionnel et retombe sur le dictionnaire fr
 quand il manque, ce qui garde les tests directs simples ; les aides du fil (libelles
 d evenements, types de mission) prennent le meme seat ; les marques de la barre laterale
 sont decoratives et portent un alt vide, le nom etant deja du texte.
+
+## 32. Relancer ou annuler une mission, 2 novembre a 16 h 10
+
+Une mission en echec porte un bouton « Relancer » ; une mission en file ou en cours porte
+« Annuler », desactive pour qui n en est pas l auteur sans droit d administration. Le Host
+garde la decision : il refuse d annuler une mission finie, de relancer autre chose qu un
+echec, et verifie le droit avant tout.
+
+Verification sur la production, sans modifier l etat :
+
+| Appel | Reponse |
+|---|---|
+| Relancer la mission terminee du matin | 409, « only a failed mission can be retried » |
+| Annuler la meme mission | 409, « only a waiting mission can be cancelled » |
+| Relancer une mission inconnue | 404 |
+| Sante et metriques | 200, 6 missions terminees |
+
+La sonde navigateur du 2 novembre a 16 h 10 charge la page sans erreur JavaScript ; aucun
+bouton de suivi n apparait puisque toutes les missions de production sont terminees. Le
+test de composant clique sur les deux boutons d une mission en echec et d une mission en
+file, et verifie l appel au Host avec le bon identifiant. Capture `collab-tracking.png`.

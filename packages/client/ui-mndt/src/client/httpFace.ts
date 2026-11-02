@@ -155,6 +155,20 @@ export function createHttpFace(): MndtFace {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
       return { subject, role: 'none' }
     }),
+    cancelMission: missionId => outcomeOf(async () => {
+      const body = await bodyOf<MissionRow>(await call(`/missions/${encodeURIComponent(missionId)}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }))
+      return body
+    }),
+    retryMission: missionId => outcomeOf(async () => {
+      const body = await bodyOf<{ mission: MissionRow }>(await call(`/missions/${encodeURIComponent(missionId)}/retry`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }))
+      return body.mission
+    }),
     shareMission: (missionId, visibility) => outcomeOf(async () => {
       const body = await bodyOf<{ mission: MissionRow }>(await call(`/missions/${encodeURIComponent(missionId)}/visibility`, {
         method: 'POST',

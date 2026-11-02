@@ -63,7 +63,7 @@ function fakeFace(overrides: Partial<MndtFace> = {}): MndtFace & { toggleAutomat
         { at: '2026-11-01T08:31:00.000Z', actor: 'duke@datanalysis.re', action: 'mission.created', subject: 'mis_2' },
       ],
     }) as never,
-    runMission: refusal, decide: refusal, approveBrief: refusal, remember: refusal,
+    runMission: refusal, cancelMission: refusal, retryMission: refusal, decide: refusal, approveBrief: refusal, remember: refusal,
     shareMission: refusal, shareMemory: refusal, members: async () => [{ subject: 'duke@datanalysis.re', role: 'owner' }],
     grantMember: refusal, revokeMember: refusal,
     usage: async () => ({ mine: { user: 'duke@datanalysis.re', missions: 2, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, team: [], canAdmin: true }),
@@ -112,6 +112,51 @@ describe('collaboration page', () => {
     const approve = await screen.findByRole('button', { name: 'Approuver' })
     expect((approve as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(/un autre humain/i)).toBeTruthy()
+  })
+
+  it('retries a failed mission and cancels a waiting one', async () => {
+    const retryMission = vi.fn(async () => ({
+      ok: true,
+      value: {
+        id: 'mis_9', kind: 'custom', prompt: 'panne', status: 'done', createdBy: 'duke@datanalysis.re',
+        createdAt: '2026-11-01T10:20:00.000Z', visibility: 'team',
+      },
+    }))
+    const cancelMission = vi.fn(async () => ({
+      ok: true,
+      value: {
+        id: 'mis_4', kind: 'custom', prompt: 'attente', status: 'failed', createdBy: 'duke@datanalysis.re',
+        createdAt: '2026-11-01T10:10:00.000Z', visibility: 'private',
+      },
+    }))
+    const failed = {
+      id: 'mis_3', kind: 'custom', prompt: 'panne', status: 'failed', createdBy: 'scheduler',
+      createdAt: '2026-11-01T10:00:00.000Z', visibility: 'team',
+    }
+    const waiting = {
+      id: 'mis_4', kind: 'custom', prompt: 'attente', status: 'queued', createdBy: 'duke@datanalysis.re',
+      createdAt: '2026-11-01T10:10:00.000Z', visibility: 'private',
+    }
+    const api = fakeFace({
+      state: async () => ({
+        ...state({ missions: [...state().missions, failed, waiting] }),
+        events: [],
+      }) as never,
+      retryMission,
+      cancelMission,
+    })
+    render(<CollabPage api={api} />)
+    const failedCard = await waitFor(() => {
+      const found = document.querySelector('[data-mission="mission:mis_3"]')
+      expect(found).toBeTruthy()
+      return found as HTMLElement
+    })
+    fireEvent.click(within(failedCard).getByRole('button', { name: 'Relancer' }))
+    await waitFor(() => { expect(retryMission).toHaveBeenCalledWith('mis_3') })
+    const waitingCard = document.querySelector('[data-mission="mission:mis_4"]')
+    if (waitingCard === null) throw new Error('carte de la mission en attente absente')
+    fireEvent.click(within(waitingCard as HTMLElement).getByRole('button', { name: 'Annuler' }))
+    await waitFor(() => { expect(cancelMission).toHaveBeenCalledWith('mis_4') })
   })
 
   it('opens the activity view, lists the journal and filters it by channel', async () => {

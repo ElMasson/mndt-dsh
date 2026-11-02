@@ -293,6 +293,21 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
     ? undefined
     : (state.mandates ?? []).find(candidate => `mandate:${candidate.id}` === channel.id)
 
+  /** @param id - mission. @param action - stop it or run it again. */
+  const trackMission = async (id: string, action: 'cancel' | 'retry'): Promise<void> => {
+    setBusy('track:' + id)
+    setError(undefined)
+    try {
+      const result = action === 'cancel' ? await api.cancelMission(id) : await api.retryMission(id)
+      if (!result.ok) setError(result.error ?? t('ui.action-refusee'))
+      else await load()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
   const decide = async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<void> => {
     if (decision === 'rejected' && (reason === undefined || reason.trim() === '')) {
       setError('un motif est requis pour refuser une approbation')
@@ -646,6 +661,7 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
                   open={openBriefs.has(post.id)}
                   onToggle={() => { toggleBrief(post.id) }}
                   onDecide={(id, decision, reason) => { void decide(id, decision, reason) }}
+                  onTrack={(id, action) => { void trackMission(id, action) }}
                 />
               </div>
             )
@@ -1081,6 +1097,11 @@ function renderBrief(markdown: string): ReactNode[] {
   return blocks
 }
 
+/** @param postId - a post id. @returns the mission id it points at, when it is a mission. */
+function postIdOf(postId: string): string {
+  return postId.startsWith('mission:') ? postId.slice('mission:'.length) : ''
+}
+
 /** One post in the feed. */
 function PostView(props: {
   post: Post
@@ -1091,6 +1112,7 @@ function PostView(props: {
   open: boolean
   onToggle(): void
   onDecide(id: string, decision: 'approved' | 'rejected', reason?: string): void
+  onTrack(id: string, action: 'cancel' | 'retry'): void
 }) {
   const { post, t, busy, canDecide, isYou, open } = props
   const [refusing, setRefusing] = useState(false)
@@ -1192,6 +1214,19 @@ function PostView(props: {
         {body.error === undefined ? undefined : <span className="mndt-error mndt-error-banner">{body.error}</span>}
         {body.brief === undefined ? undefined : (
           <button type="button" className="mndt-button" onClick={toggle}>{open ? t('ui.masquer-le-brief') : t('ui.ouvrir-le-brief')}</button>
+        )}
+        {body.status === 'failed' ? (
+          <button type="button" className="mndt-button" onClick={() => { props.onTrack(postIdOf(post.id), 'retry') }}>
+            {t('ui.relancer')}
+          </button>
+        ) : undefined}
+        {body.status !== 'queued' && body.status !== 'running' ? undefined : (
+          <button
+            type="button"
+            className="mndt-button"
+            disabled={!isYou && !canDecide}
+            onClick={() => { props.onTrack(postIdOf(post.id), 'cancel') }}
+          >{t('ui.annuler')}</button>
         )}
       </div>
       {open && body.brief !== undefined ? <div className="mndt-brief-body">{renderBrief(body.brief.markdown)}</div> : undefined}

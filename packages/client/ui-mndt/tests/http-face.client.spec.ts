@@ -60,6 +60,8 @@ describe('HTTP face', () => {
       '/mandates/mnd_1/sign': { id: 'mnd_1', state: 'active' },
       '/mandates/mnd_1/retire': { id: 'mnd_1', state: 'retired' },
       '/missions/mis_1/visibility': { mission: { id: 'mis_1', visibility: 'team' } },
+      '/missions/mis_1/cancel': { id: 'mis_1', status: 'failed' },
+      '/missions/mis_1/retry': { mission: { id: 'mis_9', status: 'done' } },
       '/memory/mem_1/scope': { memory: { id: 'mem_1', scope: 'team' } },
       '/automations/auto_1/toggle': { automation: { id: 'auto_1', enabled: true } },
       '/automations/auto_1/run': { outcome: 'done', mission: { id: 'mis_2' } },
@@ -82,6 +84,8 @@ describe('HTTP face', () => {
     expect((await face.signMandate('mnd_1')).ok).toBe(true)
     expect((await face.retireMandate('mnd_1')).ok).toBe(true)
     expect((await face.shareMission('mis_1', 'team')).ok).toBe(true)
+    expect((await face.cancelMission('mis_1')).ok).toBe(true)
+    expect((await face.retryMission('mis_1')).ok).toBe(true)
     expect((await face.shareMemory('mem_1', 'team')).ok).toBe(true)
     expect((await face.saveAutomation({ name: 'Test' })).ok).toBe(true)
     expect((await face.toggleAutomation('auto_1', true)).value).toEqual({ id: 'auto_1', enabled: true })

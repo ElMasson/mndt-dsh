@@ -169,6 +169,8 @@ export interface AutomationsAnswer {
 export interface MndtFace {
   state(): Promise<PageStateRow>
   runMission(kind: string, prompt: string): Promise<OutcomeRow<{ readonly mission: MissionRow; readonly brief?: BriefRow }>>
+  cancelMission(id: string): Promise<OutcomeRow<MissionRow>>
+  retryMission(id: string): Promise<OutcomeRow<MissionRow>>
   decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string): Promise<OutcomeRow<ApprovalRow>>
   approveBrief(briefId: string): Promise<OutcomeRow<BriefRow>>
   remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<OutcomeRow<MemoryRow>>
