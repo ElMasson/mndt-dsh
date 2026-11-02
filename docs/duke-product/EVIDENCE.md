@@ -474,3 +474,23 @@ dit pourquoi.
 Preuve : le cas `shows a shared mission and its brief to the whole team` passe, et un test
 unitaire dedie verifie le partage puis le retour en prive. Suite du Host : 54 tests, tous
 verts. Suite du client : 45 tests, couverture 100 %.
+
+## 27. Le briefing planifie a tourne seul, 2 novembre a 06 h 30
+
+Le registre d automatisations n est pas seulement cable : il a produit la mission du matin
+sans intervention.
+
+| Fait | Valeur |
+|---|---|
+| Declenchement | 2 novembre 2026 a 06:30:03 UTC, par le planificateur |
+| Mission | `mis_b164fe798f96490588b6`, type briefing, statut done |
+| Brief produit | `brf_d1f6921e99994102b8e2`, titre « Briefing du matin — lundi 2 novembre 2026 » |
+| Duree | environ 1 minute 49 secondes |
+| Occurrence la veille | `mis_a7cf9a1410fb4412b7de` le 1er novembre a 06:30:16 |
+
+La page le montre dans le canal equipe, et le rail annonce 27 posts, 5 missions, 5 briefs.
+Verification navigateur du 2 novembre : page chargee, briefing present, vue Automatisations
+avec ses 3 cartes, captures `collab-briefing-live.png` et `collab-automations-live.png`.
+
+L heure affichee dans la capture est celle du navigateur de test (fuseau Est des Etats-Unis),
+pas celle du serveur : le declenchement reel est bien a 06:30 UTC.
