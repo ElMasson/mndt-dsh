@@ -26,6 +26,7 @@ describe('HTTP face', () => {
   it('reads the page state and the plain collections', async () => {
     stubFetch({
       '/state': { page: { you: 'duke@datanalysis.re', missions: [], briefs: [], approvals: [], memories: [] } },
+      '/search?q=revue': { hits: [{ id: 'mis_1', kind: 'mission', label: 'revue', detail: 'x' }] },
       '/members': { members: [{ subject: 'duke@datanalysis.re', role: 'owner' }] },
       '/connectors': { connectors: [{ module: 'mcp-attio', server: 'attio', enabled: true }] },
       '/usage': { mine: { user: 'duke@datanalysis.re', missions: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, team: [], canAdmin: false },
@@ -39,6 +40,7 @@ describe('HTTP face', () => {
     expect(await face.connectors()).toHaveLength(1)
     expect((await face.usage()).canAdmin).toBe(false)
     expect(await face.schedule()).toEqual({ at: '07:30' })
+    expect(await face.search('revue')).toHaveLength(1)
     expect((await face.journal('csv')).format).toBe('csv')
     expect((await face.automations()).canAdmin).toBe(true)
   })

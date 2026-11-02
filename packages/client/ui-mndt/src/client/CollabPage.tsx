@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AutomationsAnswer, MemberRow, MndtFace } from './face.ts'
+import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
 
@@ -39,6 +39,25 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
   const [activityChannel, setActivityChannel] = useState('all')
   const [search, setSearch] = useState<string | undefined>(undefined)
   const [searchIndex, setSearchIndex] = useState(0)
+  const [serverHits, setServerHits] = useState<readonly SearchRow[]>([])
+
+  useEffect(() => {
+    const needle = (search ?? '').trim()
+    if (needle.length < 2) {
+      setServerHits([])
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      api.search(needle)
+        .then((hits) => { if (!cancelled) setServerHits(hits) })
+        .catch(() => { if (!cancelled) setServerHits([]) })
+    }, 200)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [search, api])
   const [seen, setSeen] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
@@ -465,6 +484,12 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
     }
     for (const agent of agents) {
       if (agent.toLowerCase().includes(needle)) hits.push({ id: agent, kind: 'person', label: agent, detail: 'agent' })
+    }
+    const allowed: readonly SearchHit['kind'][] = ['mission', 'brief', 'approval', 'mandate', 'memory']
+    for (const hit of serverHits) {
+      if (!allowed.includes(hit.kind as SearchHit['kind'])) continue
+      if (hits.some(existing => existing.kind === hit.kind && existing.id === hit.id)) continue
+      hits.push({ id: hit.id, kind: hit.kind as SearchHit['kind'], label: hit.label, detail: hit.detail })
     }
     return hits.slice(0, 40)
   })()

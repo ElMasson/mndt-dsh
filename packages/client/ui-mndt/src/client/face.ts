@@ -7,6 +7,14 @@
  */
 
 /** A mission as the page reads it. */
+/** One search hit returned by the Host. */
+export interface SearchRow {
+  readonly id: string
+  readonly kind: string
+  readonly label: string
+  readonly detail: string
+}
+
 export interface MissionRow {
   readonly id: string
   readonly kind: string
@@ -170,6 +178,7 @@ export interface MndtFace {
   state(): Promise<PageStateRow>
   runMission(kind: string, prompt: string): Promise<OutcomeRow<{ readonly mission: MissionRow; readonly brief?: BriefRow }>>
   cancelMission(id: string): Promise<OutcomeRow<MissionRow>>
+  search(query: string): Promise<readonly SearchRow[]>
   retryMission(id: string): Promise<OutcomeRow<MissionRow>>
   decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string): Promise<OutcomeRow<ApprovalRow>>
   approveBrief(briefId: string): Promise<OutcomeRow<BriefRow>>

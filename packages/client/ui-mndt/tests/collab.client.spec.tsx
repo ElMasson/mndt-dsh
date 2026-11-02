@@ -64,6 +64,7 @@ function fakeFace(overrides: Partial<MndtFace> = {}): MndtFace & { toggleAutomat
       ],
     }) as never,
     runMission: refusal, cancelMission: refusal, retryMission: refusal, decide: refusal, approveBrief: refusal, remember: refusal,
+    search: async () => [],
     shareMission: refusal, shareMemory: refusal, members: async () => [{ subject: 'duke@datanalysis.re', role: 'owner' }],
     grantMember: refusal, revokeMember: refusal,
     usage: async () => ({ mine: { user: 'duke@datanalysis.re', missions: 2, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, team: [], canAdmin: true }),
@@ -112,6 +113,21 @@ describe('collaboration page', () => {
     const approve = await screen.findByRole('button', { name: 'Approuver' })
     expect((approve as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(/un autre humain/i)).toBeTruthy()
+  })
+
+  it('adds the Host search results to the command palette', async () => {
+    const search = vi.fn(async () => [
+      { id: 'mis_9', kind: 'mission', label: 'trouvaille distante', detail: 'custom, done' },
+      { id: 'mem_9', kind: 'memory', label: 'note gardee', detail: 'team' },
+    ])
+    render(<CollabPage api={fakeFace({ search })} />)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.change(await screen.findByPlaceholderText('Chercher une mission, un brief, une approbation, un mandat, une personne.'), {
+      target: { value: 'trouvaille' },
+    })
+    await waitFor(() => { expect(search).toHaveBeenCalledWith('trouvaille') })
+    expect(await screen.findByText('trouvaille distante')).toBeTruthy()
+    expect(await screen.findByText('note gardee')).toBeTruthy()
   })
 
   it('retries a failed mission and cancels a waiting one', async () => {

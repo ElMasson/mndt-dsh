@@ -22,6 +22,7 @@ import { startMndtApi } from './api.ts'
 import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
+import { searchState } from './search.ts'
 import { authorityGrants, localGrants } from './grants.ts'
 import { DshMissionRunner } from './runner.ts'
 import { dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
@@ -285,6 +286,66 @@ export class WorkbenchGateway extends TypertRemoteService {
       await this.service.failMission(mission.id, reason).catch(() => undefined)
       const stored = await this.service.getMission(mission.id)
       return JSON.stringify({ ok: false, error: reason, ...(stored === undefined ? {} : { value: { mission: stored } }) })
+    }
+  }
+
+  /**
+   * Search the whole state, not only the loaded page.
+   * @param query - the search text.
+   * @returns the matching rows, as JSON.
+   */
+  @Remote('search')
+  async search(query: string): Promise<string> {
+    try {
+      const snapshot = await this.service.snapshot()
+      const table = await this.grants.grants()
+      const canAdmin = table.ok && can(table.grants, this.identity, 'rights.write').allowed
+      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query) } })
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /**
+   * Stop a waiting mission.
+   * @param id - the mission.
+   * @returns the cancelled mission, or the reason it was refused.
+   */
+  @Remote('cancelMission')
+  async cancelMission(id: string): Promise<string> {
+    const decision = await this.allowed('workflows.write')
+    if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
+    const rights = await this.allowed('rights.write')
+    try {
+      return JSON.stringify({ ok: true, value: await this.service.cancelMission(id, this.identity, rights.allowed) })
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /**
+   * Run a failed mission again.
+   * @param id - the mission to repeat.
+   * @returns the new mission and its brief, or the reason it failed.
+   */
+  @Remote('retryMission')
+  async retryMission(id: string): Promise<string> {
+    const decision = await this.allowed('workflows.write')
+    if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
+    let mission: Mission
+    try {
+      mission = await this.service.retryMission(id, this.identity)
+      await this.service.startMission(mission.id, 'page')
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+    try {
+      const result = await new DshMissionRunner(this.ctx).run(mission)
+      return JSON.stringify({ ok: true, value: await this.service.completeMission(mission.id, result) })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      await this.service.failMission(mission.id, reason).catch(() => undefined)
+      return JSON.stringify({ ok: false, error: reason })
     }
   }
 

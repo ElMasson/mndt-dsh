@@ -29,7 +29,7 @@ export interface CollabState extends PageStateRow {
 /** One result in the global search. */
 export interface SearchHit {
   readonly id: string
-  readonly kind: 'channel' | 'mission' | 'brief' | 'approval' | 'mandate' | 'person'
+  readonly kind: 'channel' | 'mission' | 'brief' | 'approval' | 'mandate' | 'person' | 'memory'
   readonly label: string
   readonly detail: string
 }

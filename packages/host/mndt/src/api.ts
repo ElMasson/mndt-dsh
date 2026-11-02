@@ -24,6 +24,7 @@ import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, writeFile } from 'node:fs/promises'
 import { can, roleOf } from './policy.ts'
+import { searchState } from './search.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
@@ -168,6 +169,13 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
     try {
       if (request.method === 'GET' && path === '/me') return respond(200, { you: identity })
+
+      if (request.method === 'GET' && path === '/search') {
+        const snapshot = await service.snapshot()
+        const table = await grants.grants()
+        const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
+        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '') })
+      }
 
       if (request.method === 'GET' && path === '/metrics') {
         const snapshot = await service.snapshot()

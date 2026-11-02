@@ -629,3 +629,23 @@ La sonde navigateur du 2 novembre a 16 h 10 charge la page sans erreur JavaScrip
 bouton de suivi n apparait puisque toutes les missions de production sont terminees. Le
 test de composant clique sur les deux boutons d une mission en echec et d une mission en
 file, et verifie l appel au Host avec le bon identifiant. Capture `collab-tracking.png`.
+
+## 33. Recherche serveur sur tout l etat, 2 novembre a 16 h 45
+
+La palette ne lisait que les trente missions et quarante evenements deja charges. Le Host
+expose maintenant `GET /search?q=` : il parcourt missions, briefs, approbations, mandats
+et notes, applique les memes regles de visibilite que la page, trie du plus recent au plus
+ancien et rend quarante lignes au plus. La page interroge le Host apres une frappe de
+200 ms et fusionne ces resultats avec ses canaux et ses personnes.
+
+Verification sur la production :
+
+| Requete | Reponse |
+|---|---|
+| `reporting` | 2 resultats : le mandat « Reporting marketing hebdomadaire », un brief |
+| vide | `{"hits":[]}` |
+| `zzzzintrouvable` | `{"hits":[]}` |
+
+Sonde navigateur du 2 novembre a 16 h 45 : Ctrl-K, « reporting », 3 lignes affichees dont
+le canal du mandat et les resultats du Host, aucune erreur JavaScript. Capture
+`collab-search.png`. Tests : 62 cotes Host, 48 cotes client, couverture client 100 %.

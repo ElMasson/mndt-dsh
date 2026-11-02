@@ -91,6 +91,7 @@ describe('client plugin wiring', () => {
       state: () => Promise.resolve({ ok: true, value: JSON.stringify({ page: { you: 'remote', missions: [], briefs: [], approvals: [], memories: [] } }) }),
       runMission: () => wrap({ mission: { id: 'mis_1' } }),
       cancelMission: () => wrap({ id: 'mis_1', status: 'failed' }),
+      search: () => wrap({ hits: [{ id: 'mis_1', kind: 'mission', label: 'revue', detail: 'x' }] }),
       retryMission: () => wrap({ mission: { id: 'mis_9' } }),
       decide: () => wrap({ approval: { id: 'apr_1' } }),
       approveBrief: () => wrap({ brief: { id: 'brf_1' } }),
@@ -125,6 +126,7 @@ describe('client plugin wiring', () => {
     expect((await api.state()).you).toBe('remote')
     expect(await api.runMission('custom', 'x')).toBeTruthy()
     expect(await api.cancelMission('mis_1')).toBeTruthy()
+    expect(await api.search('revue')).toHaveLength(1)
     expect(await api.retryMission('mis_1')).toBeTruthy()
     expect(await api.decide('apr_1', 'approved')).toBeTruthy()
     expect(await api.approveBrief('brf_1')).toBeTruthy()

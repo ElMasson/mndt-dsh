@@ -20,6 +20,7 @@ import type {
   MndtFace,
   OutcomeRow,
   PageStateRow,
+  SearchRow,
   MandateRow,
   JournalAnswer,
   AutomationRow,
@@ -155,6 +156,7 @@ export function createHttpFace(): MndtFace {
       await call('/members/revoke', { method: 'POST', body: JSON.stringify({ subject }) })
       return { subject, role: 'none' }
     }),
+    search: async query => (await bodyOf<{ hits: readonly SearchRow[] }>(await call('/search?q=' + encodeURIComponent(query)))).hits,
     cancelMission: missionId => outcomeOf(async () => {
       const body = await bodyOf<MissionRow>(await call(`/missions/${encodeURIComponent(missionId)}/cancel`, {
         method: 'POST',

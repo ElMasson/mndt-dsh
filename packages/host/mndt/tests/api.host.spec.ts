@@ -78,6 +78,22 @@ describe('duke api', () => {
     expect(reason.toLowerCase()).toContain('daily limit')
   })
 
+  it('searches the whole state, not only the loaded page', async () => {
+    const { api, service } = bench()
+    await service.createMission({ kind: 'custom', prompt: 'revue de compte annuelle', createdBy: owner, visibility: 'team' })
+    const found = await api({ method: 'GET', path: '/search', query: { q: 'annuelle' }, ...asOwner })
+    expect(found.status).toBe(200)
+    const hits = (found.body as { hits: { kind: string; label: string }[] }).hits
+    expect(hits.some(hit => hit.kind === 'mission' && hit.label.includes('annuelle'))).toBe(true)
+    const empty = await api({ method: 'GET', path: '/search', query: { q: '' }, ...asOwner })
+    expect((empty.body as { hits: unknown[] }).hits).toEqual([])
+    const brief = await service.createMission({ kind: 'custom', prompt: 'synthese', createdBy: owner, visibility: 'team' })
+    await service.startMission(brief.id, 'session-1')
+    await service.completeMission(brief.id, { title: 'Synthese', markdown: '# indicateur cle corps' })
+    const byBrief = await api({ method: 'GET', path: '/search', query: { q: 'indicateur' }, ...asOwner })
+    expect((byBrief.body as { hits: { kind: string }[] }).hits.some(hit => hit.kind === 'brief')).toBe(true)
+  })
+
   it('publishes a small metrics document for monitoring', async () => {
     const { api } = bench()
     const response = await api({ method: 'GET', path: '/metrics', ...asOwner })
