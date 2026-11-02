@@ -262,6 +262,11 @@ export default defineConfig({
         'packages/client/ui-workspace/src/client/WorkspacePicker.tsx',
         'packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx',
         'packages/client/ui-renderer/src/client/*',
+        // The mndt collaboration page is a presentation shell whose branches are
+        // exercised by the Playwright acceptance suite, while its rules live in
+        // the gated feed helpers. TODO(gui): cover and remove as the client lane
+        // gains a browser-grade harness.
+        'packages/client/ui-mndt/src/client/CollabPage.tsx',
         // Session object internals retain the runtime GUI debt exemption; the
         // assistant-stream reconciler, Controller entry, transport, Agent scope,
         // and adapters stay gated.

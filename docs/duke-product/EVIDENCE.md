@@ -434,3 +434,43 @@ mission en erreur avec sa raison.
 Reserve : le texte des automatisations est fixe a la creation, il n y a pas encore d edition
 du prompt dans la page. Le modele reste celui de la session ; voir AUTOMATIONS.md pour la
 question du vLLM Qwen, non installe sur ce serveur.
+
+## 25. Tests du client mndt et couverture, 1er novembre a 18 h 30
+
+La page n avait aucun test. Elle en a maintenant 45, repartis en cinq fichiers :
+
+| Fichier | Ce qu il couvre |
+|---|---|
+| `feed.client.spec.ts` | canaux, composition du fil, libelles du journal, cas limites d un etat incomplet |
+| `collab.client.spec.tsx` | rendu des canaux, fil, presence, decision interdite sur sa propre demande, vue Activite et filtre, recherche Ctrl K, vue Automatisations et bascule |
+| `http-face.client.spec.ts` | chaque route du transport HTTP, refus avec motif, refus sans motif, API injoignable |
+| `plugin.client.spec.tsx` | declaration des services, enregistrement des deux contributions, choix du transport, enveloppes du Remote, absence des deux transports |
+| `shell.client.spec.tsx` | feuille de style, dictionnaires, icone, et la moitie Host sans effet |
+| `host-half.client.spec.ts` | demarrage de la ligne navigateur cote Host |
+
+Mesure de couverture du paquet, sur son perimetre source : 100 % des instructions, des
+branches, des fonctions et des lignes, pour 45 tests. Les regles metier sont sorties du
+composant dans `feed.ts`, entierement couvert.
+
+Deux points a connaitre. Le composant `CollabPage.tsx` reste exempte de la couverture par
+fichier, comme les autres composants d interface du depot : ses branches sont exercees par
+la suite Playwright, et l exemption est commentee dans `vitest.config.ts` avec une TODO
+explicite. React est declare en dependance de developpement du paquet pour que la suite
+tourne sous jsdom.
+
+Verification : `pnpm exec vitest run packages/client/ui-mndt --coverage.enabled` affiche
+45 tests passes et 100 % partout, sans aucune ligne d erreur de seuil.
+
+## 26. Bug de partage corrige, 2 novembre a 08 h 20
+
+En relancant la suite du Host apres les tests du client, un cas a echoue : partager une
+mission terminee ne montrait pas son brief a l equipe. Le brief gardait la visibilite
+privee qu il avait a sa creation, seul le statut de la mission changeait.
+
+Cause : `setMissionVisibility` ne touchait que la mission. Correction : le brief suit
+desormais la mission dans les deux sens, partage et retour en prive, avec un commentaire qui
+dit pourquoi.
+
+Preuve : le cas `shows a shared mission and its brief to the whole team` passe, et un test
+unitaire dedie verifie le partage puis le retour en prive. Suite du Host : 54 tests, tous
+verts. Suite du client : 45 tests, couverture 100 %.

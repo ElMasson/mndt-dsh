@@ -429,7 +429,13 @@ export class WorkbenchService {
       if (mission === undefined) throw new Error(`no mission ${id}`)
       const next: Mission = { ...mission, visibility }
       return {
-        state: { ...state, missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)) },
+        state: {
+          ...state,
+          missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)),
+          // A brief follows the mission it came from: sharing the work must show
+          // its result, and making it private again must hide it.
+          briefs: state.briefs.map(brief => (brief.missionId === id ? { ...brief, visibility } : brief)),
+        },
         event: { at: this.#at(), actor: mission.createdBy, action: `mission.${visibility}`, subject: id },
         value: next,
       }

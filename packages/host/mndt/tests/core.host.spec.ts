@@ -130,3 +130,20 @@ describe('memory and history', () => {
     expect((await workbench.events()).map(event => event.action)).toEqual(['mission.queued', 'mission.started', 'mission.done'])
   })
 })
+
+describe('sharing', () => {
+  it('makes the brief follow its mission when the mission is shared or hidden again', async () => {
+    const workbench = bench()
+    const mission = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner, visibility: 'private' })
+    await workbench.startMission(mission.id, 'session-1')
+    const finished = await workbench.completeMission(mission.id, { title: 'B', markdown: 'M' })
+
+    await workbench.setMissionVisibility(mission.id, 'team')
+    const shared = await workbench.getBrief(finished.brief.id)
+    expect(shared?.visibility).toBe('team')
+
+    await workbench.setMissionVisibility(mission.id, 'private')
+    const hidden = await workbench.getBrief(finished.brief.id)
+    expect(hidden?.visibility).toBe('private')
+  })
+})
