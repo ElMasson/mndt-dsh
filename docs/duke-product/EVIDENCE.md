@@ -494,3 +494,23 @@ avec ses 3 cartes, captures `collab-briefing-live.png` et `collab-automations-li
 
 L heure affichee dans la capture est celle du navigateur de test (fuseau Est des Etats-Unis),
 pas celle du serveur : le declenchement reel est bien a 06:30 UTC.
+
+## 28. Administration des personnes et des mandats, 2 novembre a 09 h 20
+
+Une troisieme vue d administration rejoint le rail, visible seulement pour les comptes qui
+ont le droit d ecriture.
+
+| Controle | Resultat |
+|---|---|
+| Entree dans le rail | visible pour duke, absente pour un simple lecteur |
+| Personnes listees | duke, contact, smarion, gouvernance, avec un selecteur de role par personne |
+| Mandats listes | Reporting marketing hebdomadaire, Preparation des rendez-vous commerciaux, avec signer et retirer |
+| Formulaire | accorder un role a une adresse, proposer un mandat avec objet, delegataire et echeance |
+| Capture | `collab-admin.png` |
+
+La sonde navigateur est restee en lecture seule pour ne pas modifier les droits de la
+production. Les ecritures sont couvertes par un test de composant : il verifie l appel a
+`grantMember` avec l adresse saisie et le role choisi, et l appel a `createMandate` avec
+l objet et le delegataire du formulaire.
+
+Etat des suites : client 45 tests, couverture 100 % sur les fichiers gated ; host 54 tests.

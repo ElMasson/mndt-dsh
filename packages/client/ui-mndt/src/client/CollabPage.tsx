@@ -24,7 +24,7 @@ export function CollabPage({ api }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<'channel' | 'activity' | 'automations'>('channel')
+  const [view, setView] = useState<'channel' | 'activity' | 'automations' | 'admin'>('channel')
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [openBriefs, setOpenBriefs] = useState<ReadonlySet<string>>(new Set())
   const [prompt, setPrompt] = useState('')
@@ -102,6 +102,139 @@ export function CollabPage({ api }: CollabPageProps) {
     }
   }
 
+
+  type MemberRole = 'viewer' | 'operator' | 'admin' | 'owner'
+  const MEMBER_ROLES: readonly MemberRole[] = ['viewer', 'operator', 'admin', 'owner']
+
+  const [adminMembers, setAdminMembers] = useState<readonly MemberRow[] | undefined>(undefined)
+  const [adminError, setAdminError] = useState<string | undefined>(undefined)
+  const [adminNotice, setAdminNotice] = useState<string | undefined>(undefined)
+  const [adminBusy, setAdminBusy] = useState<string | undefined>(undefined)
+  const [grantEmail, setGrantEmail] = useState('')
+  const [grantRole, setGrantRole] = useState<MemberRole>('viewer')
+  const [mandatePurpose, setMandatePurpose] = useState('')
+  const [mandateDelegate, setMandateDelegate] = useState('')
+  const [mandateUntil, setMandateUntil] = useState('')
+
+  /** Read the grant table, which only an administrator can change. */
+  const loadAdmin = useCallback(async () => {
+    try {
+      setAdminMembers(await api.members())
+      setAdminError(undefined)
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (view === 'admin' && adminMembers === undefined) void loadAdmin()
+  }, [view, adminMembers, loadAdmin])
+
+  /** @param subject - the person. @param role - the right to give. */
+  const changeMemberRole = async (subject: string, role: MemberRole): Promise<void> => {
+    setAdminBusy(`grant:${subject}`)
+    setAdminError(undefined)
+    try {
+      const result = await api.grantMember(subject, role)
+      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      else {
+        setAdminNotice(`${subject} : ${role}`)
+        setAdminMembers(await api.members())
+      }
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdminBusy(undefined)
+    }
+  }
+
+  const grantTypedMember = async (): Promise<void> => {
+    const subject = grantEmail.trim()
+    if (subject === '') return
+    setAdminBusy('grant')
+    setAdminError(undefined)
+    setAdminNotice(undefined)
+    try {
+      const result = await api.grantMember(subject, grantRole)
+      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      else {
+        setAdminNotice(`${subject} : ${grantRole}`)
+        setGrantEmail('')
+        setAdminMembers(await api.members())
+      }
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdminBusy(undefined)
+    }
+  }
+
+  /** @param subject - the person to remove. */
+  const revokeMemberNow = async (subject: string): Promise<void> => {
+    setAdminBusy(`revoke:${subject}`)
+    setAdminError(undefined)
+    try {
+      const result = await api.revokeMember(subject)
+      if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
+      else {
+        setAdminNotice(`${subject} : acces retire`)
+        setAdminMembers(await api.members())
+        await load()
+      }
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdminBusy(undefined)
+    }
+  }
+
+  const proposeMandate = async (): Promise<void> => {
+    if (mandatePurpose.trim() === '' || mandateDelegate.trim() === '') {
+      setAdminError('un mandat a besoin d un objet et d un delegataire')
+      return
+    }
+    setAdminBusy('mandate')
+    setAdminError(undefined)
+    setAdminNotice(undefined)
+    try {
+      const result = await api.createMandate({
+        purpose: mandatePurpose.trim(),
+        delegataire: mandateDelegate.trim(),
+        dailyCap: 3,
+        ...(mandateUntil === '' ? {} : { expiresOn: mandateUntil }),
+      })
+      if (!result.ok) setAdminError(result.error ?? 'le mandat a ete refuse')
+      else {
+        setAdminNotice(`mandat propose : ${result.value?.purpose ?? mandatePurpose.trim()}`)
+        setMandatePurpose('')
+        setMandateDelegate('')
+        setMandateUntil('')
+        await load()
+      }
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdminBusy(undefined)
+    }
+  }
+
+  /** @param id - mandate. @param action - sign it or retire it. */
+  const settleMandate = async (id: string, action: 'sign' | 'retire'): Promise<void> => {
+    setAdminBusy(`${action}:${id}`)
+    setAdminError(undefined)
+    try {
+      const result = action === 'sign' ? await api.signMandate(id) : await api.retireMandate(id)
+      if (!result.ok) setAdminError(result.error ?? 'le changement a ete refuse')
+      else {
+        setAdminNotice(`${id} : ${action === 'sign' ? 'signe' : 'retire'}`)
+        await load()
+      }
+    } catch (failure) {
+      setAdminError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setAdminBusy(undefined)
+    }
+  }
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -400,6 +533,17 @@ export function CollabPage({ api }: CollabPageProps) {
             <span className="mndt-channel-name">Automatisations</span>
             <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
           </button>
+          {state.canAdmin !== true ? undefined : (
+            <button
+              type="button"
+              className="mndt-channel"
+              data-active={view === 'admin'}
+              onClick={() => { setView('admin') }}
+            >
+              <span className="mndt-channel-hash">{'\u2699'}</span>
+              <span className="mndt-channel-name">Administration</span>
+            </button>
+          )}
         </div>
         {['team', 'mandate', 'system'].map((kind) => {
           const group = channels.filter(candidate => candidate.kind === kind)
@@ -596,6 +740,123 @@ export function CollabPage({ api }: CollabPageProps) {
         </div>
       </section>
 
+      <section className="mndt-main mndt-admin" style={{ display: view === 'admin' ? undefined : 'none' }}>
+        <header className="mndt-channel-head">
+          <div className="mndt-channel-head-main">
+            <h1 className="mndt-channel-title">Administration</h1>
+            <p className="mndt-channel-subject">Les personnes, leurs droits et les mandats en cours.</p>
+          </div>
+          <div className="mndt-channel-head-side">
+            <button type="button" className="mndt-button" onClick={() => { void loadAdmin() }}>Rafraichir</button>
+            <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0} personnes</span>
+          </div>
+        </header>
+        {adminError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{adminError}</span></div>}
+        {adminNotice === undefined ? undefined : <p className="mndt-empty">{adminNotice}</p>}
+        <div className="mndt-feed">
+          <article className="mndt-post-card" data-kind="members">
+            <div className="mndt-post-head">
+              <span className="mndt-post-kind">Personnes et droits</span>
+              <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0}</span>
+            </div>
+            <div className="mndt-post-body">
+              {(adminMembers ?? []).map(member => (
+                <div key={member.subject} className="mndt-post-actions">
+                  <span className="mndt-tag">{member.subject}</span>
+                  <select
+                    className="mndt-input"
+                    aria-label={`role de ${member.subject}`}
+                    value={member.role}
+                    disabled={adminBusy === `grant:${member.subject}`}
+                    onChange={(event) => { void changeMemberRole(member.subject, event.target.value as MemberRole) }}
+                  >
+                    {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    className="mndt-button"
+                    disabled={adminBusy === `revoke:${member.subject}`}
+                    onClick={() => { void revokeMemberNow(member.subject) }}
+                  >
+                    Retirer
+                  </button>
+                </div>
+              ))}
+              {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">Aucune personne.</p> : undefined}
+            </div>
+            <div className="mndt-post-actions">
+              <input
+                className="mndt-input"
+                aria-label="adresse de la personne a accorder"
+                placeholder="prenom@datanalysis.re"
+                value={grantEmail}
+                onChange={(event) => { setGrantEmail(event.target.value) }}
+              />
+              <select
+                className="mndt-input"
+                aria-label="role a accorder"
+                value={grantRole}
+                onChange={(event) => { setGrantRole(event.target.value as MemberRole) }}
+              >
+                {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
+              </select>
+              <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
+                Accorder
+              </button>
+            </div>
+          </article>
+
+          <article className="mndt-post-card" data-kind="mandates">
+            <div className="mndt-post-head">
+              <span className="mndt-post-kind">Mandats</span>
+              <span className="mndt-pill" data-tone="id">{(state.mandates ?? []).length}</span>
+            </div>
+            <div className="mndt-post-body">
+              {(state.mandates ?? []).map(item => (
+                <div key={item.id} className="mndt-post-actions">
+                  <span className="mndt-tag">{item.purpose === '' ? item.id : item.purpose}</span>
+                  <span className="mndt-post-time">{item.delegant} vers {item.delegataire}</span>
+                  <span className="mndt-pill" data-tone="state">{item.state}</span>
+                  <span className="mndt-post-time">echeance {item.expiresOn}</span>
+                  {item.state !== 'proposed' ? undefined : (
+                    <button type="button" className="mndt-button" disabled={adminBusy === `sign:${item.id}`} onClick={() => { void settleMandate(item.id, 'sign') }}>Signer</button>
+                  )}
+                  {item.state === 'retired' ? undefined : (
+                    <button type="button" className="mndt-button" disabled={adminBusy === `retire:${item.id}`} onClick={() => { void settleMandate(item.id, 'retire') }}>Retirer</button>
+                  )}
+                </div>
+              ))}
+              <p className="mndt-empty">Un mandat se propose, se signe par le delegant, puis se retire a l echeance.</p>
+            </div>
+            <div className="mndt-post-actions">
+              <input
+                className="mndt-input"
+                aria-label="objet du mandat"
+                placeholder="objet du mandat"
+                value={mandatePurpose}
+                onChange={(event) => { setMandatePurpose(event.target.value) }}
+              />
+              <input
+                className="mndt-input"
+                aria-label="delegataire du mandat"
+                placeholder="prenom@datanalysis.re"
+                value={mandateDelegate}
+                onChange={(event) => { setMandateDelegate(event.target.value) }}
+              />
+              <input
+                className="mndt-input"
+                aria-label="echeance du mandat"
+                type="date"
+                value={mandateUntil}
+                onChange={(event) => { setMandateUntil(event.target.value) }}
+              />
+              <button type="button" className="mndt-button" disabled={adminBusy === 'mandate'} onClick={() => { void proposeMandate() }}>
+                Proposer
+              </button>
+            </div>
+          </article>
+        </div>
+      </section>
       <section className="mndt-main mndt-activity" style={{ display: view === 'activity' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">

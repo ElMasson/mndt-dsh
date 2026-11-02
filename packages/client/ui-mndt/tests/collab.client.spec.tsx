@@ -141,6 +141,34 @@ describe('collaboration page', () => {
     })
   })
 
+  it('opens the administration view, grants a role and proposes a mandate', async () => {
+    const grantMember = vi.fn(async (subject: string, role: string) => ({ ok: true, value: { subject, role } }))
+    const createMandate = vi.fn(async () => ({ ok: true, value: { id: 'mnd_9', purpose: 'Reporting' } }))
+    const api = fakeFace({
+      members: async () => [
+        { subject: 'duke@datanalysis.re', role: 'owner' },
+        { subject: 'smarion@datanalysis.re', role: 'operator' },
+      ],
+      grantMember,
+      createMandate,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    expect(await screen.findByText('Personnes et droits')).toBeTruthy()
+    const email = screen.getByLabelText('adresse de la personne a accorder')
+    fireEvent.change(email, { target: { value: 'contact@datanalysis.re' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
+    await waitFor(() => {
+      expect(grantMember).toHaveBeenCalledWith('contact@datanalysis.re', 'viewer')
+    })
+    fireEvent.change(screen.getByLabelText('objet du mandat'), { target: { value: 'Reporting' } })
+    fireEvent.change(screen.getByLabelText('delegataire du mandat'), { target: { value: 'smarion@datanalysis.re' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Proposer' }))
+    await waitFor(() => {
+      expect(createMandate).toHaveBeenCalled()
+    })
+  })
+
   it('opens the automations view from the rail and toggles one', async () => {
     const api = fakeFace()
     render(<CollabPage api={api} />)
