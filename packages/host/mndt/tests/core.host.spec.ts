@@ -147,3 +147,34 @@ describe('sharing', () => {
     expect(hidden?.visibility).toBe('private')
   })
 })
+
+describe('mission tracking', () => {
+  it('stops a waiting mission and refuses to stop a finished one', async () => {
+    const workbench = bench()
+    const mission = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })
+    const cancelled = await workbench.cancelMission(mission.id, owner, false)
+    expect(cancelled.status).toBe('failed')
+    expect(cancelled.error).toContain('cancelled by')
+    await expect(workbench.cancelMission(mission.id, owner, false)).rejects.toThrow('only a waiting mission')
+  })
+
+  it('refuses someone else s cancellation without the administration right', async () => {
+    const workbench = bench()
+    const mission = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })
+    await expect(workbench.cancelMission(mission.id, 'autre@datanalysis.re', false)).rejects.toThrow('belongs to')
+    const cancelled = await workbench.cancelMission(mission.id, 'admin@datanalysis.re', true)
+    expect(cancelled.status).toBe('failed')
+  })
+
+  it('retries a failed mission as a fresh one', async () => {
+    const workbench = bench()
+    const mission = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })
+    await workbench.startMission(mission.id, 'session-1')
+    await workbench.failMission(mission.id, 'panne')
+    const retried = await workbench.retryMission(mission.id, owner)
+    expect(retried.id).not.toBe(mission.id)
+    expect(retried.status).toBe('queued')
+    expect(retried.prompt).toBe('Morning')
+    await expect(workbench.retryMission(retried.id, owner)).rejects.toThrow('only a failed mission')
+  })
+})

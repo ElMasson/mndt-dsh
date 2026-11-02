@@ -300,3 +300,34 @@ describe('hybrid sharing', () => {
     expect((afterShare.body as { memories: { id: string }[] }).memories.map(row => row.id)).toContain(note.id)
   })
 })
+
+describe('mission tracking routes', () => {
+  it('cancels a waiting mission and retries a failed one', async () => {
+    const { api, service } = bench()
+    const waiting = await service.createMission({ kind: 'custom', prompt: 'attente', createdBy: owner, visibility: 'team' })
+    const cancelled = await api({ method: 'POST', path: `/missions/${waiting.id}/cancel`, ...asOwner })
+    expect(cancelled.status).toBe(200)
+    expect((cancelled.body as { status: string }).status).toBe('failed')
+
+    const failed = await service.createMission({ kind: 'custom', prompt: 'panne', createdBy: owner, visibility: 'team' })
+    await service.startMission(failed.id, 'session-1')
+    await service.failMission(failed.id, 'panne du modele')
+    const retried = await api({ method: 'POST', path: `/missions/${failed.id}/retry`, ...asOwner })
+    expect(retried.status).toBe(201)
+    const retriedBody = retried.body as { mission: { prompt: string; status: string } }
+    expect(retriedBody.mission.prompt).toBe('panne')
+    expect(retriedBody.mission.status).toBe('done')
+  })
+
+  it('refuses to cancel a finished mission and to retry a waiting one', async () => {
+    const { api, service } = bench()
+    const done = await service.createMission({ kind: 'custom', prompt: 'fini', createdBy: owner, visibility: 'team' })
+    await service.startMission(done.id, 'session-1')
+    await service.completeMission(done.id, { title: 'T', markdown: 'M' })
+    const refusedCancel = await api({ method: 'POST', path: `/missions/${done.id}/cancel`, ...asOwner })
+    expect(refusedCancel.status).toBe(409)
+    const waiting = await service.createMission({ kind: 'custom', prompt: 'attente', createdBy: owner, visibility: 'team' })
+    const refusedRetry = await api({ method: 'POST', path: `/missions/${waiting.id}/retry`, ...asOwner })
+    expect(refusedRetry.status).toBe(409)
+  })
+})

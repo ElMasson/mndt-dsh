@@ -142,6 +142,22 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
 
+  /**
+   * Start a queued mission and let the runner finish it.
+   * @param mission - the mission just created.
+   * @returns the finished mission, or a 502 carrying the failure.
+   */
+  const launch = async (mission: Mission): Promise<MndtApiResponse> => {
+    const started = await service.startMission(mission.id, 'pending')
+    try {
+      const result = await runner.run(started)
+      return respond(201, await service.completeMission(started.id, result))
+    } catch (error) {
+      const reason = messageOf(error)
+      await service.failMission(started.id, reason)
+      return respond(502, { error: reason, mission: await service.getMission(started.id) })
+    }
+  }
   return async function handle(request: MndtApiRequest): Promise<MndtApiResponse> {
     const path = request.path.replace(/\/+$/, '') || '/'
 
@@ -317,18 +333,52 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const mission = await service.createMission({
           kind, prompt, createdBy: identity, visibility, ...(mandateId === undefined ? {} : { mandateId }),
         })
-        const started = await service.startMission(mission.id, 'pending')
+        return await launch(mission)
+      }
+
+      if (request.method === 'POST' && path.startsWith('/missions/') && path.endsWith('/cancel')) {
+        const id = path.slice('/missions/'.length, -'/cancel'.length)
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
         try {
-          const result = await runner.run(started)
-          const finished = await service.completeMission(started.id, result)
-          return respond(201, finished)
+          const mission = await service.cancelMission(id, identity, can(table.grants, identity, 'rights.write').allowed)
+          return respond(200, mission)
         } catch (error) {
-          const reason = messageOf(error)
-          await service.failMission(started.id, reason)
-          return respond(502, { error: reason, mission: await service.getMission(started.id) })
+          return respond(409, { error: messageOf(error) })
         }
       }
 
+      if (request.method === 'POST' && path.startsWith('/missions/') && path.endsWith('/retry')) {
+        const id = path.slice('/missions/'.length, -'/retry'.length)
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const original = await service.getMission(id)
+        if (original === undefined) return respond(404, { error: `no mission ${id}` })
+        if (original.status !== 'failed') {
+          return respond(409, { error: `mission ${id} is ${original.status}; only a failed mission can be retried` })
+        }
+        const mandateId = original.mandateId
+        if (mandateId !== undefined) {
+          const mandate = await service.mandate(mandateId)
+          if (mandate === undefined) return respond(404, { error: `no mandate ${mandateId}` })
+          const usedToday = await service.missionsToday(mandateId, mandate.delegataire)
+          const refusal = missionRefusal(mandate, { identity, kind: original.kind, usedToday }, today())
+          if (refusal !== undefined) {
+            await service.recordRefusal(identity, original.kind, refusal, mandateId)
+            return respond(403, { error: refusal })
+          }
+        }
+        const mission = await service.createMission({
+          kind: original.kind,
+          prompt: original.prompt,
+          createdBy: identity,
+          visibility: original.visibility,
+          ...(mandateId === undefined ? {} : { mandateId }),
+        })
+        return await launch(mission)
+      }
       if (request.method === 'GET' && path.startsWith('/missions/')) {
         const id = path.slice('/missions/'.length)
         const mission = await service.getMission(id)

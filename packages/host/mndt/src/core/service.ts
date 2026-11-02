@@ -274,6 +274,49 @@ export class WorkbenchService {
    * @param filter - optional narrowing.
    * @returns the matching missions.
    */
+  /**
+   * Stop a mission that has not finished yet.
+   * @param id - mission id.
+   * @param actor - who stops it.
+   * @param privileged - whether the actor may stop anyone s mission.
+   * @returns the cancelled mission.
+   */
+  cancelMission(id: string, actor: string, privileged: boolean): Promise<Mission> {
+    return this.#write((state) => {
+      const mission = state.missions.find(candidate => candidate.id === id)
+      if (mission === undefined) throw new Error(`no mission ${id}`)
+      if (!privileged && mission.createdBy !== actor) throw new Error(`mission ${id} belongs to ${mission.createdBy}`)
+      if (mission.status !== 'queued' && mission.status !== 'running') {
+        throw new Error(`mission ${id} is ${mission.status}; only a waiting mission can be cancelled`)
+      }
+      const at = this.#at()
+      const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: `cancelled by ${actor}` }
+      return {
+        state: { ...state, missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'mission.cancelled', subject: id },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Run a failed mission again as a new mission.
+   * @param id - mission to repeat.
+   * @param actor - who asks for the retry.
+   * @returns the new mission, queued.
+   */
+  async retryMission(id: string, actor: string): Promise<Mission> {
+    const mission = await this.getMission(id)
+    if (mission === undefined) throw new Error(`no mission ${id}`)
+    if (mission.status !== 'failed') throw new Error(`mission ${id} is ${mission.status}; only a failed mission can be retried`)
+    return this.createMission({
+      kind: mission.kind,
+      prompt: mission.prompt,
+      createdBy: actor,
+      visibility: mission.visibility,
+      ...(mission.mandateId === undefined ? {} : { mandateId: mission.mandateId }),
+    })
+  }
   async listMissions(filter: MissionFilter = {}): Promise<readonly Mission[]> {
     const state = await this.#ready()
     return state.missions
