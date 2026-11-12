@@ -15,12 +15,16 @@ import { MndtIcon } from './MndtIcon.tsx'
 import { CollabPage } from './CollabPage.tsx'
 import type { MndtFace } from './face.ts'
 import { available, createHttpFace } from './httpFace.ts'
+import { createHttpChat } from './httpChat.ts'
+import type { ChatFace } from './chat.ts'
+import { CHAT_NS, chatEn, chatFr, chatZh } from './chatLocales.ts'
+import type { ChatKey } from './chatLocales.ts'
 import { CSS } from './styles.ts'
 import { en, fr, zh } from './locales.ts'
 import type { MndtKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface LocaleNamespaceMap { mndt: MndtKey }
+  interface LocaleNamespaceMap { mndt: MndtKey; 'mndt.chat': ChatKey }
 }
 
 export type { MndtKey } from './locales.ts'
@@ -132,6 +136,30 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
  * @param ctx - client root context.
  * @returns a face that picks the per-user API when it is served, else the Remote.
  */
+/**
+ * The team channels, over the product API only: where the API is not served, every call refuses
+ * with that reason, and the page says the channels are not served here.
+ * @returns the channel face.
+ */
+function chatFace(): ChatFace {
+  const http = createHttpChat()
+  const served = available()
+  const route = async <T>(pick: (face: ChatFace) => Promise<T>): Promise<T> => {
+    if (!(await served)) throw new Error('the product API is not served on this workstation')
+    return pick(http)
+  }
+  return {
+    channels: () => route(next => next.channels()),
+    createChannel: input => route(next => next.createChannel(input)),
+    messages: channelId => route(next => next.messages(channelId)),
+    changes: (channelId, since) => route(next => next.changes(channelId, since)),
+    post: (channelId, text, replyTo) => route(next => next.post(channelId, text, replyTo)),
+    remove: (channelId, messageId) => route(next => next.remove(channelId, messageId)),
+    agents: () => route(next => next.agents()),
+    addAgents: (channelId, agentIds) => route(next => next.addAgents(channelId, agentIds)),
+  }
+}
+
 function face(ctx: ClientContext): MndtFace {
   const http = createHttpFace()
   const remote = remoteFace(ctx)
@@ -190,6 +218,8 @@ export function apply(ctx: ClientContext): void {
     'ui-mndt: French',
   )
   ctx.effect(() => ctx.locale.register(NS, 'fr', fr), 'ui-mndt: French dictionary')
+  ctx.effect(() => ctx.locale.register(CHAT_NS, { zh: chatZh, en: chatEn }), 'ui-mndt: channel dictionaries')
+  ctx.effect(() => ctx.locale.register(CHAT_NS, 'fr', chatFr), 'ui-mndt: channel dictionary, French')
   ctx.effect(() => {
     const style = document.createElement('style')
     style.id = 'mndt-workbench-styles'
@@ -198,11 +228,12 @@ export function apply(ctx: ClientContext): void {
     return () => { style.remove() }
   }, 'ui-mndt: styles')
   const t = ctx.locale.bind(NS)
+  const chat = chatFace()
   ctx.slots.inject('main', () => ctx.slots.register({
     name: 'main',
     key: 'mndt',
     locale: NS,
-    inject: () => ({ api: face(ctx), t: ctx.locale.bind(NS) }),
+    inject: () => ({ api: face(ctx), t: ctx.locale.bind(NS), chat, tc: ctx.locale.bind(CHAT_NS) }),
   }, CollabPage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',

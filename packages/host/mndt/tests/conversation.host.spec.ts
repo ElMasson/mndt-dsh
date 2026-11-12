@@ -497,10 +497,12 @@ describe('channels, mentions and agent turns', () => {
 
   it('the deployed grid prices every lot 1 model, so no agent turn is refused for a missing price', () => {
     const grid = parsePrices(readFileSync(join(import.meta.dirname, '..', 'deploy', 'llm', 'prices.json'), 'utf8'))
-    for (const model of ['deepseek-v4.1-flash', 'glm-5.3', 'qwen3.8-27b']) {
+    for (const model of ['deepseek-v4.1-flash', 'glm-5.3']) {
       expect(priceOf(grid, { provider: 'scaleway-genapi', model })).toBeDefined()
     }
     expect(priceOf(grid, { provider: 'vllm-qwen', model: 'qwen3.5-35b-a3b' })?.output).toBe(0)
+    // Qwen is the H100's only: an API Qwen has no price, so its turn would be refused, never run.
+    expect(priceOf(grid, { provider: 'scaleway-genapi', model: 'qwen3.8-27b' })).toBeUndefined()
     // 1M tokens in and 1M out on glm-5.3: 1.80 + 5.50 euros.
     expect(eurOf({ input: 1_000_000, output: 1_000_000 }, priceOf(grid, { provider: 'scaleway-genapi', model: 'glm-5.3' })!)).toBe(7.3)
   })

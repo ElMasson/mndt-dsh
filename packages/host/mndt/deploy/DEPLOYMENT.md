@@ -690,3 +690,78 @@ acceptée par le `json` de Python), atteignait le serveur sans filtre.
 vérifie en plus : chaque connecteur avec `allow` passe par le proxy, le proxy
 déployé refuse `dolibarr_raw_api`, les deux routes sont déclarées et aucune clé
 n'est écrite dans la composition.
+
+## Joindre le H100 vLLM depuis l'instance dédiée (procédure, 12 novembre)
+
+Décision de Stéphane : `@qwen` passe par le vLLM du H100. Cette procédure n'a pas
+été exécutée. Elle se lance **depuis la future instance dédiée**, après sa
+création, et ne fait que des lectures : aucune commande ici ne touche au H100,
+à ses interfaces, à son pare-feu ou au réseau privé. Si un test échoue, on le
+note et on le remonte à Stéphane ; on ne corrige rien côté H100 sans fenêtre
+décidée par lui.
+
+Valeurs à poser dans le shell (aucune n'est secrète) :
+
+    H100_PUBLIC_IP=51.159.151.86
+    H100_PRIVATE_IP=            # adresse du H100 sur le réseau privé, lue dans la console Scaleway
+    VLLM_PORT=8000
+
+L'adresse privée peut manquer : l'interface privée du H100 a été retirée le
+07/11. Dans ce cas, on saute le test privé et on le signale.
+
+La clé, si vLLM tourne avec `--api-key`, est lue dans `model.env` sans être
+affichée :
+
+    auth=()
+    key=$(grep -E '^VLLM_API_KEY=' /data/mndt/live/model.env | cut -d= -f2-)
+    [ -n "$key" ] && [ "$key" != placeholder ] && auth=(-H "Authorization: Bearer $key")
+
+### 1. Port ouvert
+
+    nc -zv -w 3 "$H100_PRIVATE_IP" "$VLLM_PORT"
+    nc -zv -w 3 "$H100_PUBLIC_IP" "$VLLM_PORT"
+
+### 2. Code HTTP de `/v1/models`
+
+    for ip in "$H100_PRIVATE_IP" "$H100_PUBLIC_IP"; do
+      [ -n "$ip" ] || continue
+      printf '%s -> ' "$ip"
+      curl -sS -m 8 -o /dev/null -w '%{http_code}\n' "${auth[@]}" "http://$ip:$VLLM_PORT/v1/models"
+    done
+
+Attendu : `200`. Un `401` signifie que vLLM exige une clé et que
+`VLLM_API_KEY` manque ou est fausse. `000` ou un délai dépassé signifie que le
+chemin réseau est fermé.
+
+### 3. Identifiant du modèle servi
+
+    curl -sS -m 8 "${auth[@]}" "http://${H100_PRIVATE_IP:-$H100_PUBLIC_IP}:$VLLM_PORT/v1/models" \
+      | jq -r '.data[] | "\(.id)\tmax_model_len=\(.max_model_len // "?")"'
+
+L'identifiant affiché devient `VLLM_QWEN_MODEL`, et `max_model_len` sert à
+vérifier le `contextWindow` de 131072 déclaré dans
+`llm/routes.patch.yml.template`.
+
+### 4. L'IP publique ne répond pas sans clé
+
+Sans clé, on vérifie aussi que l'IP publique ne répond pas à n'importe qui :
+
+    curl -sS -m 8 -o /dev/null -w '%{http_code}\n' "http://$H100_PUBLIC_IP:$VLLM_PORT/v1/models"
+
+Si ce test répond `200` sans clé, le modèle est ouvert sur Internet : à signaler
+à Stéphane, sans rien changer.
+
+### 5. Lecture du résultat
+
+| Privé | Public | Suite |
+|---|---|---|
+| 200 | refusé ou 401 | `VLLM_QWEN_BASE_URL=http://$H100_PRIVATE_IP:8000/v1`, route recommandée |
+| fermé ou absent | 200 avec clé | `VLLM_QWEN_BASE_URL=http://$H100_PUBLIC_IP:8000/v1` en attendant ; le trafic passe en clair sur Internet, à faire valider par Stéphane |
+| fermé | fermé | `@qwen` ne peut pas répondre ; le signaler, ne pas ouvrir de port ni rattacher d'interface sans fenêtre |
+
+Puis, sur l'instance, avec les deux valeurs retenues dans `model.env` :
+
+    python3 llm/render-llm-routes.py --env-file /data/mndt/live/model.env --print
+
+`--print` montre le bloc sans l'écrire. On l'écrit (sans `--print`) une fois le
+résultat validé.

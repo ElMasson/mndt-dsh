@@ -90,6 +90,14 @@ chmod 644 "$root$conf/oauth2.cfg"
 render "$here/tenant/docker-compose.yml.template" > "$root$app/docker-compose.yml"
 mkdir -p "$root$app/gateway"
 cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
+# The connector machinery of the adapters lane, at this tenant's paths: the
+# renderer and the catalog beside the gateway, the tools the workbench runs in
+# its tools folder (code, refreshed on each run; no secret among them).
+cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$root$app/gateway/"
+for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs; do
+  cp "$here/connectors/$tool" "$root$data/tools/$tool"
+done
+mkdir -p "$root$data/home/profiles/web"
 
 # The model environment: names only, values filled in by hand (mode 600).
 if [ ! -f "$root$data/model.env" ]; then
@@ -115,6 +123,7 @@ fi
 echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for $email_domains)"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"
 echo "  fill in $data/model.env before the first agent turn"
+echo "  then, once the stack runs: tenant/seed-team.sh $slug --owner $owner"
 if [ "$docker" = 1 ]; then
   cd "$root$app"
   docker compose up -d
