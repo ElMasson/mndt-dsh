@@ -10740,6 +10740,9 @@ importers:
       '@deepseek-ai/dsh-agent-default-model':
         specifier: workspace:*
         version: link:../../core/agent-default-model
+      '@deepseek-ai/dsh-client-ui-mndt':
+        specifier: workspace:*
+        version: link:../../client/ui-mndt
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../../core/session

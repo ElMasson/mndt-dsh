@@ -5,8 +5,8 @@ import { createMndtApi } from '../src/api.ts'
 import type { MndtApi } from '../src/api.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
-import { createHttpChat } from '../../../client/ui-mndt/src/client/httpChat.ts'
-import type { ChatFace } from '../../../client/ui-mndt/src/client/chat.ts'
+import { createHttpChat } from '@deepseek-ai/dsh-client-ui-mndt/src/client/httpChat.ts'
+import type { ChatFace } from '@deepseek-ai/dsh-client-ui-mndt/src/client/chat.ts'
 
 /**
  * Lane B's screen client against the real API handler, in memory: what the
