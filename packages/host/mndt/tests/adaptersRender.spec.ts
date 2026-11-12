@@ -130,7 +130,8 @@ describe('LLM routes', () => {
     expect(prices.models['scaleway-genapi/glm-5.3']).toEqual({ input: 1.8, cacheRead: 1.8, output: 5.5 })
     const glm = providers['scaleway-genapi']!.models.find(model => model.id === 'glm-5.3') as { contextWindow?: number } | undefined
     expect(glm?.contextWindow).toBe(256000)
-    expect(prices.models['scaleway-genapi/qwen3.8-27b']).toEqual({ input: 0.6, cacheRead: 0.12, output: 3.3 })
+    // Qwen runs on the H100 only (12/11): no API route for it, so no API price that could let one run.
+    expect(Object.keys(prices.models).filter(key => key.includes('qwen'))).toEqual(['vllm-qwen/*'])
     expect(prices.models['scaleway-genapi/deepseek-v4.1-flash']).toEqual({ input: 0.6, cacheRead: 0.12, output: 1.8 })
     expect(prices.models['vllm-qwen/*']).toEqual({ input: 0, cacheRead: 0, output: 0 })
   })
