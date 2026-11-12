@@ -1,12 +1,11 @@
 {
-  "_comment": "Price grid of the LLM routes, euros per million tokens (input, cache read, output). Keys are <provider>/<model>; <provider>/* covers every model of a route. A null price means 'to be provided': the core refuses the turn, it never counts it as 0. Source for deepseek-v4.1-flash: Scaleway invoice of November 2026 (relais grid scaleway-2026-11). glm-5.3 and qwen3.8-27b: Scaleway console, read by Stephane on 12/11/2026; the console shows no cache price for glm-5.3, so its cache read is priced as its input, on the safe side.",
+  "_comment": "Price grid of the LLM routes, euros per million tokens (input, cache read, output). Keys are <provider>/<model>; <provider>/* covers every model of a route. A null price means 'to be provided': the core refuses the turn, it never counts it as 0. Source for deepseek-v4.1-flash: Scaleway invoice of November 2026 (relais grid scaleway-2026-11). glm-5.3: Scaleway console, read by Stephane on 12/11/2026; the console shows no cache price for glm-5.3, so its cache read is priced as its input, on the safe side. Qwen runs on our H100 only (vllm-qwen, decided by Stephane on 12/11): no API route for it, so none is priced.",
   "version": "scaleway-2026-11",
   "currency": "EUR",
   "unit": "per_million_tokens",
   "models": {
     "scaleway-genapi/deepseek-v4.1-flash": { "input": 0.60, "cacheRead": 0.12, "output": 1.80 },
     "scaleway-genapi/glm-5.3": { "input": 1.80, "cacheRead": 1.80, "output": 5.50 },
-    "scaleway-genapi/qwen3.8-27b": { "input": 0.60, "cacheRead": 0.12, "output": 3.30 },
     "vllm-qwen/*": { "input": 0, "cacheRead": 0, "output": 0 }
   }
 }
