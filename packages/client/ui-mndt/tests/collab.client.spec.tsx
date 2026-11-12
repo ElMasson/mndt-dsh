@@ -177,7 +177,7 @@ describe('collaboration page', () => {
 
   it('opens the activity view, lists the journal and filters it by channel', async () => {
     render(<CollabPage api={fakeFace()} />)
-    fireEvent.click(within(await rail()).getByRole('button', { name: /Activite/ }))
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Activité/ }))
     const rows = await waitFor(() => {
       const found = document.querySelectorAll('.mndt-activity .mndt-event-post')
       expect(found.length).toBeGreaterThan(0)
@@ -224,14 +224,14 @@ describe('collaboration page', () => {
     render(<CollabPage api={api} />)
     fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
     expect(await screen.findByText('Personnes et droits')).toBeTruthy()
-    const email = screen.getByLabelText('adresse de la personne a accorder')
+    const email = screen.getByLabelText('adresse de la personne à accorder')
     fireEvent.change(email, { target: { value: 'contact@datanalysis.re' } })
     fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
     await waitFor(() => {
       expect(grantMember).toHaveBeenCalledWith('contact@datanalysis.re', 'viewer')
     })
     fireEvent.change(screen.getByLabelText('objet du mandat'), { target: { value: 'Reporting' } })
-    fireEvent.change(screen.getByLabelText('delegataire du mandat'), { target: { value: 'smarion@datanalysis.re' } })
+    fireEvent.change(screen.getByLabelText('délégataire du mandat'), { target: { value: 'smarion@datanalysis.re' } })
     fireEvent.click(screen.getByRole('button', { name: 'Proposer' }))
     await waitFor(() => {
       expect(createMandate).toHaveBeenCalled()

@@ -34,7 +34,7 @@ function bench(mounted?: Record<string, (...args: never[]) => unknown>): Bench {
       return () => undefined
     },
   })
-  ctx.provide('locale', { register: () => () => undefined, bind: () => (key: string) => key } as never)
+  ctx.provide('locale', { register: () => () => undefined, addLanguage: () => () => undefined, bind: () => (key: string) => key } as never)
   ctx.provide('slots', {
     inject: (_name: string, callback: () => unknown) => {
       callback()

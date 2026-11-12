@@ -16,7 +16,7 @@ import { CollabPage } from './CollabPage.tsx'
 import type { MndtFace } from './face.ts'
 import { available, createHttpFace } from './httpFace.ts'
 import { CSS } from './styles.ts'
-import { en, zh } from './locales.ts'
+import { en, fr, zh } from './locales.ts'
 import type { MndtKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -184,6 +184,12 @@ export const inject = ['slots', 'locale', 'remote']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mndt: dictionaries')
+  // French, as a language pack: the language (falling back to English), then this page's copy.
+  ctx.effect(
+    () => ctx.locale.addLanguage({ id: 'fr', label: 'Français', fallback: 'en' }),
+    'ui-mndt: French',
+  )
+  ctx.effect(() => ctx.locale.register(NS, 'fr', fr), 'ui-mndt: French dictionary')
   ctx.effect(() => {
     const style = document.createElement('style')
     style.id = 'mndt-workbench-styles'
