@@ -162,6 +162,20 @@ export function spentThisMonth(
   return Math.round(eur * 1_000_000) / 1_000_000
 }
 
+const CENTS = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' })
+const SMALL = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumSignificantDigits: 2 })
+
+/**
+ * An amount in euros as a French reader writes it: « 5,00 € ». Below one
+ * cent, two significant digits, so a ceiling or a spend that is not zero never
+ * reads « 0,00 € ».
+ * @param amount - euros.
+ * @returns the amount, formatted.
+ */
+export function euros(amount: number): string {
+  return amount !== 0 && Math.abs(amount) < 0.01 ? SMALL.format(amount) : CENTS.format(amount)
+}
+
 /**
  * Why a turn may not start, before any call to the model.
  * @param agent - the agent mentioned.
@@ -178,7 +192,7 @@ export function ceilingRefusal(
     return `Prix du modèle non configuré (${priceKey(agent)}) : @${agent.handle} ne peut pas répondre tant que son prix n'est pas renseigné.`
   }
   if (spent >= agent.eurPerMonth) {
-    return `Plafond mensuel atteint pour @${agent.handle} : ${spent.toFixed(2)} € sur ${agent.eurPerMonth.toFixed(2)} €. Seul l'owner peut le relever.`
+    return `Plafond mensuel atteint pour @${agent.handle} : ${euros(spent)} sur ${euros(agent.eurPerMonth)}. Seul l'owner peut le relever.`
   }
   return undefined
 }
