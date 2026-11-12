@@ -28,6 +28,9 @@ import { searchState } from './search.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
+import type { TurnScheduler } from './turns.ts'
+import { spentThisMonth } from './core/index.ts'
+import type { Channel } from './core/index.ts'
 
 /** One request as the handler sees it. */
 export interface MndtApiRequest {
@@ -87,6 +90,8 @@ export interface MndtApiOptions {
   readonly grants: GrantSource
   /** Mounted connectors, when the host can enumerate them. */
   readonly connectors?: () => Promise<readonly ConnectorInfo[]>
+  /** Agent turns of mentions; without it, a mention queues a turn nobody runs. */
+  readonly turns?: TurnScheduler
 }
 
 /** The API handler. */
@@ -159,6 +164,161 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       return respond(502, { error: reason, mission: await service.getMission(started.id) })
     }
   }
+  /** @param channelId - a channel. @param identity - the caller. @returns it, when they are a member. */
+  const memberChannel = async (channelId: string, identity: string): Promise<Channel | undefined> => {
+    const channel = await service.channel(channelId)
+    return channel !== undefined && channel.members.includes(identity) ? channel : undefined
+  }
+
+  /**
+   * @param servers - MCP server names asked for.
+   * @returns a 400 naming those not mounted, when the host can say which are.
+   */
+  const unmounted = async (servers: readonly string[]): Promise<MndtApiResponse | undefined> => {
+    if (options.connectors === undefined || servers.length === 0) return undefined
+    const mounted = new Set((await options.connectors()).filter(c => c.enabled).map(c => c.server))
+    const missing = servers.filter(server => !mounted.has(server))
+    return missing.length === 0 ? undefined : respond(400, { error: `connector not mounted: ${missing.join(', ')}` })
+  }
+
+  /**
+   * The channels, messages and agents routes.
+   * @param request - the request.
+   * @param path - its normalised path.
+   * @param identity - the proven caller.
+   * @returns the response, or undefined for no such route.
+   */
+  const conversationRoute = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
+    try {
+      return await conversation(request, path, identity)
+    } catch (error) {
+      const reason = messageOf(error)
+      if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
+      if (/taken|exists/.test(reason)) return respond(409, { error: reason })
+      return respond(400, { error: reason })
+    }
+  }
+
+  const conversation = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
+    const parts = path.split('/').slice(1)
+    const input = request.method === 'POST' ? parseBody(request.body) : {}
+    const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [])
+
+    if (parts[0] === 'agents') {
+      if (request.method === 'GET' && parts.length === 1) {
+        const now = new Date().toISOString()
+        const messages = (await service.snapshot()).messages ?? []
+        const agents = await service.listAgents()
+        return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now) })) })
+      }
+      if (request.method === 'POST' && parts.length <= 2) {
+        const denied = await authorise(identity, 'agents.write')
+        if (denied !== undefined) return denied
+        const connectors = input.connectors === undefined ? undefined : strings(input.connectors)
+        const missing = await unmounted(connectors ?? [])
+        if (missing !== undefined) return missing
+        const eurPerMonth = typeof input.eurPerMonth === 'number' ? input.eurPerMonth : undefined
+        const text = (key: string): string | undefined => (typeof input[key] === 'string' ? input[key] : undefined)
+        if (parts.length === 1) {
+          const agent = await service.createAgent({
+            handle: text('handle') ?? '',
+            name: text('name') ?? '',
+            provider: text('provider') ?? '',
+            model: text('model') ?? '',
+            ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
+            ...(connectors === undefined ? {} : { connectors }),
+            ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
+          }, identity)
+          return respond(201, { agent })
+        }
+        const table = await grants.grants()
+        const role = table.ok ? roleOf(table.grants, identity) : undefined
+        const patch = {
+          ...(text('name') === undefined ? {} : { name: text('name') as string }),
+          ...(text('provider') === undefined ? {} : { provider: text('provider') as string }),
+          ...(text('model') === undefined ? {} : { model: text('model') as string }),
+          ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
+          ...(connectors === undefined ? {} : { connectors }),
+          ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
+        }
+        const agent = await service.updateAgent(parts[1] ?? '', patch, identity, role)
+        return respond(200, { agent })
+      }
+      return undefined
+    }
+
+    // ---- channels
+    if (request.method === 'GET' && parts.length === 1) {
+      return respond(200, { channels: await service.channelsOf(identity) })
+    }
+    if (request.method === 'POST' && parts.length === 1) {
+      const denied = await authorise(identity, 'workflows.write')
+      if (denied !== undefined) return denied
+      const connectors = strings(input.connectors)
+      const missing = await unmounted(connectors)
+      if (missing !== undefined) return missing
+      const channel = await service.createChannel({
+        name: typeof input.name === 'string' ? input.name : '',
+        ...(typeof input.title === 'string' ? { title: input.title } : {}),
+        members: strings(input.members),
+        agents: strings(input.agents),
+        connectors,
+      }, identity)
+      return respond(201, { channel })
+    }
+    const channelId = parts[1] ?? ''
+    const channel = await memberChannel(channelId, identity)
+    // Not a member: the channel does not exist for them (never an empty list).
+    if (channel === undefined) return respond(404, { error: `no channel ${channelId}` })
+
+    if (request.method === 'GET' && parts.length === 2) return respond(200, { channel })
+
+    if (request.method === 'GET' && parts.length === 3 && parts[2] === 'messages') {
+      const limit = Number(request.query?.limit ?? 200)
+      const since = request.query?.since
+      if (since !== undefined) {
+        if (Number.isNaN(Date.parse(since))) return respond(400, { error: 'since is an ISO instant' })
+        return respond(200, await service.changedSince(channel.id, since, Number.isFinite(limit) && limit > 0 ? limit : 200))
+      }
+      const after = request.query?.after
+      return respond(200, { messages: await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200) })
+    }
+
+    if (request.method === 'POST' && parts.length === 3 && parts[2] === 'messages') {
+      const text = typeof input.text === 'string' ? input.text : ''
+      const replyTo = typeof input.replyTo === 'string' ? input.replyTo : undefined
+      const message = await service.postMessage(channel.id, identity, text, replyTo)
+      options.turns?.launch(message)
+      return respond(201, { message })
+    }
+
+    if (request.method === 'POST' && parts.length === 5 && parts[2] === 'messages' && parts[4] === 'delete') {
+      const message = await service.deleteMessage(channel.id, parts[3] ?? '', identity)
+      options.turns?.stop({ messageId: message.id })
+      return respond(200, { message })
+    }
+
+    if (request.method === 'POST' && parts.length === 3 && ['members', 'agents', 'connectors'].includes(parts[2] ?? '')) {
+      const denied = await authorise(identity, 'workflows.write')
+      if (denied !== undefined) return denied
+      if (parts[2] === 'connectors') {
+        const connectors = strings(input.connectors)
+        const missing = await unmounted(connectors)
+        if (missing !== undefined) return missing
+        return respond(200, { channel: await service.updateChannel(channel.id, { connectors }, identity) })
+      }
+      const add = strings(input.add)
+      const remove = strings(input.remove)
+      const updated = parts[2] === 'members'
+        ? await service.updateChannel(channel.id, { addMembers: add, removeMembers: remove }, identity)
+        : await service.updateChannel(channel.id, { addAgents: add, removeAgents: remove }, identity)
+      // An agent that leaves stops answering here, a turn already running included.
+      if (parts[2] === 'agents') for (const agentId of remove) options.turns?.stop({ channelId: channel.id, agentId })
+      return respond(200, { channel: updated })
+    }
+    return undefined
+  }
+
   return async function handle(request: MndtApiRequest): Promise<MndtApiResponse> {
     const path = request.path.replace(/\/+$/, '') || '/'
 
@@ -436,12 +596,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete') {
           return respond(400, { error: `unknown approval kind: ${String(kind)}` })
         }
+        // A card asked during an agent turn belongs to that turn's thread: the
+        // approvals connector names the run it acts for (x-mndt-run).
+        const run = request.headers?.['x-mndt-run']
+        const turn = options.turns?.current()
+        const thread = turn !== undefined && run !== undefined && run === turn.turnId ? turn : undefined
         const approval = await service.requestApproval({
           kind,
           title: typeof input.title === 'string' ? input.title : '',
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
+          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId }),
         })
         return respond(201, { approval })
       }
@@ -856,6 +1022,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/connectors') {
         const mounted = options.connectors === undefined ? [] : await options.connectors()
         return respond(200, { connectors: mounted })
+      }
+
+      if (path === '/agents' || path.startsWith('/agents/') || path === '/channels' || path.startsWith('/channels/')) {
+        const answered = await conversationRoute(request, path, identity)
+        if (answered !== undefined) return answered
       }
 
       if (request.method === 'GET' && path === '/events') {

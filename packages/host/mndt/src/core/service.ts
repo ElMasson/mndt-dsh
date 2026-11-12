@@ -10,18 +10,23 @@
 import { randomUUID } from 'node:crypto'
 import { emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
+  Agent,
   Approval,
   ApprovalAction,
   ApprovalPayload,
   ApprovalState,
   Brief,
   BriefSource,
+  Channel,
   MemoryKind,
   MemoryNote,
   MemoryScope,
   Mission,
   MissionKind,
   MissionStatus,
+  Message,
+  MessageAuthor,
+  Turn,
   Visibility,
   WorkbenchEvent,
   WorkbenchState,
@@ -31,6 +36,7 @@ import type { Mandate } from './types.ts'
 import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
+import { SLUG, mentionsOf } from './conversation.ts'
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -55,8 +61,40 @@ export interface ApprovalRequest {
   readonly title: string
   readonly payload?: ApprovalPayload
   readonly missionId?: string
+  /** The channel and the mentioning message of the agent turn that asks it. */
+  readonly channelId?: string
+  readonly messageId?: string
   readonly requestedBy: string
 }
+
+/** What creating an agent needs. */
+export interface AgentDraft {
+  readonly handle: string
+  readonly name: string
+  readonly provider: string
+  readonly model: string
+  readonly instructions?: string
+  readonly connectors?: readonly string[]
+  readonly eurPerMonth?: number
+}
+
+/** What changing an agent may touch. */
+export type AgentPatch = Partial<Pick<Agent, 'name' | 'provider' | 'model' | 'instructions' | 'connectors' | 'eurPerMonth'>>
+
+/** What creating a channel needs. */
+export interface ChannelDraft {
+  readonly name: string
+  readonly title?: string
+  readonly members?: readonly string[]
+  readonly agents?: readonly string[]
+  readonly connectors?: readonly string[]
+}
+
+/** The default monthly ceiling of an agent, in euros. */
+export const DEFAULT_EUR_PER_MONTH = 5
+
+/** An MCP server name, as the MCP client accepts it. */
+const SERVER = /^[A-Za-z0-9_-]{1,32}$/
 
 /** How to narrow a listing. */
 export interface MissionFilter {
@@ -380,6 +418,8 @@ export class WorkbenchService {
       requestedAt: this.#at(),
       state: 'pending',
       ...(request.missionId === undefined ? {} : { missionId: request.missionId }),
+      ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
+      ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
     }
     return this.#write(state => ({
       state: { ...state, approvals: [approval, ...state.approvals] },
@@ -639,8 +679,399 @@ export class WorkbenchService {
     }))
   }
 
+  // ---------------------------------------------------------------- agents
+
+  /** @param includeRetired - whether retired agents show. @returns the agents, oldest first. */
+  async listAgents(includeRetired = false): Promise<readonly Agent[]> {
+    const agents = (await this.#ready()).agents ?? []
+    return agents.filter(agent => includeRetired || agent.retiredAt === undefined)
+  }
+
+  /** @param id - agent id. @returns the agent, retired or not. */
+  async agent(id: string): Promise<Agent | undefined> {
+    return ((await this.#ready()).agents ?? []).find(agent => agent.id === id)
+  }
+
+  /**
+   * Declare an agent.
+   * @param draft - handle, name, model and connectors.
+   * @param actor - who declares it.
+   * @returns the agent.
+   */
+  createAgent(draft: AgentDraft, actor: string): Promise<Agent> {
+    const refusal = agentRefusal(draft)
+    if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    return this.#write((state) => {
+      if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
+        throw new Error(`the handle @${draft.handle} is taken`)
+      }
+      const agent: Agent = {
+        id: this.#id('agt'),
+        handle: draft.handle,
+        name: draft.name.trim(),
+        provider: draft.provider.trim(),
+        model: draft.model.trim(),
+        ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
+        connectors: [...new Set(draft.connectors ?? [])].sort(),
+        eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
+        createdBy: actor,
+        createdAt: this.#at(),
+      }
+      return {
+        state: { ...state, agents: [...(state.agents ?? []), agent] },
+        event: { at: agent.createdAt, actor, action: 'agent.created', subject: agent.id, detail: `@${agent.handle} ${agent.provider}/${agent.model}` },
+        value: agent,
+      }
+    })
+  }
+
+  /**
+   * Change an agent's model, framing, connectors or ceiling.
+   * @param id - agent id.
+   * @param patch - what changes.
+   * @param actor - who changes it.
+   * @param role - their role: only the owner raises a ceiling.
+   * @returns the agent.
+   */
+  updateAgent(id: string, patch: AgentPatch, actor: string, role: Role | undefined): Promise<Agent> {
+    return this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === id)
+      if (agent === undefined || agent.retiredAt !== undefined) throw new Error(`no agent ${id}`)
+      const next: Agent = {
+        ...agent,
+        ...patch,
+        ...(patch.connectors === undefined ? {} : { connectors: [...new Set(patch.connectors)].sort() }),
+      }
+      const refusal = agentRefusal(next)
+      if (refusal !== undefined) throw new Error(refusal)
+      if (next.eurPerMonth > agent.eurPerMonth && role !== 'owner') {
+        throw new Error(`only the owner raises the ceiling of @${agent.handle}`)
+      }
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor, action: 'agent.updated', subject: id, detail: Object.keys(patch).sort().join(',') },
+        value: next,
+      }
+    })
+  }
+
+  // ---------------------------------------------------------------- channels
+
+  /** @param id - channel id. @returns the channel. */
+  async channel(id: string): Promise<Channel | undefined> {
+    return ((await this.#ready()).channels ?? []).find(channel => channel.id === id)
+  }
+
+  /**
+   * The channels of one person, their own lane first; the lane is created on
+   * its first read.
+   * @param email - the person.
+   * @returns their channels.
+   */
+  async channelsOf(email: string): Promise<readonly Channel[]> {
+    const lane = await this.laneOf(email)
+    const channels = (await this.#ready()).channels ?? []
+    return [lane, ...channels.filter(channel => channel.id !== lane.id && channel.members.includes(email))]
+  }
+
+  /** @param email - the person. @returns their solo lane, created when absent. */
+  async laneOf(email: string): Promise<Channel> {
+    const existing = ((await this.#ready()).channels ?? []).find(c => c.kind === 'solo' && c.members[0] === email)
+    if (existing !== undefined) return existing
+    return this.#write((state) => {
+      const again = (state.channels ?? []).find(c => c.kind === 'solo' && c.members[0] === email)
+      const at = this.#at()
+      const lane: Channel = again ?? {
+        id: this.#id('chn'),
+        name: `solo-${this.#id('l').slice(-8)}`,
+        title: `Ma lane (${email})`,
+        kind: 'solo',
+        members: [email],
+        agents: [],
+        connectors: [],
+        createdBy: email,
+        createdAt: at,
+      }
+      return {
+        state: again === undefined ? { ...state, channels: [...(state.channels ?? []), lane] } : state,
+        event: { at, actor: email, action: 'channel.lane', subject: lane.id },
+        value: lane,
+      }
+    })
+  }
+
+  /**
+   * Open a team channel; its creator is a member.
+   * @param draft - name, members, agents and connectors.
+   * @param actor - who opens it.
+   * @returns the channel.
+   */
+  createChannel(draft: ChannelDraft, actor: string): Promise<Channel> {
+    if (!SLUG.test(draft.name)) return Promise.reject(new Error(`a channel name is a slug: ${draft.name}`))
+    const connectorRefusal = serversRefusal(draft.connectors ?? [])
+    if (connectorRefusal !== undefined) return Promise.reject(new Error(connectorRefusal))
+    return this.#write((state) => {
+      if ((state.channels ?? []).some(channel => channel.name === draft.name)) {
+        throw new Error(`the channel #${draft.name} exists`)
+      }
+      const agents = draft.agents ?? []
+      const unknown = agents.filter(id => !(state.agents ?? []).some(agent => agent.id === id && agent.retiredAt === undefined))
+      if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
+      const channel: Channel = {
+        id: this.#id('chn'),
+        name: draft.name,
+        title: draft.title?.trim() || draft.name,
+        kind: 'team',
+        members: [...new Set([actor, ...(draft.members ?? [])])],
+        agents: [...new Set(agents)],
+        connectors: [...new Set(draft.connectors ?? [])].sort(),
+        createdBy: actor,
+        createdAt: this.#at(),
+      }
+      return {
+        state: { ...state, channels: [...(state.channels ?? []), channel] },
+        event: { at: channel.createdAt, actor, action: 'channel.created', subject: channel.id, detail: `#${channel.name}` },
+        value: channel,
+      }
+    })
+  }
+
+  /**
+   * Change who is in a channel: people, agents, or the connectors it allows.
+   * A solo lane keeps its single person.
+   * @param id - channel id.
+   * @param change - what to add, remove or set.
+   * @param actor - a member.
+   * @returns the channel.
+   */
+  updateChannel(
+    id: string,
+    change: {
+      readonly addMembers?: readonly string[]
+      readonly removeMembers?: readonly string[]
+      readonly addAgents?: readonly string[]
+      readonly removeAgents?: readonly string[]
+      readonly connectors?: readonly string[]
+    },
+    actor: string,
+  ): Promise<Channel> {
+    if (change.connectors !== undefined) {
+      const refusal = serversRefusal(change.connectors)
+      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    }
+    return this.#write((state) => {
+      const channel = (state.channels ?? []).find(candidate => candidate.id === id)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      if (channel.kind === 'solo' && ((change.addMembers ?? []).length > 0 || (change.removeMembers ?? []).length > 0)) {
+        throw new Error('a solo lane has one person')
+      }
+      const added = change.addAgents ?? []
+      const unknown = added.filter(agentId => !(state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined))
+      if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
+      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])])]
+        .filter(email => !(change.removeMembers ?? []).includes(email))
+      if (members.length === 0) throw new Error('a channel keeps at least one person')
+      const next: Channel = {
+        ...channel,
+        members,
+        agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
+        ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
+      }
+      return {
+        state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor, action: 'channel.updated', subject: id },
+        value: next,
+      }
+    })
+  }
+
+  // ---------------------------------------------------------------- messages
+
+  /**
+   * The messages of a channel, oldest first.
+   * @param channelId - the channel.
+   * @param after - only those after this message id.
+   * @param limit - at most this many, the latest ones.
+   * @returns the messages.
+   */
+  async messages(channelId: string, after?: string, limit = 200): Promise<readonly Message[]> {
+    const all = ((await this.#ready()).messages ?? []).filter(message => message.channelId === channelId)
+    const from = after === undefined ? 0 : all.findIndex(message => message.id === after) + 1
+    return all.slice(from).slice(-limit)
+  }
+
+  /**
+   * The messages of a channel created or changed at or after an instant: new
+   * messages, turns that moved on, deletions. One request per poll.
+   * @param channelId - the channel.
+   * @param since - an ISO instant, inclusive: the screen keeps the latest copy of each id.
+   * @param limit - at most this many, the latest changes.
+   * @returns the messages, oldest change first, and the cursor of the next poll.
+   */
+  async changedSince(channelId: string, since: string, limit = 200): Promise<{ messages: readonly Message[]; cursor: string }> {
+    const changed = ((await this.#ready()).messages ?? [])
+      .filter(message => message.channelId === channelId && (message.updatedAt ?? message.createdAt) >= since)
+      .sort((a, b) => (a.updatedAt ?? a.createdAt).localeCompare(b.updatedAt ?? b.createdAt))
+      .slice(-limit)
+    const last = changed.at(-1)
+    return { messages: changed, cursor: last === undefined ? since : (last.updatedAt ?? last.createdAt) }
+  }
+
+  /** @param id - message id. @returns the message. */
+  async message(id: string): Promise<Message | undefined> {
+    return ((await this.#ready()).messages ?? []).find(message => message.id === id)
+  }
+
+  /**
+   * Post a person's message; each agent of the channel it mentions gets a
+   * queued turn. The text is stored, never applied: it decides nothing.
+   * @param channelId - the channel.
+   * @param author - a member.
+   * @param text - what they wrote.
+   * @param replyTo - the message it answers, if any.
+   * @returns the message and its queued turns.
+   */
+  postMessage(channelId: string, author: string, text: string, replyTo?: string): Promise<Message> {
+    const body = text.trim()
+    if (body === '') return Promise.reject(new Error('a message needs text'))
+    return this.#write((state) => {
+      const channel = (state.channels ?? []).find(candidate => candidate.id === channelId)
+      if (channel === undefined || !channel.members.includes(author)) throw new Error(`no channel ${channelId}`)
+      const agents = (state.agents ?? []).filter(agent => channel.agents.includes(agent.id) && agent.retiredAt === undefined)
+      const mentions = mentionsOf(body, agents)
+      const turns: Turn[] = mentions.map(agentId => ({ id: this.#id('trn'), agentId, status: 'queued' }))
+      const at = this.#at()
+      const message: Message = {
+        id: this.#id('msg'),
+        channelId,
+        author: { kind: 'human', email: author },
+        text: body,
+        mentions,
+        ...(replyTo === undefined ? {} : { replyTo }),
+        ...(turns.length === 0 ? {} : { turns }),
+        createdAt: at,
+        updatedAt: at,
+      }
+      return {
+        state: { ...state, messages: [...(state.messages ?? []), message] },
+        event: { at: message.createdAt, actor: author, action: 'message.posted', subject: message.id, detail: channelId },
+        value: message,
+      }
+    })
+  }
+
+  /**
+   * Delete a person's own message: its place stays, its text goes, and its
+   * turns that have not finished are cancelled.
+   * @param channelId - the channel.
+   * @param id - the message.
+   * @param actor - its author.
+   * @returns the message.
+   */
+  deleteMessage(channelId: string, id: string, actor: string): Promise<Message> {
+    return this.#write((state) => {
+      const message = (state.messages ?? []).find(candidate => candidate.id === id && candidate.channelId === channelId)
+      if (message === undefined) throw new Error(`no message ${id}`)
+      if (message.author.kind !== 'human' || message.author.email !== actor) throw new Error('only its author deletes a message')
+      const at = this.#at()
+      const next: Message = {
+        ...message,
+        text: '',
+        deletedAt: at,
+        updatedAt: at,
+        ...(message.turns === undefined
+          ? {}
+          : {
+            turns: message.turns.map(turn => (turn.status === 'queued' || turn.status === 'running'
+              ? { ...turn, status: 'cancelled' as const, reason: 'Message supprimé par son auteur.', finishedAt: at }
+              : turn)),
+          }),
+      }
+      return {
+        state: { ...state, messages: (state.messages ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'message.deleted', subject: id, detail: channelId },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Move a turn on, unless it already settled (a cancelled turn stays so).
+   * @param messageId - the mentioning message.
+   * @param turnId - the turn.
+   * @param patch - its new status and figures.
+   * @returns the turn as it now stands.
+   */
+  updateTurn(messageId: string, turnId: string, patch: Partial<Omit<Turn, 'id' | 'agentId'>>): Promise<Turn> {
+    return this.#write((state) => {
+      const message = (state.messages ?? []).find(candidate => candidate.id === messageId)
+      const turn = message?.turns?.find(candidate => candidate.id === turnId)
+      if (message === undefined || turn === undefined) throw new Error(`no turn ${turnId}`)
+      const settled = turn.status !== 'queued' && turn.status !== 'running'
+      const next: Turn = settled ? turn : { ...turn, ...patch }
+      const updated: Message = {
+        ...message,
+        turns: (message.turns ?? []).map(t => (t.id === turnId ? next : t)),
+        ...(settled ? {} : { updatedAt: this.#at() }),
+      }
+      return {
+        state: { ...state, messages: (state.messages ?? []).map(candidate => (candidate.id === messageId ? updated : candidate)) },
+        event: { at: this.#at(), actor: 'mndt', action: `turn.${next.status}`, subject: turnId, ...(next.reason === undefined ? {} : { detail: next.reason }) },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Write an agent's answer, or a system notice, in the thread of a message.
+   * @param channelId - the channel.
+   * @param replyTo - the mentioning message.
+   * @param author - the agent, or the system.
+   * @param text - the answer.
+   * @returns the message.
+   */
+  reply(channelId: string, replyTo: string, author: Exclude<MessageAuthor, { kind: 'human' }>, text: string): Promise<Message> {
+    return this.#write((state) => {
+      const at = this.#at()
+      const message: Message = {
+        id: this.#id('msg'),
+        channelId,
+        author,
+        text,
+        mentions: [],
+        replyTo,
+        createdAt: at,
+        updatedAt: at,
+      }
+      return {
+        state: { ...state, messages: [...(state.messages ?? []), message] },
+        event: { at: message.createdAt, actor: author.kind === 'agent' ? author.agentId : 'mndt', action: 'message.reply', subject: message.id, detail: channelId },
+        value: message,
+      }
+    })
+  }
+
   /** @returns the whole state, for a page that wants one read. */
   async snapshot(): Promise<WorkbenchState> {
     return this.#ready()
   }
+}
+
+/**
+ * @param agent - an agent as drafted or patched.
+ * @returns why it cannot be kept, or undefined.
+ */
+function agentRefusal(agent: AgentDraft): string | undefined {
+  if (!SLUG.test(agent.handle)) return `a handle is a slug of 2 to 32 characters: ${agent.handle}`
+  if (agent.name.trim() === '') return 'an agent needs a name'
+  if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
+  const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
+  if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling <= 0) return 'a monthly ceiling is a positive number of euros'
+  return serversRefusal(agent.connectors ?? [])
+}
+
+/** @param servers - MCP server names. @returns why one is not a server name, or undefined. */
+function serversRefusal(servers: readonly string[]): string | undefined {
+  const bad = servers.filter(server => typeof server !== 'string' || !SERVER.test(server))
+  return bad.length === 0 ? undefined : `not an MCP server name: ${bad.join(', ')}`
 }

@@ -1,0 +1,75 @@
+name: mndt-__SLUG__
+
+# One tenant of the team workbench (agentic Slack, lot 1), rendered by
+# create-tenant.sh. Same shape as mndt-front/docker-compose.yml, with every
+# name, path and host of the tenant set by the script.
+
+services:
+  gateway:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/gateway/server.mjs"]
+    environment:
+      PORT: "8080"
+      WORKBENCH: "http://workbench:3111"
+      API: "http://workbench:8795"
+      TOKEN_FILE: "/state/web-token"
+    volumes:
+      - __APP__/gateway:/opt/gateway:ro
+      - __DATA__:/state:ro
+    networks:
+      - front
+    restart: unless-stopped
+
+  proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    command:
+      - "--config=/etc/mndt-front/oauth2.cfg"
+      - "--client-secret-file=/etc/mndt-front/client_secret"
+      - "--cookie-secret-file=/etc/mndt-front/cookie_secret"
+      - "--trusted-proxy-ip=__TRUSTED_PROXY__"
+    volumes:
+      - __CONF__:/etc/mndt-front:ro
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "__TRAEFIK_NETWORK__"
+      traefik.http.routers.mndt-__SLUG__.rule: "Host(`__DOMAIN__`)"
+      traefik.http.routers.mndt-__SLUG__.entrypoints: "websecure"
+      traefik.http.routers.mndt-__SLUG__.tls.certresolver: "letsencrypt"
+      traefik.http.services.mndt-__SLUG__.loadbalancer.server.port: "4180"
+    networks:
+      - front
+      - edge
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  workbench:
+    image: __IMAGE__
+    # The gateway is the only ingress: no public port.
+    env_file:
+      - __DATA__/model.env
+    environment:
+      DSH_HOME: /state/home
+      DSH_MNDT_IDENTITY: __OWNER__
+      DSH_MNDT_LOCAL_OWNER: __OWNER__
+      DSH_MNDT_STATE: /state/state.json
+      DSH_MNDT_PORT: "8795"
+      DSH_MNDT_TOKENS_FILE: /state/tokens.json
+      DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
+      # A message never decides: the approvals connector never offers decide_approval.
+      MNDT_APPROVALS_ALLOW_DECIDE: "0"
+      PUBLIC_URL: https://__DOMAIN__/
+      TRUSTED_HOST: __DOMAIN__
+    command: ["sh", "/opt/mndt-tools/workbench-entrypoint.sh"]
+    volumes:
+      - __DATA__:/state
+      - __DATA__/tools:/opt/mndt-tools:ro
+      - __DATA__/mcp-auth:/state/mcp-auth
+    networks:
+      - front
+    restart: unless-stopped
+networks:
+  front: {}
+  edge:
+    external: true
+    name: __TRAEFIK_NETWORK__

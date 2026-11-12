@@ -16,6 +16,21 @@ export async function publishActor(actor: string, missionId: string): Promise<vo
   await writeFile(actorFilePath(), JSON.stringify({ actor, missionId }), 'utf8')
 }
 
+/** Every run that publishes an actor, missions and agent turns alike, in one line. */
+let exclusiveQueue: Promise<unknown> = Promise.resolve()
+
+/**
+ * Run work that publishes an actor, after every such run before it: two runs
+ * at once would let a tool read the other's actor (another person's mailbox).
+ * @param work - the run.
+ * @returns its result.
+ */
+export function exclusive<T>(work: () => Promise<T>): Promise<T> {
+  const next = exclusiveQueue.then(work, work)
+  exclusiveQueue = next.catch(() => undefined)
+  return next
+}
+
 /** Remove the record once the mission settled. */
 export async function clearActor(): Promise<void> {
   await unlink(actorFilePath()).catch(() => undefined)

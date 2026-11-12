@@ -35,13 +35,34 @@ async function actorNow() {
   return ACTOR
 }
 
+/**
+ * The run the current call belongs to (a mission, or an agent turn of a
+ * mention): the API files a card asked during a turn in that turn's thread.
+ * @returns the run id, or an empty string outside a run.
+ */
+async function runNow() {
+  if (ACTOR_FILE === '') return ''
+  const raw = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
+  try {
+    const record = JSON.parse(raw)
+    return typeof record.missionId === 'string' ? record.missionId : ''
+  } catch {
+    return ''
+  }
+}
+
 const KINDS = ['send-email', 'publish', 'spend', 'delete']
 
 /** @param path - API path. @param init - fetch options. @returns parsed body. */
 async function call(path, init = {}) {
   const response = await fetch(`${API}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init.headers ?? {}), 'x-forwarded-email': await actorNow() },
+    headers: {
+      'content-type': 'application/json',
+      ...(init.headers ?? {}),
+      'x-forwarded-email': await actorNow(),
+      ...(await runNow().then(run => (run === '' ? {} : { 'x-mndt-run': run }))),
+    },
   })
   const text = await response.text()
   let body

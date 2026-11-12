@@ -24,7 +24,11 @@ import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { authorityGrants, localGrants } from './grants.ts'
-import { DshMissionRunner } from './runner.ts'
+import { DshMissionRunner, DshTurnRunner } from './runner.ts'
+import { TurnScheduler } from './turns.ts'
+import { readFileSync } from 'node:fs'
+import { parsePrices } from './core/index.ts'
+import type { PriceGrid } from './core/index.ts'
 import { dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 
@@ -91,6 +95,15 @@ export class WorkbenchGateway extends TypertRemoteService {
     // through the environment, which is what a container needs.
     const host = config.host ?? process.env.DSH_MNDT_HOST
     const runner = new DshMissionRunner(ctx)
+    // Agent turns of mentions: the price grid is the adapters lane's
+    // deploy/llm/prices.json, copied beside the state (or MNDT_PRICES_FILE);
+    // a model without a price, or priced null, is refused, never free.
+    const turns = new TurnScheduler({
+      service: this.service,
+      engine: new DshTurnRunner(ctx),
+      prices: readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json')),
+      dataDir: dirname(this.statePath),
+    })
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
         service: this.service,
@@ -104,6 +117,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
+        turns,
         port,
         ...(host === undefined || host === '' ? {} : { host }),
       }),
@@ -406,4 +420,19 @@ export class WorkbenchGateway extends TypertRemoteService {
   connectors(): { module: string; server: string; enabled: boolean }[] {
     return this.connectorRows()
   }
+}
+
+/**
+ * @param path - the price grid file.
+ * @returns the grid; without a file, an empty grid (every turn refused, with its reason).
+ */
+function readPrices(path: string): PriceGrid {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ENOENT') return {}
+    throw error
+  }
+  return parsePrices(text)
 }
