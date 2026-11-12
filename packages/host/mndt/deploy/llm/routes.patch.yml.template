@@ -20,7 +20,7 @@
         compat: {supportsStore: false, supportsDeveloperRole: false}
         models:
           - {id: deepseek-v4.1-flash, name: DeepSeek V4.1 Flash (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: false}
-          - {id: glm-5.3, name: GLM 5.3 (Scaleway), contextWindow: 128000, maxTokens: 8192, reasoningEfforts: false}
+          - {id: glm-5.3, name: GLM 5.3 (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: false}
       vllm-qwen:
         displayName: Qwen (vLLM, Scaleway)
         apiKeyEnv: VLLM_API_KEY

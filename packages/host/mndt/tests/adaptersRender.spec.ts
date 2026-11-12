@@ -119,7 +119,7 @@ describe('LLM routes', () => {
     expect(text).toContain('- id: own-row')
   })
 
-  test('every declared model has a line in the price grid; glm-5.3 stays to be provided', () => {
+  test('every declared model has a line in the price grid; glm-5.3 is priced with a 256k window', () => {
     const { rows } = rendered()
     const providers = rows.find(row => row.id === 'llm-pi-ai')!.config.providers as Record<string, { models: { id: string }[] }>
     for (const [provider, profile] of Object.entries(providers)) {
@@ -127,7 +127,10 @@ describe('LLM routes', () => {
         expect(`${provider}/${model.id}` in prices.models || `${provider}/*` in prices.models).toBe(true)
       }
     }
-    expect(prices.models['scaleway-genapi/glm-5.3']).toBeNull()
+    expect(prices.models['scaleway-genapi/glm-5.3']).toEqual({ input: 1.8, cacheRead: 1.8, output: 5.5 })
+    const glm = providers['scaleway-genapi']!.models.find(model => model.id === 'glm-5.3') as { contextWindow?: number } | undefined
+    expect(glm?.contextWindow).toBe(256000)
+    expect(prices.models['scaleway-genapi/qwen3.8-27b']).toEqual({ input: 0.6, cacheRead: 0.12, output: 3.3 })
     expect(prices.models['scaleway-genapi/deepseek-v4.1-flash']).toEqual({ input: 0.6, cacheRead: 0.12, output: 1.8 })
     expect(prices.models['vllm-qwen/*']).toEqual({ input: 0, cacheRead: 0, output: 0 })
   })
