@@ -188,6 +188,18 @@ describe('feed edge cases', () => {
     expect(event?.body.kind === 'event' ? event.body.detail : 'x').toBeUndefined()
   })
 
+  it('the team channels\' own traffic stays in their thread, not in the legacy team feed', () => {
+    const events = [
+      { at: '2026-11-12T15:45:00.000Z', actor: 'mndt', action: 'turn.done', subject: 'trn_1' },
+      { at: '2026-11-12T15:45:01.000Z', actor: 'agt_1', action: 'message.reply', subject: 'msg_1' },
+      { at: '2026-11-12T15:45:02.000Z', actor: 'scheduler', action: 'mission.failed', subject: 'mis_1' },
+    ]
+    const actions = (posts: ReturnType<typeof feedOf>): string[] =>
+      posts.flatMap(post => (post.body.kind === 'event' ? [post.body.action] : []))
+    expect(actions(feedOf(stateWith({ events }), team))).toEqual(['mission.failed'])
+    expect(actions(feedOf(stateWith({ events }), system)).sort()).toEqual(['message.reply', 'mission.failed', 'turn.done'])
+  })
+
   it('reads a feed whose state carries neither mandates nor journal', () => {
     const bare = withoutEvents(withoutMandates(fixture()))
     expect(feedOf(bare, team).length).toBeGreaterThan(0)
@@ -225,6 +237,11 @@ describe('journal wording', () => {
     expect(sentenceOf('mission.done', translate)).toBe('mission terminée')
     expect(sentenceOf('approval.rejected', translate)).toBe('approbation refusée')
     expect(sentenceOf('autre.action', translate)).toBe('autre.action')
+    // The channels' traffic, where it is shown (system channel, activity), is read, not raw.
+    expect(sentenceOf('turn.done', translate)).toBe('tour terminé')
+    expect(sentenceOf('message.reply', translate)).toBe('réponse d\'agent')
+    expect(subjectLabel('trn_123', translate)).toBe('un tour')
+    expect(subjectLabel('agt_123', translate)).toBe('un agent')
   })
 
   it('formats a clock, a day and plural words', () => {
