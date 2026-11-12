@@ -1,0 +1,20 @@
+# oauth2-proxy in front of one tenant of the team workbench, Microsoft Entra ID.
+# Rendered by create-tenant.sh. The redirect URI below must be registered on the
+# Entra application, otherwise Entra refuses the sign-in.
+provider = "oidc"
+oidc_issuer_url = "https://login.microsoftonline.com/__ENTRA_TENANT__/v2.0"
+client_id = "__CLIENT_ID__"
+
+redirect_url = "https://__DOMAIN__/oauth2/callback"
+email_domains = [__EMAIL_DOMAINS__]
+
+cookie_secure = true
+cookie_samesite = "lax"
+cookie_name = "_mndt___SLUG__"
+
+http_address = "0.0.0.0:4180"
+upstreams = ["http://gateway:8080/"]
+reverse_proxy = true
+pass_user_headers = true
+skip_provider_button = true
+set_xauthrequest = true
