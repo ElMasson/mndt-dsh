@@ -189,6 +189,11 @@ export const CSS = `
 .mndt-dot[data-state="available"] { background: #16724B; }
 .mndt-dot[data-state="working"] { background: #8A4B00; }
 .mndt-role { color: var(--mndt-muted); font-size: 11px; }
+.mndt-link { padding: 0; background: none; border: none; color: #3445D1; font: inherit; font-size: 12px; cursor: pointer; }
+.mndt-link:hover { text-decoration: underline; }
+.mndt-link[data-tone="danger"] { color: #A12C2C; }
+.mndt-link:disabled { color: var(--mndt-muted); cursor: default; text-decoration: none; }
+.mndt-message-actions { display: inline-flex; gap: 10px; }
 
 .mndt-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--mndt-canvas); }
 .mndt-channel-head {
