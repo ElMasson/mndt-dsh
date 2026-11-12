@@ -1,0 +1,33 @@
+# LLM routes of the workbench (agentic Slack, lot 1). Rendered by
+# render-llm-routes.py into the home patch, between its markers.
+#
+# No secret here: each route names the environment variable that holds its key
+# (apiKeyEnv), resolved per request. ${VAR} placeholders are non-secret values
+# the renderer substitutes and refuses to leave empty.
+#
+# - scaleway-genapi: Scaleway Generative APIs, OpenAI-compatible, per project.
+# - vllm-qwen: the vLLM server on the H100, reachable from the Scaleway private
+#   network only. pi-ai's OpenAI client still wants a key: VLLM_API_KEY may hold
+#   any placeholder when the server runs without --api-key.
+- id: llm-pi-ai
+  config:
+    providers:
+      scaleway-genapi:
+        displayName: Scaleway Generative APIs
+        apiKeyEnv: SCW_GENAPI_KEY
+        api: openai-completions
+        baseURL: https://api.scaleway.ai/${SCW_PROJECT_ID}/v1
+        compat: {supportsStore: false, supportsDeveloperRole: false}
+        models:
+          - {id: deepseek-v4.1-flash, name: DeepSeek V4.1 Flash (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: false}
+          - {id: glm-5.3, name: GLM 5.3 (Scaleway), contextWindow: 128000, maxTokens: 8192, reasoningEfforts: false}
+      vllm-qwen:
+        displayName: Qwen (vLLM, Scaleway)
+        apiKeyEnv: VLLM_API_KEY
+        api: openai-completions
+        baseURL: ${VLLM_QWEN_BASE_URL}
+        compat: {supportsStore: false, supportsDeveloperRole: false}
+        models:
+          - {id: '${VLLM_QWEN_MODEL}', name: Qwen (vLLM), contextWindow: 131072, maxTokens: 8192, reasoningEfforts: false}
+- id: agent-default-model
+  config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}
