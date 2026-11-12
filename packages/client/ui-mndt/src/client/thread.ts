@@ -35,6 +35,29 @@ export function isOpen(turn: ChatTurn): boolean {
 }
 
 /**
+ * The turns a page of changes brings to an end: closed in the page, not yet closed in what was held.
+ * A turn read again with the same closed status (the cursor is inclusive) does not count twice.
+ * @param held - the thread as shown.
+ * @param changed - the messages the Host just served.
+ * @returns how many turns ended.
+ */
+export function settledTurns(
+  held: readonly ChatMessage[],
+  changed: readonly ChatMessage[],
+): number {
+  const before = new Map<string, ChatTurn>()
+  for (const m of held) for (const turn of m.turns ?? []) before.set(turn.id, turn)
+  let ended = 0
+  for (const m of changed) {
+    for (const turn of m.turns ?? []) {
+      const old = before.get(turn.id)
+      if (!isOpen(turn) && (old === undefined || isOpen(old))) ended += 1
+    }
+  }
+  return ended
+}
+
+/**
  * The agents' answers to a message.
  * @param thread - the thread.
  * @param messageId - the message that mentioned them.

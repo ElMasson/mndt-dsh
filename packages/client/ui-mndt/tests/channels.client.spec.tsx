@@ -141,6 +141,37 @@ describe('the thread', () => {
     expect(screen.queryByTestId('chat-empty')).toBeNull()
   })
 
+  it('a turn that ends is told once, so the cards and the spending it asked for are read at once', async () => {
+    const chat = double()
+    const onSettled = vi.fn()
+    render(
+      <ChannelThread
+        chat={chat}
+        channel={channel()}
+        agents={[agent()]}
+        cards={[]}
+        canDecide
+        onDecide={() => Promise.resolve(undefined)}
+        onSettled={onSettled}
+        t={chatEnglish}
+        pollMs={20}
+      />,
+    )
+    await screen.findByTestId('chat-empty')
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@assistant bonjour', selectionStart: 18 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(1) })
+    act(() => { chat.tick() })
+    await waitFor(() => { expect(within(screen.getByTestId('chat-turn')).getByText('answering…')).toBeTruthy() })
+    expect(onSettled).not.toHaveBeenCalled()
+    act(() => { chat.tick() })
+    await waitFor(() => { expect(onSettled).toHaveBeenCalledTimes(1) })
+    // Read again and again through the inclusive cursor, the ended turn is not told twice.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(onSettled).toHaveBeenCalledTimes(1)
+  })
+
   it('a channel without agents says that no one answers a mention', async () => {
     const chat = createMockChat({ you: YOU, agents: [], channels: [channel({ agents: [] })] }, () => Date.parse(AT))
     render(
