@@ -1,0 +1,45 @@
+name: edge
+
+# The edge of a fresh host: Traefik terminates TLS (Let's Encrypt) and routes
+# each tenant by its host name. A tenant rendered by create-tenant.sh joins the
+# external network `traefik` and names the resolver `letsencrypt`; nothing else
+# is published on the host.
+#
+#   ACME_EMAIL=<contact address> docker compose up -d
+#
+# Only 80 (ACME challenge, then a redirect to https) and 443 are published; the
+# instance security group keeps every other port closed. The Docker socket is
+# mounted read-only: Traefik reads the labels of the containers, it never
+# starts nor changes one.
+
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?set ACME_EMAIL to the contact address of the certificates}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /data/edge/acme:/acme
+    networks:
+      - traefik
+    restart: unless-stopped
+
+networks:
+  traefik:
+    name: traefik
