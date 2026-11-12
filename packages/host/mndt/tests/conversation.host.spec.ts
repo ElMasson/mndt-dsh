@@ -6,7 +6,9 @@ import type { MissionRunner } from '../src/api.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 import { mcpServerOf } from '../src/runner.ts'
-import { parsePrices, priceOf } from '../src/core/index.ts'
+import { eurOf, parsePrices, priceOf } from '../src/core/index.ts'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const owner = 'duke@datanalysis.re'
 const admin = 'smarion@datanalysis.re'
@@ -491,6 +493,16 @@ describe('channels, mentions and agent turns', () => {
     const second = await say(b, general, 'deux')
     const page = await b.api({ method: 'GET', path: `/channels/${general}/messages`, query: { limit: '1' }, ...asOwner })
     expect((page.body as { messages: Message[]; cursor: string }).cursor).toBe(second.updatedAt)
+  })
+
+  it('the deployed grid prices every lot 1 model, so no agent turn is refused for a missing price', () => {
+    const grid = parsePrices(readFileSync(join(import.meta.dirname, '..', 'deploy', 'llm', 'prices.json'), 'utf8'))
+    for (const model of ['deepseek-v4.1-flash', 'glm-5.3', 'qwen3.8-27b']) {
+      expect(priceOf(grid, { provider: 'scaleway-genapi', model })).toBeDefined()
+    }
+    expect(priceOf(grid, { provider: 'vllm-qwen', model: 'qwen3.5-35b-a3b' })?.output).toBe(0)
+    // 1M tokens in and 1M out on glm-5.3: 1.80 + 5.50 euros.
+    expect(eurOf({ input: 1_000_000, output: 1_000_000 }, priceOf(grid, { provider: 'scaleway-genapi', model: 'glm-5.3' })!)).toBe(7.3)
   })
 
   it('names the MCP server of a tool', () => {
