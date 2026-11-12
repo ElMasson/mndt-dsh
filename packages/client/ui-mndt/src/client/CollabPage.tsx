@@ -12,7 +12,7 @@ import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.t
 import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
-import { ChannelAgents, ChannelList, ChannelThread } from './ChannelView.tsx'
+import { ChannelAgents, ChannelList, ChannelThread, reasonOf } from './ChannelView.tsx'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
 
@@ -96,9 +96,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setChatAgents(agents)
       setChatError(undefined)
     } catch (failure) {
-      setChatError(failure instanceof Error ? failure.message : String(failure))
+      setChatError(reasonOf(failure, tc))
     }
-  }, [chat])
+  }, [chat, tc])
 
   useEffect(() => {
     void loadChat()
@@ -117,9 +117,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setView('chat')
       return undefined
     } catch (failure) {
-      return failure instanceof Error ? failure.message : String(failure)
+      return reasonOf(failure, tc)
     }
-  }, [chat])
+  }, [chat, tc])
 
   const addChatAgent = useCallback(async (agentId: string): Promise<string | undefined> => {
     if (chat === undefined || chatId === undefined) return undefined
@@ -128,9 +128,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
       return undefined
     } catch (failure) {
-      return failure instanceof Error ? failure.message : String(failure)
+      return reasonOf(failure, tc)
     }
-  }, [chat, chatId])
+  }, [chat, chatId, tc])
 
   const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
     const outcome = await api.decide(id, decision, reason)
@@ -725,7 +725,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     key={candidate.id}
                     type="button"
                     className="mndt-channel"
-                    data-active={candidate.id === channel?.id}
+                    data-active={view === 'channel' && candidate.id === channel?.id}
                     onClick={() => { setChannelId(candidate.id); setView('channel') }}
                   >
                     <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
@@ -865,6 +865,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 canDecide={state.canAdmin === true}
                 onDecide={decideCard}
                 openTrace={openTrace}
+                you={state.you}
                 t={tc}
               />
             </section>

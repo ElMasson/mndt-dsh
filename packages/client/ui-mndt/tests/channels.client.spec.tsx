@@ -159,6 +159,103 @@ describe('the thread', () => {
   })
 })
 
+describe('deleting one\'s own message (R-16)', () => {
+  it('only the author is offered it; after the confirmation the text goes and the pending turn stops', async () => {
+    const chat = double()
+    render(
+      <ChannelThread
+        chat={chat}
+        channel={channel()}
+        agents={[agent(), agent({ id: 'agt_2', handle: 'analyste', name: 'Analyste' })]}
+        cards={[]}
+        canDecide
+        onDecide={() => Promise.resolve(undefined)}
+        you={YOU}
+        t={chatEnglish}
+        pollMs={20}
+      />,
+    )
+    await screen.findByTestId('chat-empty')
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@assistant résume', selectionStart: 17 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(1) })
+    act(() => { chat.tick() })
+    act(() => { chat.tick() })
+    // The agent's answer is not the reader's: it offers nothing.
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(2) })
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1)
+    fireEvent.change(box, { target: { value: '@assistant une autre', selectionStart: 20 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(3) })
+    const mine = screen.getAllByTestId('chat-message')[2]!
+    fireEvent.click(within(mine).getByRole('button', { name: 'Delete' }))
+    // Nothing goes before the confirmation; cancelling keeps the message.
+    fireEvent.click(within(mine).getByRole('button', { name: 'Cancel' }))
+    expect(within(mine).getByText('@assistant une autre')).toBeTruthy()
+    fireEvent.click(within(mine).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(mine).getByRole('button', { name: 'Confirm the deletion' }))
+    await waitFor(() => { expect(within(mine).getByText('Message deleted.')).toBeTruthy() })
+    expect(within(mine).getByText('stopped')).toBeTruthy()
+    expect(within(mine).queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('a refused deletion is said as served and the message stays', async () => {
+    const chat = double()
+    chat.remove = () => Promise.reject(new Error('not_the_author'))
+    render(
+      <ChannelThread
+        chat={chat}
+        channel={channel()}
+        agents={[agent()]}
+        cards={[]}
+        canDecide
+        onDecide={() => Promise.resolve(undefined)}
+        you={YOU}
+        t={chatEnglish}
+        pollMs={20}
+      />,
+    )
+    await screen.findByTestId('chat-empty')
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'bonjour', selectionStart: 7 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    const mine = await screen.findByTestId('chat-message')
+    fireEvent.click(within(mine).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(mine).getByRole('button', { name: 'Confirm the deletion' }))
+    expect((await within(mine).findByRole('alert')).textContent).toBe('not_the_author')
+    expect(within(mine).getByText('bonjour')).toBeTruthy()
+  })
+})
+
+describe('the thread follows the newest message', () => {
+  /** @param box - the feed. @param height - its content height. */
+  function sized(box: HTMLElement, height: number): void {
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => height })
+    Object.defineProperty(box, 'clientHeight', { configurable: true, get: () => 100 })
+  }
+
+  it('at the bottom it follows; scrolled up to read, it stays where the reader is', async () => {
+    const chat = double()
+    render(thread(chat))
+    await screen.findByTestId('chat-empty')
+    const feed = screen.getByTestId('chat-thread')
+    sized(feed, 600)
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@assistant bonjour', selectionStart: 18 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(feed.scrollTop).toBe(600) })
+    // The reader scrolls up: a new answer does not pull them down.
+    feed.scrollTop = 50
+    fireEvent.scroll(feed)
+    sized(feed, 900)
+    act(() => { chat.tick() })
+    act(() => { chat.tick() })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(2) })
+    expect(feed.scrollTop).toBe(50)
+  })
+})
+
 describe('the channel agents', () => {
   it('model and this month\'s spending against the ceiling', () => {
     render(<ChannelAgents channel={channel()} agents={[agent(), agent({ id: 'agt_2', handle: 'analyste' })]} t={chatEnglish} />)
