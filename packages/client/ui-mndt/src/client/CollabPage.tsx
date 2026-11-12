@@ -21,6 +21,9 @@ import {
 } from './feed.ts'
 import type { Channel, CollabState, Post, SearchHit } from './feed.ts'
 
+/** How often the cards are read again while a channel is open, in milliseconds. */
+export const CARDS_MS = 10000
+
 /** @param props - the face the Host exposes. */
 export interface CollabPageProps {
   readonly api: MndtFace
@@ -106,6 +109,19 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const timer = setInterval(() => { void loadChat() }, 30000)
     return () => { clearInterval(timer) }
   }, [loadChat])
+
+  // A turn ended: its cards and the agents' spending are read at once, not at the next tick.
+  const settled = useCallback((): void => {
+    void load()
+    void loadChat()
+  }, [load, loadChat])
+
+  useEffect(() => {
+    if (view !== 'chat') return undefined
+    // A card asked in another channel, or decided by someone else, still reaches the page.
+    const timer = setInterval(() => { void load() }, CARDS_MS)
+    return () => { clearInterval(timer) }
+  }, [view, load])
 
   const createChat = useCallback(async (title: string): Promise<string | undefined> => {
     if (chat === undefined) return undefined
@@ -866,6 +882,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 onDecide={decideCard}
                 openTrace={openTrace}
                 you={state.you}
+                onSettled={settled}
                 t={tc}
               />
             </section>

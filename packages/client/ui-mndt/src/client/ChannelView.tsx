@@ -15,7 +15,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
-import { authorName, mergeThread } from './thread.ts'
+import { authorName, mergeThread, settledTurns } from './thread.ts'
 
 /** How often the thread is read again, in milliseconds. */
 export const POLL_MS = 2000
@@ -292,6 +292,8 @@ export function ChannelThread(props: {
   readonly openTrace?: ((sessionId: string) => void) | undefined
   /** The reader's e-mail: their own messages offer « Delete ». */
   readonly you?: string | undefined
+  /** A turn ended: what it asked for (cards, spending) is now on the Host. */
+  readonly onSettled?: (() => void) | undefined
   readonly t: ChatTranslate
   /** For tests: how often to read again. */
   readonly pollMs?: number
@@ -303,12 +305,17 @@ export function ChannelThread(props: {
   // The feed follows the newest message while the reader is at the bottom; scrolled up, it stays put.
   const feed = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
+  // What is shown, read by the poll to tell which turns a page brings to an end.
+  const shown = useRef<readonly ChatMessage[]>([])
+  const onSettled = useRef(props.onSettled)
+  onSettled.current = props.onSettled
   const byAgent = useMemo(() => new Map(props.agents.map(a => [a.id, a])), [props.agents])
 
   useEffect(() => {
     let live = true
     cursor.current = undefined
     atBottom.current = true
+    shown.current = []
     setThread(undefined)
     setError(undefined)
     const read = async (): Promise<void> => {
@@ -318,8 +325,11 @@ export function ChannelThread(props: {
           : await chat.changes(channel.id, cursor.current)
         if (!live) return
         cursor.current = page.cursor
+        const ended = settledTurns(shown.current, page.messages)
+        shown.current = mergeThread(shown.current, page.messages)
         setThread(held => mergeThread(held ?? [], page.messages))
         setError(undefined)
+        if (ended > 0) onSettled.current?.()
       } catch (failure) {
         if (live) setError(reasonOf(failure, t))
       }
@@ -346,6 +356,7 @@ export function ChannelThread(props: {
 
   const posted = useCallback((message: ChatMessage): void => {
     atBottom.current = true
+    shown.current = mergeThread(shown.current, [message])
     setThread(held => mergeThread(held ?? [], [message]))
   }, [])
 
