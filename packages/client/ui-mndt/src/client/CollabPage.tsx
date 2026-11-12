@@ -9,6 +9,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
+import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
+import { chatEnglish } from './chatLocales.ts'
+import type { ChatTranslate } from './chatLocales.ts'
+import { ChannelAgents, ChannelList, ChannelThread } from './ChannelView.tsx'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
 
@@ -22,13 +26,24 @@ export interface CollabPageProps {
   readonly api: MndtFace
   /** The locale seat; the page falls back to French when it is absent. */
   readonly t?: MndtTranslate
+  /** The team channels of lot 1; absent where they are not served. */
+  readonly chat?: ChatFace | undefined
+  /** The channels' copy (namespace `mndt.chat`). */
+  readonly tc?: ChatTranslate | undefined
+  /** Open a turn's DSH session, where this workstation can show it. */
+  readonly openTrace?: ((sessionId: string) => void) | undefined
 }
 
-export function CollabPage({ api, t = translate }: CollabPageProps) {
+export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<'channel' | 'activity' | 'automations' | 'admin'>('channel')
+  const [view, setView] = useState<'channel' | 'chat' | 'activity' | 'automations' | 'admin'>('channel')
+  // Team channels (lot 1): what the workbench serves, or why it could not be read.
+  const [chatChannels, setChatChannels] = useState<readonly ChatChannel[] | undefined>(undefined)
+  const [chatAgents, setChatAgents] = useState<readonly ChatAgent[]>([])
+  const [chatError, setChatError] = useState<string | undefined>(undefined)
+  const [chatId, setChatId] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [openBriefs, setOpenBriefs] = useState<ReadonlySet<string>>(new Set())
   const [prompt, setPrompt] = useState('')
@@ -72,6 +87,48 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
   }, [api])
 
   useEffect(() => { void load() }, [load])
+
+  const loadChat = useCallback(async () => {
+    if (chat === undefined) return
+    try {
+      const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
+      setChatChannels(channels)
+      setChatAgents(agents)
+      setChatError(undefined)
+    } catch (failure) {
+      setChatError(failure instanceof Error ? failure.message : String(failure))
+    }
+  }, [chat])
+
+  useEffect(() => {
+    void loadChat()
+    // The agents' spending moves with each turn: read the list again now and then.
+    const timer = setInterval(() => { void loadChat() }, 30000)
+    return () => { clearInterval(timer) }
+  }, [loadChat])
+
+  const createChat = useCallback(async (title: string): Promise<string | undefined> => {
+    if (chat === undefined) return undefined
+    try {
+      // The Host derives the identifier from the title, with a free suffix if taken.
+      const made = await chat.createChannel({ title })
+      setChatChannels(held => [...(held ?? []), made])
+      setChatId(made.id)
+      setView('chat')
+      return undefined
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : String(failure)
+    }
+  }, [chat])
+
+  const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
+    const outcome = await api.decide(id, decision, reason)
+    if (outcome.ok) {
+      void load()
+      return undefined
+    }
+    return outcome.error ?? decision
+  }, [api, load])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
@@ -589,6 +646,19 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
             </button>
           )}
         </div>
+        {chat === undefined ? undefined : chatChannels !== undefined ? (
+          <ChannelList
+            channels={chatChannels}
+            selected={view === 'chat' ? chatId : undefined}
+            onSelect={(id) => { setChatId(id); setView('chat') }}
+            onCreate={createChat}
+            t={tc}
+          />
+        ) : chatError === undefined ? undefined : (
+          <p className="mndt-hint mndt-channel-note" role="note" data-testid="chat-not-served">
+            {tc('notServed')} ({chatError})
+          </p>
+        )}
         {['team', 'mandate', 'system'].map((kind) => {
           const group = channels.filter(candidate => candidate.kind === kind)
           if (group.length === 0) return undefined
@@ -731,6 +801,40 @@ export function CollabPage({ api, t = translate }: CollabPageProps) {
         </div>
       </section>
 
+      {(() => {
+        const current = chatChannels?.find(c => c.id === chatId)
+        if (chat === undefined || current === undefined) return undefined
+        return (
+          <>
+            <section className="mndt-main mndt-chat" style={{ display: view === 'chat' ? undefined : 'none' }}>
+              <header className="mndt-channel-head">
+                <div className="mndt-channel-head-main">
+                  <h1 className="mndt-channel-title">{current.kind === 'solo' ? tc('lane') : `# ${current.title || current.name}`}</h1>
+                </div>
+              </header>
+              <ChannelThread
+                chat={chat}
+                channel={current}
+                agents={chatAgents}
+                cards={state.approvals}
+                canDecide={state.canAdmin === true}
+                onDecide={decideCard}
+                openTrace={openTrace}
+                t={tc}
+              />
+            </section>
+            <aside className="mndt-context" aria-label={t('ui.contexte')} style={{ display: view === 'chat' ? undefined : 'none' }}>
+              <ChannelAgents channel={current} agents={chatAgents} t={tc} />
+              <div className="mndt-context-block">
+                <h3 className="mndt-context-title">{tc('members')}</h3>
+                <ul className="mndt-plain-list">
+                  {current.members.map(email => <li key={email}>{email}</li>)}
+                </ul>
+              </div>
+            </aside>
+          </>
+        )
+      })()}
       <section className="mndt-main mndt-automations" style={{ display: view === 'automations' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
           <div className="mndt-channel-head-main">

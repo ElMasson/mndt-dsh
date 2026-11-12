@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CollabPage } from '../src/client/CollabPage.tsx'
 import type { MndtFace, PageStateRow } from '../src/client/face.ts'
+import { createMockChat } from '../src/client/mockChat.ts'
+import type { ChatFace } from '../src/client/chat.ts'
 
 afterEach(() => { cleanup() })
 
@@ -252,5 +254,46 @@ describe('collaboration page', () => {
     await waitFor(() => {
       expect(api.toggleAutomation).toHaveBeenCalledWith('auto_approvals', true)
     })
+  })
+})
+
+describe('the team channels of lot 1 in the page', () => {
+  const at = '2026-11-12T09:00:00.000Z'
+  const you = 'duke@datanalysis.re'
+
+  it('lists the served channels, the lane first, and opens a channel\'s thread with its agents', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [{ id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'vllm-qwen', model: 'qwen', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }],
+      channels: [
+        { id: 'chn_0', name: 'duke', title: 'duke', kind: 'solo', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at },
+        { id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at },
+      ],
+    }, () => Date.parse(at))
+    render(<CollabPage api={fakeFace()} chat={chat} />)
+    const list = await screen.findByTestId('chat-channels')
+    const names = within(list).getAllByRole('button').filter(b => b.classList.contains('mndt-channel')).map(b => b.textContent)
+    expect(names).toEqual(['•My lane', '#Compta'])
+    fireEvent.click(within(list).getByText('Compta'))
+    expect(await screen.findByTestId('chat-thread')).toBeTruthy()
+    expect((await screen.findByTestId('chat-agent')).textContent).toContain('@assistant')
+  })
+
+  it('where the channels are not served, the rail says why and the page still works', async () => {
+    const absent: ChatFace = {
+      channels: () => Promise.reject(new Error('the product API is not served on this workstation')),
+      agents: () => Promise.resolve([]),
+      createChannel: () => Promise.reject(new Error('x')),
+      messages: () => Promise.reject(new Error('x')),
+      changes: () => Promise.reject(new Error('x')),
+      post: () => Promise.reject(new Error('x')),
+      remove: () => Promise.reject(new Error('x')),
+      addAgents: () => Promise.reject(new Error('x')),
+    }
+    render(<CollabPage api={fakeFace()} chat={absent} />)
+    const note = await screen.findByTestId('chat-not-served')
+    expect(note.textContent).toContain('Team channels are not served on this workstation.')
+    expect(note.textContent).toContain('the product API is not served on this workstation')
+    expect(await rail()).toBeTruthy()
   })
 })

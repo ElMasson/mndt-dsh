@@ -31,6 +31,23 @@ function settle<T>(work: () => T): Promise<T> {
   }
 }
 
+/**
+ * The Host's derivation of an identifier from a title, played by the double.
+ * @param title - the title.
+ * @returns the identifier, or `canal` when nothing usable is left.
+ */
+function deriveName(title: string): string {
+  const name = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 32)
+    .replace(/-+$/gu, '')
+  return name.length >= 2 ? name : 'canal'
+}
+
 /** What the double starts from. */
 export interface MockSeed {
   readonly you: string
@@ -92,14 +109,16 @@ export function createMockChat(
     },
     createChannel(input: ChannelCreate) {
       return settle(() => {
-        if (!/^[a-z0-9][a-z0-9-]{0,79}$/u.test(input.name))
-          throw new Error('name_invalid')
-        if ([...channels.values()].some(c => c.name === input.name))
-          throw new Error('name_taken')
+        const base = input.name ?? deriveName(input.title)
+        if (!/^[a-z0-9][a-z0-9-]{1,31}$/u.test(base)) throw new Error('name_invalid')
+        const taken = (name: string): boolean => [...channels.values()].some(c => c.name === name)
+        if (input.name !== undefined && taken(base)) throw new Error('name_taken')
+        let name = base
+        for (let n = 2; input.name === undefined && taken(name); n += 1) name = `${base}-${n}`
         const c: ChatChannel = {
           id: nextId('chn'),
-          name: input.name,
-          title: input.title ?? input.name,
+          name,
+          title: input.title,
           kind: 'team',
           members: [...new Set([seed.you, ...(input.members ?? [])])],
           agents: [...(input.agents ?? [])],

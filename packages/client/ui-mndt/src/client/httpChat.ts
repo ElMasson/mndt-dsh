@@ -62,15 +62,8 @@ export function createHttpChat(
       (await get<{ channels: ChatChannel[] }>('/channels')).channels,
     createChannel: async (input: ChannelCreate) =>
       (await post<{ channel: ChatChannel }>('/channels', input)).channel,
-    messages: async (channelId) => {
-      const body = await get<{ messages: ChatMessage[]; cursor?: string }>(
-        `/channels/${id(channelId)}/messages`,
-      )
-      return {
-        messages: body.messages,
-        cursor: body.cursor ?? latest(body.messages),
-      }
-    },
+    messages: async channelId =>
+      get<ChatChanges>(`/channels/${id(channelId)}/messages`),
     changes: async (channelId, since) =>
       get<ChatChanges>(
         `/channels/${id(channelId)}/messages?since=${id(since)}`,
@@ -98,15 +91,4 @@ export function createHttpChat(
         )
       ).channel,
   }
-}
-
-/**
- * The cursor to start from when a first page carries none: its newest change.
- * @param messages - a page.
- * @returns an ISO instant.
- */
-function latest(messages: readonly ChatMessage[]): string {
-  let at = new Date(0).toISOString()
-  for (const m of messages) if (m.updatedAt > at) at = m.updatedAt
-  return at
 }

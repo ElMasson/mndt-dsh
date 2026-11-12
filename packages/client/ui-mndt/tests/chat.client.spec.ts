@@ -3,7 +3,6 @@ import { completeMention, mentionAt, mentionChoices } from '../src/client/mentio
 import { authorName, mergeThread, personName } from '../src/client/thread.ts'
 import { createHttpChat } from '../src/client/httpChat.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
-import { slugOf } from '../src/client/slug.ts'
 import type { ChatAgent, ChatChannel, ChatMessage } from '../src/client/chat.ts'
 
 const AT = '2026-11-12T09:00:00.000Z'
@@ -114,11 +113,19 @@ describe('the HTTP face: the lot 1 routes', () => {
     await expect(createHttpChat(fetcher).channels()).rejects.toThrow('forbidden')
   })
 
-  it('a first page without a cursor starts from its newest change', async () => {
+  it('the first page comes with its cursor, kept as served', async () => {
     const { fetcher } = recorder({
-      'GET /mndt-api/channels/chn_1/messages': { body: { messages: [message(), message({ id: 'msg_2', updatedAt: '2026-11-12T09:05:00.000Z' })] } },
+      'GET /mndt-api/channels/chn_1/messages': { body: { messages: [message()], cursor: '2026-11-12T09:05:00.000Z' } },
     })
     expect((await createHttpChat(fetcher).messages('chn_1')).cursor).toBe('2026-11-12T09:05:00.000Z')
+  })
+
+  it('a channel is created from its title alone', async () => {
+    const { calls, fetcher } = recorder({
+      'POST /mndt-api/channels': { status: 201, body: { channel: channel({ name: 'compta-orange', title: 'Compta Orange' }) } },
+    })
+    expect((await createHttpChat(fetcher).createChannel({ title: 'Compta Orange' })).name).toBe('compta-orange')
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ title: 'Compta Orange' })
   })
 })
 
@@ -153,17 +160,5 @@ describe('the double plays the Host: turns, answers, the ceiling', () => {
     }, () => Date.parse(AT))
     expect((await face.post('chn_1', '@analyste bonjour')).mentions).toEqual([])
     expect((await face.channels()).map(c => c.kind)).toEqual(['solo', 'team'])
-  })
-})
-
-describe('a channel title written as its identifier', () => {
-  it('lowercase, accents dropped, punctuation as single hyphens, 32 characters at most', () => {
-    expect(slugOf('Compta Orange')).toBe('compta-orange')
-    expect(slugOf('  Équipe — Ça & Là ')).toBe('equipe-ca-la')
-    expect(slugOf('€€')).toBe('')
-    const long = slugOf(`${'a'.repeat(31)} b c`)
-    expect(long.length).toBeLessThanOrEqual(32)
-    expect(long).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/u)
-    expect(long.endsWith('-')).toBe(false)
   })
 })

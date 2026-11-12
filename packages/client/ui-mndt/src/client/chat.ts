@@ -93,10 +93,13 @@ export interface ChatChanges {
   readonly cursor: string
 }
 
-/** A channel to create: its name is enough. */
+/**
+ * A channel to create: its title is enough; the Host derives the identifier from it (lowercase,
+ * accents dropped, hyphens) and takes the first free `-n` suffix. A `name` given stays the person's.
+ */
 export interface ChannelCreate {
-  readonly name: string
-  readonly title?: string
+  readonly title: string
+  readonly name?: string
   readonly members?: readonly string[]
   readonly agents?: readonly string[]
   readonly connectors?: readonly string[]
@@ -107,7 +110,7 @@ export interface ChatFace {
   /** The reader's channels, the solo lane first. */
   channels(): Promise<readonly ChatChannel[]>
   createChannel(input: ChannelCreate): Promise<ChatChannel>
-  /** The first page of a channel, oldest first. */
+  /** The first page of a channel, oldest first, with the cursor to read changes from. */
   messages(channelId: string): Promise<ChatChanges>
   /** Every message created or changed since `since` (inclusive), and the next cursor. */
   changes(channelId: string, since: string): Promise<ChatChanges>
