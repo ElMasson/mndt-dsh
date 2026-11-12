@@ -210,7 +210,7 @@ export const CSS = `
   display: flex; flex-direction: column; gap: 8px;
   padding: 14px 16px; background: var(--mndt-card);
   border: 1px solid var(--mndt-border); border-radius: 16px;
-  max-width: 760px; width: 100%;
+  max-width: 760px; width: 100%; box-sizing: border-box;
 }
 .mndt-post-card[data-kind="approval"] { border-color: #F0DDBB; background: #FFFDF8; }
 .mndt-post-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
