@@ -363,6 +363,15 @@ export const CSS = `
 .mndt-message .mndt-role { font-size: 12px; font-weight: 600; color: var(--mndt-text); }
 .mndt-message .mndt-role[data-agent="true"] { color: #3445D1; }
 .mndt-message-text { margin: 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mndt-message-markdown { white-space: normal; }
+.mndt-message-markdown p { margin: 0 0 6px; }
+.mndt-message-markdown p:last-child { margin-bottom: 0; }
+.mndt-message-markdown h3, .mndt-message-markdown h4 { margin: 8px 0 4px; font-family: "Space Grotesk", Inter, sans-serif; font-size: 15px; }
+.mndt-message-markdown ul { margin: 4px 0 6px 18px; padding: 0; }
+.mndt-message-markdown code { background: #F0EFED; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.mndt-message-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+.mndt-message-markdown th, .mndt-message-markdown td { border-bottom: 1px solid #E2E4E9; padding: 5px 8px; text-align: left; vertical-align: top; white-space: nowrap; }
+.mndt-message-markdown th { font-weight: 600; background: #F0EFED; }
 .mndt-turn { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
 .mndt-turn .mndt-role { font-size: 12px; }
 .mndt-turn code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }

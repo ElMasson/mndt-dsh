@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChannelAgents, ChannelList, ChannelThread } from '../src/client/ChannelView.tsx'
 import type { ThreadCard } from '../src/client/ChannelView.tsx'
+import { renderBrief } from '../src/client/markdown.tsx'
 import { chatEnglish } from '../src/client/chatLocales.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
 import type { MockChat } from '../src/client/mockChat.ts'
@@ -284,6 +285,36 @@ describe('the thread follows the newest message', () => {
     act(() => { chat.tick() })
     await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(2) })
     expect(feed.scrollTop).toBe(50)
+  })
+})
+
+describe('an agent\'s answer is read, not shown as raw Markdown', () => {
+  it('bold, a table and a list become elements, and nothing in the text becomes HTML', () => {
+    const answer = 'Voici **#compta** :\n\n| Facture | Montant |\n|---|---:|\n| FA2610-031 | 1 640,00 € |\n\n- relancer Sodiac\n- <img src=x onerror=alert(1)>'
+    const { container } = render(<div>{renderBrief(answer)}</div>)
+    expect(container.querySelector('strong')!.textContent).toBe('#compta')
+    expect([...container.querySelectorAll('th')].map(th => th.textContent)).toEqual(['Facture', 'Montant'])
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect(container.querySelectorAll('li')).toHaveLength(2)
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.textContent).not.toContain('**')
+    expect(container.textContent).not.toContain('|---')
+  })
+
+  it('in the thread, an agent\'s message goes through it and a person\'s keeps its own lines', async () => {
+    const chat = double()
+    render(thread(chat))
+    await screen.findByTestId('chat-empty')
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@assistant ligne une', selectionStart: 20 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(1) })
+    act(() => { chat.tick() })
+    act(() => { chat.tick() })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(2) })
+    const [human, agentMessage] = screen.getAllByTestId('chat-message')
+    expect(within(agentMessage!).getByTestId('chat-markdown')).toBeTruthy()
+    expect(within(human!).queryByTestId('chat-markdown')).toBeNull()
   })
 })
 
