@@ -20,7 +20,7 @@ import type { ChatFace } from './chat.ts'
 import { CHAT_NS, chatEn, chatFr, chatZh } from './chatLocales.ts'
 import type { ChatKey } from './chatLocales.ts'
 import { CSS } from './styles.ts'
-import { en, zh } from './locales.ts'
+import { en, fr, zh } from './locales.ts'
 import type { MndtKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -212,6 +212,12 @@ export const inject = ['slots', 'locale', 'remote']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mndt: dictionaries')
+  // French, as a language pack: the language (falling back to English), then this page's copy.
+  ctx.effect(
+    () => ctx.locale.addLanguage({ id: 'fr', label: 'Français', fallback: 'en' }),
+    'ui-mndt: French',
+  )
+  ctx.effect(() => ctx.locale.register(NS, 'fr', fr), 'ui-mndt: French dictionary')
   ctx.effect(() => ctx.locale.register(CHAT_NS, { zh: chatZh, en: chatEn }), 'ui-mndt: channel dictionaries')
   ctx.effect(() => ctx.locale.register(CHAT_NS, 'fr', chatFr), 'ui-mndt: channel dictionary, French')
   ctx.effect(() => {

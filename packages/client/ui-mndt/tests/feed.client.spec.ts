@@ -222,8 +222,8 @@ describe('journal wording', () => {
     expect(subjectLabel('mnd_123', translate)).toBe('un mandat')
     expect(subjectLabel('apr_123', translate)).toBe('une approbation')
     expect(subjectLabel('inconnu', translate)).toBe('inconnu')
-    expect(sentenceOf('mission.done', translate)).toBe('mission terminee')
-    expect(sentenceOf('approval.rejected', translate)).toBe('approbation refusee')
+    expect(sentenceOf('mission.done', translate)).toBe('mission terminée')
+    expect(sentenceOf('approval.rejected', translate)).toBe('approbation refusée')
     expect(sentenceOf('autre.action', translate)).toBe('autre.action')
   })
 
