@@ -1,0 +1,23 @@
+{
+  "_comment": "The agents of a new tenant (agentic Slack, lot 1), declared by seed-team.sh through the API as the owner. ${VAR} is read from the tenant's model.env; an agent whose model stays empty is skipped, never declared with a guess. Connectors are MCP server names of connectors/catalog.json.",
+  "agents": [
+    {
+      "handle": "assistant", "name": "Assistant",
+      "provider": "scaleway-genapi", "model": "deepseek-v4.1-flash",
+      "connectors": ["office365", "qonto", "dolibarr", "swing"],
+      "eurPerMonth": 5
+    },
+    {
+      "handle": "analyste", "name": "Analyste",
+      "provider": "scaleway-genapi", "model": "glm-5.3",
+      "connectors": ["qonto", "dolibarr"],
+      "eurPerMonth": 5
+    },
+    {
+      "handle": "qwen", "name": "Qwen",
+      "provider": "vllm-qwen", "model": "${VLLM_QWEN_MODEL}",
+      "connectors": [],
+      "eurPerMonth": 5
+    }
+  ]
+}
