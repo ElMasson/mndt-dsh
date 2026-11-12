@@ -1,0 +1,11 @@
+{
+  "_comment": "Price grid of the LLM routes, euros per million tokens (input, cache read, output). Keys are <provider>/<model>; <provider>/* covers every model of a route. A null price means 'to be provided': the core refuses the turn, it never counts it as 0. Source for deepseek-v4.1-flash: Scaleway invoice of November 2026 (relais grid scaleway-2026-11).",
+  "version": "scaleway-2026-11",
+  "currency": "EUR",
+  "unit": "per_million_tokens",
+  "models": {
+    "scaleway-genapi/deepseek-v4.1-flash": { "input": 0.60, "cacheRead": 0.12, "output": 1.80 },
+    "scaleway-genapi/glm-5.3": null,
+    "vllm-qwen/*": { "input": 0, "cacheRead": 0, "output": 0 }
+  }
+}

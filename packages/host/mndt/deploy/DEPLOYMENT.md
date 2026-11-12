@@ -624,3 +624,69 @@ L archivage du journal est planifie le dimanche a 03:23 UTC :
 /data/mndt/bin/archive-state.sh --days 60             # simulation
 /data/mndt/bin/archive-state.sh --days 60 --apply     # ecriture
 ```
+
+## Adaptateurs de l'agentic Slack, lot 1 (12 novembre)
+
+Rien de ce qui suit n'a été exécuté sur un serveur. Ce sont les gestes prévus,
+couverts par des tests locaux sans réseau ni LLM.
+
+### Routes LLM
+
+`llm/routes.patch.yml.template` déclare deux routes pi-ai :
+
+- `scaleway-genapi` : `deepseek-v4.1-flash` et `glm-5.3`, clé `SCW_GENAPI_KEY` ;
+- `vllm-qwen` : `http://51.159.151.86:8000/v1`, joignable depuis le réseau
+  privé Scaleway seulement, clé `VLLM_API_KEY` (une valeur bidon suffit si vLLM
+  tourne sans `--api-key`).
+
+`llm/render-llm-routes.py --env-file /data/mndt/live/model.env` les écrit entre
+deux marqueurs dans `/data/mndt/live/home/cordis.patch.yml` (couche « home »).
+Il ne lit dans le fichier que `SCW_PROJECT_ID`, `VLLM_QWEN_BASE_URL` et
+`VLLM_QWEN_MODEL`, valeurs non secrètes vérifiées par motif ; les clés restent
+des références `apiKeyEnv`. Modèle par défaut : `scaleway-genapi/deepseek-v4.1-flash`.
+Variables attendues : `llm/llm.env.example`. Identifiant Qwen à lire sur
+`$VLLM_QWEN_BASE_URL/models`, depuis le réseau privé.
+
+`llm/prices.json` est la grille en euros par million de jetons (entrée, cache,
+sortie), clés `<route>/<modèle>` ou `<route>/*`. `glm-5.3` vaut `null` : prix à
+fournir, le cœur refuse le tour en attendant.
+
+### Connecteurs en lecture seule
+
+`connectors/catalog.json` décrit `approvals`, `office365`, `qonto`, `dolibarr` et `swing` :
+commande, fichier de secrets, réglages non secrets, listes `allow` et `deny`.
+Un descripteur avec `allow` est enveloppé dans `mcp-proxy.mjs` ; les listes sont
+exportées après le fichier de secrets, qui ne peut donc pas les élargir.
+
+    for c in approvals office365 qonto dolibarr swing; do mount-connector.sh "$c" --preset --no-restart; done
+    cd /opt/mndt-front && docker compose restart workbench
+
+Pré-requis par connecteur, dans `/data/mndt/live/connectors/` (mode 600) :
+
+- `office365.env` : `OFFICE365_TENANT_ID`, `OFFICE365_CLIENT_ID`,
+  `OFFICE365_CLIENT_SECRET` (ou `OFFICE365_CLIENT_SECRET_FILE`). Mode
+  `application` : la boîte lue est celle de l'auteur de la mention, publiée par
+  le workbench dans `/state/mission-actor.json`, limitée à `datanalysis.re` ;
+- `qonto.env` : rien de secret ; le cache OAuth `mcp-remote` de Qonto est déposé
+  dans `/data/mndt/live/mcp-auth`, comme pour Attio ;
+- `dolibarr.env` : `DOLIBARR_URL`, `DOLIBARR_API_KEY` d'un compte de service en
+  lecture ; le serveur Python dans `/data/mndt/live/tools/dolibarr-mcp/.venv` ;
+- `swing.env` : `SWING_API_URL`, `SWING_USERNAME`, `SWING_PASSWORD`,
+  `SWING_DEFAULT_PROJECT_ID` ; le paquet `mcp` de Swing dans
+  `/data/mndt/live/tools/swing`.
+
+`mcp-proxy.mjs` et `office365-mcp.mjs` sont copiés dans `/data/mndt/live/tools`,
+`render-connectors.py` et `catalog.json` dans `/opt/mndt-front/gateway`.
+
+Durcissement du proxy, le 12/11 : une liste `MCP_PROXY_DENY` l'emporte sur
+`MCP_PROXY_ALLOW` ; un lot JSON-RPC est filtré élément par élément ; une ligne
+que le proxy ne sait pas lire est refusée au lieu d'être transmise. Avant, un
+`tools/call` dans un lot, ou une ligne contenant `NaN` (refusée par JavaScript,
+acceptée par le `json` de Python), atteignait le serveur sans filtre.
+
+### Contrôle
+
+`MNDT_PUBLIC_HOST=equipe.datanalysis.re MNDT_SMOKE_CONNECTORS="approvals office365 qonto dolibarr swing" MNDT_SMOKE_LLM_ROUTES=1 smoke.sh`
+vérifie en plus : chaque connecteur avec `allow` passe par le proxy, le proxy
+déployé refuse `dolibarr_raw_api`, les deux routes sont déclarées et aucune clé
+n'est écrite dans la composition.

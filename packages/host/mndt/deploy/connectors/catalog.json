@@ -1,0 +1,96 @@
+{
+  "_comment": "Read-only connectors of the agentic Slack lot 1. One entry per connector: mount it with `mount-connector.sh <name> --preset`. approvals: MNDT_API stays in approvals.env as deployed today; deciding is denied twice (env and proxy). Secrets never live here: each entry names an env file under /data/mndt/live/connectors, mode 600. allow/deny are tool-name patterns (trailing * = prefix); deny wins. The proxy refuses every tool outside allow before the call reaches the server.",
+  "office365": {
+    "command": [
+      "node",
+      "/opt/mndt-tools/office365-mcp.mjs"
+    ],
+    "envFile": "office365.env",
+    "env": {
+      "OFFICE365_MODE": "application",
+      "OFFICE365_ALLOWED_DOMAINS": "datanalysis.re",
+      "MNDT_ACTOR_FILE": "/state/mission-actor.json"
+    },
+    "allow": [
+      "mail_recent",
+      "mail_search",
+      "calendar_upcoming"
+    ],
+    "deny": []
+  },
+  "qonto": {
+    "command": [
+      "npx",
+      "-y",
+      "mcp-remote@0.1.29",
+      "https://mcp.qonto.com/mcp"
+    ],
+    "envFile": "qonto.env",
+    "env": {
+      "MCP_REMOTE_CONFIG_DIR": "/state/mcp-auth"
+    },
+    "allow": [
+      "list_*",
+      "get_*"
+    ],
+    "deny": [
+      "get_attachment"
+    ]
+  },
+  "dolibarr": {
+    "command": [
+      "/opt/mndt-tools/dolibarr-mcp/.venv/bin/python",
+      "-m",
+      "dolibarr_mcp.dolibarr_mcp_server"
+    ],
+    "envFile": "dolibarr.env",
+    "env": {
+      "PYTHONSAFEPATH": "1"
+    },
+    "allow": [
+      "get_*",
+      "search_*",
+      "list_*"
+    ],
+    "deny": [
+      "dolibarr_raw_api"
+    ]
+  },
+  "swing": {
+    "command": [
+      "python3",
+      "-m",
+      "mcp.swing_mcp"
+    ],
+    "cwd": "/opt/mndt-tools/swing",
+    "envFile": "swing.env",
+    "env": {},
+    "allow": [
+      "list_*",
+      "get_*",
+      "search_*"
+    ],
+    "deny": [
+      "get_rehydration_prompt"
+    ]
+  },
+  "approvals": {
+    "command": [
+      "node",
+      "/opt/mndt-tools/approvals-mcp.mjs"
+    ],
+    "envFile": "approvals.env",
+    "env": {
+      "MNDT_ACTOR_FILE": "/state/mission-actor.json",
+      "MNDT_APPROVALS_ALLOW_DECIDE": "0"
+    },
+    "allow": [
+      "request_approval",
+      "list_pending_approvals",
+      "read_approval"
+    ],
+    "deny": [
+      "decide_approval"
+    ]
+  }
+}

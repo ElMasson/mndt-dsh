@@ -9,7 +9,11 @@ LIVE=${MNDT_HOME:-/data/mndt/live}
 PAGE_HOST=${MNDT_PAGE_HOST:-127.0.0.1}
 API=http://127.0.0.1:8795
 PAGE=http://$PAGE_HOST:3111
-HOST=mndt.duke-analytics.com
+HOST=${MNDT_PUBLIC_HOST:-mndt.duke-analytics.com}
+# Connectors this tenant must have mounted, by MCP server name. The agentic
+# Slack tenant sets: MNDT_SMOKE_CONNECTORS="approvals office365 qonto dolibarr swing".
+EXPECTED_CONNECTORS=${MNDT_SMOKE_CONNECTORS:-workbench_facts attio approvals office365}
+WORKBENCH_CONTAINER=${MNDT_WORKBENCH_CONTAINER:-mndt-front-workbench-1}
 failures=0
 
 check() {
@@ -54,10 +58,40 @@ if [ -n "$pending_id" ]; then
   check "lecteur ne peut pas decider" '^403$' "$viewer_decide"
 fi
 connectors=$(curl -s -m 8 -H 'x-forwarded-email: duke@datanalysis.re' "$API/connectors")
-check "connecteur monte" '"server":"workbench_facts"' "$connectors"
-check "connecteur Attio monte" '"server":"attio"' "$connectors"
-check "outil de decision monte" '"server":"approvals"' "$connectors"
-check "connecteur Office365 monte" '"server":"office365"' "$connectors"
+for server in $EXPECTED_CONNECTORS; do
+  check "connecteur $server monte" "\"server\":\"$server\"" "$connectors"
+done
+
+# Read-only connectors: every descriptor that carries an allow list must be
+# wrapped by the proxy, and the deployed proxy must refuse a write on its own.
+for descriptor in "$LIVE"/connectors/*.json; do
+  [ -f "$descriptor" ] || continue
+  name=$(basename "$descriptor" .json)
+  if grep -q '"allow"' "$descriptor"; then
+    row=$(grep -A8 "id: mcp-$name\$" "$LIVE/home/profiles/web/cordis.patch.yml" 2>/dev/null | tr -d '\n')
+    check "connecteur $name derriere le proxy" 'mcp-proxy.mjs' "$row"
+  fi
+done
+if command -v docker >/dev/null 2>&1 && docker inspect "$WORKBENCH_CONTAINER" >/dev/null 2>&1; then
+  stub='process.stdin.on("data",d=>{for(const l of String(d).split("\n").filter(Boolean)){const m=JSON.parse(l);process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:m.id,result:{content:[{type:"text",text:"stub reached"}]}})+"\n")}})'
+  refused=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"dolibarr_raw_api","arguments":{}}}' \
+    | timeout 10 docker exec -i -e MCP_PROXY_ALLOW='get_*' -e MCP_PROXY_DENY=dolibarr_raw_api "$WORKBENCH_CONTAINER" \
+      node /opt/mndt-tools/mcp-proxy.mjs node -e "$stub" 2>/dev/null | head -1)
+  check "proxy deploye refuse une ecriture" 'outside the read-only allow list' "$refused"
+fi
+
+# LLM routes (agentic Slack): rendered in the home patch, keys by reference only.
+if [ -n "${MNDT_SMOKE_LLM_ROUTES:-}" ]; then
+  home_patch="$LIVE/home/cordis.patch.yml"
+  routes=$(tr -d '\n' < "$home_patch" 2>/dev/null)
+  check "route LLM scaleway-genapi declaree" 'scaleway-genapi:' "$routes"
+  check "route LLM vllm-qwen declaree" 'vllm-qwen:' "$routes"
+  check "cle Scaleway par reference" 'apiKeyEnv: SCW_GENAPI_KEY' "$routes"
+  key_in_patch=$(grep -cE '(sk-|scw-|SCW_SECRET|SCW_GENAPI_KEY=)' "$home_patch" 2>/dev/null || true)
+  check "aucune cle dans la composition" '^0$' "${key_in_patch:-0}"
+  key_set=$(grep -cE '^SCW_GENAPI_KEY=.+' "$LIVE/model.env" 2>/dev/null || true)
+  check "cle Scaleway fournie au workbench" '^1$' "${key_set:-0}"
+fi
 
 if [ -f "$LIVE/web-token" ]; then
   token=$(cat "$LIVE/web-token")
@@ -81,17 +115,17 @@ if [ -n "$authority" ]; then
   snapshot=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "Authorization: Bearer $authority_token" "$authority/governance/snapshot")
   check "autorite centrale joignable" '^200$' "$snapshot"
 fi
-public_code=$(curl -s -o /dev/null -w '%{http_code}' -m 12 https://mndt.duke-analytics.com/)
+public_code=$(curl -s -o /dev/null -w '%{http_code}' -m 12 "https://$HOST/")
 check "HTTPS public repond" '^302$' "$public_code"
 
-public_redirect=$(curl -s -o /dev/null -w '%{redirect_url}' -m 12 https://mndt.duke-analytics.com/)
+public_redirect=$(curl -s -o /dev/null -w '%{redirect_url}' -m 12 "https://$HOST/")
 check "HTTPS public renvoie vers Entra" 'login.microsoftonline.com' "$public_redirect"
 
-certificate=$(echo | openssl s_client -connect 127.0.0.1:443 -servername mndt.duke-analytics.com 2>/dev/null \
+certificate=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$HOST" 2>/dev/null \
   | openssl x509 -noout -subject 2>/dev/null)
-check "certificat public emis pour cet hote" 'CN *= *mndt.duke-analytics.com' "$certificate"
+check "certificat public emis pour cet hote" "CN *= *$HOST" "$certificate"
 
-certificate_issuer=$(echo | openssl s_client -connect 127.0.0.1:443 -servername mndt.duke-analytics.com 2>/dev/null \
+certificate_issuer=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$HOST" 2>/dev/null \
   | openssl x509 -noout -issuer 2>/dev/null)
 check "certificat public non auto-signe" "Let's Encrypt" "$certificate_issuer"
 planified=$(python3 - <<PY
