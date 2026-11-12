@@ -48,6 +48,9 @@ export const chatEn = {
   agentMonth: '{spent} this month, of {ceiling}',
   agentNone: 'No agent in this channel.',
   members: 'Members',
+  add: 'Add',
+  chooseAgent: 'Choose an agent',
+  addAgent: 'Add an agent to this channel',
 } as const
 
 /** One copy key. */
@@ -96,6 +99,9 @@ export const chatFr: Record<ChatKey, string> = {
   agentMonth: '{spent} ce mois-ci, sur {ceiling}',
   agentNone: 'Aucun agent dans ce canal.',
   members: 'Membres',
+  add: 'Ajouter',
+  chooseAgent: 'Choisir un agent',
+  addAgent: 'Ajouter un agent à ce canal',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

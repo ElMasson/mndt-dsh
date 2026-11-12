@@ -168,3 +168,27 @@ describe('the channel agents', () => {
     expect(screen.getByTestId('chat-agent-month').textContent).toMatch(/this month, of /u)
   })
 })
+
+describe('adding an agent to a channel, as a colleague', () => {
+  it('offers the declared agents not yet here nor retired; a refusal is said as served', async () => {
+    const onAdd = vi.fn()
+      .mockResolvedValueOnce('me@datanalysis.re is viewer and does not hold workflows.write')
+      .mockResolvedValueOnce(undefined)
+    render(
+      <ChannelAgents
+        channel={channel()}
+        agents={[agent(), agent({ id: 'agt_2', handle: 'analyste', name: 'Analyste' }), agent({ id: 'agt_3', handle: 'ancien', name: 'Ancien', retiredAt: AT })]}
+        onAdd={onAdd}
+        t={chatEnglish}
+      />,
+    )
+    const pick = screen.getByLabelText('Add an agent to this channel')
+    expect(within(pick).getAllByRole('option').map(o => o.textContent)).toEqual(['Choose an agent', '@analyste · Analyste'])
+    fireEvent.change(pick, { target: { value: 'agt_2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('does not hold workflows.write')
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
+    expect(onAdd).toHaveBeenLastCalledWith('agt_2')
+  })
+})

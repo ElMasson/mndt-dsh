@@ -121,6 +121,17 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     }
   }, [chat])
 
+  const addChatAgent = useCallback(async (agentId: string): Promise<string | undefined> => {
+    if (chat === undefined || chatId === undefined) return undefined
+    try {
+      const next = await chat.addAgents(chatId, [agentId])
+      setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
+      return undefined
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : String(failure)
+    }
+  }, [chat, chatId])
+
   const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
     const outcome = await api.decide(id, decision, reason)
     if (outcome.ok) {
@@ -824,7 +835,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               />
             </section>
             <aside className="mndt-context" aria-label={t('ui.contexte')} style={{ display: view === 'chat' ? undefined : 'none' }}>
-              <ChannelAgents channel={current} agents={chatAgents} t={tc} />
+              <ChannelAgents channel={current} agents={chatAgents} onAdd={addChatAgent} t={tc} />
               <div className="mndt-context-block">
                 <h3 className="mndt-context-title">{tc('members')}</h3>
                 <ul className="mndt-plain-list">

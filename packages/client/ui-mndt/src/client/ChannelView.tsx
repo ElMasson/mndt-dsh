@@ -437,14 +437,31 @@ function Composer(props: {
 
 /* ------------------------------------------------------------------ the agents */
 
-/** The channel's agents: model, what they spent this month against their ceiling. */
+/**
+ * The channel's agents: model, what they spent this month against their ceiling; and adding a
+ * declared agent to the channel, as a colleague. The Host decides who may (a refusal is shown).
+ */
 export function ChannelAgents(props: {
   readonly channel: ChatChannel
   readonly agents: readonly ChatAgent[]
   readonly t: ChatTranslate
+  /** Add an agent to the channel; resolves to the Host's reason when refused. */
+  readonly onAdd?: ((agentId: string) => Promise<string | undefined>) | undefined
 }): ReactNode {
   const { channel, t } = props
   const here = props.agents.filter(a => channel.agents.includes(a.id))
+  const addable = props.agents.filter(a => !channel.agents.includes(a.id) && a.retiredAt === undefined)
+  const [choice, setChoice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const add = async (): Promise<void> => {
+    if (!choice || busy || props.onAdd === undefined) return
+    setBusy(true)
+    const refused = await props.onAdd(choice)
+    setBusy(false)
+    setError(refused)
+    if (refused === undefined) setChoice('')
+  }
   return (
     <div className="mndt-context-block" data-testid="chat-agents">
       <h3 className="mndt-context-title">{t('agents')}</h3>
@@ -461,6 +478,16 @@ export function ChannelAgents(props: {
           ))}
         </ul>
       )}
+      {props.onAdd === undefined || addable.length === 0 ? undefined : (
+        <form className="mndt-row" onSubmit={(event) => { event.preventDefault(); void add() }} data-testid="chat-agent-add">
+          <select className="mndt-input" aria-label={t('addAgent')} value={choice} onChange={(event) => { setChoice(event.target.value) }}>
+            <option value="">{t('chooseAgent')}</option>
+            {addable.map(a => <option key={a.id} value={a.id}>@{a.handle} · {a.name}</option>)}
+          </select>
+          <button type="submit" className="mndt-button" disabled={!choice || busy}>{t('add')}</button>
+        </form>
+      )}
+      {error === undefined ? undefined : <span role="alert" className="mndt-error">{error}</span>}
     </div>
   )
 }
