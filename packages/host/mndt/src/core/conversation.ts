@@ -12,6 +12,38 @@ import type { Agent, Channel, Message, Mission } from './types.ts'
 /** A handle or a channel name: lower case, digits and dashes. */
 export const SLUG = /^[a-z0-9][a-z0-9-]{1,31}$/
 
+/**
+ * A slug from a title a person typed: accents dropped, lower case, every other
+ * character a dash. Plain formatting, it reads no meaning.
+ * @param title - the title.
+ * @returns a slug of 2 to 32 characters (`canal` when nothing usable is left).
+ */
+export function slugOf(title: string): string {
+  const slug = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/, '')
+  return SLUG.test(slug) ? slug : 'canal'
+}
+
+/**
+ * @param slug - the wanted slug.
+ * @param taken - the names already used.
+ * @returns the slug, or the slug with the first free `-n` suffix.
+ */
+export function freeSlug(slug: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(slug)) return slug
+  for (let n = 2; ; n += 1) {
+    const suffix = `-${n}`
+    const candidate = `${slug.slice(0, 32 - suffix.length).replace(/-+$/, '')}${suffix}`
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
 /** How many of the channel's last messages a turn reads. */
 export const HISTORY = 30
 

@@ -212,6 +212,10 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://gateway')
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     const rest = url.pathname.slice(API_PREFIX.length) || '/'
+    // Only the approvals connector, inside the workbench, names the agent run a
+    // card belongs to: a browser that sends it could file a card in the thread
+    // of another channel's turn.
+    delete req.headers['x-mndt-run']
     forward(req, res, API, `${rest}${url.search}`)
     return
   }

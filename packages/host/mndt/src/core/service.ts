@@ -36,7 +36,7 @@ import type { Mandate } from './types.ts'
 import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
-import { SLUG, mentionsOf } from './conversation.ts'
+import { SLUG, freeSlug, mentionsOf, slugOf } from './conversation.ts'
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -83,7 +83,8 @@ export type AgentPatch = Partial<Pick<Agent, 'name' | 'provider' | 'model' | 'in
 
 /** What creating a channel needs. */
 export interface ChannelDraft {
-  readonly name: string
+  /** A slug; absent, it is derived from the title (a channel is created from one field). */
+  readonly name?: string
   readonly title?: string
   readonly members?: readonly string[]
   readonly agents?: readonly string[]
@@ -807,20 +808,28 @@ export class WorkbenchService {
    * @returns the channel.
    */
   createChannel(draft: ChannelDraft, actor: string): Promise<Channel> {
-    if (!SLUG.test(draft.name)) return Promise.reject(new Error(`a channel name is a slug: ${draft.name}`))
+    const title = draft.title?.trim() ?? ''
+    if (draft.name === undefined && title === '') return Promise.reject(new Error('a channel needs a name or a title'))
+    if (draft.name !== undefined && !SLUG.test(draft.name)) {
+      return Promise.reject(new Error(`a channel name is a slug: ${draft.name}`))
+    }
     const connectorRefusal = serversRefusal(draft.connectors ?? [])
     if (connectorRefusal !== undefined) return Promise.reject(new Error(connectorRefusal))
     return this.#write((state) => {
-      if ((state.channels ?? []).some(channel => channel.name === draft.name)) {
+      const taken = new Set((state.channels ?? []).map(channel => channel.name))
+      if (draft.name !== undefined && taken.has(draft.name)) {
         throw new Error(`the channel #${draft.name} exists`)
       }
+      // A name the person chose is theirs; one derived from a title takes the
+      // first free suffix instead of failing.
+      const name = draft.name ?? freeSlug(slugOf(title), taken)
       const agents = draft.agents ?? []
       const unknown = agents.filter(id => !(state.agents ?? []).some(agent => agent.id === id && agent.retiredAt === undefined))
       if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
       const channel: Channel = {
         id: this.#id('chn'),
-        name: draft.name,
-        title: draft.title?.trim() || draft.name,
+        name,
+        title: title || name,
         kind: 'team',
         members: [...new Set([actor, ...(draft.members ?? [])])],
         agents: [...new Set(agents)],
@@ -898,6 +907,19 @@ export class WorkbenchService {
     const all = ((await this.#ready()).messages ?? []).filter(message => message.channelId === channelId)
     const from = after === undefined ? 0 : all.findIndex(message => message.id === after) + 1
     return all.slice(from).slice(-limit)
+  }
+
+  /**
+   * @param channelId - the channel.
+   * @returns the instant of its last change, the epoch when it has none: the first `since`.
+   */
+  async lastChange(channelId: string): Promise<string> {
+    let last = new Date(0).toISOString()
+    for (const message of (await this.#ready()).messages ?? []) {
+      const at = message.updatedAt ?? message.createdAt
+      if (message.channelId === channelId && at > last) last = at
+    }
+    return last
   }
 
   /**
