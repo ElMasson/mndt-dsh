@@ -295,6 +295,26 @@ describe('the team channels of lot 1 in the page', () => {
     await waitFor(() => { expect(screen.getAllByTestId('chat-agent')).toHaveLength(2) })
   })
 
+  it('a turn that ends in the open channel reads the cards again, without waiting for a mission', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [{ id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'vllm-qwen', model: 'qwen', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }],
+      channels: [{ id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at }],
+    }, () => Date.parse(at))
+    const face = fakeFace()
+    const read = vi.spyOn(face, 'state')
+    render(<CollabPage api={face} chat={chat} />)
+    fireEvent.click(within(await screen.findByTestId('chat-channels')).getByText('Compta'))
+    const box = await screen.findByLabelText('Message')
+    fireEvent.change(box, { target: { value: '@assistant bonjour', selectionStart: 18 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(1) })
+    const before = read.mock.calls.length
+    chat.tick()
+    chat.tick()
+    await waitFor(() => { expect(read.mock.calls.length).toBeGreaterThan(before) }, { timeout: 4000 })
+  })
+
   it('where the channels are not served, the rail says why and the page still works', async () => {
     const absent: ChatFace = {
       channels: () => Promise.reject(new Error('the product API is not served on this workstation')),

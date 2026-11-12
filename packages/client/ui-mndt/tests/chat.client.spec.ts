@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { completeMention, mentionAt, mentionChoices } from '../src/client/mention.ts'
-import { authorName, mergeThread, personName } from '../src/client/thread.ts'
+import { authorName, mergeThread, personName, settledTurns } from '../src/client/thread.ts'
 import { createHttpChat } from '../src/client/httpChat.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
 import type { ChatAgent, ChatChannel, ChatMessage } from '../src/client/chat.ts'
@@ -71,6 +71,18 @@ describe('the thread: what the Host served, merged', () => {
     expect(merged[0]!.turns![0]!.status).toBe('done')
     // An older copy served again never replaces a newer one.
     expect(mergeThread(merged, [first])[0]!.turns![0]!.status).toBe('done')
+  })
+
+  it('counts the turns a page brings to an end, once each', () => {
+    const queued = message({ turns: [{ id: 'trn_1', agentId: 'agt_1', status: 'queued' }] })
+    const done = message({ updatedAt: '2026-11-12T09:02:00.000Z', turns: [{ id: 'trn_1', agentId: 'agt_1', status: 'done' }] })
+    const running = message({ turns: [{ id: 'trn_1', agentId: 'agt_1', status: 'running' }] })
+    expect(settledTurns([queued], [running])).toBe(0)
+    expect(settledTurns([queued], [done])).toBe(1)
+    // The cursor is inclusive: the same closed turn served again does not end twice.
+    expect(settledTurns([done], [done])).toBe(0)
+    // A turn first seen closed has ended for this reader too.
+    expect(settledTurns([], [message({ turns: [{ id: 'trn_2', agentId: 'agt_1', status: 'refused' }] })])).toBe(1)
   })
 
   it('names a person by the part before the @, an agent by its handle, the system by nothing', () => {
