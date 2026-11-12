@@ -109,6 +109,10 @@ export interface ApprovalPayload {
 export interface Approval {
   readonly id: string
   readonly missionId?: string
+  /** The channel whose agent turn asked it: the card shows in that thread. */
+  readonly channelId?: string
+  /** The human message whose mention gave the turn that asked it. */
+  readonly messageId?: string
   readonly kind: ApprovalAction
   readonly title: string
   readonly payload: ApprovalPayload
@@ -153,6 +157,91 @@ export interface Mandate {
   readonly retiredAt?: string
 }
 
+/**
+ * A named agent with its own LLM: it answers in the channels it belongs to,
+ * when a person mentions it, and never decides anything.
+ */
+export interface Agent {
+  readonly id: string
+  /** Mentioned as `@handle`; unique, `[a-z0-9-]{2,32}`. */
+  readonly handle: string
+  readonly name: string
+  /** The pi-ai route: `scaleway-genapi`, `vllm-qwen`, … */
+  readonly provider: string
+  readonly model: string
+  /** Its own framing, prepended to every turn (the lot 1 preset). */
+  readonly instructions?: string
+  /** The MCP servers it may ever use; a turn gets those its channel also allows. */
+  readonly connectors: readonly string[]
+  /** Its monthly ceiling in euros; a turn is refused once the month reaches it. */
+  readonly eurPerMonth: number
+  readonly createdBy: string
+  readonly createdAt: string
+  readonly retiredAt?: string
+}
+
+/** A team channel, or one person's own lane. */
+export type ChannelKind = 'team' | 'solo'
+
+/** A conversation shared by its members, people and agents. */
+export interface Channel {
+  readonly id: string
+  /** Unique slug. */
+  readonly name: string
+  readonly title: string
+  readonly kind: ChannelKind
+  /** E-mails; a solo lane has exactly one. */
+  readonly members: readonly string[]
+  /** Agent ids that may be mentioned here. */
+  readonly agents: readonly string[]
+  /** MCP servers usable in this channel. */
+  readonly connectors: readonly string[]
+  readonly createdBy: string
+  readonly createdAt: string
+}
+
+/** Who wrote a message. */
+export type MessageAuthor =
+  | { readonly kind: 'human'; readonly email: string }
+  | { readonly kind: 'agent'; readonly agentId: string }
+  | { readonly kind: 'system' }
+
+/** Where one agent turn stands. */
+export type TurnStatus = 'queued' | 'running' | 'done' | 'failed' | 'refused' | 'cancelled'
+
+/** One agent's turn, asked by a mention. */
+export interface Turn {
+  readonly id: string
+  readonly agentId: string
+  readonly status: TurnStatus
+  /** The DSH session of the turn: its trace. */
+  readonly sessionId?: string
+  readonly tokens?: Mission['tokens']
+  /** What it cost, from the configured price of its model. */
+  readonly eur?: number
+  /** Why it failed, was refused or cancelled, in plain words. */
+  readonly reason?: string
+  readonly startedAt?: string
+  readonly finishedAt?: string
+}
+
+/** One message of a channel. */
+export interface Message {
+  readonly id: string
+  readonly channelId: string
+  readonly author: MessageAuthor
+  readonly text: string
+  /** Agent ids the text mentions among the channel's agents. */
+  readonly mentions: readonly string[]
+  /** An agent's answer points at the message that mentioned it. */
+  readonly replyTo?: string
+  /** On a human message: one turn per agent it mentions. */
+  readonly turns?: readonly Turn[]
+  readonly createdAt: string
+  /** A deleted message keeps its place, without its text. */
+  readonly deletedAt?: string
+}
+
 /** Everything the product persists. */
 export interface WorkbenchState {
   readonly version: 1
@@ -162,6 +251,10 @@ export interface WorkbenchState {
   readonly approvals: readonly Approval[]
   readonly events: readonly WorkbenchEvent[]
   readonly mandates: readonly Mandate[]
+  /** Absent in a state written before the channels: read as empty. */
+  readonly agents?: readonly Agent[]
+  readonly channels?: readonly Channel[]
+  readonly messages?: readonly Message[]
 }
 
 /** A state with nothing in it. */

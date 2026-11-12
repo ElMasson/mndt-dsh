@@ -13,8 +13,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
+import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
-import { clearActor, publishActor } from './machine-tools.ts'
+import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
+import { clearActor, exclusive, publishActor } from './machine-tools.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -55,8 +57,6 @@ interface WorkflowEngineLike {
 export class DshMissionRunner {
   readonly #ctx: Context
   readonly #options: DshRunnerOptions
-  /** Missions run one at a time so the published actor cannot race. */
-  #queue: Promise<unknown> = Promise.resolve()
 
   /** @param ctx - the host context. @param options - optional framing. */
   constructor(ctx: Context, options: DshRunnerOptions = {}) {
@@ -70,9 +70,8 @@ export class DshMissionRunner {
    * @returns the title and markdown the child produced.
    */
   async run(mission: Mission): Promise<MissionResult> {
-    const next = this.#queue.then(() => this.#run(mission), () => this.#run(mission))
-    this.#queue = next.catch(() => undefined)
-    return next
+    // One queue with the agent turns: they publish the same actor record.
+    return exclusive(() => this.#run(mission))
   }
 
   /**
@@ -144,6 +143,113 @@ export class DshMissionRunner {
     } finally {
       stopAgentEnd()
       stopTurnEnd()
+      await clearActor()
+      await created.dispose()
+    }
+  }
+}
+
+/** @param name - a tool name. @returns the MCP server it comes from, if it is an MCP tool. */
+export function mcpServerOf(name: string): string | undefined {
+  if (!name.startsWith('mcp__')) return undefined
+  const end = name.indexOf('__', 'mcp__'.length)
+  return end < 0 ? undefined : name.slice('mcp__'.length, end)
+}
+
+/** The servers every turn may reach: asking for a card is never an action. */
+export const ALWAYS_SERVERS: readonly string[] = ['approvals']
+
+/** The scoped tools face the turn setup uses, structurally. */
+interface ScopedToolsLike {
+  schemas(): readonly { readonly name: string }[]
+  restrict(filter: { readonly deny: readonly string[] }): () => void
+  guard(guard: (execution: { readonly name: string }) => string | undefined): () => void
+}
+
+/**
+ * Run one agent turn on DSH: the agent's own model, its channel's folder as
+ * the working directory, and only the MCP servers its channel allows. The
+ * servers outside are hidden (restrict) and refused at execution (guard), so a
+ * server mounted after the turn started is refused too.
+ */
+export class DshTurnRunner implements TurnEngine {
+  readonly #ctx: Context
+
+  /** @param ctx - the host context. */
+  constructor(ctx: Context) {
+    this.#ctx = ctx
+  }
+
+  /**
+   * @param input - the turn.
+   * @returns its text, session and tokens.
+   */
+  async run(input: TurnInput): Promise<TurnOutput> {
+    return exclusive(() => this.#run(input))
+  }
+
+  /** @param input - the turn. @returns its output, with the actor published for its tools. */
+  async #run(input: TurnInput): Promise<TurnOutput> {
+    const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
+    if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
+    await mkdir(input.cwd, { recursive: true })
+    const allowed = new Set([...input.servers, ...ALWAYS_SERVERS])
+    const created = await this.#ctx.agents.create({
+      sessionId: input.turnId as never,
+      meta: { cwd: input.cwd },
+      // The agent's own model, never the workstation default.
+      agentOptions: { provider: input.agent.provider, model: input.agent.model },
+      setup: (agentCtx: unknown) => {
+        const tools = (agentCtx as { tools: ScopedToolsLike }).tools
+        const outside = tools.schemas().map(tool => tool.name)
+          .filter((name) => { const server = mcpServerOf(name); return server !== undefined && !allowed.has(server) })
+        if (outside.length > 0) tools.restrict({ deny: outside })
+        tools.guard((execution) => {
+          const server = mcpServerOf(execution.name)
+          return server === undefined || allowed.has(server) ? undefined : `the MCP server ${server} is not allowed in this channel`
+        })
+      },
+    })
+    await publishActor(input.actor, input.turnId)
+    const sessionId = created.agent.session.header.id
+    const failures: string[] = []
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const stopEvents = this.#ctx.on('session/event', (session, event) => {
+      if (session.header.id !== sessionId && session.header.parentSession !== sessionId) return
+      if (event.type === 'assistant/message') {
+        type StepUsage = { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+        const step = (event as unknown as { data?: { usage?: StepUsage } }).data?.usage
+        if (step !== undefined) {
+          usage.input += step.inputTokens ?? 0
+          usage.output += step.outputTokens ?? 0
+          usage.cacheRead += step.cacheReadTokens ?? 0
+          usage.cacheWrite += step.cacheWriteTokens ?? 0
+        }
+      }
+      if (event.type === 'turn/end' && event.data.reason.kind !== 'completed') {
+        const reason = event.data.reason
+        failures.push(reason.kind === 'error' ? `the agent turn failed: ${reason.error.message}` : `the agent turn ended ${reason.kind}`)
+      }
+    })
+    // A deleted message or an agent leaving the channel stops the turn at once.
+    const abort = (): void => { void created.dispose() }
+    input.signal.addEventListener('abort', abort, { once: true })
+    try {
+      const run = engine.start({
+        script: `return await agent(${JSON.stringify(input.prompt)})`,
+        meta: { name: 'mndt-turn', description: `@${input.agent.handle} in #${input.channel.name}` },
+        parent: created.agent,
+      })
+      const settled = await run.result
+      if (input.signal.aborted) throw new Error('turn stopped')
+      if (failures.length > 0) throw new Error(failures.join('; '))
+      const text = textOf(settled)
+      if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
+      const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
+      return { text, sessionId, ...(tokens === undefined ? {} : { tokens }) }
+    } finally {
+      input.signal.removeEventListener('abort', abort)
+      stopEvents()
       await clearActor()
       await created.dispose()
     }

@@ -24,7 +24,9 @@ import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { authorityGrants, localGrants } from './grants.ts'
-import { DshMissionRunner } from './runner.ts'
+import { DshMissionRunner, DshTurnRunner } from './runner.ts'
+import { TurnScheduler } from './turns.ts'
+import { parsePrices } from './core/index.ts'
 import { dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 
@@ -91,6 +93,14 @@ export class WorkbenchGateway extends TypertRemoteService {
     // through the environment, which is what a container needs.
     const host = config.host ?? process.env.DSH_MNDT_HOST
     const runner = new DshMissionRunner(ctx)
+    // Agent turns of mentions: the price grid is configuration (MNDT_PRICES);
+    // a model without a price is refused, never counted as free.
+    const turns = new TurnScheduler({
+      service: this.service,
+      engine: new DshTurnRunner(ctx),
+      prices: parsePrices(process.env.MNDT_PRICES),
+      dataDir: dirname(this.statePath),
+    })
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
         service: this.service,
@@ -104,6 +114,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
+        turns,
         port,
         ...(host === undefined || host === '' ? {} : { host }),
       }),
