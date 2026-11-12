@@ -105,6 +105,18 @@ export interface ChannelCreate {
   readonly connectors?: readonly string[]
 }
 
+/** A call the Host refused: its reason as served, and the HTTP status that tells its kind. */
+export class ChatRefusal extends Error {
+  /**
+   * @param message - the Host's `{ error }`.
+   * @param status - the HTTP status.
+   */
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ChatRefusal'
+  }
+}
+
 /** The channel routes the page uses. Each call throws with the Host's reason when refused. */
 export interface ChatFace {
   /** The reader's channels, the solo lane first. */

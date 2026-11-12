@@ -3,7 +3,14 @@ import { completeMention, mentionAt, mentionChoices } from '../src/client/mentio
 import { authorName, mergeThread, personName } from '../src/client/thread.ts'
 import { createHttpChat } from '../src/client/httpChat.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
+import { ChatRefusal } from '../src/client/chat.ts'
 import type { ChatAgent, ChatChannel, ChatMessage } from '../src/client/chat.ts'
+import { reasonOf } from '../src/client/ChannelView.tsx'
+import { chatFr } from '../src/client/chatLocales.ts'
+import type { ChatKey } from '../src/client/chatLocales.ts'
+
+/** @param key - the message. @returns its French copy, as the page shows it. */
+const chatFrench = (key: ChatKey): string => chatFr[key]
 
 const AT = '2026-11-12T09:00:00.000Z'
 
@@ -126,6 +133,20 @@ describe('the HTTP face: the lot 1 routes', () => {
     })
     expect((await createHttpChat(fetcher).createChannel({ title: 'Compta Orange' })).name).toBe('compta-orange')
     expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ title: 'Compta Orange' })
+  })
+
+  it('a refused right is said in the page\'s words; any other refusal as the Host served it', async () => {
+    const { fetcher } = recorder({
+      'POST /mndt-api/channels': { status: 403, body: { error: 'me@datanalysis.re is viewer and does not hold workflows.write' } },
+      'GET /mndt-api/channels/chn_9/messages': { status: 404, body: { error: 'channel_not_found' } },
+    })
+    const face = createHttpChat(fetcher)
+    const refused = await face.createChannel({ title: 'Essai' }).catch((failure: unknown) => failure)
+    expect(refused).toBeInstanceOf(ChatRefusal)
+    expect((refused as ChatRefusal).status).toBe(403)
+    expect(reasonOf(refused, chatFrench)).toBe('Votre rôle ne le permet pas : demandez à un owner ou un admin.')
+    const missing = await face.messages('chn_9').catch((failure: unknown) => failure)
+    expect(reasonOf(missing, chatFrench)).toBe('channel_not_found')
   })
 })
 
