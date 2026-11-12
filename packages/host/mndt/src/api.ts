@@ -258,7 +258,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const missing = await unmounted(connectors)
       if (missing !== undefined) return missing
       const channel = await service.createChannel({
-        name: typeof input.name === 'string' ? input.name : '',
+        ...(typeof input.name === 'string' && input.name !== '' ? { name: input.name } : {}),
         ...(typeof input.title === 'string' ? { title: input.title } : {}),
         members: strings(input.members),
         agents: strings(input.agents),
@@ -281,7 +281,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, await service.changedSince(channel.id, since, Number.isFinite(limit) && limit > 0 ? limit : 200))
       }
       const after = request.query?.after
-      return respond(200, { messages: await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200) })
+      // The cursor of the first poll: the channel's last change, whatever this page holds.
+      return respond(200, {
+        messages: await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200),
+        cursor: await service.lastChange(channel.id),
+      })
     }
 
     if (request.method === 'POST' && parts.length === 3 && parts[2] === 'messages') {
