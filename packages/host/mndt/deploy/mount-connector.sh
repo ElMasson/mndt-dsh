@@ -14,7 +14,7 @@
 # listed tools are visible and callable; --deny removes tools the allow list
 # would otherwise let through. --preset takes command, env file, non-secret
 # settings and both lists from the versioned catalog (connectors/catalog.json):
-# office365, qonto, dolibarr, swing.
+# approvals, office365, qonto, dolibarr, swing.
 set -euo pipefail
 
 LIVE=${MNDT_HOME:-/data/mndt/live}

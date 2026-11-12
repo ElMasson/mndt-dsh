@@ -653,12 +653,12 @@ fournir, le cœur refuse le tour en attendant.
 
 ### Connecteurs en lecture seule
 
-`connectors/catalog.json` décrit `office365`, `qonto`, `dolibarr` et `swing` :
+`connectors/catalog.json` décrit `approvals`, `office365`, `qonto`, `dolibarr` et `swing` :
 commande, fichier de secrets, réglages non secrets, listes `allow` et `deny`.
 Un descripteur avec `allow` est enveloppé dans `mcp-proxy.mjs` ; les listes sont
 exportées après le fichier de secrets, qui ne peut donc pas les élargir.
 
-    for c in office365 qonto dolibarr swing; do mount-connector.sh "$c" --preset --no-restart; done
+    for c in approvals office365 qonto dolibarr swing; do mount-connector.sh "$c" --preset --no-restart; done
     cd /opt/mndt-front && docker compose restart workbench
 
 Pré-requis par connecteur, dans `/data/mndt/live/connectors/` (mode 600) :

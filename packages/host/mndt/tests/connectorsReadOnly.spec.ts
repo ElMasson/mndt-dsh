@@ -24,6 +24,11 @@ const catalog = JSON.parse(readFileSync(join(deploy, 'catalog.json'), 'utf8')) a
 
 /** The tool names each server publishes today, writes included. */
 const servers: Record<string, { reads: readonly string[]; writes: readonly string[] }> = {
+  approvals: {
+    reads: ['request_approval', 'list_pending_approvals', 'read_approval'],
+    // A turn may ask a person, never decide for them.
+    writes: ['decide_approval'],
+  },
   qonto: {
     reads: [
       'get_authenticated_membership', 'get_client', 'get_client_invoice', 'get_credit_note', 'get_organization',
@@ -131,11 +136,25 @@ async function session(server: string, lines: readonly string[]): Promise<{ answ
   let output = ''
   child.stdout?.on('data', (chunk) => { output += String(chunk) })
   for (const line of lines) child.stdin?.write(`${line}\n`)
-  await new Promise(resolve => setTimeout(resolve, 1500))
-  const answers = output.split('\n').filter(Boolean).flatMap((line) => {
+  const parse = (): Message[] => output.split('\n').filter(Boolean).flatMap((line) => {
     const parsed = JSON.parse(line) as Message | Message[]
     return Array.isArray(parsed) ? parsed : [parsed]
   })
+  // Wait for one answer per request sent (a batch counts its elements), with a
+  // generous bound for a loaded machine; then a short grace for the call log.
+  const expected = lines.reduce((total, line) => {
+    try {
+      const parsed = JSON.parse(line) as unknown
+      return total + (Array.isArray(parsed) ? parsed.length : 1)
+    } catch {
+      return total + 1
+    }
+  }, 0)
+  for (let waited = 0; waited < 15_000 && parse().length < expected; waited += 50) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  await new Promise(resolve => setTimeout(resolve, 200))
+  const answers = parse()
   const reached = existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : []
   return { answers, reached }
 }
