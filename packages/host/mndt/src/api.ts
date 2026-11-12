@@ -275,6 +275,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
     if (request.method === 'GET' && parts.length === 3 && parts[2] === 'messages') {
       const limit = Number(request.query?.limit ?? 200)
+      const since = request.query?.since
+      if (since !== undefined) {
+        if (Number.isNaN(Date.parse(since))) return respond(400, { error: 'since is an ISO instant' })
+        return respond(200, await service.changedSince(channel.id, since, Number.isFinite(limit) && limit > 0 ? limit : 200))
+      }
       const after = request.query?.after
       return respond(200, { messages: await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200) })
     }

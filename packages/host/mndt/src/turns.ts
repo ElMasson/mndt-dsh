@@ -20,7 +20,7 @@ import type {
 import {
   ceilingRefusal,
   eurOf,
-  priceKey,
+  priceOf,
   spentThisMonth,
   turnPrompt,
   turnServers,
@@ -250,7 +250,7 @@ export class TurnScheduler {
         await cancel(after.reason ?? 'Tour arrêté.')
         return
       }
-      const price = prices[priceKey(agent)]
+      const price = priceOf(prices, agent)
       const eur =
         output.tokens === undefined || price === undefined
           ? undefined

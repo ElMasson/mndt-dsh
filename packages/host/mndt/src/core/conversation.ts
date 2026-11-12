@@ -26,7 +26,12 @@ export interface ModelPrice {
 }
 
 /** The grid: `<provider>/<model>` to its price. */
-export type PriceGrid = Readonly<Record<string, ModelPrice>>
+/**
+ * The grid, as the adapters lane keeps it in `deploy/llm/prices.json`: keys
+ * `<route>/<model>` or `<route>/*` (every model of a route); `null` means the
+ * price is still to be provided, and such a model is refused, never free.
+ */
+export type PriceGrid = Readonly<Record<string, ModelPrice | null>>
 
 /** @param agent - the agent. @returns the grid key of its model. */
 export function priceKey(agent: Pick<Agent, 'provider' | 'model'>): string {
@@ -34,36 +39,40 @@ export function priceKey(agent: Pick<Agent, 'provider' | 'model'>): string {
 }
 
 /**
- * Read a grid from its JSON text (`MNDT_PRICES`).
- * @param text - the configuration, or undefined.
- * @returns the grid; an absent configuration is an empty grid.
- * @throws when the text is not a grid: a broken price list must not run turns.
+ * The price of an agent's model: its exact key, else its route's `*`.
+ * @param grid - the grid.
+ * @param agent - the agent.
+ * @returns the price, or undefined when it is absent or still to be provided.
+ */
+export function priceOf(grid: PriceGrid, agent: Pick<Agent, 'provider' | 'model'>): ModelPrice | undefined {
+  const exact = grid[priceKey(agent)]
+  if (exact !== undefined) return exact ?? undefined
+  return grid[`${agent.provider}/*`] ?? undefined
+}
+
+/**
+ * Read the grid file of the adapters lane (`{ models: { key: price | null } }`).
+ * @param text - the file's text, or undefined when there is no file.
+ * @returns the grid; no file is an empty grid, so every turn is refused.
+ * @throws when the file is not a grid: a broken price list must not run turns.
  */
 export function parsePrices(text: string | undefined): PriceGrid {
   if (text === undefined || text.trim() === '') return {}
-  const parsed: unknown = JSON.parse(text)
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(
-      'MNDT_PRICES must map "<provider>/<model>" to { input, output } in euros per million tokens',
-    )
+  const parsed = JSON.parse(text) as { models?: unknown }
+  const models = parsed.models
+  if (typeof models !== 'object' || models === null || Array.isArray(models)) {
+    throw new Error('the price grid needs { "models": { "<route>/<model>": { input, output } | null } } in euros per million tokens')
   }
-  const grid: Record<string, ModelPrice> = {}
-  for (const [key, value] of Object.entries(
-    parsed as Record<string, unknown>,
-  )) {
+  const grid: Record<string, ModelPrice | null> = {}
+  for (const [key, value] of Object.entries(models as Record<string, unknown>)) {
+    if (value === null) {
+      grid[key] = null
+      continue
+    }
     const price = value as Partial<Record<keyof ModelPrice, unknown>>
-    const numbers = [
-      price.input,
-      price.output,
-      price.cacheRead ?? 0,
-      price.cacheWrite ?? 0,
-    ]
-    if (
-      numbers.some(n => typeof n !== 'number' || !Number.isFinite(n) || n < 0)
-    ) {
-      throw new Error(
-        `MNDT_PRICES: the price of ${key} needs non-negative numbers for input and output`,
-      )
+    const numbers = [price.input, price.output, price.cacheRead ?? 0, price.cacheWrite ?? 0]
+    if (numbers.some(n => typeof n !== 'number' || !Number.isFinite(n) || n < 0)) {
+      throw new Error(`the price of ${key} needs non-negative numbers for input and output, or null`)
     }
     grid[key] = price as ModelPrice
   }
@@ -133,7 +142,7 @@ export function ceilingRefusal(
   prices: PriceGrid,
   spent: number,
 ): string | undefined {
-  if (prices[priceKey(agent)] === undefined) {
+  if (priceOf(prices, agent) === undefined) {
     return `Prix du modèle non configuré (${priceKey(agent)}) : @${agent.handle} ne peut pas répondre tant que son prix n'est pas renseigné.`
   }
   if (spent >= agent.eurPerMonth) {

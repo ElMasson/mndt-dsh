@@ -900,6 +900,23 @@ export class WorkbenchService {
     return all.slice(from).slice(-limit)
   }
 
+  /**
+   * The messages of a channel created or changed at or after an instant: new
+   * messages, turns that moved on, deletions. One request per poll.
+   * @param channelId - the channel.
+   * @param since - an ISO instant, inclusive: the screen keeps the latest copy of each id.
+   * @param limit - at most this many, the latest changes.
+   * @returns the messages, oldest change first, and the cursor of the next poll.
+   */
+  async changedSince(channelId: string, since: string, limit = 200): Promise<{ messages: readonly Message[]; cursor: string }> {
+    const changed = ((await this.#ready()).messages ?? [])
+      .filter(message => message.channelId === channelId && (message.updatedAt ?? message.createdAt) >= since)
+      .sort((a, b) => (a.updatedAt ?? a.createdAt).localeCompare(b.updatedAt ?? b.createdAt))
+      .slice(-limit)
+    const last = changed.at(-1)
+    return { messages: changed, cursor: last === undefined ? since : (last.updatedAt ?? last.createdAt) }
+  }
+
   /** @param id - message id. @returns the message. */
   async message(id: string): Promise<Message | undefined> {
     return ((await this.#ready()).messages ?? []).find(message => message.id === id)
@@ -923,6 +940,7 @@ export class WorkbenchService {
       const agents = (state.agents ?? []).filter(agent => channel.agents.includes(agent.id) && agent.retiredAt === undefined)
       const mentions = mentionsOf(body, agents)
       const turns: Turn[] = mentions.map(agentId => ({ id: this.#id('trn'), agentId, status: 'queued' }))
+      const at = this.#at()
       const message: Message = {
         id: this.#id('msg'),
         channelId,
@@ -931,7 +949,8 @@ export class WorkbenchService {
         mentions,
         ...(replyTo === undefined ? {} : { replyTo }),
         ...(turns.length === 0 ? {} : { turns }),
-        createdAt: this.#at(),
+        createdAt: at,
+        updatedAt: at,
       }
       return {
         state: { ...state, messages: [...(state.messages ?? []), message] },
@@ -959,6 +978,7 @@ export class WorkbenchService {
         ...message,
         text: '',
         deletedAt: at,
+        updatedAt: at,
         ...(message.turns === undefined
           ? {}
           : {
@@ -989,7 +1009,11 @@ export class WorkbenchService {
       if (message === undefined || turn === undefined) throw new Error(`no turn ${turnId}`)
       const settled = turn.status !== 'queued' && turn.status !== 'running'
       const next: Turn = settled ? turn : { ...turn, ...patch }
-      const updated: Message = { ...message, turns: (message.turns ?? []).map(t => (t.id === turnId ? next : t)) }
+      const updated: Message = {
+        ...message,
+        turns: (message.turns ?? []).map(t => (t.id === turnId ? next : t)),
+        ...(settled ? {} : { updatedAt: this.#at() }),
+      }
       return {
         state: { ...state, messages: (state.messages ?? []).map(candidate => (candidate.id === messageId ? updated : candidate)) },
         event: { at: this.#at(), actor: 'mndt', action: `turn.${next.status}`, subject: turnId, ...(next.reason === undefined ? {} : { detail: next.reason }) },
@@ -1008,6 +1032,7 @@ export class WorkbenchService {
    */
   reply(channelId: string, replyTo: string, author: Exclude<MessageAuthor, { kind: 'human' }>, text: string): Promise<Message> {
     return this.#write((state) => {
+      const at = this.#at()
       const message: Message = {
         id: this.#id('msg'),
         channelId,
@@ -1015,7 +1040,8 @@ export class WorkbenchService {
         text,
         mentions: [],
         replyTo,
-        createdAt: this.#at(),
+        createdAt: at,
+        updatedAt: at,
       }
       return {
         state: { ...state, messages: [...(state.messages ?? []), message] },

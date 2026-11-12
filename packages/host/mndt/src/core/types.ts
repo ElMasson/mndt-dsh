@@ -238,6 +238,8 @@ export interface Message {
   /** On a human message: one turn per agent it mentions. */
   readonly turns?: readonly Turn[]
   readonly createdAt: string
+  /** Last change: its creation, a turn moving on, its deletion. The screen polls on it. */
+  readonly updatedAt?: string
   /** A deleted message keeps its place, without its text. */
   readonly deletedAt?: string
 }

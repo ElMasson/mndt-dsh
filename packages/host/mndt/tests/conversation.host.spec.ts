@@ -6,6 +6,7 @@ import type { MissionRunner } from '../src/api.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 import { mcpServerOf } from '../src/runner.ts'
+import { parsePrices, priceOf } from '../src/core/index.ts'
 
 const owner = 'duke@datanalysis.re'
 const admin = 'smarion@datanalysis.re'
@@ -16,7 +17,8 @@ const asViewer = { authorization: 'Bearer tok-viewer' }
 
 const PRICES: PriceGrid = {
   'scaleway-genapi/deepseek-v4.1-flash': { input: 100, output: 100 },
-  'vllm-qwen/qwen3.5': { input: 0, output: 0 },
+  'scaleway-genapi/glm-5.3': null, // to be provided: refused, never free
+  'vllm-qwen/*': { input: 0, output: 0 },
 }
 
 /** An engine that records what each turn was given and answers at once, or when released. */
@@ -419,6 +421,49 @@ describe('channels, mentions and agent turns', () => {
     })
     release()
     await b.turns.settled()
+  })
+
+
+  it('one poll with since returns the new messages and those whose turn moved on', async () => {
+    const b = bench()
+    const assistant = await agent(b, 'assistant')
+    const general = await channel(b, 'general', [assistant], [])
+    const since = new Date(Date.now() - 1000).toISOString()
+    const asked = await say(b, general, '@assistant bonjour')
+    await b.turns.settled()
+    const polled = await b.api({ method: 'GET', path: `/channels/${general}/messages`, query: { since: since }, ...asOwner })
+    expect(polled.status).toBe(200)
+    const body = polled.body as { messages: Message[]; cursor: string }
+    const origin = body.messages.find(m => m.id === asked.id)
+    expect(origin?.turns?.[0]?.status).toBe('done') // the turn moved on: the origin comes back
+    expect(origin?.updatedAt).toBeDefined()
+    expect(body.messages.some(m => m.replyTo === asked.id)).toBe(true)
+    expect(body.cursor >= since).toBe(true)
+    const later = await b.api({ method: 'GET', path: `/channels/${general}/messages`, query: { since: new Date(Date.now() + 60_000).toISOString() }, ...asOwner })
+    expect((later.body as { messages: Message[] }).messages).toEqual([])
+    const bad = await b.api({ method: 'GET', path: `/channels/${general}/messages`, query: { since: 'hier' }, ...asOwner })
+    expect(bad.status).toBe(400)
+  })
+
+
+  it('reads the price grid of the adapters lane: exact keys, route wildcards and null', () => {
+    // The content of deploy/llm/prices.json (lane C, 05f63ce120), verbatim but for its comment.
+    const grid = parsePrices(JSON.stringify({
+      version: 'scaleway-2026-11',
+      currency: 'EUR',
+      unit: 'per_million_tokens',
+      models: {
+        'scaleway-genapi/deepseek-v4.1-flash': { input: 0.60, cacheRead: 0.12, output: 1.80 },
+        'scaleway-genapi/glm-5.3': null,
+        'vllm-qwen/*': { input: 0, cacheRead: 0, output: 0 },
+      },
+    }))
+    expect(priceOf(grid, { provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' })?.output).toBe(1.8)
+    expect(priceOf(grid, { provider: 'vllm-qwen', model: 'Qwen/Qwen3.5-35B-A3B' })?.input).toBe(0)
+    expect(priceOf(grid, { provider: 'scaleway-genapi', model: 'glm-5.3' })).toBeUndefined()
+    expect(priceOf(grid, { provider: 'scaleway-genapi', model: 'another' })).toBeUndefined()
+    expect(() => parsePrices('{"models": {"x/y": {"input": -1, "output": 0}}}')).toThrow()
+    expect(parsePrices(undefined)).toEqual({})
   })
 
   it('names the MCP server of a tool', () => {
