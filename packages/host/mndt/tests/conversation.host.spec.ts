@@ -466,6 +466,33 @@ describe('channels, mentions and agent turns', () => {
     expect(parsePrices(undefined)).toEqual({})
   })
 
+
+  it('a channel is created from its title alone; its name is derived and kept free', async () => {
+    const b = bench()
+    const created = async (body: object) => b.call('POST', '/channels', asOwner, body)
+    const first = await created({ title: 'Compta Orange — Été 2026' })
+    expect(first.status).toBe(201)
+    expect((first.body as { channel: { name: string; title: string } }).channel).toMatchObject({ name: 'compta-orange-ete-2026', title: 'Compta Orange — Été 2026' })
+    const again = await created({ title: 'Compta  Orange, été 2026 !' })
+    expect((again.body as { channel: { name: string } }).channel.name).toBe('compta-orange-ete-2026-2')
+    const odd = await created({ title: '!!!' })
+    expect((odd.body as { channel: { name: string } }).channel.name).toBe('canal')
+    expect((await created({ name: 'compta-orange-ete-2026' })).status).toBe(409) // a chosen name stays the person's
+    expect((await created({})).status).toBe(400)
+  })
+
+
+  it('the first page carries the cursor of the next poll: the channel last change', async () => {
+    const b = bench()
+    const general = await channel(b, 'general', [], [])
+    const empty = await b.call('GET', `/channels/${general}/messages`, asOwner)
+    expect((empty.body as { cursor: string }).cursor).toBe(new Date(0).toISOString())
+    await say(b, general, 'un')
+    const second = await say(b, general, 'deux')
+    const page = await b.api({ method: 'GET', path: `/channels/${general}/messages`, query: { limit: '1' }, ...asOwner })
+    expect((page.body as { messages: Message[]; cursor: string }).cursor).toBe(second.updatedAt)
+  })
+
   it('names the MCP server of a tool', () => {
     expect(mcpServerOf('mcp__qonto__list_transactions')).toBe('qonto')
     expect(mcpServerOf('read_file')).toBeUndefined()
