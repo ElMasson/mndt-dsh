@@ -159,6 +159,34 @@ describe('the thread', () => {
   })
 })
 
+describe('the thread follows the newest message', () => {
+  /** @param box - the feed. @param height - its content height. */
+  function sized(box: HTMLElement, height: number): void {
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => height })
+    Object.defineProperty(box, 'clientHeight', { configurable: true, get: () => 100 })
+  }
+
+  it('at the bottom it follows; scrolled up to read, it stays where the reader is', async () => {
+    const chat = double()
+    render(thread(chat))
+    await screen.findByTestId('chat-empty')
+    const feed = screen.getByTestId('chat-thread')
+    sized(feed, 600)
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@assistant bonjour', selectionStart: 18 } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => { expect(feed.scrollTop).toBe(600) })
+    // The reader scrolls up: a new answer does not pull them down.
+    feed.scrollTop = 50
+    fireEvent.scroll(feed)
+    sized(feed, 900)
+    act(() => { chat.tick() })
+    act(() => { chat.tick() })
+    await waitFor(() => { expect(screen.getAllByTestId('chat-message')).toHaveLength(2) })
+    expect(feed.scrollTop).toBe(50)
+  })
+})
+
 describe('the channel agents', () => {
   it('model and this month\'s spending against the ceiling', () => {
     render(<ChannelAgents channel={channel()} agents={[agent(), agent({ id: 'agt_2', handle: 'analyste' })]} t={chatEnglish} />)

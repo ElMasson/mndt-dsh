@@ -3,6 +3,7 @@
  * front, the proxy proves the person on every request. A refusal throws with the Host's reason:
  * an error is never read as an empty list.
  */
+import { ChatRefusal } from './chat.ts'
 import type {
   ChannelCreate,
   ChatAgent,
@@ -19,7 +20,7 @@ const BASE = '/mndt-api'
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
 
 /**
- * Read a JSON body; a refusal throws with the Host's `{ error }`, or its status.
+ * Read a JSON body; a refusal throws a `ChatRefusal` with the Host's `{ error }` and its status.
  * @param response - the API response.
  * @returns the parsed body.
  */
@@ -32,7 +33,7 @@ async function bodyOf<T>(response: Response): Promise<T> {
       typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error: string }).error
         : `the Host refused the call (${response.status})`
-    throw new Error(reason)
+    throw new ChatRefusal(reason, response.status)
   }
   return body as T
 }
