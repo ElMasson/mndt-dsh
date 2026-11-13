@@ -68,6 +68,9 @@ if health 80; then echo "API answers through the gateway"; else echo "KO: the AP
 echo "--- profiles/web/cordis.patch.yml as DSH wrote it:"; cat "$data/home/profiles/web/cordis.patch.yml" 2>/dev/null || echo "(absent)"
 
 step "3. seed-team.sh, the production script (Compose calls through compose-shim.sh)"
+# The workbench writes its profile files as root; on the server seed-team.sh runs
+# as root too. Here it runs as this user, so hand the profile files over first.
+docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || exit 1
 shim=$(mktemp -d); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
