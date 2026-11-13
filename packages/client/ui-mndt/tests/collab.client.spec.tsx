@@ -358,12 +358,15 @@ describe('the team channels of lot 1 in the page', () => {
     // Said in the channel view and in the activity view alike.
     expect(await screen.findAllByText('L\'espace ne répond pas. Vérifiez la connexion, puis réessayez.')).toHaveLength(2)
     expect(screen.queryByText(/the Host refused the call/u)).toBeNull()
+    // Nobody was read: the rail does not name a « membre ».
+    expect(screen.queryByTestId('presence')).toBeNull()
     // The activity says nothing was read, rather than showing an empty log.
     fireEvent.click(screen.getAllByRole('button', { name: /Activité/u })[0]!)
     expect(screen.getByTestId('activity-unread').textContent).toContain('L\'espace ne répond pas')
     // Retry reads the state again and the banner goes.
     fireEvent.click(within(screen.getByTestId('activity-unread')).getByRole('button', { name: 'Réessayer' }))
     await waitFor(() => { expect(screen.queryByTestId('activity-unread')).toBeNull() })
+    expect(screen.getByTestId('presence').textContent).toContain('duke@datanalysis.re')
   })
 
   it('with the workspace down, the channels say it in words, not as a gateway status', async () => {

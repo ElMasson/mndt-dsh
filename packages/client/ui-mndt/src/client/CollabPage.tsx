@@ -779,11 +779,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           )
         })}
         <div className="mndt-channels-foot">
-          <div className="mndt-presence">
-            <span className="mndt-dot" data-state="available" />
-            <span>{state.you}</span>
-            <span className="mndt-role">{state.role ?? t('ui.membre')}</span>
-          </div>
+          {state.you === '' ? undefined : (
+            // Nobody read yet (the workspace did not answer): no presence, rather than « membre ».
+            <div className="mndt-presence" data-testid="presence">
+              <span className="mndt-dot" data-state="available" />
+              <span>{state.you}</span>
+              <span className="mndt-role">{state.role ?? t('ui.membre')}</span>
+            </div>
+          )}
           <div className="mndt-presence">
             <span className="mndt-dot" data-state="working" />
             <span>{pending} {t('ui.decision')}{pending > 1 ? t('ui.s') : ''} {t('ui.en-attente')}</span>
