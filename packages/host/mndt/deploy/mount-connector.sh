@@ -20,6 +20,10 @@ set -euo pipefail
 LIVE=${MNDT_HOME:-/data/mndt/live}
 CONNECTORS="$LIVE/connectors"
 FRONT=${MNDT_FRONT:-/opt/mndt-front}
+# The renderer of this checkout when there is one: an installed copy may predate
+# the shared guard (patchfile.py) and append its block after the `[]` dsh writes.
+checkout_render="$(cd "$(dirname "$0")" && pwd)/connectors/render-connectors.py"
+if [ -z "${RENDER_SCRIPT:-}" ] && [ -f "$checkout_render" ]; then RENDER_SCRIPT=$checkout_render; fi
 RENDER="${RENDER_SCRIPT:-/opt/mndt-front/gateway/render-connectors.py}"
 CATALOG="${CONNECTOR_CATALOG:-$(dirname "$RENDER")/catalog.json}"
 # The renderer writes the composition through the shared guard (patchfile.py).
