@@ -93,7 +93,7 @@ cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # The connector machinery of the adapters lane, at this tenant's paths: the
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
-cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$root$app/gateway/"
+cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs; do
   cp "$here/connectors/$tool" "$root$data/tools/$tool"
 done
@@ -111,33 +111,28 @@ mkdir -p "$root$data/home/profiles/web"
 patch="$root$data/home/cordis.patch.yml"
 begin='# >>> tenant d equipe (create-tenant.sh)'
 end='# <<< tenant d equipe (create-tenant.sh)'
-kept=''
-if [ -f "$patch" ]; then
-  kept=$(awk -v b="$begin" -v e="$end" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$patch")
-fi
-{
-  [ -n "$kept" ] && printf '%s\n' "$kept"
-  printf '%s\n' "$begin" \
-    '# Interface en francais, sans Plugins ni Automation.' \
-    '- id: locale' \
-    '  config:' \
-    '    preference: fr' \
-    '- id: ui-plugin-manager' \
-    '  disabled: true' \
-    '- id: ui-schedule' \
-    '  disabled: true' \
-    '# Ni avis Preview Notice DeepSeek Harness (sa version tenue pour lue), ni invite' \
-    '# Get started a saisir une cle DeepSeek : les modeles sont configures cote serveur.' \
-    '# La version suit WELCOME_NOTICE_VERSION (ui-settings-models/src/onboarding-copy.ts).' \
-    '- id: ui-settings-general' \
-    '  config:' \
-    "    welcomeNoticeVersion: '2026-09-28.1'" \
-    '- id: ui-settings-models' \
-    '  config:' \
-    '    credentialOnboarding: false' \
-    "$end"
-} > "$patch.tmp"
-mv "$patch.tmp" "$patch"
+# Written through the shared guard (patchfile.py): the file may hold the `[]`
+# dsh writes at first start, the interface's rows, `!!js`; a file or a result
+# that does not parse is refused and nothing is written.
+python3 "$here/patchfile.py" "$patch" --begin "$begin" --end "$end" <<'YAML' || exit 1
+# Interface en francais, sans Plugins ni Automation.
+- id: locale
+  config:
+    preference: fr
+- id: ui-plugin-manager
+  disabled: true
+- id: ui-schedule
+  disabled: true
+# Ni avis Preview Notice DeepSeek Harness (sa version tenue pour lue), ni invite
+# Get started a saisir une cle DeepSeek : les modeles sont configures cote serveur.
+# La version suit WELCOME_NOTICE_VERSION (ui-settings-models/src/onboarding-copy.ts).
+- id: ui-settings-general
+  config:
+    welcomeNoticeVersion: '2026-09-28.1'
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
+YAML
 
 # The model environment, from the adapters lane's one source of names
 # (deploy/llm/llm.env.example): the keys stay empty, filled in by hand (mode 600).
