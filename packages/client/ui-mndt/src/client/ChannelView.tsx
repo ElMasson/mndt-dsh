@@ -15,6 +15,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
+import { renderBrief } from './markdown.tsx'
 import { authorName, mergeThread, settledTurns } from './thread.ts'
 
 /** How often the thread is read again, in milliseconds. */
@@ -263,10 +264,13 @@ function MessageView(props: {
         )}
       </div>
       {error === undefined ? undefined : <span role="alert" className="mndt-error">{error}</span>}
-      {m.deletedAt === undefined ? (
-        <p className="mndt-message-text">{m.text}</p>
-      ) : (
+      {m.deletedAt !== undefined ? (
         <p className="mndt-message-text mndt-hint">{t('deleted')}</p>
+      ) : m.author.kind === 'agent' ? (
+        // An agent writes Markdown (tables, lists, bold): read, never shown as raw markers.
+        <div className="mndt-message-text mndt-message-markdown" data-testid="chat-markdown">{renderBrief(m.text)}</div>
+      ) : (
+        <p className="mndt-message-text">{m.text}</p>
       )}
       {(m.turns ?? []).map(turn => (
         <TurnLine key={turn.id} turn={turn} agent={agents.get(turn.agentId)} openTrace={props.openTrace} t={t} />
