@@ -225,6 +225,8 @@ function CardView(props: {
 /** One message, its turns and the cards they asked for. */
 function MessageView(props: {
   readonly message: ChatMessage
+  /** The author may delete their own message; the Host still decides. */
+  readonly onRemove?: (() => Promise<string | undefined>) | undefined
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
@@ -234,12 +236,33 @@ function MessageView(props: {
 }): ReactNode {
   const { message: m, agents, t } = props
   const name = authorName(m, agents) ?? t('system')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const remove = async (): Promise<void> => {
+    if (props.onRemove === undefined) return
+    setBusy(true)
+    setError(await props.onRemove())
+    setBusy(false)
+    setConfirming(false)
+  }
   return (
     <div className="mndt-message" data-author={m.author.kind} data-testid="chat-message" data-id={m.id}>
       <div className="mndt-post-head">
         <span className="mndt-role" data-agent={m.author.kind === 'agent' ? 'true' : undefined}>{name}</span>
         <span className="mndt-post-time">{clock(m.createdAt)}</span>
+        {props.onRemove === undefined || m.deletedAt !== undefined ? undefined : confirming ? (
+          <span className="mndt-message-actions">
+            <button type="button" className="mndt-link" data-tone="danger" disabled={busy} onClick={() => { void remove() }}>
+              {t('confirmDelete')}
+            </button>
+            <button type="button" className="mndt-link" disabled={busy} onClick={() => { setConfirming(false) }}>{t('cancel')}</button>
+          </span>
+        ) : (
+          <button type="button" className="mndt-link mndt-message-actions" onClick={() => { setConfirming(true) }}>{t('delete')}</button>
+        )}
       </div>
+      {error === undefined ? undefined : <span role="alert" className="mndt-error">{error}</span>}
       {m.deletedAt === undefined ? (
         <p className="mndt-message-text">{m.text}</p>
       ) : (
@@ -267,6 +290,8 @@ export function ChannelThread(props: {
   readonly canDecide: boolean
   readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
+  /** The reader's e-mail: their own messages offer « Delete ». */
+  readonly you?: string | undefined
   /** A turn ended: what it asked for (cards, spending) is now on the Host. */
   readonly onSettled?: (() => void) | undefined
   readonly t: ChatTranslate
@@ -335,6 +360,19 @@ export function ChannelThread(props: {
     setThread(held => mergeThread(held ?? [], [message]))
   }, [])
 
+  const removeOf = (m: ChatMessage): (() => Promise<string | undefined>) | undefined => {
+    if (props.you === undefined || m.author.kind !== 'human' || m.author.email !== props.you) return undefined
+    return async () => {
+      try {
+        const removed = await chat.remove(channel.id, m.id)
+        setThread(held => mergeThread(held ?? [], [removed]))
+        return undefined
+      } catch (failure) {
+        return reasonOf(failure, t)
+      }
+    }
+  }
+
   const cardsOf = (messageId: string): ThreadCard[] =>
     props.cards.filter(card => card.channelId === channel.id && card.messageId === messageId)
 
@@ -350,6 +388,7 @@ export function ChannelThread(props: {
           <MessageView
             key={m.id}
             message={m}
+            onRemove={removeOf(m)}
             agents={byAgent}
             cards={cardsOf(m.id)}
             canDecide={props.canDecide}

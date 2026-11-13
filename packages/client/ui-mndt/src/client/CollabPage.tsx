@@ -847,6 +847,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 canDecide={state.canAdmin === true}
                 onDecide={decideCard}
                 openTrace={openTrace}
+                you={state.you}
                 onSettled={settled}
                 t={tc}
               />
