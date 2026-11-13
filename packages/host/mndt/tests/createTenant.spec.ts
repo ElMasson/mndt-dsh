@@ -41,6 +41,12 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(mode(join(root, 'etc/mndt/datanalysis/client_secret'))).toBe('400')
     expect(mode(join(root, 'etc/mndt/datanalysis/cookie_secret'))).toBe('400')
     expect(mode(join(root, 'data/mndt/datanalysis/live/model.env'))).toBe('600')
+    // The adapters lane's names, the ones its LLM routes read; the keys stay empty.
+    const modelEnv = readFileSync(join(root, 'data/mndt/datanalysis/live/model.env'), 'utf8')
+    for (const name of ['SCW_GENAPI_KEY=', 'SCW_PROJECT_ID=', 'VLLM_QWEN_BASE_URL=', 'VLLM_QWEN_MODEL=', 'VLLM_API_KEY=']) expect(modelEnv).toContain(name)
+    expect(modelEnv).not.toMatch(/^SCW_GENAPI_KEY=\S/m)
+    // The compose starts the workbench from the tools folder.
+    expect(readFileSync(join(root, 'data/mndt/datanalysis/live/tools/workbench-entrypoint.sh'), 'utf8')).toContain('apps/cli/lib/bin.js web')
     expect(readFileSync(join(root, 'opt/mndt/datanalysis/gateway/server.mjs'), 'utf8')).not.toBe('')
     expect(JSON.parse(readFileSync(join(root, 'data/mndt/datanalysis/live/state.json'), 'utf8'))).toMatchObject({ version: 1 })
   })

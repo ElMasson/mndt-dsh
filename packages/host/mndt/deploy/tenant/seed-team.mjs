@@ -44,6 +44,10 @@ if (process.env.CEILING !== undefined && process.env.CEILING !== '') {
 }
 
 const wanted = JSON.parse(process.env.AGENTS_JSON ?? '{"agents":[]}').agents ?? []
+// The API refuses an agent naming a connector the workbench has not mounted:
+// each agent gets the ones mounted now, and the others are said, to add once
+// mounted (POST /agents/:id { connectors }).
+const mounted = new Set(((await call('/connectors')).connectors ?? []).filter(c => c.enabled).map(c => c.server))
 for (const draft of wanted) {
   const model = String(draft.model).replace(/\$\{([A-Z0-9_]+)\}/g, (_, name) => process.env[name] ?? '')
   if (byHandle.has(draft.handle)) {
@@ -54,6 +58,9 @@ for (const draft of wanted) {
     console.log(`@${draft.handle}: skipped, its model ${draft.model} is not set in model.env`)
     continue
   }
-  const { agent } = await call('/agents', { ...draft, model })
-  console.log(`@${agent.handle}: declared on ${agent.provider}/${agent.model}, ceiling ${agent.eurPerMonth} euros a month`)
+  const connectors = (draft.connectors ?? []).filter(server => mounted.has(server))
+  const waiting = (draft.connectors ?? []).filter(server => !mounted.has(server))
+  const { agent } = await call('/agents', { ...draft, model, connectors })
+  console.log(`@${agent.handle}: declared on ${agent.provider}/${agent.model}, ceiling ${agent.eurPerMonth} euros a month` +
+    (waiting.length === 0 ? '' : `; connectors not mounted yet: ${waiting.join(', ')}`))
 }

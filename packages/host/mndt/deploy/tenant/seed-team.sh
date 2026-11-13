@@ -24,7 +24,9 @@ done
 [[ $owner =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "--owner <email> is required" >&2; exit 1; }
 
 here=$(cd "$(dirname "$0")" && pwd)
-app="/opt/mndt/$slug"; data="/data/mndt/$slug/live"
+# MNDT_ROOT prefixes every absolute path, as in create-tenant.sh (tests).
+root=${MNDT_ROOT:-}
+app="$root/opt/mndt/$slug"; data="$root/data/mndt/$slug/live"
 [ -f "$app/docker-compose.yml" ] || { echo "no tenant $slug: run create-tenant.sh first" >&2; exit 1; }
 compose=(docker compose -f "$app/docker-compose.yml")
 
@@ -32,13 +34,17 @@ if [ -z "$ceiling" ] && [ ! -f "$data/connectors/approvals.json" ]; then
   # The approvals connector, from the versioned catalog, at this tenant's paths.
   MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
     CONNECTOR_CATALOG="$app/gateway/catalog.json" \
-    "$here/../mount-connector.sh" approvals --preset --no-restart
-  "${compose[@]}" up -d workbench
+    bash "$here/../mount-connector.sh" approvals --preset --no-restart  # its mode is not executable in git
+  # A restart, not up -d: the container's configuration did not change, so up -d
+  # would leave it running without the connector it must now load.
+  "${compose[@]}" restart workbench
   echo "waiting for the workbench API"
+  up=0
   for _ in $(seq 1 60); do
-    "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" && break
+    if "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"; then up=1; break; fi
     sleep 2
   done
+  [ "$up" = 1 ] || { echo "the workbench API did not answer after its restart: docker compose -f $app/docker-compose.yml logs workbench" >&2; exit 1; }
 fi
 
 qwen_model=$(grep -E '^VLLM_QWEN_MODEL=' "$data/model.env" 2>/dev/null | cut -d= -f2- || true)

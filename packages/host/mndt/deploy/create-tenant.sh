@@ -97,20 +97,16 @@ cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$roo
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs; do
   cp "$here/connectors/$tool" "$root$data/tools/$tool"
 done
+# The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,
+# and /opt/mndt-tools is this tools folder: without it the workbench never starts.
+cp "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
 mkdir -p "$root$data/home/profiles/web"
 
-# The model environment: names only, values filled in by hand (mode 600).
+# The model environment, from the adapters lane's one source of names
+# (deploy/llm/llm.env.example): the keys stay empty, filled in by hand (mode 600).
 if [ ! -f "$root$data/model.env" ]; then
   umask 077
-  cat > "$root$data/model.env" <<ENV
-# LLM routes and prices of tenant $slug. Fill in, then: docker compose up -d workbench
-# Scaleway Generative APIs (deepseek-v4.1-flash, glm-5.3):
-SCW_SECRET_KEY=
-# vLLM Qwen on the private network (http allowed there):
-VLLM_BASE_URL=
-# The euros per million tokens are not here: $data/prices.json (the adapters
-# lane's deploy/llm/prices.json). A model without a price is refused.
-ENV
+  cp "$here/llm/llm.env.example" "$root$data/model.env"
   chmod 600 "$root$data/model.env"
 fi
 # The price grid of the agents' models, one source: deploy/llm/prices.json.
