@@ -135,11 +135,6 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
 }
 
 /**
- * @param ctx - client root context.
- * @param served - what the gateway says of the API on this origin, probed once for the page.
- * @returns a face that picks the per-user API when it is served, else the Remote.
- */
-/**
  * The team channels, over the product API only: where the API is not served, every call refuses
  * with that reason, and the page says the channels are not served here.
  * @param served - what the gateway says of the API on this origin, probed once for the page.
@@ -165,6 +160,11 @@ function chatFace(served: Promise<Probe>): ChatFace {
   }
 }
 
+/**
+ * @param ctx - client root context.
+ * @param served - what the gateway says of the API on this origin, probed once for the page.
+ * @returns a face that picks the per-user API when it is served, else the Remote.
+ */
 function face(ctx: ClientContext, served: Promise<Probe>): MndtFace {
   const http = createHttpFace()
   const remote = remoteFace(ctx)
@@ -216,6 +216,29 @@ export const inject = ['slots', 'locale', 'remote', 'layout']
 /** The key of the team page, in the `main` slot and in the sidebar. */
 const PAGE = 'mndt'
 
+/** Where this browser last was: on the team page, or in a conversation (per viewer, a convenience). */
+const LAST_VIEW_KEY = 'mndt.arrival.lastView'
+
+/** @returns the view this browser last left, or undefined on a first visit or without storage. */
+function lastView(): 'team' | 'conversation' | undefined {
+  try {
+    const value = window.localStorage.getItem(LAST_VIEW_KEY)
+    return value === 'team' || value === 'conversation' ? value : undefined
+  } catch {
+    // No storage (private window, blocked site data): treated as a first visit.
+    return undefined
+  }
+}
+
+/** @param view - the view the person is now on. */
+function rememberView(view: 'team' | 'conversation'): void {
+  try {
+    window.localStorage.setItem(LAST_VIEW_KEY, view)
+  } catch {
+    // No storage: the next arrival is a first visit, which opens the team page.
+  }
+}
+
 /**
  * Install the page.
  * @param ctx - client root context.
@@ -249,16 +272,29 @@ export function apply(ctx: ClientContext): void {
       inject: () => ({ api: face(ctx, served), t: ctx.locale.bind(NS), chat, tc: ctx.locale.bind(CHAT_NS) }),
     }, CollabPage)
     let live = true
+    let decided = false
+    // Remember where the person is, once the arrival is decided: the team page, or a conversation
+    // (`null` in the shell). Other panels (governance) leave the memory as it was.
+    const stopWatching = ctx.layout.panelInfo.subscribe(() => {
+      if (!decided) return
+      const active = ctx.layout.panelInfo.getSnapshot().activePanelId
+      if (active === PAGE) rememberView('team')
+      else if (active === null) rememberView('conversation')
+    })
     // Where the team API is served (a mndt workbench), the team page is the arrival, not the
-    // generic session home. Elsewhere (plain DSH, local development) nothing changes. A page the
-    // person already chose is kept; opening a session still leads to the conversation.
+    // generic session home. Elsewhere (plain DSH, local development) nothing changes. A person
+    // who left from a conversation comes back to it: selecting a panel would abort the shell's
+    // session restore. A page already chosen is kept.
     void served.then((answer) => {
       if (!live || answer !== 'served') return
+      decided = true
+      if (lastView() === 'conversation') return
       if (ctx.layout.panelInfo.getSnapshot().activePanelId !== null) return
       ctx.layout.selectPanel(PAGE as MainPanelId)
     })
     return () => {
       live = false
+      stopWatching()
       dispose()
     }
   })
