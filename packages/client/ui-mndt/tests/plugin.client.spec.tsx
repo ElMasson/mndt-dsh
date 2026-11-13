@@ -10,6 +10,8 @@ interface Registration {
   readonly options: {
     readonly inject?: () => { readonly api: MndtFace }
     readonly label?: () => string
+    readonly name?: string
+    readonly order?: number
   }
   readonly component: unknown
 }
@@ -22,10 +24,18 @@ interface Bench {
 
 /**
  * @param mounted - the Remote face, when the bench has one.
+ * @param layout - the layout service: what it selects, and the page already open.
  * @returns a client context that records what the plugin registers.
  */
-function bench(mounted?: Record<string, (...args: never[]) => unknown>): Bench {
+function bench(
+  mounted?: Record<string, (...args: never[]) => unknown>,
+  layout: { selectPanel: (id: string | null) => void; active?: string | null } = { selectPanel: () => undefined },
+): Bench {
   const ctx = new Context()
+  // The layout service the plugin injects: where the page opens at arrival.
+  Object.defineProperty(ctx, 'layout', {
+    value: { selectPanel: layout.selectPanel, panelInfo: { getSnapshot: () => ({ activePanelId: layout.active ?? null }) } },
+  })
   const registrations: Registration[] = []
   const disposers: (() => void)[] = []
   Object.defineProperty(ctx, 'get', { value: (name: string) => (name === 'remote.mndt' ? mounted : undefined) })
@@ -61,7 +71,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 describe('client plugin wiring', () => {
   it('declares the services it needs and registers the two contributions once', () => {
-    expect(inject).toEqual(['slots', 'locale', 'remote'])
+    expect(inject).toEqual(['slots', 'locale', 'remote', 'layout'])
     const b = bench()
     apply(b.ctx)
     expect(b.registrations).toHaveLength(2)
@@ -228,6 +238,21 @@ describe('client plugin wiring', () => {
     back = true
     expect((await injected.api.state()).you).toBe('duke@datanalysis.re')
     expect(await injected.chat.channels()).toEqual([])
+  })
+
+  it('where the team API is served, the team page is the arrival; elsewhere, or once a page is chosen, nothing moves', async () => {
+    for (const [health, active, opened] of [[200, null, true], [200, 'governance', false], [404, null, false]] as const) {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: health === 200, status: health, json: async () => ({}) }) as unknown as Response))
+      const selectPanel = vi.fn()
+      const b = bench(undefined, { selectPanel, active })
+      apply(b.ctx)
+      await vi.waitFor(() => { expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0) })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(selectPanel.mock.calls).toEqual(opened ? [['mndt']] : [])
+      // The team page leads the menu.
+      expect(b.registrations.find(r => r.options.name === 'sidebar.panellist')?.options.order).toBe(-10)
+      vi.unstubAllGlobals()
+    }
   })
 
   it('refuses every call when neither transport is mounted', async () => {
