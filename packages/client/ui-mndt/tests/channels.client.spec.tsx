@@ -134,6 +134,65 @@ describe('the thread', () => {
     await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_1', 'rejected', 'pas maintenant') })
   })
 
+  it('a refusal cannot be confirmed without its reason', async () => {
+    const chat = double()
+    const sent = await chat.post('chn_1', '@assistant prépare le brouillon')
+    const onDecide = vi.fn(() => Promise.resolve(undefined))
+    render(thread(chat, [
+      { id: 'apr_1', kind: 'tool', title: 'Créer un brouillon de mail', requestedBy: 'assistant', requestedAt: AT, channelId: 'chn_1', messageId: sent.id },
+    ], onDecide))
+    const card = await screen.findByTestId('chat-card')
+    fireEvent.click(within(card).getByRole('button', { name: 'Refuse' }))
+    const confirm = within(card).getByRole('button', { name: 'Confirm the refusal' }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    expect(confirm.title).toBe('A refusal needs its reason.')
+    fireEvent.click(confirm)
+    fireEvent.change(within(card).getByLabelText('Reason for the refusal, kept in the log'), { target: { value: '   ' } })
+    expect(confirm.disabled).toBe(true)
+    expect(onDecide).not.toHaveBeenCalled()
+  })
+
+  it('a decided card stays under its message with who and when, and offers no button', async () => {
+    const chat = double()
+    const sent = await chat.post('chn_1', '@assistant deux brouillons')
+    const decidedAt = '2026-11-13T08:40:00.000Z'
+    render(thread(chat, [
+      {
+        id: 'apr_1', kind: 'tool', title: 'Premier brouillon', requestedBy: 'assistant', requestedAt: AT, channelId: 'chn_1', messageId: sent.id,
+        state: 'approved', decidedBy: 'stephane@datanalysis.re', decidedAt,
+      },
+      {
+        id: 'apr_2', kind: 'tool', title: 'Second brouillon', requestedBy: 'assistant', requestedAt: AT, channelId: 'chn_1', messageId: sent.id,
+        state: 'rejected', decidedBy: 'stephane@datanalysis.re', decidedAt, reason: 'pas avant la revue',
+      },
+    ]))
+    await waitFor(() => { expect(screen.getAllByTestId('chat-card')).toHaveLength(2) })
+    const [approved, refused] = screen.getAllByTestId('chat-card')
+    const time = new Date(decidedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    expect(within(approved!).getByTestId('chat-card-decision').textContent).toBe(`Approved by stephane at ${time}`)
+    expect(within(refused!).getByTestId('chat-card-decision').textContent).toBe(`Refused by stephane at ${time}: pas avant la revue`)
+    expect(within(approved!).queryAllByRole('button')).toHaveLength(0)
+    expect(within(refused!).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('cards that cannot be read are said so in the thread', async () => {
+    const chat = double()
+    render(
+      <ChannelThread
+        chat={chat}
+        channel={channel()}
+        agents={[agent()]}
+        cards={[]}
+        cardsError="the Host refused the call (500)"
+        canDecide
+        onDecide={() => Promise.resolve(undefined)}
+        t={chatEnglish}
+        pollMs={20}
+      />,
+    )
+    expect((await screen.findByRole('alert')).textContent).toBe('The cards could not be read: the Host refused the call (500)')
+  })
+
   it('a thread that cannot be read says why, never shows as empty', async () => {
     const chat = double()
     chat.messages = () => Promise.reject(new Error('channel_not_found'))

@@ -17,7 +17,7 @@ import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
 import { isHostDown } from './hostDown.ts'
 import { renderBrief } from './markdown.tsx'
-import { authorName, mergeThread, settledTurns } from './thread.ts'
+import { authorName, mergeThread, personName, settledTurns } from './thread.ts'
 
 /** How often the thread is read again, in milliseconds. */
 export const POLL_MS = 2000
@@ -25,10 +25,15 @@ export const POLL_MS = 2000
 /** How close to the bottom, in pixels, the reader still follows the newest message. */
 const FOLLOW_PX = 80
 
-/** A card a turn asked for: the approval, with where it was asked. */
+/** A card a turn asked for: the approval, with where it was asked and, once decided, by whom. */
 export interface ThreadCard extends ApprovalRow {
   readonly channelId?: string
   readonly messageId?: string
+  /** Absent on a pending card read from the page state. */
+  readonly state?: 'pending' | 'approved' | 'rejected'
+  readonly decidedBy?: string
+  readonly decidedAt?: string
+  readonly reason?: string
 }
 
 /**
@@ -190,6 +195,7 @@ function CardView(props: {
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
+  const decided = card.state === 'approved' || card.state === 'rejected'
   const [refusing, setRefusing] = useState(false)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -200,13 +206,20 @@ function CardView(props: {
     setBusy(false)
   }
   return (
-    <article className="mndt-post-card" data-kind="approval" data-testid="chat-card">
+    <article className="mndt-post-card" data-kind="approval" data-state={card.state ?? 'pending'} data-testid="chat-card">
       <div className="mndt-post-head">
         <span className="mndt-post-kind">{t('card')}</span>
         <span className="mndt-hint">{t('askedBy', { name: card.requestedBy })}</span>
       </div>
       <p className="mndt-post-body">{card.title}</p>
-      {props.canDecide ? (
+      {decided ? (
+        // A decided card stays where it was asked, with who decided and when; no button any more.
+        <p className="mndt-post-meta" data-testid="chat-card-decision">
+          {card.state === 'approved'
+            ? t('cardApproved', { name: personName(card.decidedBy ?? ''), time: clock(card.decidedAt ?? '') })
+            : t('cardRefused', { name: personName(card.decidedBy ?? ''), time: clock(card.decidedAt ?? ''), reason: card.reason ?? '' })}
+        </p>
+      ) : props.canDecide ? (
         <div className="mndt-post-actions">
           <button type="button" className="mndt-button" data-tone="primary" disabled={busy} onClick={() => { void decide('approved') }}>{t('approve')}</button>
           {refusing ? undefined : (
@@ -214,10 +227,11 @@ function CardView(props: {
           )}
         </div>
       ) : undefined}
-      {refusing ? (
-        <form className="mndt-row" onSubmit={(event) => { event.preventDefault(); void decide('rejected', reason.trim() || undefined) }}>
+      {refusing && !decided ? (
+        <form className="mndt-row" onSubmit={(event) => { event.preventDefault(); if (reason.trim() !== '') void decide('rejected', reason.trim()) }}>
           <input className="mndt-input" aria-label={t('refuseReason')} placeholder={t('refuseReason')} value={reason} onChange={(event) => { setReason(event.target.value) }} />
-          <button type="submit" className="mndt-button" disabled={busy}>{t('confirmRefuse')}</button>
+          {/* The Host refuses a refusal without a reason: the page asks for it first. */}
+          <button type="submit" className="mndt-button" disabled={busy || reason.trim() === ''} title={t('reasonNeeded')}>{t('confirmRefuse')}</button>
         </form>
       ) : undefined}
       {error === undefined ? undefined : <span role="alert" className="mndt-error">{error}</span>}
@@ -296,6 +310,8 @@ export function ChannelThread(props: {
   readonly canDecide: boolean
   readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
+  /** Why the cards could not be read: said in the thread, never shown as « no card ». */
+  readonly cardsError?: string | undefined
   /** The reader's e-mail: their own messages offer « Delete ». */
   readonly you?: string | undefined
   /** A turn ended: what it asked for (cards, spending) is now on the Host. */
@@ -386,6 +402,9 @@ export function ChannelThread(props: {
     <section className="mndt-thread" aria-label={channel.kind === 'solo' ? t('lane') : `# ${channel.title || channel.name}`}>
       <div className="mndt-thread-feed" data-testid="chat-thread" ref={feed} onScroll={followed}>
         {error === undefined ? undefined : <p role="alert" className="mndt-error mndt-error-banner">{t('unreadable', { reason: error })}</p>}
+        {props.cardsError === undefined ? undefined : (
+          <p role="alert" className="mndt-error mndt-error-banner">{t('cardsUnreadable', { reason: props.cardsError })}</p>
+        )}
         {thread === undefined ? (
           error === undefined ? <p className="mndt-hint">{t('loading')}</p> : undefined
         ) : thread.length === 0 ? (

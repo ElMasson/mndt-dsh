@@ -369,7 +369,8 @@ describe('the team channels of lot 1 in the page', () => {
   it('with the workspace down, the channels say it in words, not as a gateway status', async () => {
     const down = (): Promise<never> => Promise.reject(new ChatRefusal('the Host refused the call (502)', 502))
     const absent: ChatFace = {
-      channels: down, createChannel: down, messages: down, changes: down, post: down, remove: down, agents: down, addAgents: down,
+      channels: down, createChannel: down, messages: down, changes: down, post: down, remove: down,
+      agents: down, addAgents: down, cards: down,
     }
     render(<CollabPage api={fakeFace()} chat={absent} />)
     expect((await screen.findByTestId('chat-not-served')).textContent).toBe(
@@ -377,10 +378,30 @@ describe('the team channels of lot 1 in the page', () => {
     )
   })
 
+  it('a card decided in a channel stays in its thread, read from the decided cards', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [{ id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'vllm-qwen', model: 'qwen', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }],
+      channels: [{ id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at }],
+      messages: [{ id: 'msg_1', channelId: 'chn_1', author: { kind: 'human', email: you }, text: '@assistant brouillon', mentions: ['agt_1'], createdAt: at, updatedAt: at }],
+      cards: [{
+        id: 'apr_9', kind: 'send-email', title: 'Relance Sodiac', requestedBy: 'assistant', requestedAt: at, channelId: 'chn_1', messageId: 'msg_1',
+        state: 'approved', decidedBy: you, decidedAt: at,
+      }],
+    }, () => Date.parse(at))
+    render(<CollabPage api={fakeFace()} chat={chat} />)
+    fireEvent.click(within(await screen.findByTestId('chat-channels')).getByText('Compta'))
+    const card = await screen.findByTestId('chat-card')
+    expect(card.textContent).toContain('Relance Sodiac')
+    expect(within(card).getByTestId('chat-card-decision').textContent).toMatch(/^Approved by /u)
+    expect(within(card).queryAllByRole('button')).toHaveLength(0)
+  })
+
   it('where the channels are not served, the rail says why and the page still works', async () => {
     const absent: ChatFace = {
       channels: () => Promise.reject(new Error('the product API is not served on this workstation')),
       agents: () => Promise.resolve([]),
+      cards: () => Promise.resolve([]),
       createChannel: () => Promise.reject(new Error('x')),
       messages: () => Promise.reject(new Error('x')),
       changes: () => Promise.reject(new Error('x')),

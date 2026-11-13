@@ -10,6 +10,7 @@
 import type {
   ChannelCreate,
   ChatAgent,
+  ChatCard,
   ChatChannel,
   ChatChanges,
   ChatFace,
@@ -54,6 +55,7 @@ export interface MockSeed {
   readonly agents: readonly ChatAgent[]
   readonly channels: readonly ChatChannel[]
   readonly messages?: readonly ChatMessage[]
+  readonly cards?: readonly ChatCard[]
 }
 
 /** The double, with its clock step. */
@@ -206,6 +208,9 @@ export function createMockChat(
       return settle(() => {
         return [...agents.values()]
       })
+    },
+    cards() {
+      return settle(() => [...(seed.cards ?? [])])
     },
     addAgents(channelId, agentIds) {
       return settle(() => {
