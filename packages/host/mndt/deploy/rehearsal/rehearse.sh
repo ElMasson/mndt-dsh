@@ -18,8 +18,34 @@ image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
-root=${2:-$(mktemp -d /tmp/mndt-rehearsal-XXXX)}
 project=mndt-rehearsal
+# The rehearsal root is written freely (model.env, grants.json, chmod -R): never
+# an existing instance. Only a new or empty folder under the temporary directory.
+tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+if [ -n "${2:-}" ]; then
+  # Resolved without creating anything: a refused root is never touched.
+  root=$(realpath -m "${2}")
+else
+  root=$(mktemp -d "$tmp_base/mndt-rehearsal-XXXX")
+fi
+case $root in
+  "$tmp_base"/?*) ;;
+  *) echo "refused: the rehearsal root must be under $tmp_base, not $root" >&2; exit 2 ;;
+esac
+mkdir -p "$root" || exit 1
+if [ -n "$(ls -A "$root")" ]; then echo "refused: the rehearsal root $root is not empty" >&2; exit 2; fi
+touch "$root/.mndt-rehearsal"
+# Whatever the exit, the containers and their network go, unless KEEP=1: the
+# workbench restarts unless stopped and would loop on. The root stays, for the
+# screenshots and the logs.
+cleanup() {
+  if [ "${KEEP:-0}" != 1 ]; then
+    docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
+    docker network rm ${project}_front >/dev/null 2>&1
+  fi
+  echo "rehearsal root: $root"
+}
+trap cleanup EXIT
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
@@ -55,6 +81,9 @@ cat > "$root/compose.override.yml" <<YML
 services:
   gateway:
     ports: ["127.0.0.1:18080:8080"]
+  workbench:
+    # Nothing leaves this machine: the managed endpoint answers nowhere.
+    extra_hosts: ["api.scaleway.ai:127.0.0.1"]
   fakellm:
     image: node:22-bookworm-slim
     command: ["node", "/opt/fake/fake-llm.mjs"]
@@ -71,7 +100,7 @@ step "3. seed-team.sh, the production script (Compose calls through compose-shim
 # The workbench writes its profile files as root; on the server seed-team.sh runs
 # as root too. Here it runs as this user, so hand the profile files over first.
 docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || exit 1
-shim=$(mktemp -d); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
+shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
 echo "seed-team.sh exit $seeded"
@@ -93,10 +122,7 @@ echo "check-connectors.sh exit $connectors"
 
 step "5. the page, the turn, the resets"
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
+if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-if [ "${KEEP:-0}" != 1 ]; then
-  docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
-fi
-echo; echo "rehearsal root: $root (screenshot: $root/shots/landing.png)"
 [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]

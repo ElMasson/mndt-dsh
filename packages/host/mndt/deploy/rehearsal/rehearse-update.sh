@@ -21,9 +21,35 @@ new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root
 here=$(cd "$(dirname "$0")" && pwd)
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
-root=${3:-$(mktemp -d /tmp/mndt-update-XXXX)}
 old_ref=${OLD_REF:-96d2801d8a}
 project=mndt-rehearsal
+# The rehearsal root is written freely (model.env, grants.json, chmod -R): never
+# an existing instance. Only a new or empty folder under the temporary directory.
+tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+if [ -n "${3:-}" ]; then
+  # Resolved without creating anything: a refused root is never touched.
+  root=$(realpath -m "${3}")
+else
+  root=$(mktemp -d "$tmp_base/mndt-update-XXXX")
+fi
+case $root in
+  "$tmp_base"/?*) ;;
+  *) echo "refused: the rehearsal root must be under $tmp_base, not $root" >&2; exit 2 ;;
+esac
+mkdir -p "$root" || exit 1
+if [ -n "$(ls -A "$root")" ]; then echo "refused: the rehearsal root $root is not empty" >&2; exit 2; fi
+touch "$root/.mndt-rehearsal"
+# Whatever the exit, the containers and their network go, unless KEEP=1: the
+# workbench restarts unless stopped and would loop on. The root stays, for the
+# screenshots and the logs.
+cleanup() {
+  if [ "${KEEP:-0}" != 1 ]; then
+    docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
+    docker network rm ${project}_front >/dev/null 2>&1
+  fi
+  echo "rehearsal root: $root"
+}
+trap cleanup EXIT
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 web_patch=$data/home/profiles/web/cordis.patch.yml
@@ -52,7 +78,7 @@ compose_for() { # <image>
       "$app/docker-compose.yml" > "$root/compose.yml"
 }
 seed() { # <deploy dir>
-  local shim; shim=$(mktemp -d); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
+  local shim; shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
   REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
     bash "$1/tenant/seed-team.sh" datanalysis --owner $owner
 }
@@ -76,6 +102,9 @@ cat > "$root/compose.override.yml" <<YML
 services:
   gateway:
     ports: ["127.0.0.1:18080:8080"]
+  workbench:
+    # Nothing leaves this machine: the managed endpoint answers nowhere.
+    extra_hosts: ["api.scaleway.ai:127.0.0.1"]
   fakellm:
     image: node:22-bookworm-slim
     command: ["node", "/opt/fake/fake-llm.mjs"]
@@ -90,7 +119,10 @@ own
 seed "$old"; echo "old seed-team.sh exit $?"
 sleep 15
 echo "workbench: $(state)"
-python3 "$deploy/patchfile.py" "$web_patch" --check; echo "check exit $? (1 expected: the 13/11 breakage)"
+python3 "$deploy/patchfile.py" "$web_patch" --check; broke=$?
+echo "check exit $broke (1 expected: the 13/11 breakage)"
+# The update proves something only if the old instance really broke.
+if [ "$broke" != 1 ]; then echo "KO: the 13/11 breakage was not reproduced, the update below would prove nothing"; fi
 
 step "A3. repaired by hand, as on the instance: the [] line removed, the old renderer left installed"
 own
@@ -135,10 +167,7 @@ echo "check-connectors.sh exit $connectors"
 
 step "B5. the page, the turn, the resets"
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
+if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-if [ "${KEEP:-0}" != 1 ]; then
-  docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
-fi
-echo; echo "rehearsal root: $root"
-[ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]

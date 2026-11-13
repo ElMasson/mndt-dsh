@@ -29,6 +29,7 @@ for (const [name, service] of Object.entries(services)) {
   for (const [key, value] of Object.entries(service.environment ?? {})) args.push('-e', `${key}=${value}`)
   for (const volume of service.volumes ?? []) args.push('-v', volume)
   for (const port of service.ports ?? []) args.push('-p', port)
+  for (const host of service.extra_hosts ?? []) args.push('--add-host', host)
   args.push(service.image)
   if (Array.isArray(service.command)) args.push(...service.command)
   console.log(`${name}: ${docker(...args).slice(0, 12)}`)
