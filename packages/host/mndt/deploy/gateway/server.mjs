@@ -114,12 +114,24 @@ function forward(req, res, target, path, shellCookie) {
     headers,
   }, (answer) => {
     res.writeHead(answer.statusCode ?? 502, answer.headers)
+    // An upstream answer cut halfway ends the browser's answer, never the gateway.
+    answer.on('error', () => { res.destroy() })
     answer.pipe(res)
   })
   upstream.on('error', (error) => {
+    // Once headers left, a second writeHead would throw and kill the gateway for
+    // everyone: the browser's answer is cut instead.
+    if (res.headersSent) {
+      res.destroy()
+      return
+    }
     res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
     res.end(`gateway: upstream failed: ${error.message}`)
   })
+  // A browser that leaves mid-request (closed tab, lost network) resets its
+  // socket: drop the upstream call, and never let the reset reach the process.
+  req.on('error', () => { upstream.destroy() })
+  res.on('close', () => { if (!res.writableFinished) upstream.destroy() })
   req.pipe(upstream)
 }
 
@@ -314,7 +326,20 @@ server.on('upgrade', (req, socket, head) => {
     path: `${url.pathname}${url.search}`,
     headers,
   })
+  // A WebSocket lives long and ends abruptly (closed tab, sleeping laptop,
+  // mobile network, a proxy recycling its connections): every socket of it has
+  // an error handler, and one side closing closes the other. An unhandled reset
+  // here used to kill the gateway for every person at once.
+  socket.on('error', () => { upstream.destroy() })
   upstream.on('upgrade', (answer, upstreamSocket, upstreamHead) => {
+    upstreamSocket.on('error', () => { socket.destroy() })
+    socket.on('error', () => { upstreamSocket.destroy() })
+    upstreamSocket.on('close', () => { socket.destroy() })
+    socket.on('close', () => { upstreamSocket.destroy() })
+    if (socket.destroyed) {
+      upstreamSocket.destroy()
+      return
+    }
     const lines = [`HTTP/1.1 101 Switching Protocols`]
     for (let index = 0; index < answer.rawHeaders.length; index += 2) {
       lines.push(`${answer.rawHeaders[index]}: ${answer.rawHeaders[index + 1]}`)
@@ -324,6 +349,12 @@ server.on('upgrade', (req, socket, head) => {
     if (head.length > 0) upstreamSocket.write(head)
     upstreamSocket.pipe(socket)
     socket.pipe(upstreamSocket)
+  })
+  // The upstream answered without switching protocols (refused, not found):
+  // say so to the browser instead of leaving its socket hanging.
+  upstream.on('response', (answer) => {
+    answer.resume()
+    if (!socket.destroyed) socket.end(`HTTP/1.1 ${answer.statusCode ?? 502} ${answer.statusMessage ?? ''}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`)
   })
   upstream.on('error', () => { socket.destroy() })
   upstream.end()
