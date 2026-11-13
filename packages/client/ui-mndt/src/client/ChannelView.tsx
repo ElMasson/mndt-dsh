@@ -50,19 +50,28 @@ export function reasonOf(error: unknown, t: ChatTranslate): string {
 }
 
 /**
+ * The language the page is shown in (the locale plugin sets it on the document), not the browser's:
+ * an English browser on a French workspace reads « 17:50 » and « 1 020 », not « 05:50 PM » and « 1,020 ».
+ * @returns the page's language, or undefined where none is declared.
+ */
+function pageLanguage(): string | undefined {
+  if (typeof document === 'undefined') return undefined
+  return document.documentElement.lang === '' ? undefined : document.documentElement.lang
+}
+
+/**
  * An amount in euros, small ones kept readable.
  * @param eur - the amount.
  * @returns it formatted in the page's language.
  */
 export function euros(eur: number): string {
-  const lang = typeof document === 'undefined' ? 'fr' : document.documentElement.lang || 'fr'
-  return new Intl.NumberFormat(lang, { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(eur)
+  return new Intl.NumberFormat(pageLanguage() ?? 'fr', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(eur)
 }
 
-/** @param iso - an instant. @returns its time of day. */
+/** @param iso - an instant. @returns its time of day, in the page's language. */
 function clock(iso: string): string {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(pageLanguage(), { hour: '2-digit', minute: '2-digit' })
 }
 
 /* ------------------------------------------------------------------ the list */
@@ -173,7 +182,7 @@ function TurnLine(props: {
       <span className="mndt-role" data-agent="true">@{agent?.handle ?? turn.agentId}</span>
       <span className="mndt-pill" data-tone="state">{t(TURN_WORD[turn.status])}</span>
       {turn.status === 'done' && tokens !== undefined && turn.eur !== undefined ? (
-        <span className="mndt-hint" data-testid="chat-turn-cost">{t('turnCost', { tokens: tokens.toLocaleString(), eur: euros(turn.eur) })}</span>
+        <span className="mndt-hint" data-testid="chat-turn-cost">{t('turnCost', { tokens: tokens.toLocaleString(pageLanguage()), eur: euros(turn.eur) })}</span>
       ) : undefined}
       {turn.reason === undefined ? undefined : (
         // A failed turn carries the engine's own cause, often in English: a sentence of the page's
