@@ -79,6 +79,33 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     await expect(seed({ ...env, CEILING: 'personne=1' })).rejects.toThrow(/no agent @personne/)
   })
 
+  it('seed-team.sh restarts the workbench after mounting approvals, then seeds in the gateway', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    writeFileSync(join(data, 'model.env'), 'VLLM_QWEN_MODEL=Qwen/Qwen3.5-35B-A3B\n')
+    // A docker that records each call; its exec answers like a healthy gateway.
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const log = join(root, 'docker.log')
+    writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho "$*" >> ${log}\ncat > /dev/null\nexit 0\n`, { mode: 0o755 })
+    execFileSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` },
+    })
+    const calls = readFileSync(log, 'utf8').trim().split('\n')
+    const compose = `compose -f ${join(root, 'opt/mndt/datanalysis/docker-compose.yml')}`
+    expect(existsSync(join(data, 'connectors', 'approvals.json'))).toBe(true)
+    expect(calls[0]).toBe(`${compose} restart workbench`) // never up -d: it would not reload
+    expect(calls[1]).toContain(`${compose} exec -T gateway node -e`)
+    expect(calls.at(-1)).toContain('-e VLLM_QWEN_MODEL=Qwen/Qwen3.5-35B-A3B')
+    expect(calls.at(-1)).toContain('gateway node --input-type=module -')
+  })
+
   it('mounts the approvals connector at the tenant paths, decide_approval denied', () => {
     const root = mkdtempSync(join(tmpdir(), 'seed-'))
     mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
