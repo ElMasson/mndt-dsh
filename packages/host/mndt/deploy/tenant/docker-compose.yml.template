@@ -54,6 +54,10 @@ services:
       DSH_MNDT_LOCAL_OWNER: __OWNER__
       DSH_MNDT_STATE: /state/state.json
       DSH_MNDT_PORT: "8795"
+      # The API must listen on the container's network, or the gateway (another
+      # container) is refused and every /mndt-api call answers 502. The front
+      # network is not published: only the gateway reaches it.
+      DSH_MNDT_HOST: 0.0.0.0
       DSH_MNDT_TOKENS_FILE: /state/tokens.json
       DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
       # The tenant's role table, read on every request (create-tenant.sh writes it with the owner).
