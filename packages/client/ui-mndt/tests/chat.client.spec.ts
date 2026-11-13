@@ -139,6 +139,18 @@ describe('the HTTP face: the lot 1 routes', () => {
     expect((await createHttpChat(fetcher).messages('chn_1')).cursor).toBe('2026-11-12T09:05:00.000Z')
   })
 
+  it('the cards are read with the decided ones, who and when', async () => {
+    const { calls, fetcher } = recorder({
+      'GET /mndt-api/approvals?state=all': { body: { approvals: [{
+        id: 'apr_1', kind: 'send-email', title: 'Relance', requestedBy: 'assistant', requestedAt: '2026-11-13T08:39:00.000Z',
+        channelId: 'chn_1', messageId: 'msg_1', state: 'approved', decidedBy: 'stephane@datanalysis.re', decidedAt: '2026-11-13T08:40:00.000Z',
+      }] } },
+    })
+    const [card] = await createHttpChat(fetcher).cards()
+    expect(calls[0]!.url).toBe('/mndt-api/approvals?state=all')
+    expect(card).toMatchObject({ state: 'approved', decidedBy: 'stephane@datanalysis.re', messageId: 'msg_1' })
+  })
+
   it('a channel is created from its title alone', async () => {
     const { calls, fetcher } = recorder({
       'POST /mndt-api/channels': { status: 201, body: { channel: channel({ name: 'compta-orange', title: 'Compta Orange' }) } },
