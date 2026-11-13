@@ -132,6 +132,12 @@ python3 "$here/patchfile.py" "$patch" --begin "$begin" --end "$end" <<'YAML' || 
 - id: ui-settings-models
   config:
     credentialOnboarding: false
+# L'espace de travail par defaut, dans le volume : l'image n'a pas de dossier
+# Documents (xdg-user-dir), sans quoi la premiere arrivee affiche « Impossible
+# de creer l'espace de travail par defaut ». Chemin absolu, sous DSH_HOME.
+- id: workspace-controller
+  config:
+    documentsDirectory: /state/home/documents
 YAML
 
 # The model environment, from the adapters lane's one source of names

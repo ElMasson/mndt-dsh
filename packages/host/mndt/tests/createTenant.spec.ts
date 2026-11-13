@@ -93,6 +93,8 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(shipped).toBeDefined()
     expect((rows.find(row => row.id === 'ui-settings-general')?.config as { welcomeNoticeVersion?: string } | undefined)?.welcomeNoticeVersion).toBe(shipped)
     expect((rows.find(row => row.id === 'ui-settings-models')?.config as { credentialOnboarding?: boolean } | undefined)?.credentialOnboarding).toBe(false)
+    // The default workspace lands in the volume: the image has no Documents folder (lane B).
+    expect((rows.find(row => row.id === 'workspace-controller')?.config as { documentsDirectory?: string } | undefined)?.documentsDirectory).toBe('/state/home/documents')
     expect(rows.some(row => row.id === 'llm-pi-ai')).toBe(true)
   })
 
