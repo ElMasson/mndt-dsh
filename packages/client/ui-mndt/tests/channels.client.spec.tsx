@@ -377,6 +377,32 @@ describe('an agent\'s answer is read, not shown as raw Markdown', () => {
   })
 })
 
+describe('times and numbers follow the page language, not the browser', () => {
+  it('a French page reads a 24-hour time and spaced thousands, even in an English browser', async () => {
+    document.documentElement.lang = 'fr'
+    try {
+      const chat = double()
+      const sent = await chat.post('chn_1', '@assistant prépare le brouillon')
+      const decidedAt = '2026-11-13T17:50:00.000Z'
+      render(thread(chat, [{
+        id: 'apr_1', kind: 'tool', title: 'Brouillon', requestedBy: 'assistant', requestedAt: AT, channelId: 'chn_1', messageId: sent.id,
+        state: 'approved', decidedBy: 'stephane@datanalysis.re', decidedAt,
+      }]))
+      const decision = await screen.findByTestId('chat-card-decision')
+      const french = new Date(decidedAt).toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit' })
+      expect(decision.textContent).toContain(french)
+      expect(decision.textContent).not.toMatch(/AM|PM/u)
+      act(() => { chat.tick() })
+      act(() => { chat.tick() })
+      const cost = await screen.findByTestId('chat-turn-cost')
+      expect(cost.textContent).toContain((1500).toLocaleString('fr'))
+      expect(cost.textContent).not.toContain('1,500')
+    } finally {
+      document.documentElement.lang = ''
+    }
+  })
+})
+
 describe('the channel agents', () => {
   it('model and this month\'s spending against the ceiling', () => {
     render(<ChannelAgents channel={channel()} agents={[agent(), agent({ id: 'agt_2', handle: 'analyste' })]} t={chatEnglish} />)
