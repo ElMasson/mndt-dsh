@@ -1,0 +1,11 @@
+# The Swing MCP server (mcp/swing_mcp.py) imports httpx and structlog only.
+# Pinned and resolved under Python 3.11 (13/11/2026); installed with pip --target
+# into <tools>/swing/site by install-connectors.sh.
+anyio==4.16.0
+certifi==2026.10.23
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+structlog==25.5.0
+typing_extensions==4.16.0

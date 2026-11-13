@@ -1,0 +1,8 @@
+{
+  "name": "mndt-connector-qonto",
+  "private": true,
+  "description": "mcp-remote, pinned, for the Qonto connector of a tenant (installed by install-connectors.sh)",
+  "dependencies": {
+    "mcp-remote": "0.1.29"
+  }
+}
