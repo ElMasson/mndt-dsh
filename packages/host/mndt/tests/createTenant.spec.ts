@@ -96,6 +96,27 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(rows.some(row => row.id === 'llm-pi-ai')).toBe(true)
   })
 
+  it('writes its block through the guard: over the `[]` dsh wrote, and refuses a broken file untouched', () => {
+    const root = rootWithEntra()
+    const data = join(root, 'data/mndt/datanalysis/live')
+    const patchPath = join(data, 'home/cordis.patch.yml')
+    // The home as the workbench leaves it at first start: comments, then `[]`.
+    mkdirSync(join(data, 'home'), { recursive: true })
+    writeFileSync(patchPath, '# Your patch layer for this dsh profile.\n[]\n')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const once = readFileSync(patchPath, 'utf8')
+    const rows = load(once) as { id: string }[]
+    expect(Array.isArray(rows)).toBe(true)
+    expect(rows.map(row => row.id)).toContain('locale')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    expect(readFileSync(patchPath, 'utf8')).toBe(once) // a rerun changes nothing
+    expect(readFileSync(join(root, 'opt/mndt/datanalysis/gateway/patchfile.py'), 'utf8')).toContain('def update(')
+    // A file that does not parse is left exactly as it was, and the script fails.
+    writeFileSync(patchPath, 'foo: [\n')
+    expect(() => create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')).toThrow()
+    expect(readFileSync(patchPath, 'utf8')).toBe('foo: [\n')
+  })
+
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {
     const root = rootWithEntra()
     for (const args of [['datanalysis', 'equipe.datanalysis.re'], ['Data Nalysis', 'equipe.datanalysis.re', '--owner', 'a@b.c'], ['datanalysis', 'not a domain', '--owner', 'a@b.c']]) {
