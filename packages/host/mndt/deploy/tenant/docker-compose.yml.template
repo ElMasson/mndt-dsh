@@ -56,6 +56,8 @@ services:
       DSH_MNDT_PORT: "8795"
       DSH_MNDT_TOKENS_FILE: /state/tokens.json
       DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
+      # The tenant's role table, read on every request (create-tenant.sh writes it with the owner).
+      DSH_MNDT_GRANTS_FILE: /state/grants.json
       # A message never decides: the approvals connector never offers decide_approval.
       MNDT_APPROVALS_ALLOW_DECIDE: "0"
       PUBLIC_URL: https://__DOMAIN__/

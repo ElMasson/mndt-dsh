@@ -41,6 +41,10 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(mode(join(root, 'etc/mndt/datanalysis/client_secret'))).toBe('400')
     expect(mode(join(root, 'etc/mndt/datanalysis/cookie_secret'))).toBe('400')
     expect(mode(join(root, 'data/mndt/datanalysis/live/model.env'))).toBe('600')
+    // The tenant's role table, owner first, read by the workbench from /state.
+    expect(JSON.parse(readFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), 'utf8'))).toEqual({ grants: [{ subject: 'duke@datanalysis.re', role: 'owner' }] })
+    expect(mode(join(root, 'data/mndt/datanalysis/live/grants.json'))).toBe('600')
+    expect(compose).toContain('DSH_MNDT_GRANTS_FILE: /state/grants.json')
     // The adapters lane's names, the ones its LLM routes read; the keys stay empty.
     const modelEnv = readFileSync(join(root, 'data/mndt/datanalysis/live/model.env'), 'utf8')
     for (const name of ['SCW_GENAPI_KEY=', 'SCW_PROJECT_ID=', 'VLLM_QWEN_BASE_URL=', 'VLLM_QWEN_MODEL=', 'VLLM_API_KEY=']) expect(modelEnv).toContain(name)
@@ -51,14 +55,17 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(JSON.parse(readFileSync(join(root, 'data/mndt/datanalysis/live/state.json'), 'utf8'))).toMatchObject({ version: 1 })
   })
 
-  it('keeps the secrets, the state and the model environment of an existing tenant', () => {
+  it('keeps the secrets, the state, the model environment and the role file of an existing tenant', () => {
     const root = rootWithEntra()
     create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
     const cookie = readFileSync(join(root, 'etc/mndt/datanalysis/cookie_secret'))
     writeFileSync(join(root, 'data/mndt/datanalysis/live/model.env'), 'SCW_SECRET_KEY=filled\n')
+    const team = '{"grants":[{"subject":"duke@datanalysis.re","role":"owner"},{"subject":"a@datanalysis.re","role":"admin"}]}'
+    writeFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), team)
     create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
     expect(readFileSync(join(root, 'etc/mndt/datanalysis/cookie_secret'))).toEqual(cookie)
     expect(readFileSync(join(root, 'data/mndt/datanalysis/live/model.env'), 'utf8')).toBe('SCW_SECRET_KEY=filled\n')
+    expect(readFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), 'utf8')).toBe(team) // the team stays
   })
 
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {
