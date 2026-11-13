@@ -155,6 +155,7 @@ function chatFace(): ChatFace {
     changes: (channelId, since) => route(next => next.changes(channelId, since)),
     post: (channelId, text, replyTo) => route(next => next.post(channelId, text, replyTo)),
     remove: (channelId, messageId) => route(next => next.remove(channelId, messageId)),
+    cards: () => route(next => next.cards()),
     agents: () => route(next => next.agents()),
     addAgents: (channelId, agentIds) => route(next => next.addAgents(channelId, agentIds)),
   }

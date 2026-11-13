@@ -87,6 +87,23 @@ export interface ChatMessage {
   readonly deletedAt?: string
 }
 
+/** A card a turn asked for, decided or not, as `GET /approvals?state=all` serves it. */
+export interface ChatCard {
+  readonly id: string
+  readonly kind: string
+  readonly title: string
+  readonly requestedBy: string
+  readonly requestedAt: string
+  readonly channelId?: string
+  readonly messageId?: string
+  /** `pending` until a person decides it with its button. */
+  readonly state: 'pending' | 'approved' | 'rejected'
+  readonly decidedBy?: string
+  readonly decidedAt?: string
+  /** Why it was refused, kept in the log. */
+  readonly reason?: string
+}
+
 /** A page of changes: every message created or changed since an instant, and the next instant. */
 export interface ChatChanges {
   readonly messages: readonly ChatMessage[]
@@ -129,6 +146,8 @@ export interface ChatFace {
   /** Answers at once; its turns start queued. */
   post(channelId: string, text: string, replyTo?: string): Promise<ChatMessage>
   remove(channelId: string, messageId: string): Promise<ChatMessage>
+  /** Every card, the decided ones included: a decided card stays in its thread with who and when. */
+  cards(): Promise<readonly ChatCard[]>
   /** The declared agents, with what they spent this month. */
   agents(): Promise<readonly ChatAgent[]>
   addAgents(

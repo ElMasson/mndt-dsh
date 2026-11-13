@@ -7,6 +7,7 @@ import { ChatRefusal } from './chat.ts'
 import type {
   ChannelCreate,
   ChatAgent,
+  ChatCard,
   ChatChannel,
   ChatChanges,
   ChatFace,
@@ -83,6 +84,8 @@ export function createHttpChat(
           {},
         )
       ).message,
+    cards: async () =>
+      (await get<{ approvals: ChatCard[] }>('/approvals?state=all')).approvals,
     agents: async () => (await get<{ agents: ChatAgent[] }>('/agents')).agents,
     addAgents: async (channelId, agentIds) =>
       (

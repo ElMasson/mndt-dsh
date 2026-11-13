@@ -12,6 +12,7 @@ import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, reasonOf } from './ChannelView.tsx'
+import type { ThreadCard } from './ChannelView.tsx'
 import { renderBrief } from './markdown.tsx'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
@@ -91,8 +92,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
 
   useEffect(() => { void load() }, [load])
 
+  // The thread's cards, decided ones included (who and when), read apart from the page state.
+  const [chatCards, setChatCards] = useState<readonly ThreadCard[] | undefined>(undefined)
+  const [cardsError, setCardsError] = useState<string | undefined>(undefined)
+  const loadCards = useCallback(async () => {
+    if (chat === undefined) return
+    try {
+      setChatCards(await chat.cards())
+      setCardsError(undefined)
+    } catch (failure) {
+      setCardsError(reasonOf(failure, tc))
+    }
+  }, [chat, tc])
+
   const loadChat = useCallback(async () => {
     if (chat === undefined) return
+    void loadCards()
     try {
       const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
       setChatChannels(channels)
@@ -101,7 +116,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
-  }, [chat, tc])
+  }, [chat, tc, loadCards])
 
   useEffect(() => {
     void loadChat()
@@ -119,9 +134,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   useEffect(() => {
     if (view !== 'chat') return undefined
     // A card asked in another channel, or decided by someone else, still reaches the page.
-    const timer = setInterval(() => { void load() }, CARDS_MS)
+    const timer = setInterval(() => { void load(); void loadCards() }, CARDS_MS)
     return () => { clearInterval(timer) }
-  }, [view, load])
+  }, [view, load, loadCards])
 
   const createChat = useCallback(async (title: string): Promise<string | undefined> => {
     if (chat === undefined) return undefined
@@ -152,10 +167,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const outcome = await api.decide(id, decision, reason)
     if (outcome.ok) {
       void load()
+      void loadCards()
       return undefined
     }
     return outcome.error ?? decision
-  }, [api, load])
+  }, [api, load, loadCards])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
@@ -877,7 +893,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 chat={chat}
                 channel={current}
                 agents={chatAgents}
-                cards={state.approvals}
+                cards={chatCards ?? state.approvals}
+                cardsError={cardsError}
                 canDecide={state.canAdmin === true}
                 onDecide={decideCard}
                 openTrace={openTrace}
