@@ -71,3 +71,24 @@ export const zh: Record<AccountKey, string> = {
   quotaTopUp: '去充值',
   bonusNoticeTitle: '赠金已到账',
 }
+
+/**
+ * French for what a team member sees of the account in the shell: the sidebar's « More » menu and
+ * its entries. The DeepSeek sign-in and top-up copy is not shown on a team workbench (its models are
+ * served by the workbench): missing keys fall back to English, key by key.
+ */
+export const fr = {
+  more: 'Plus',
+  menu: 'Menu du compte',
+  settings: 'Réglages',
+  contactUs: 'Retour',
+  nav: 'Compte',
+  close: 'Fermer',
+  cancel: 'Annuler',
+  loading: 'Chargement…',
+  retry: 'Se reconnecter',
+  signedIn: 'Connecté à DeepSeek',
+  signedOut: 'Non connecté',
+  signIn: 'Se connecter',
+  signOut: 'Se déconnecter',
+} satisfies Partial<Record<AccountKey, string>>
