@@ -87,7 +87,7 @@ describe('install-connectors.sh', { timeout: 30_000 }, () => {
     const expected: Record<string, [string, string]> = {
       approvals: ['request_approval,list_pending_approvals,read_approval', 'decide_approval'],
       office365: ['mail_recent,mail_search,calendar_upcoming', ''],
-      qonto: ['list_*,get_*', 'get_attachment'],
+      qonto: ['list_*,get_*', 'get_attachment,get_statement,list_statements,list_transaction_attachments'],
       dolibarr: ['get_*,search_*,list_*', 'dolibarr_raw_api'],
       swing: ['list_*,get_*,search_*', 'get_rehydration_prompt'],
     }
