@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# The assembled lot 1 rehearsal, in the instance's real order, on this machine:
+#   1. create-tenant.sh, the LLM keys and routes, the role file;
+#   2. the workbench's first start (DSH writes its default patch template);
+#   3. the real seed-team.sh (approvals mounted, workbench restarted, agents
+#      seeded), its two Compose calls passed through compose-shim.sh;
+#   4. the restart survives, then drive.mjs: the real page in Chromium, the
+#      shell's WebSocket, a real agent turn on a fake LLM, abrupt resets.
+# Nothing leaves this machine: the LLM routes point at fake-llm.mjs, SSO is
+# replaced by the identity header given to the gateway.
+#
+#   rehearse.sh <workbench image> [rehearsal root]
+# The image is built beforehand from a clean export of the branch, as on the
+# server: docker build -f packages/host/mndt/deploy/Dockerfile.workbench -t <image> .
+# KEEP=1 leaves the containers running for inspection.
+set -uo pipefail
+image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
+here=$(cd "$(dirname "$0")" && pwd)
+deploy=$(cd "$here/.." && pwd)
+repo=$(cd "$deploy/../../../.." && pwd)
+root=${2:-$(mktemp -d /tmp/mndt-rehearsal-XXXX)}
+project=mndt-rehearsal
+owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
+app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
+mkdir -p "$root/root" "$root/shots"
+step() { printf '\n== %s\n' "$*"; }
+health() {
+  for _ in $(seq 1 "${1:-80}"); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/mndt-api/health)" = 200 ] && return 0
+    sleep 3
+  done
+  return 1
+}
+workbench_log() { echo "--- last lines of home/web.log"; tail -15 "$data/home/web.log" 2>/dev/null; }
+
+step "1. tenant, keys, routes, roles (root $root)"
+printf 'secret' > "$root/root/entra_client_secret"
+MNDT_ROOT=$root bash "$deploy/create-tenant.sh" datanalysis equipe.datanalysis.re --owner $owner \
+  --client-id 00000000-0000-0000-0000-000000000000 --client-secret-file /root/entra_client_secret --no-docker || exit 1
+cat > "$data/model.env" <<ENV
+SCW_GENAPI_KEY=rehearsal
+VLLM_API_KEY=placeholder
+SCW_PROJECT_ID=11111111-2222-3333-4444-555555555555
+VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
+VLLM_QWEN_MODEL=fake-qwen
+ENV
+MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" } ] }\n' $owner $viewer > "$data/grants.json"
+sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" \
+    -e "s#image: mndt-workbench:local#image: $image#" \
+    -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
+    -e "s#TRUSTED_HOST: equipe.datanalysis.re#TRUSTED_HOST: 127.0.0.1:18080#" \
+    "$app/docker-compose.yml" > "$root/compose.yml"
+cat > "$root/compose.override.yml" <<YML
+services:
+  gateway:
+    ports: ["127.0.0.1:18080:8080"]
+  fakellm:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/fake/fake-llm.mjs"]
+    volumes: ["$here:/opt/fake:ro"]
+YML
+chmod -R a+rX "$root"
+
+step "2. first start"
+node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
+if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
+echo "--- profiles/web/cordis.patch.yml as DSH wrote it:"; cat "$data/home/profiles/web/cordis.patch.yml" 2>/dev/null || echo "(absent)"
+
+step "3. seed-team.sh, the production script (Compose calls through compose-shim.sh)"
+shim=$(mktemp -d); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
+REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
+  bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
+echo "seed-team.sh exit $seeded"
+echo "--- profiles/web/cordis.patch.yml after the mount:"; cat "$data/home/profiles/web/cordis.patch.yml"
+
+step "4. after the restart"
+if health 60; then echo "the workbench came back"; else echo "KO: the workbench does not come back after seed-team.sh"; docker ps -a --filter name=$project --format '{{.Names}} {{.Status}}'; workbench_log; fi
+
+step "5. the page, the turn, the resets"
+playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
+node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+
+if [ "${KEEP:-0}" != 1 ]; then
+  docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
+fi
+echo; echo "rehearsal root: $root (screenshot: $root/shots/landing.png)"
+[ "$seeded" = 0 ] && [ "$driven" = 0 ]
