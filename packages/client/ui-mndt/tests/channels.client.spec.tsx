@@ -377,6 +377,28 @@ describe('an agent\'s answer is read, not shown as raw Markdown', () => {
   })
 })
 
+describe('the cause of a turn, said in the page\'s words first', () => {
+  it('a failed turn reads a sentence of the page before the engine\'s cause; a refusal keeps the Host\'s own', async () => {
+    const chat = double()
+    const failed = await chat.post('chn_1', '@assistant un tour qui échoue')
+    const refused = await chat.post('chn_1', '@assistant un tour refusé')
+    const turn = (status: 'failed' | 'refused', reason: string) => [{ id: `trn_${status}`, agentId: 'agt_1', status, reason }]
+    chat.messages = () => Promise.resolve({
+      messages: [
+        { ...failed, turns: turn('failed', 'llm-pi-ai: no credential for provider route') },
+        { ...refused, turns: turn('refused', 'Plafond mensuel atteint pour @assistant') },
+      ],
+      cursor: AT,
+    })
+    chat.changes = () => Promise.resolve({ messages: [], cursor: AT })
+    render(thread(chat))
+    await waitFor(() => { expect(screen.getAllByTestId('chat-turn-reason')).toHaveLength(2) })
+    const [first, second] = screen.getAllByTestId('chat-turn-reason')
+    expect(first!.textContent).toBe('The turn did not complete: llm-pi-ai: no credential for provider route')
+    expect(second!.textContent).toBe('Plafond mensuel atteint pour @assistant')
+  })
+})
+
 describe('the channel agents', () => {
   it('model and this month\'s spending against the ceiling', () => {
     render(<ChannelAgents channel={channel()} agents={[agent(), agent({ id: 'agt_2', handle: 'analyste' })]} t={chatEnglish} />)

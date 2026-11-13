@@ -175,7 +175,13 @@ function TurnLine(props: {
       {turn.status === 'done' && tokens !== undefined && turn.eur !== undefined ? (
         <span className="mndt-hint" data-testid="chat-turn-cost">{t('turnCost', { tokens: tokens.toLocaleString(), eur: euros(turn.eur) })}</span>
       ) : undefined}
-      {turn.reason === undefined ? undefined : <span className="mndt-hint">{turn.reason}</span>}
+      {turn.reason === undefined ? undefined : (
+        // A failed turn carries the engine's own cause, often in English: a sentence of the page's
+        // language goes before it, chosen by the status, never by reading the cause.
+        <span className="mndt-hint" data-testid="chat-turn-reason">
+          {turn.status === 'failed' ? t('turnFailedBecause', { reason: turn.reason }) : turn.reason}
+        </span>
+      )}
       {turn.sessionId === undefined ? undefined : props.openTrace === undefined ? (
         <code className="mndt-hint">{t('traceId', { id: turn.sessionId })}</code>
       ) : (
