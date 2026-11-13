@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
+import { ChatRefusal } from './chat.ts'
 import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { ApprovalRow } from './face.ts'
@@ -19,14 +20,24 @@ import { authorName, mergeThread, settledTurns } from './thread.ts'
 /** How often the thread is read again, in milliseconds. */
 export const POLL_MS = 2000
 
+/** How close to the bottom, in pixels, the reader still follows the newest message. */
+const FOLLOW_PX = 80
+
 /** A card a turn asked for: the approval, with where it was asked. */
 export interface ThreadCard extends ApprovalRow {
   readonly channelId?: string
   readonly messageId?: string
 }
 
-/** @param error - a thrown value. @returns its message. */
-function reasonOf(error: unknown): string {
+/**
+ * What to say of a refusal.
+ * @param error - a thrown value.
+ * @param t - the channels' copy.
+ * @returns the Host's reason, or the page's own sentence for a refused right.
+ */
+export function reasonOf(error: unknown, t: ChatTranslate): string {
+  // A 403 says the reader's role: the Host's English sentence is replaced by the page's own.
+  if (error instanceof ChatRefusal && error.status === 403) return t('forbidden')
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -266,6 +277,9 @@ export function ChannelThread(props: {
   const [thread, setThread] = useState<readonly ChatMessage[] | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const cursor = useRef<string | undefined>(undefined)
+  // The feed follows the newest message while the reader is at the bottom; scrolled up, it stays put.
+  const feed = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
   // What is shown, read by the poll to tell which turns a page brings to an end.
   const shown = useRef<readonly ChatMessage[]>([])
   const onSettled = useRef(props.onSettled)
@@ -275,6 +289,7 @@ export function ChannelThread(props: {
   useEffect(() => {
     let live = true
     cursor.current = undefined
+    atBottom.current = true
     shown.current = []
     setThread(undefined)
     setError(undefined)
@@ -291,7 +306,7 @@ export function ChannelThread(props: {
         setError(undefined)
         if (ended > 0) onSettled.current?.()
       } catch (failure) {
-        if (live) setError(reasonOf(failure))
+        if (live) setError(reasonOf(failure, t))
       }
     }
     void read()
@@ -302,7 +317,20 @@ export function ChannelThread(props: {
     }
   }, [chat, channel.id, props.pollMs])
 
+  const last = thread === undefined || thread.length === 0 ? undefined : thread[thread.length - 1]
+  const lastSeen = last === undefined ? '' : `${last.id}:${last.updatedAt}:${String(props.cards.length)}`
+  useEffect(() => {
+    const box = feed.current
+    if (box !== null && atBottom.current) box.scrollTop = box.scrollHeight
+  }, [lastSeen])
+
+  const followed = (): void => {
+    const box = feed.current
+    if (box !== null) atBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < FOLLOW_PX
+  }
+
   const posted = useCallback((message: ChatMessage): void => {
+    atBottom.current = true
     shown.current = mergeThread(shown.current, [message])
     setThread(held => mergeThread(held ?? [], [message]))
   }, [])
@@ -312,7 +340,7 @@ export function ChannelThread(props: {
 
   return (
     <section className="mndt-thread" aria-label={channel.kind === 'solo' ? t('lane') : `# ${channel.title || channel.name}`}>
-      <div className="mndt-thread-feed" data-testid="chat-thread">
+      <div className="mndt-thread-feed" data-testid="chat-thread" ref={feed} onScroll={followed}>
         {error === undefined ? undefined : <p role="alert" className="mndt-error mndt-error-banner">{t('unreadable', { reason: error })}</p>}
         {thread === undefined ? (
           error === undefined ? <p className="mndt-hint">{t('loading')}</p> : undefined
@@ -379,7 +407,7 @@ function Composer(props: {
       setCaret(0)
       setError(undefined)
     } catch (failure) {
-      setError(reasonOf(failure))
+      setError(reasonOf(failure, t))
     }
     setBusy(false)
   }
