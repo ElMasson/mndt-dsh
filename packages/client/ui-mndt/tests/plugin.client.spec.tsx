@@ -29,12 +29,28 @@ interface Bench {
  */
 function bench(
   mounted?: Record<string, (...args: never[]) => unknown>,
-  layout: { selectPanel: (id: string | null) => void; active?: string | null } = { selectPanel: () => undefined },
+  layout: { selectPanel?: (id: string | null) => void; active?: string | null } = {},
 ): Bench {
   const ctx = new Context()
-  // The layout service the plugin injects: where the page opens at arrival.
+  // The layout service the plugin injects: where the page opens at arrival. Selecting a panel
+  // changes the active one and tells the subscribers, as the shell does.
+  let active = layout.active ?? null
+  const listeners = new Set<() => void>()
   Object.defineProperty(ctx, 'layout', {
-    value: { selectPanel: layout.selectPanel, panelInfo: { getSnapshot: () => ({ activePanelId: layout.active ?? null }) } },
+    value: {
+      selectPanel: (id: string | null) => {
+        layout.selectPanel?.(id)
+        active = id
+        for (const listener of listeners) listener()
+      },
+      panelInfo: {
+        getSnapshot: () => ({ activePanelId: active }),
+        subscribe: (listener: () => void) => {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+      },
+    },
   })
   const registrations: Registration[] = []
   const disposers: (() => void)[] = []
@@ -242,6 +258,7 @@ describe('client plugin wiring', () => {
 
   it('where the team API is served, the team page is the arrival; elsewhere, or once a page is chosen, nothing moves', async () => {
     for (const [health, active, opened] of [[200, null, true], [200, 'governance', false], [404, null, false]] as const) {
+      window.localStorage.clear()
       vi.stubGlobal('fetch', vi.fn(async () => ({ ok: health === 200, status: health, json: async () => ({}) }) as unknown as Response))
       const selectPanel = vi.fn()
       const b = bench(undefined, { selectPanel, active })
@@ -253,6 +270,28 @@ describe('client plugin wiring', () => {
       expect(b.registrations.find(r => r.options.name === 'sidebar.panellist')?.options.order).toBe(-10)
       vi.unstubAllGlobals()
     }
+    // Off a mndt workbench, nothing is remembered either.
+    expect(window.localStorage.getItem('mndt.arrival.lastView')).toBeNull()
+  })
+
+  it('a person who left from a conversation comes back to it; one who left from the team page, to the team page', async () => {
+    window.localStorage.clear()
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }) as unknown as Response))
+    // First visit: the team page, remembered.
+    const first = bench()
+    apply(first.ctx)
+    await vi.waitFor(() => { expect(window.localStorage.getItem('mndt.arrival.lastView')).toBe('team') })
+    // The person opens a conversation (the shell selects null): remembered.
+    ;(first.ctx as unknown as { layout: { selectPanel: (id: null) => void } }).layout.selectPanel(null)
+    expect(window.localStorage.getItem('mndt.arrival.lastView')).toBe('conversation')
+    // Reload: the conversation stays, the shell's session restore is not aborted.
+    const selectPanel = vi.fn()
+    const again = bench(undefined, { selectPanel })
+    apply(again.ctx)
+    await vi.waitFor(() => { expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(selectPanel).not.toHaveBeenCalled()
+    window.localStorage.clear()
   })
 
   it('refuses every call when neither transport is mounted', async () => {
