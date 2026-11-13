@@ -4,6 +4,7 @@
  * an error is never read as an empty list.
  */
 import { ChatRefusal } from './chat.ts'
+import { readWithin } from './deadline.ts'
 import type {
   ChannelCreate,
   ChatAgent,
@@ -48,7 +49,7 @@ export function createHttpChat(
   fetcher: Fetcher = (input, init) => fetch(input, init),
 ): ChatFace {
   const get = async <T>(path: string): Promise<T> =>
-    bodyOf<T>(await fetcher(`${BASE}${path}`, { credentials: 'include' }))
+    bodyOf<T>(await readWithin(path, signal => fetcher(`${BASE}${path}`, { credentials: 'include', signal })))
   const post = async <T>(path: string, payload: unknown): Promise<T> =>
     bodyOf<T>(
       await fetcher(`${BASE}${path}`, {

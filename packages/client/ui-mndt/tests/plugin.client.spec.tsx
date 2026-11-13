@@ -3,6 +3,8 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, inject } from '../src/client/index.ts'
 import type { MndtFace } from '../src/client/face.ts'
+import type { ChatFace } from '../src/client/chat.ts'
+import { isHostDown } from '../src/client/hostDown.ts'
 
 interface Registration {
   readonly options: {
@@ -204,6 +206,28 @@ describe('client plugin wiring', () => {
     await expect(api.state()).rejects.toThrow('refus du Host')
     expect(await api.connectors()).toEqual([])
     expect(await api.runMission('custom', 'x')).toEqual({ direct: true })
+  })
+
+  it('a workspace down at load is not taken for an absent one: the page reaches it again once back', async () => {
+    let back = false
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (!back) return { ok: false, status: 502, json: async () => { throw new SyntaxError('html') } } as unknown as Response
+      if (path.endsWith('/channels')) return { ok: true, status: 200, json: async () => ({ channels: [] }) } as unknown as Response
+      return {
+        ok: true, status: 200, json: async () => ({ page: { you: 'duke@datanalysis.re', missions: [], briefs: [], approvals: [], memories: [] } }),
+      } as unknown as Response
+    }))
+    const b = bench()
+    apply(b.ctx)
+    const injected = (b.registrations[0]?.options.inject as () => { api: MndtFace; chat: ChatFace })()
+    const down = await injected.api.state().catch((failure: unknown) => failure)
+    expect(isHostDown(down)).toBe(true)
+    expect(isHostDown(await injected.chat.channels().catch((failure: unknown) => failure))).toBe(true)
+    // « Réessayer » once the workspace is back: the same face answers, no reload needed.
+    back = true
+    expect((await injected.api.state()).you).toBe('duke@datanalysis.re')
+    expect(await injected.chat.channels()).toEqual([])
   })
 
   it('refuses every call when neither transport is mounted', async () => {

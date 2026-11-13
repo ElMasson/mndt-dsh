@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { MndtIcon } from './MndtIcon.tsx'
 import { CollabPage } from './CollabPage.tsx'
 import type { MndtFace } from './face.ts'
-import { available, createHttpFace } from './httpFace.ts'
+import { createHttpFace, probe } from './httpFace.ts'
 import { createHttpChat } from './httpChat.ts'
 import type { ChatFace } from './chat.ts'
 import { CHAT_NS, chatEn, chatFr, chatZh } from './chatLocales.ts'
@@ -143,9 +143,10 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
  */
 function chatFace(): ChatFace {
   const http = createHttpChat()
-  const served = available()
+  const served = probe()
   const route = async <T>(pick: (face: ChatFace) => Promise<T>): Promise<T> => {
-    if (!(await served)) throw new Error('the product API is not served on this workstation')
+    // A workspace that is down keeps the HTTP face: its calls say so, and recover when it is back.
+    if ((await served) === 'absent') throw new Error('the product API is not served on this workstation')
     return pick(http)
   }
   return {
@@ -164,8 +165,10 @@ function chatFace(): ChatFace {
 function face(ctx: ClientContext): MndtFace {
   const http = createHttpFace()
   const remote = remoteFace(ctx)
-  const choice = available().then((served): MndtFace => {
-    if (served) return http
+  const choice = probe().then((served): MndtFace => {
+    // Down is not absent: the page keeps the HTTP face, says the workspace does not answer, and
+    // « Réessayer » reaches it again once it is back.
+    if (served !== 'absent') return http
     if (remote !== undefined) return remote
     return absentFace('neither the product API nor the mndt Remote is mounted on this workstation')
   })

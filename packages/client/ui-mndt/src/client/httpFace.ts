@@ -6,6 +6,7 @@
  * identity. The in-process Remote stays available for local development, where
  * no proxy sits in front of the API.
  */
+import { HostTimeout, readWithin } from './deadline.ts'
 import type {
   ApprovalRow,
   MemberRow,
@@ -42,7 +43,8 @@ function messageOf(error: unknown): string {
  * @returns the response.
  */
 async function call(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${path}`, { credentials: 'include', ...init })
+  if (init?.method !== undefined && init.method !== 'GET') return fetch(`${BASE}${path}`, { credentials: 'include', ...init })
+  return readWithin(path, signal => fetch(`${BASE}${path}`, { credentials: 'include', ...init, signal }))
 }
 
 /** A call the Host refused: its reason as served, and the HTTP status that tells its kind. */
@@ -205,10 +207,24 @@ export function createHttpFace(): MndtFace {
  * @returns true when the per-user path is available.
  */
 export async function available(): Promise<boolean> {
+  return (await probe()) === 'served'
+}
+
+/** What the gateway says of the API on this origin. */
+export type Probe = 'served' | 'absent' | 'down'
+
+/**
+ * Tell a workstation without the API (`absent`) from a workspace that does not answer (`down`):
+ * a gateway status, a network failure or no answer within the deadline. A down workspace keeps
+ * the HTTP face, so that « Réessayer » reaches it again once it is back.
+ * @returns the probe.
+ */
+export async function probe(): Promise<Probe> {
   try {
-    const response = await fetch(`${BASE}/health`, { credentials: 'include' })
-    return response.ok
-  } catch {
-    return false
+    const response = await readWithin('/health', signal => fetch(`${BASE}/health`, { credentials: 'include', signal }))
+    if (response.ok) return 'served'
+    return response.status === 502 || response.status === 503 || response.status === 504 ? 'down' : 'absent'
+  } catch (failure) {
+    return failure instanceof TypeError || failure instanceof HostTimeout ? 'down' : 'absent'
   }
 }
