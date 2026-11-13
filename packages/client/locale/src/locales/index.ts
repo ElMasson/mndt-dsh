@@ -5,4 +5,5 @@
  */
 export { zh } from './zh.ts'
 export { en } from './en.ts'
+export { fr } from './fr.ts'
 export type { CommonKey } from './zh.ts'
