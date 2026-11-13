@@ -266,7 +266,7 @@ export const fr = {
   'shortcut.directoryBusy': 'Sélection ou ajout d\'un espace de travail en cours',
   'shortcut.noCompletedTurn': 'Cette session n\'a aucun tour terminé',
   'shortcut.forkFailed': 'Impossible de dupliquer la session. Réessayez.',
-  'section.workspaces': 'Espaces de travail',
+  'section.workspaces': 'Espaces',
   'section.sessions': 'Sessions',
   'viewOptions.label': 'Options d\'affichage',
   'groupBy.label': 'Regrouper par',
