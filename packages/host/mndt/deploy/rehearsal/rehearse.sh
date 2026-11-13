@@ -80,6 +80,17 @@ echo "--- profiles/web/cordis.patch.yml after the mount:"; cat "$data/home/profi
 step "4. after the restart"
 if health 60; then echo "the workbench came back"; else echo "KO: the workbench does not come back after seed-team.sh"; docker ps -a --filter name=$project --format '{{.Names}} {{.Status}}'; workbench_log; fi
 
+step "4 bis. both patch files, then the connectors without any model"
+checked=0
+for file in "$data/home/cordis.patch.yml" "$data/home/profiles/web/cordis.patch.yml"; do
+  python3 "$deploy/patchfile.py" "$file" --check || checked=1
+done
+# mcp-check.mjs, as install-connectors.sh installs it (the rehearsal does not
+# run install-connectors.sh: it downloads, and needs the real secrets).
+cp "$deploy/connectors/mcp-check.mjs" "$data/tools/mcp-check.mjs"
+MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deploy/tenant/check-connectors.sh" datanalysis; connectors=$?
+echo "check-connectors.sh exit $connectors"
+
 step "5. the page, the turn, the resets"
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
@@ -88,4 +99,4 @@ if [ "${KEEP:-0}" != 1 ]; then
   docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
 fi
 echo; echo "rehearsal root: $root (screenshot: $root/shots/landing.png)"
-[ "$seeded" = 0 ] && [ "$driven" = 0 ]
+[ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
