@@ -6,7 +6,7 @@
  * A channel is a perimeter of responsibility (the team, one mandate, the system),
  * every post is typed, and the approval card is the only place a decision is made.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
 import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
@@ -113,6 +113,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     }
   }, [chat, tc])
 
+  // The first read of the channels decides the arrival: the person's own lane, where the team's
+  // conversations with its agents start, rather than the legacy feed. Later reads change nothing.
+  const arrived = useRef(false)
   const loadChat = useCallback(async () => {
     if (chat === undefined) return
     void loadCards()
@@ -121,6 +124,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setChatChannels(channels)
       setChatAgents(agents)
       setChatError(undefined)
+      if (!arrived.current) {
+        arrived.current = true
+        const lane = channels.find(c => c.kind === 'solo')
+        if (lane !== undefined) {
+          setChatId(held => held ?? lane.id)
+          setView(held => (held === 'channel' ? 'chat' : held))
+        }
+      }
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
