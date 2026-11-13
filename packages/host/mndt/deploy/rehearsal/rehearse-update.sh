@@ -119,7 +119,8 @@ own
 seed "$old"; echo "old seed-team.sh exit $?"
 sleep 15
 echo "workbench: $(state)"
-python3 "$deploy/patchfile.py" "$web_patch" --check; broke=$?
+# Refused because it does not parse, not because it is absent (exit 1 either way).
+if [ -f "$web_patch" ]; then python3 "$deploy/patchfile.py" "$web_patch" --check; broke=$?; else echo "absent: $web_patch"; broke=0; fi
 echo "check exit $broke (1 expected: the 13/11 breakage)"
 # The update proves something only if the old instance really broke.
 if [ "$broke" != 1 ]; then echo "KO: the 13/11 breakage was not reproduced, the update below would prove nothing"; fi
