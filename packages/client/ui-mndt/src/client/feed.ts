@@ -197,6 +197,9 @@ export function feedOf(state: CollabState, channel: Channel): Post[] {
   }
   if (channel.kind === 'system' || channel.kind === 'team') {
     for (const event of state.events ?? []) {
+      // A team channel's own traffic (turns, messages, agents) lives in its thread: the legacy team
+      // feed does not repeat it line by line. The system channel and the activity view keep it.
+      if (channel.kind === 'team' && isChannelTraffic(event.action)) continue
       posts.push({
         id: `event:${event.at}:${event.action}:${event.subject}`,
         at: event.at,
@@ -207,6 +210,17 @@ export function feedOf(state: CollabState, channel: Channel): Post[] {
   }
   posts.sort((a, b) => timeOf(b.at) - timeOf(a.at))
   return posts
+}
+
+/** The actions of the team channels (lot 1), which their own thread shows. */
+const CHANNEL_TRAFFIC = ['turn.', 'message.', 'channel.', 'agent.'] as const
+
+/**
+ * @param action - an event action.
+ * @returns whether it belongs to a team channel's own traffic.
+ */
+export function isChannelTraffic(action: string): boolean {
+  return CHANNEL_TRAFFIC.some(prefix => action.startsWith(prefix))
 }
 
 /** @param state - the page state. @returns known human members. */
@@ -220,6 +234,10 @@ export function subjectLabel(subject: string, t: MndtTranslate): string {
   if (subject.startsWith('apr_')) return t('ui.une-approbation')
   if (subject.startsWith('mnd_')) return t('ui.un-mandat')
   if (subject.startsWith('brf_')) return t('ui.un-brief')
+  if (subject.startsWith('trn_')) return t('ui.un-tour')
+  if (subject.startsWith('msg_')) return t('ui.un-message')
+  if (subject.startsWith('chn_')) return t('ui.un-canal')
+  if (subject.startsWith('agt_')) return t('ui.un-agent')
   return subject
 }
 
@@ -240,6 +258,20 @@ export function sentenceOf(action: string, t: MndtTranslate): string {
     'mandate.proposed': 'ui.mandat-propose',
     'mandate.signed': 'ui.mandat-signe',
     'mandate.retired': 'ui.mandat-retire',
+    'turn.queued': 'ui.tour-en-attente',
+    'turn.running': 'ui.tour-en-cours',
+    'turn.done': 'ui.tour-termine',
+    'turn.failed': 'ui.tour-echoue',
+    'turn.refused': 'ui.tour-refuse',
+    'turn.cancelled': 'ui.tour-arrete',
+    'message.posted': 'ui.message-publie',
+    'message.reply': 'ui.reponse-d-agent',
+    'message.deleted': 'ui.message-supprime',
+    'channel.created': 'ui.canal-cree',
+    'channel.updated': 'ui.canal-modifie',
+    'channel.lane': 'ui.lane-ouverte',
+    'agent.created': 'ui.agent-declare',
+    'agent.updated': 'ui.agent-modifie',
   }
   const key = table[action]
   return key === undefined ? action : t(key)

@@ -1107,7 +1107,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 {newDay ? <div className="mndt-day">{dayOf(event.at)}</div> : undefined}
                 <button type="button" className="mndt-event-post mndt-event-button" onClick={() => { openEvent(event.subject) }}>
                   <span className="mndt-event-time">{clockOf(event.at)}</span>
-                  <span className="mndt-event-actor" data-agent={isHuman(event.actor) ? 'false' : 'true'}>{event.actor}</span>
+                  <span className="mndt-event-actor" data-agent={isHuman(event.actor) ? 'false' : 'true'}>{subjectLabel(event.actor, t)}</span>
                   <span className="mndt-event-text">{sentenceOf(event.action, t)} : {subjectLabel(event.subject, t)}</span>
                 </button>
               </div>
@@ -1246,7 +1246,7 @@ function PostView(props: {
     return (
       <div className="mndt-event-post">
         <span className="mndt-event-time">{clockOf(body.at)}</span>
-        <span className="mndt-event-actor">{body.actor}</span>
+        <span className="mndt-event-actor">{subjectLabel(body.actor, t)}</span>
         <span className="mndt-event-text">{sentenceOf(body.action, t)} : {subjectLabel(body.subject, t)}</span>
       </div>
     )
