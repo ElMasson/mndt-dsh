@@ -670,10 +670,24 @@ Pré-requis par connecteur, dans `/data/mndt/live/connectors/` (mode 600) :
 - `qonto.env` : rien de secret ; le cache OAuth `mcp-remote` de Qonto est déposé
   dans `/data/mndt/live/mcp-auth`, comme pour Attio ;
 - `dolibarr.env` : `DOLIBARR_URL`, `DOLIBARR_API_KEY` d'un compte de service en
-  lecture ; le serveur Python dans `/data/mndt/live/tools/dolibarr-mcp/.venv` ;
+  lecture ; le paquet `dolibarr_mcp` dans `tools/dolibarr-mcp/src`, ses
+  dépendances dans `tools/dolibarr-mcp/site` ;
 - `swing.env` : `SWING_API_URL`, `SWING_USERNAME`, `SWING_PASSWORD`,
-  `SWING_DEFAULT_PROJECT_ID` ; le paquet `mcp` de Swing dans
-  `/data/mndt/live/tools/swing`.
+  `SWING_DEFAULT_PROJECT_ID` ; `mcp/swing_mcp.py` de Swing dans
+  `tools/swing/src/mcp`, ses dépendances dans `tools/swing/site`.
+
+Pour un tenant rendu par `create-tenant.sh`, `tenant/install-connectors.sh <slug>`
+fait tout cela : il copie le code (fichiers `*.py` seuls), installe les
+dépendances figées (`connectors/runtime/`) dans des conteneurs jetables
+(`pip --target` sous Python 3.11, `npm ci` de `mcp-remote` dans l'image du
+workbench), vérifie l'import dans l'image, ne monte que les connecteurs dont
+les secrets sont en place (noms vérifiés, valeurs jamais lues à l'écran), puis
+redémarre le workbench et complète les connecteurs des agents
+(`connectors/attach-agent-connectors.mjs`). Rien n'est téléchargé au démarrage
+du workbench. `tenant/check-connectors.sh <slug> [--live]` lance chaque
+connecteur dans le workbench comme un tour, affiche les outils visibles, vérifie
+qu'un outil d'écriture est refusé par le proxy et, avec `--live`, fait une
+lecture réelle dont il n'affiche que la taille.
 
 `mcp-proxy.mjs` et `office365-mcp.mjs` sont copiés dans `/data/mndt/live/tools`,
 `render-connectors.py` et `catalog.json` dans `/opt/mndt-front/gateway`.

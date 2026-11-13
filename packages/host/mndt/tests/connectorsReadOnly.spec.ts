@@ -32,19 +32,19 @@ const servers: Record<string, { reads: readonly string[]; writes: readonly strin
   qonto: {
     reads: [
       'get_authenticated_membership', 'get_client', 'get_client_invoice', 'get_credit_note', 'get_organization',
-      'get_payment_link', 'get_qonto_public_pricing', 'get_quote', 'get_statement', 'get_subscription',
+      'get_payment_link', 'get_qonto_public_pricing', 'get_quote', 'get_subscription',
       'get_supplier_invoice', 'get_transaction', 'list_bank_accounts', 'list_cards', 'list_cash_flow_categories',
       'list_client_invoices', 'list_clients', 'list_credit_notes', 'list_labels', 'list_memberships',
-      'list_payment_links', 'list_products', 'list_quotes', 'list_requests', 'list_statements',
-      'list_supplier_invoices', 'list_teams', 'list_transaction_attachments', 'list_transactions',
+      'list_payment_links', 'list_products', 'list_quotes', 'list_requests',
+      'list_supplier_invoices', 'list_teams', 'list_transactions',
     ],
     writes: [
       'approve_request', 'change_card_status', 'create_card', 'create_client_invoice', 'create_transfer_request',
       'create_multi_transfer_request', 'decline_request', 'delete_client', 'mark_client_invoice_as_paid',
       'modify_transaction_cash_flow_category', 'remove_transaction_attachment', 'request_attachment_upload',
       'send_client_invoice', 'send_quote', 'update_card', 'update_client', 'upload_attachment',
-      // Read-only, but it hands out presigned download URLs: kept out on purpose.
-      'get_attachment',
+      // Read-only, but they hand out presigned download URLs: kept out on purpose.
+      'get_attachment', 'get_statement', 'list_statements', 'list_transaction_attachments',
     ],
   },
   dolibarr: {
@@ -204,7 +204,7 @@ describe('proxy bypass attempts', () => {
   })
 
   test('the deny list wins over a matching allow prefix', async () => {
-    const { reached } = await session('qonto', [call(4, 'get_attachment')])
+    const { reached } = await session('qonto', ['get_attachment', 'get_statement', 'list_statements', 'list_transaction_attachments'].map((name, index) => call(4 + index, name)))
     expect(reached).toEqual([])
   })
 })
