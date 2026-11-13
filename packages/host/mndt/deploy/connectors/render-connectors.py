@@ -15,9 +15,12 @@ the composition. `env` holds non-secret settings only and is written inline.
 A descriptor with an `allow` list is wrapped in the read-only proxy
 (`mcp-proxy.mjs`): its allow and deny lists are exported after the env file is
 sourced, so a secret file can never widen what the descriptor permits. Every
-word of the command is shell-quoted. Only the block between the two markers is
-rewritten: a person's own patch rows are preserved.
+word of the command is shell-quoted. The file is rewritten through the shared
+guard (deploy/patchfile.py): only the connector rows are replaced, every other
+row is kept, including those the interface writes, and a file or a result that
+does not parse is refused without writing anything.
 """
+import importlib.util
 import json
 import os
 import re
@@ -39,6 +42,19 @@ SERVER_NAME = re.compile(r'^[a-z][a-z0-9_-]{0,62}$')
 ENV_NAME = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 FILE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+\*?$')
+MODULE = '@deepseek-ai/dsh-mcp-client'
+
+
+def load_patchfile():
+    """@returns the shared patch-file guard (deploy/patchfile.py), from beside this script or one folder up."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.environ.get('MNDT_PATCHFILE'), os.path.join(here, 'patchfile.py'), os.path.join(here, '..', 'patchfile.py')):
+        if candidate and os.path.isfile(candidate):
+            spec = importlib.util.spec_from_file_location('mndt_patchfile', candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError('patchfile.py introuvable: le copier a cote de ce script (deploy/patchfile.py), ou nommer son chemin dans MNDT_PATCHFILE')
 
 
 def patterns(value, field, server):
@@ -105,7 +121,7 @@ def load_descriptors():
             continue
         rows.append({
             'id': f'mcp-{server}',
-            'name': '@deepseek-ai/dsh-mcp-client',
+            'name': MODULE,
             'config': {
                 'serverName': server,
                 'transport': 'stdio',
@@ -117,9 +133,8 @@ def load_descriptors():
 
 
 def render(rows):
-    if not rows:
-        return ''
-    lines = [BEGIN]
+    """@returns the connector rows as a block array, without the markers."""
+    lines = []
     for row in rows:
         lines.append('- insert:')
         lines.append(f"    - id: {row['id']}")
@@ -132,43 +147,25 @@ def render(rows):
                     lines.append(f"          - {json.dumps(arg)}")
             else:
                 lines.append(f'        {key}: {json.dumps(value)}')
-    lines.append(END)
-    return '\n'.join(lines) + '\n'
-
-
-def strip_managed(text):
-    """Drop every insert block that mounts an MCP client, marked or legacy.
-
-    The renderer is the only writer of these blocks. A hand-added block from an
-    earlier attempt must not survive next to a generated one, otherwise the same
-    server is mounted twice.
-    """
-    blocks = []
-    current = []
-    for line in text.splitlines(keepends=True):
-        if line.startswith('- ') and current:
-            blocks.append(''.join(current))
-            current = []
-        current.append(line)
-    if current:
-        blocks.append(''.join(current))
-    kept = [block for block in blocks if '@deepseek-ai/dsh-mcp-client' not in block]
-    # The markers ride on whichever block precedes them; drop them so they never
-    # pile up between renders.
-    text = ''.join(kept)
-    return ''.join(line for line in text.splitlines(keepends=True) if line.rstrip('\n') not in (BEGIN, END))
+    return '\n'.join(lines) + '\n' if lines else ''
 
 
 def main():
     rows = load_descriptors()
-    block = render(rows)
-    text = open(PATCH, encoding='utf-8').read() if os.path.exists(PATCH) else ''
-    text = strip_managed(text)
-    text = text.rstrip() + '\n'
-    if block:
-        text += block
-    with open(PATCH, 'w', encoding='utf-8') as handle:
-        handle.write(text)
+    try:
+        guard = load_patchfile()
+    except RuntimeError as error:
+        sys.stderr.write(f'render-connectors: refus: {error}\n')
+        return 1
+    try:
+        # Every insert list of MCP clients is this renderer's, marked or not: a
+        # hand-added one from an earlier attempt would mount the same server twice.
+        notes = guard.update(PATCH, BEGIN, END, render(rows), insert_name=MODULE)
+    except guard.PatchFileError as error:
+        sys.stderr.write(f'render-connectors: refus: {error}\n')
+        return 1
+    for note in notes:
+        print('patch:', note)
     print(f'connecteurs actifs: {len(rows)}')
     for row in rows:
         print(' -', row['config']['serverName'])

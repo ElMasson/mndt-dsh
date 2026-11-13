@@ -12,7 +12,10 @@ Keys never pass through here: the routes name them by apiKeyEnv.
 The block lands between two markers in <MNDT_HOME>/home/cordis.patch.yml (the
 home patch layer, applied after the profile patch), so a rerun replaces it and
 every other row of the file is kept. --print writes the block to stdout only.
+The file is rewritten through the shared guard (deploy/patchfile.py): a file or
+a result that does not parse is refused, and nothing is written.
 """
+import importlib.util
 import os
 import re
 import sys
@@ -32,6 +35,18 @@ CHECKS = {
     'VLLM_QWEN_MODEL': re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:-]{0,127}$'),
 }
 DEFAULTS = {'VLLM_QWEN_BASE_URL': 'http://51.159.151.86:8000/v1'}
+
+
+def load_patchfile():
+    """@returns the shared patch-file guard (deploy/patchfile.py), from beside this script or one folder up."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.environ.get('MNDT_PATCHFILE'), os.path.join(here, 'patchfile.py'), os.path.join(here, '..', 'patchfile.py')):
+        if candidate and os.path.isfile(candidate):
+            spec = importlib.util.spec_from_file_location('mndt_patchfile', candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError('patchfile.py introuvable: le copier a cote de ce script (deploy/patchfile.py), ou nommer son chemin dans MNDT_PATCHFILE')
 
 
 def read_env_file(path):
@@ -70,19 +85,9 @@ def substitute(template, values):
     return text
 
 
-def block(text):
-    """@returns the rendered rows wrapped in the markers, comments dropped."""
-    rows = [line for line in text.splitlines() if line.strip() != '' and not line.lstrip().startswith('#')]
-    return '\n'.join([BEGIN, *rows, END]) + '\n'
-
-
-def strip_block(text):
-    """@returns the patch text without a previous rendered block."""
-    if BEGIN not in text:
-        return text
-    head, _, rest = text.partition(BEGIN)
-    _, _, tail = rest.partition(END)
-    return head.rstrip() + '\n' + tail.lstrip('\n')
+def rows_of(text):
+    """@returns the rendered rows, comments and blank lines dropped, without the markers."""
+    return '\n'.join(line for line in text.splitlines() if line.strip() != '' and not line.lstrip().startswith('#')) + '\n'
 
 
 def main(argv):
@@ -93,16 +98,17 @@ def main(argv):
         if os.environ.get(key):
             values[key] = os.environ[key]
     with open(TEMPLATE, encoding='utf-8') as handle:
-        rendered = block(substitute(handle.read(), values))
+        rendered = rows_of(substitute(handle.read(), values))
     if '--print' in argv:
-        sys.stdout.write(rendered)
+        sys.stdout.write(f'{BEGIN}\n{rendered}{END}\n')
         return 0
-    current = open(PATCH, encoding='utf-8').read() if os.path.exists(PATCH) else ''
-    text = strip_block(current).strip()
-    text = (text + '\n' if text else '') + rendered
-    os.makedirs(os.path.dirname(PATCH), exist_ok=True)
-    with open(PATCH, 'w', encoding='utf-8') as handle:
-        handle.write(text)
+    guard = load_patchfile()
+    try:
+        notes = guard.update(PATCH, BEGIN, END, rendered)
+    except guard.PatchFileError as error:
+        raise ValueError(f'refus: {error}') from error
+    for note in notes:
+        print('patch:', note)
     print('routes LLM ecrites dans', PATCH)
     print(' - scaleway-genapi: deepseek-v4.1-flash, glm-5.3')
     print(' - vllm-qwen:', values['VLLM_QWEN_MODEL'])
@@ -112,6 +118,6 @@ def main(argv):
 if __name__ == '__main__':
     try:
         sys.exit(main(sys.argv[1:]))
-    except ValueError as error:
+    except (ValueError, RuntimeError) as error:
         sys.stderr.write(f'render-llm-routes: {error}\n')
         sys.exit(1)
