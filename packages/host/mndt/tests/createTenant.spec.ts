@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { load } from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
 const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
@@ -68,6 +69,31 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(readFileSync(join(root, 'etc/mndt/datanalysis/cookie_secret'))).toEqual(cookie)
     expect(readFileSync(join(root, 'data/mndt/datanalysis/live/model.env'), 'utf8')).toBe('SCW_SECRET_KEY=filled\n')
     expect(readFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), 'utf8')).toBe(team) // the team stays
+  })
+
+  it('writes the team defaults in the home patch once, beside the LLM routes', () => {
+    const root = rootWithEntra()
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const data = join(root, 'data/mndt/datanalysis/live')
+    writeFileSync(join(data, 'model.env'), 'SCW_PROJECT_ID=11111111-2222-3333-4444-555555555555\nVLLM_QWEN_MODEL=Qwen/Qwen3.5-35B-A3B\n')
+    execFileSync('python3', [join(import.meta.dirname, '..', 'deploy', 'llm', 'render-llm-routes.py'), '--env-file', join(data, 'model.env')], { env: { ...process.env, MNDT_HOME: data } })
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    execFileSync('python3', [join(import.meta.dirname, '..', 'deploy', 'llm', 'render-llm-routes.py'), '--env-file', join(data, 'model.env')], { env: { ...process.env, MNDT_HOME: data } })
+    const patch = readFileSync(join(data, 'home/cordis.patch.yml'), 'utf8')
+    expect(patch.split('# >>> tenant d equipe (create-tenant.sh)').length - 1).toBe(1)
+    expect(patch.split('# >>> routes LLM rendues par render-llm-routes').length - 1).toBe(1)
+    const rows = load(patch) as { id: string; config?: { preference?: string } & Record<string, unknown>; disabled?: boolean }[]
+    expect(rows.find(row => row.id === 'locale')?.config?.preference).toBe('fr')
+    expect(rows.find(row => row.id === 'ui-plugin-manager')?.disabled).toBe(true)
+    expect(rows.find(row => row.id === 'ui-schedule')?.disabled).toBe(true)
+    // No Preview Notice nor Get started prompt at the first arrival (lane B): the
+    // notice version must follow the client's, or the notice comes back.
+    const copy = readFileSync(join(import.meta.dirname, '..', '..', '..', 'client', 'ui-settings-models', 'src', 'onboarding-copy.ts'), 'utf8')
+    const shipped = /WELCOME_NOTICE_VERSION = '([^']+)'/.exec(copy)?.[1]
+    expect(shipped).toBeDefined()
+    expect((rows.find(row => row.id === 'ui-settings-general')?.config as { welcomeNoticeVersion?: string } | undefined)?.welcomeNoticeVersion).toBe(shipped)
+    expect((rows.find(row => row.id === 'ui-settings-models')?.config as { credentialOnboarding?: boolean } | undefined)?.credentialOnboarding).toBe(false)
+    expect(rows.some(row => row.id === 'llm-pi-ai')).toBe(true)
   })
 
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {

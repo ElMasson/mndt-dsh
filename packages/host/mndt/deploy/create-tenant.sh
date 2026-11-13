@@ -102,6 +102,43 @@ done
 cp "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
 mkdir -p "$root$data/home/profiles/web"
 
+# The team tenant's defaults, in the home patch (DSH_HOME=/state/home), between
+# markers of their own: the LLM routes block of render-llm-routes.py keeps its
+# markers and every other row. A rerun replaces this block, never duplicates it.
+# Validated by lane B on the assembled dsh web: a patch row's config never
+# reaches a browser plugin, only `disabled` and the server half of `locale` act.
+# `preference` is the home's language, shared by the whole tenant.
+patch="$root$data/home/cordis.patch.yml"
+begin='# >>> tenant d equipe (create-tenant.sh)'
+end='# <<< tenant d equipe (create-tenant.sh)'
+kept=''
+if [ -f "$patch" ]; then
+  kept=$(awk -v b="$begin" -v e="$end" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$patch")
+fi
+{
+  [ -n "$kept" ] && printf '%s\n' "$kept"
+  printf '%s\n' "$begin" \
+    '# Interface en francais, sans Plugins ni Automation.' \
+    '- id: locale' \
+    '  config:' \
+    '    preference: fr' \
+    '- id: ui-plugin-manager' \
+    '  disabled: true' \
+    '- id: ui-schedule' \
+    '  disabled: true' \
+    '# Ni avis Preview Notice DeepSeek Harness (sa version tenue pour lue), ni invite' \
+    '# Get started a saisir une cle DeepSeek : les modeles sont configures cote serveur.' \
+    '# La version suit WELCOME_NOTICE_VERSION (ui-settings-models/src/onboarding-copy.ts).' \
+    '- id: ui-settings-general' \
+    '  config:' \
+    "    welcomeNoticeVersion: '2026-09-28.1'" \
+    '- id: ui-settings-models' \
+    '  config:' \
+    '    credentialOnboarding: false' \
+    "$end"
+} > "$patch.tmp"
+mv "$patch.tmp" "$patch"
+
 # The model environment, from the adapters lane's one source of names
 # (deploy/llm/llm.env.example): the keys stay empty, filled in by hand (mode 600).
 if [ ! -f "$root$data/model.env" ]; then
