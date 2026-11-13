@@ -35,6 +35,8 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(compose).toContain('DSH_MNDT_IDENTITY: duke@datanalysis.re')
     expect(compose).toContain('/data/mndt/datanalysis/live:/state')
     expect(compose).toContain('MNDT_APPROVALS_ALLOW_DECIDE: "0"')
+    // The gateway is another container: the API must not listen on its loopback only.
+    expect(compose).toContain('DSH_MNDT_HOST: 0.0.0.0')
     for (const text of [oauth, compose]) {
       expect(text).not.toContain('duke-analytics')
       expect(text).not.toMatch(/__[A-Z_]+__/)
