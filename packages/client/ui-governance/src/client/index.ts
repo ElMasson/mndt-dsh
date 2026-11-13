@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-governance/remote'
 import { GovernanceIcon } from './GovernanceIcon.tsx'
 import { GovernancePage } from './GovernancePage.tsx'
 import { installGovernanceStyles } from './styles.ts'
-import { en, zh } from './locales.ts'
+import { en, fr, zh } from './locales.ts'
 import type { GovernanceKey } from './locales.ts'
 import type { TypertRemoteNamespaceMap } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -77,6 +77,7 @@ const NS = 'governance'
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-governance: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, 'fr', fr), 'ui-governance: French dictionary')
   ctx.effect(installGovernanceStyles, 'ui-governance: styles')
   const t = ctx.locale.bind(NS)
   // The page lives in the main content area, keyed by the same id the sidebar
