@@ -257,7 +257,8 @@ describe('client plugin wiring', () => {
   })
 
   it('where the team API is served, the team page is the arrival; elsewhere, or once a page is chosen, nothing moves', async () => {
-    for (const [health, active, opened] of [[200, null, true], [200, 'governance', false], [404, null, false]] as const) {
+    // 502: the workspace does not answer, still a mndt workbench; 404: no API on this workstation.
+    for (const [health, active, opened] of [[200, null, true], [502, null, true], [200, 'governance', false], [404, null, false]] as const) {
       window.localStorage.clear()
       vi.stubGlobal('fetch', vi.fn(async () => ({ ok: health === 200, status: health, json: async () => ({}) }) as unknown as Response))
       const selectPanel = vi.fn()

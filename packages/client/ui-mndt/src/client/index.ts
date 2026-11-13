@@ -285,8 +285,11 @@ export function apply(ctx: ClientContext): void {
     // generic session home. Elsewhere (plain DSH, local development) nothing changes. A person
     // who left from a conversation comes back to it: selecting a panel would abort the shell's
     // session restore. A page already chosen is kept.
+    // A workspace that does not answer is still a mndt workbench: the team page is where it says
+    // so (« L'espace ne répond pas », « Réessayer »); only a workstation without the API keeps the
+    // generic home.
     void served.then((answer) => {
-      if (!live || answer !== 'served') return
+      if (!live || answer === 'absent') return
       decided = true
       if (lastView() === 'conversation') return
       if (ctx.layout.panelInfo.getSnapshot().activePanelId !== null) return
