@@ -45,6 +45,18 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${BASE}${path}`, { credentials: 'include', ...init })
 }
 
+/** A call the Host refused: its reason as served, and the HTTP status that tells its kind. */
+export class FaceRefusal extends Error {
+  /**
+   * @param message - the Host's `{ error }`, or the status said in words.
+   * @param status - the HTTP status.
+   */
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'FaceRefusal'
+  }
+}
+
 /**
  * Read a JSON body and turn a refusal into a thrown error with its reason.
  * @param response - the API response.
@@ -56,7 +68,7 @@ async function bodyOf<T>(response: Response): Promise<T> {
     const reason = typeof body === 'object' && body !== null && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
       ? (body as { error: string }).error
       : `the Host refused the call (${response.status})`
-    throw new Error(reason)
+    throw new FaceRefusal(reason, response.status)
   }
   return body as T
 }

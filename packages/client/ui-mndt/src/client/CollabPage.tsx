@@ -12,6 +12,7 @@ import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, reasonOf } from './ChannelView.tsx'
+import { isHostDown } from './hostDown.ts'
 import { renderBrief } from './markdown.tsx'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
@@ -23,6 +24,11 @@ import type { Channel, CollabState, Post, SearchHit } from './feed.ts'
 
 /** How often the cards are read again while a channel is open, in milliseconds. */
 export const CARDS_MS = 10000
+
+/** What the page shows while the workspace could not be read: nothing, and no right to act. */
+const UNREAD_STATE: CollabState = {
+  you: '', canWrite: false, canAdmin: false, missions: [], briefs: [], approvals: [], memories: [], mandates: [], events: [], members: [],
+}
 
 /** @param props - the face the Host exposes. */
 export interface CollabPageProps {
@@ -84,10 +90,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setState({ ...next, members })
       setError(undefined)
     } catch (failure) {
-      const message = failure instanceof Error ? failure.message : String(failure)
-      setError(/failed to fetch|networkerror|load failed/i.test(message) ? 'L espace n a pas repondu. Verifiez la connexion, puis reessayez.' : message)
+      setError(isHostDown(failure) ? t('ui.l-espace-ne-repond-pas') : failure instanceof Error ? failure.message : String(failure))
+      // The page stays usable (rail, lane, activity): it opens on a state that holds nothing read,
+      // and the banner says why. A later read replaces it.
+      setState(held => held ?? UNREAD_STATE)
     }
-  }, [api])
+  }, [api, t])
 
   useEffect(() => { void load() }, [load])
 
@@ -356,7 +364,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   }, [])
 
   const channels = useMemo(() => (state === undefined ? [] : channelsOf(state)), [state])
-  const storageKey = state === undefined ? undefined : `mndt.seen.${state.you}`
+  const storageKey = state === undefined || state.you === '' ? undefined : `mndt.seen.${state.you}`
 
   useEffect(() => {
     if (storageKey === undefined) return
@@ -1097,6 +1105,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
           </div>
         </header>
+
+        {error === undefined ? undefined : (
+          // Nothing read is not « nothing happened »: the activity says so too.
+          <div className="mndt-error mndt-error-banner" data-testid="activity-unread">
+            <span>{error}</span>
+            <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.reessayer')}</button>
+          </div>
+        )}
         <div className="mndt-feed">
           {filteredEvents.length === 0 ? <p className="mndt-empty">{t('ui.aucune-ligne-pour-ce-filtre')}</p> : undefined}
           {filteredEvents.map((event, index) => {

@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CollabPage } from '../src/client/CollabPage.tsx'
 import type { MndtFace, PageStateRow } from '../src/client/face.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
+import { ChatRefusal } from '../src/client/chat.ts'
 import type { ChatFace } from '../src/client/chat.ts'
+import { FaceRefusal } from '../src/client/httpFace.ts'
 
 afterEach(() => { cleanup() })
 
@@ -338,6 +340,41 @@ describe('the team channels of lot 1 in the page', () => {
     chat.tick()
     chat.tick()
     await waitFor(() => { expect(read.mock.calls.length).toBeGreaterThan(before) }, { timeout: 4000 })
+  })
+
+  it('with the workspace down, the page still opens: rail, lane and activity, and says why in French', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [],
+      channels: [{ id: 'chn_0', name: 'duke', title: 'duke', kind: 'solo', members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }],
+    }, () => Date.parse(at))
+    const read = vi.fn()
+      .mockRejectedValueOnce(new FaceRefusal('the Host refused the call (502)', 502))
+      .mockResolvedValue({ ...state(), events: [] })
+    render(<CollabPage api={fakeFace({ state: read })} chat={chat} />)
+    // The rail and the lane are there, not a blocking error screen.
+    const list = await screen.findByTestId('chat-channels')
+    expect(within(list).getByText('My lane')).toBeTruthy()
+    // Said in the channel view and in the activity view alike.
+    expect(await screen.findAllByText('L\'espace ne répond pas. Vérifiez la connexion, puis réessayez.')).toHaveLength(2)
+    expect(screen.queryByText(/the Host refused the call/u)).toBeNull()
+    // The activity says nothing was read, rather than showing an empty log.
+    fireEvent.click(screen.getAllByRole('button', { name: /Activité/u })[0]!)
+    expect(screen.getByTestId('activity-unread').textContent).toContain('L\'espace ne répond pas')
+    // Retry reads the state again and the banner goes.
+    fireEvent.click(within(screen.getByTestId('activity-unread')).getByRole('button', { name: 'Réessayer' }))
+    await waitFor(() => { expect(screen.queryByTestId('activity-unread')).toBeNull() })
+  })
+
+  it('with the workspace down, the channels say it in words, not as a gateway status', async () => {
+    const down = (): Promise<never> => Promise.reject(new ChatRefusal('the Host refused the call (502)', 502))
+    const absent: ChatFace = {
+      channels: down, createChannel: down, messages: down, changes: down, post: down, remove: down, agents: down, addAgents: down,
+    }
+    render(<CollabPage api={fakeFace()} chat={absent} />)
+    expect((await screen.findByTestId('chat-not-served')).textContent).toBe(
+      'Team channels are not served on this workstation. (the workspace does not answer)',
+    )
   })
 
   it('where the channels are not served, the rail says why and the page still works', async () => {

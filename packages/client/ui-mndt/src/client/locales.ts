@@ -129,6 +129,7 @@ export const en = {
   // Page copy, owned here and reached through the t seat.
   'ui.chargement-de-l-espace': 'Loading the space...',
   'ui.reessayer': 'Retry',
+  'ui.l-espace-ne-repond-pas': 'The workspace does not answer. Check the connection, then retry.',
   'ui.canaux': 'Channels',
   'ui.mndt': 'mndt',
   'ui.duke-analytics': 'Duke Analytics',
@@ -424,6 +425,7 @@ export const fr: Record<MndtKey, string> = {
   // Page copy, owned here and reached through the t seat.
   'ui.chargement-de-l-espace': 'Chargement de l\'espace…',
   'ui.reessayer': 'Réessayer',
+  'ui.l-espace-ne-repond-pas': 'L\'espace ne répond pas. Vérifiez la connexion, puis réessayez.',
   'ui.canaux': 'Canaux',
   'ui.mndt': 'mndt',
   'ui.duke-analytics': 'Duke Analytics',

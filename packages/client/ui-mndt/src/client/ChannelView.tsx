@@ -15,6 +15,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
+import { isHostDown } from './hostDown.ts'
 import { renderBrief } from './markdown.tsx'
 import { authorName, mergeThread, settledTurns } from './thread.ts'
 
@@ -39,6 +40,7 @@ export interface ThreadCard extends ApprovalRow {
 export function reasonOf(error: unknown, t: ChatTranslate): string {
   // A 403 says the reader's role: the Host's English sentence is replaced by the page's own.
   if (error instanceof ChatRefusal && error.status === 403) return t('forbidden')
+  if (isHostDown(error)) return t('hostDown')
   return error instanceof Error ? error.message : String(error)
 }
 
