@@ -14,13 +14,15 @@ const servers: Server[] = []
 afterEach(() => { for (const server of servers.splice(0)) server.close() })
 
 /** @returns the URL of a real API, the owner proven by x-forwarded-email as behind the gateway. */
-async function realApi(): Promise<{ url: string; service: WorkbenchService }> {
+async function realApi(mounted: readonly string[] = ['approvals']): Promise<{ url: string; service: WorkbenchService }> {
   const service = new WorkbenchService({ store: new MemoryStore() })
   const server = startMndtApi({
     service,
     runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
     identity: { proxyUserHeader: 'x-forwarded-email' },
     grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }] }) },
+    // As the workbench does: the API knows which MCP servers are mounted.
+    connectors: async () => mounted.map(server => ({ module: '@deepseek-ai/dsh-mcp-client', server, enabled: true })),
     port: 0,
   })
   servers.push(server)
@@ -59,6 +61,16 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     const again = await seed(env)
     expect(again).toContain('already declared')
     expect(await service.listAgents()).toHaveLength(3)
+  })
+
+  it('declares each agent with the connectors mounted now, and says which wait', async () => {
+    const { url, service } = await realApi(['approvals', 'qonto'])
+    const printed = await seed({ MNDT_API_URL: url, MNDT_OWNER: owner, AGENTS_JSON: agentsJson, VLLM_QWEN_MODEL: 'q' })
+    const agents = await service.listAgents()
+    expect(agents.find(a => a.handle === 'assistant')?.connectors).toEqual(['qonto'])
+    expect(agents.find(a => a.handle === 'analyste')?.connectors).toEqual(['qonto'])
+    expect(printed).toContain('@assistant: declared on scaleway-genapi/deepseek-v4.1-flash, ceiling 5 euros a month; connectors not mounted yet: office365, dolibarr, swing')
+    expect(printed).toContain('@analyste: declared on scaleway-genapi/glm-5.3, ceiling 5 euros a month; connectors not mounted yet: dolibarr')
   })
 
   it('skips an agent whose model is not set, never declares it with a guess', async () => {
