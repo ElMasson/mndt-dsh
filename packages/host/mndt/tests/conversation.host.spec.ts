@@ -6,7 +6,7 @@ import type { MissionRunner } from '../src/api.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 import { mcpServerOf } from '../src/runner.ts'
-import { eurOf, parsePrices, priceOf } from '../src/core/index.ts'
+import { ceilingRefusal, eurOf, euros, parsePrices, priceOf } from '../src/core/index.ts'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -505,6 +505,21 @@ describe('channels, mentions and agent turns', () => {
     expect(priceOf(grid, { provider: 'scaleway-genapi', model: 'qwen3.8-27b' })).toBeUndefined()
     // 1M tokens in and 1M out on glm-5.3: 1.80 + 5.50 euros.
     expect(eurOf({ input: 1_000_000, output: 1_000_000 }, priceOf(grid, { provider: 'scaleway-genapi', model: 'glm-5.3' })!)).toBe(7.3)
+  })
+
+
+  it('writes euros the French way, and never reads a non-zero amount as 0,00 €', () => {
+    const plain = (text: string): string => text.replace(/[\u00a0\u202f]/g, ' ')
+    expect(plain(euros(5))).toBe('5,00 €')
+    expect(plain(euros(0))).toBe('0,00 €')
+    expect(plain(euros(1234.5))).toBe('1 234,50 €')
+    expect(plain(euros(0.012))).toBe('0,01 €')
+    expect(plain(euros(0.000001))).toBe('0,000001 €')
+    expect(plain(euros(0.0000123))).toBe('0,000012 €')
+    const agent = { id: 'a', handle: 'assistant', name: 'A', provider: 'p', model: 'm', connectors: [], eurPerMonth: 0.000001, createdBy: 'x', createdAt: 'y' }
+    const message = ceilingRefusal(agent, { 'p/m': { input: 1, output: 1 } }, 0.01) ?? ''
+    expect(plain(message)).toBe('Plafond mensuel atteint pour @assistant : 0,01 € sur 0,000001 €. Seul l\'owner peut le relever.')
+    expect(plain(ceilingRefusal({ ...agent, eurPerMonth: 5 }, { 'p/m': { input: 1, output: 1 } }, 5) ?? '')).toContain('5,00 € sur 5,00 €')
   })
 
   it('names the MCP server of a tool', () => {
