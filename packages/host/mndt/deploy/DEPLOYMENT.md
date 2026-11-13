@@ -690,7 +690,17 @@ qu'un outil d'écriture est refusé par le proxy et, avec `--live`, fait une
 lecture réelle dont il n'affiche que la taille.
 
 `mcp-proxy.mjs` et `office365-mcp.mjs` sont copiés dans `/data/mndt/live/tools`,
-`render-connectors.py` et `catalog.json` dans `/opt/mndt-front/gateway`.
+`render-connectors.py`, `catalog.json` et `patchfile.py` dans `/opt/mndt-front/gateway`.
+
+Garde des fichiers de patch, le 13/11 : `render-connectors.py`,
+`llm/render-llm-routes.py` et tout script qui écrit un `cordis.patch.yml`
+passent par `patchfile.py` (PyYAML requis sur l'hôte, paquet `python3-yaml`).
+Il lit le fichier dans l'état où il est (absent, `[]` de dsh, tableau en flux
+ou en bloc, `[]` suivi d'un bloc), ne retire que les lignes de l'appelant, garde
+telles quelles toutes les autres (celles de l'interface, les `!!js`), relit le
+résultat puis écrit par renommage. Un fichier ou un résultat qui ne se parse pas
+est refusé avec sa raison, sans rien écrire. Vérifier un fichier :
+`python3 patchfile.py <fichier> --check`.
 
 Durcissement du proxy, le 12/11 : une liste `MCP_PROXY_DENY` l'emporte sur
 `MCP_PROXY_ALLOW` ; un lot JSON-RPC est filtré élément par élément ; une ligne
