@@ -80,10 +80,17 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const patch = readFileSync(join(data, 'home/cordis.patch.yml'), 'utf8')
     expect(patch.split('# >>> tenant d equipe (create-tenant.sh)').length - 1).toBe(1)
     expect(patch.split('# >>> routes LLM rendues par render-llm-routes').length - 1).toBe(1)
-    const rows = load(patch) as { id: string; config?: { preference?: string }; disabled?: boolean }[]
+    const rows = load(patch) as { id: string; config?: { preference?: string } & Record<string, unknown>; disabled?: boolean }[]
     expect(rows.find(row => row.id === 'locale')?.config?.preference).toBe('fr')
     expect(rows.find(row => row.id === 'ui-plugin-manager')?.disabled).toBe(true)
     expect(rows.find(row => row.id === 'ui-schedule')?.disabled).toBe(true)
+    // No Preview Notice nor Get started prompt at the first arrival (lane B): the
+    // notice version must follow the client's, or the notice comes back.
+    const copy = readFileSync(join(import.meta.dirname, '..', '..', '..', 'client', 'ui-settings-models', 'src', 'onboarding-copy.ts'), 'utf8')
+    const shipped = /WELCOME_NOTICE_VERSION = '([^']+)'/.exec(copy)?.[1]
+    expect(shipped).toBeDefined()
+    expect((rows.find(row => row.id === 'ui-settings-general')?.config as { welcomeNoticeVersion?: string } | undefined)?.welcomeNoticeVersion).toBe(shipped)
+    expect((rows.find(row => row.id === 'ui-settings-models')?.config as { credentialOnboarding?: boolean } | undefined)?.credentialOnboarding).toBe(false)
     expect(rows.some(row => row.id === 'llm-pi-ai')).toBe(true)
   })
 

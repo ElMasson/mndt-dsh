@@ -126,6 +126,15 @@ fi
     '  disabled: true' \
     '- id: ui-schedule' \
     '  disabled: true' \
+    '# Ni avis Preview Notice DeepSeek Harness (sa version tenue pour lue), ni invite' \
+    '# Get started a saisir une cle DeepSeek : les modeles sont configures cote serveur.' \
+    '# La version suit WELCOME_NOTICE_VERSION (ui-settings-models/src/onboarding-copy.ts).' \
+    '- id: ui-settings-general' \
+    '  config:' \
+    "    welcomeNoticeVersion: '2026-09-28.1'" \
+    '- id: ui-settings-models' \
+    '  config:' \
+    '    credentialOnboarding: false' \
     "$end"
 } > "$patch.tmp"
 mv "$patch.tmp" "$patch"
