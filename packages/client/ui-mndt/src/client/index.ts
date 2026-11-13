@@ -288,15 +288,28 @@ export function apply(ctx: ClientContext): void {
     // A workspace that does not answer is still a mndt workbench: the team page is where it says
     // so (« L'espace ne répond pas », « Réessayer »); only a workstation without the API keeps the
     // generic home.
+    // The answer can come late (up to the 15 s read deadline when the workspace hangs): a person
+    // who acted meanwhile (opened a conversation, chose a page) keeps what they chose. The shell
+    // says nothing when a conversation opens over the session home, so their gesture is the signal.
+    let acted = false
+    const onGesture = (): void => { acted = true }
+    window.addEventListener('pointerdown', onGesture, true)
+    window.addEventListener('keydown', onGesture, true)
+    const stopListening = (): void => {
+      window.removeEventListener('pointerdown', onGesture, true)
+      window.removeEventListener('keydown', onGesture, true)
+    }
     void served.then((answer) => {
+      stopListening()
       if (!live || answer === 'absent') return
       decided = true
-      if (lastView() === 'conversation') return
+      if (acted || lastView() === 'conversation') return
       if (ctx.layout.panelInfo.getSnapshot().activePanelId !== null) return
       ctx.layout.selectPanel(PAGE as MainPanelId)
     })
     return () => {
       live = false
+      stopListening()
       stopWatching()
       dispose()
     }
