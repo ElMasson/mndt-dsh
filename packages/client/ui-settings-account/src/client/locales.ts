@@ -81,7 +81,7 @@ export const fr = {
   more: 'Plus',
   menu: 'Menu du compte',
   settings: 'Réglages',
-  contactUs: 'Retour',
+  contactUs: 'Nous écrire',
   nav: 'Compte',
   close: 'Fermer',
   cancel: 'Annuler',
