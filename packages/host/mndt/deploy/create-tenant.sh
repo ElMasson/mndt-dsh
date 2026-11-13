@@ -114,6 +114,13 @@ if [ ! -f "$root$data/prices.json" ] && [ -f "$here/llm/prices.json" ]; then
   cp "$here/llm/prices.json" "$root$data/prices.json"
 fi
 [ -f "$root$data/prices.json" ] || echo "  no price grid yet: copy deploy/llm/prices.json to $data/prices.json, or every agent turn is refused"
+# The tenant's role table: the owner first; the team is added by hand, and a
+# change applies on the next request. Kept when it exists.
+if [ ! -f "$root$data/grants.json" ]; then
+  umask 077
+  printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json"
+  chmod 600 "$root$data/grants.json"
+fi
 [ -f "$root$data/state.json" ] || printf '{\n  "version": 1,\n  "missions": [],\n  "briefs": [],\n  "memories": [],\n  "approvals": [],\n  "events": [],\n  "mandates": []\n}\n' > "$root$data/state.json"
 
 echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for $email_domains)"

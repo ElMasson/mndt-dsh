@@ -23,7 +23,7 @@ import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { authorityGrants, localGrants } from './grants.ts'
+import { authorityGrants, fileGrants, localGrants } from './grants.ts'
 import { DshMissionRunner, DshTurnRunner } from './runner.ts'
 import { TurnScheduler } from './turns.ts'
 import { readFileSync } from 'node:fs'
@@ -82,9 +82,14 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
     const baseUrl = process.env.DSH_MNDT_AUTHORITY ?? config.authority?.baseUrl
     const token = process.env.DSH_MNDT_AUTHORITY_TOKEN ?? config.authority?.token
+    // Who holds which role: the team authority when one is configured, else the
+    // tenant's own role file, else the local owner alone (solo mode).
+    const grantsFile = process.env.DSH_MNDT_GRANTS_FILE
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
       ? authorityGrants({ baseUrl, token })
-      : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
+      : grantsFile !== undefined && grantsFile !== ''
+        ? fileGrants(grantsFile)
+        : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleAutomations(ctx)
     this.#reconcileInterrupted(ctx)
