@@ -474,6 +474,44 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   }
 
   const pending = state.approvals.length
+
+  // On a phone the rail is hidden: one switcher reaches the team channels (the lane first) and the
+  // legacy ones, whichever view is open.
+  const switched = view === 'chat' && chatId !== undefined ? `chat:${chatId}` : `legacy:${channelId}`
+  const mobileSwitcher = (
+    <div className="mndt-mobile-bar" data-testid="mobile-switcher">
+      <select
+        className="mndt-input"
+        value={switched}
+        onChange={(event) => {
+          const [kind, id] = event.target.value.split(/:(.*)/su)
+          if (id === undefined) return
+          if (kind === 'chat') {
+            setChatId(id)
+            setView('chat')
+          } else {
+            setChannelId(id)
+            setView('channel')
+          }
+        }}
+        aria-label={t('ui.choisir-un-canal')}
+      >
+        {chatChannels === undefined || chatChannels.length === 0 ? undefined : (
+          <optgroup label={tc('channels')}>
+            {chatChannels.map(c => (
+              <option key={c.id} value={`chat:${c.id}`}>{c.kind === 'solo' ? tc('lane') : `# ${c.title || c.name}`}</option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label={t('ui.equipe')}>
+          {channels.map(candidate => <option key={candidate.id} value={`legacy:${candidate.id}`}>{candidate.name}</option>)}
+        </optgroup>
+      </select>
+      <button type="button" className="mndt-button" onClick={() => { setView(view === 'activity' ? 'channel' : 'activity') }}>
+        {view === 'activity' ? t('ui.retour-au-canal') : t('ui.activite')}
+      </button>
+    </div>
+  )
   const humans = humansOf(state)
   const agents = [...new Set(state.missions.map(mission => mission.createdBy))].filter(subject => subject !== state.you && !humans.some(human => human.subject === subject) && !subject.includes('@'))
   const unreadOf = (candidate: Channel): number => {
@@ -746,12 +784,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             )}
           </div>
           <div className="mndt-channel-head-side">
-            <div className="mndt-mobile-bar">
-              <select className="mndt-input" value={channelId} onChange={(event) => { setChannelId(event.target.value); setView('channel') }} aria-label={t('ui.choisir-un-canal')}>
-                {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-              </select>
-              <button type="button" className="mndt-button" onClick={() => { setView(view === 'activity' ? 'channel' : 'activity') }}>{view === 'activity' ? t('ui.retour-au-canal') : t('ui.activite')}</button>
-            </div>
+            {mobileSwitcher}
             <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.rafraichir')}</button>
             {mandate === undefined ? undefined : <span className="mndt-pill" data-tone="state">{mandate.state}</span>}
             <span className="mndt-pill" data-tone="id">{posts.length} {word(posts.length, 'post', 'posts')}</span>
@@ -838,6 +871,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 <div className="mndt-channel-head-main">
                   <h1 className="mndt-channel-title">{current.kind === 'solo' ? tc('lane') : `# ${current.title || current.name}`}</h1>
                 </div>
+                <div className="mndt-channel-head-side">{mobileSwitcher}</div>
               </header>
               <ChannelThread
                 chat={chat}

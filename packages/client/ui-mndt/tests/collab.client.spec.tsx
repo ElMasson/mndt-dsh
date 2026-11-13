@@ -295,6 +295,31 @@ describe('the team channels of lot 1 in the page', () => {
     await waitFor(() => { expect(screen.getAllByTestId('chat-agent')).toHaveLength(2) })
   })
 
+  it('on a phone, one switcher reaches the team channels, the lane first, and back to the legacy ones', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [{ id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'vllm-qwen', model: 'qwen', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }],
+      channels: [
+        { id: 'chn_0', name: 'duke', title: 'duke', kind: 'solo', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at },
+        { id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at },
+      ],
+    }, () => Date.parse(at))
+    render(<CollabPage api={fakeFace()} chat={chat} />)
+    await screen.findByTestId('chat-channels')
+    const legacy = screen.getAllByTestId('mobile-switcher')[0]!
+    const select = within(legacy).getByRole('combobox')
+    const groups = [...select.querySelectorAll('optgroup')].map(g => [g.label, [...g.querySelectorAll('option')].map(o => o.textContent)])
+    expect(groups[0]).toEqual(['Channels', ['My lane', '# Compta']])
+    fireEvent.change(select, { target: { value: 'chat:chn_1' } })
+    expect(await screen.findByTestId('chat-thread')).toBeTruthy()
+    // The open channel carries the switcher too, set on itself, and leads back to a legacy channel.
+    const inChat = screen.getAllByTestId('mobile-switcher').find(bar => bar.closest('.mndt-chat') !== null)!
+    const back = within(inChat).getByRole('combobox') as HTMLSelectElement
+    expect(back.value).toBe('chat:chn_1')
+    fireEvent.change(back, { target: { value: back.querySelector('optgroup:last-of-type option')!.getAttribute('value') } })
+    await waitFor(() => { expect((screen.getByTestId('chat-thread').closest('.mndt-chat') as HTMLElement).style.display).toBe('none') })
+  })
+
   it('a turn that ends in the open channel reads the cards again, without waiting for a mission', async () => {
     const chat = createMockChat({
       you,
