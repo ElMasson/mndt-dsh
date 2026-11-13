@@ -11,10 +11,12 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { MndtIcon } from './MndtIcon.tsx'
 import { CollabPage } from './CollabPage.tsx'
 import type { MndtFace } from './face.ts'
 import { createHttpFace, probe } from './httpFace.ts'
+import type { Probe } from './httpFace.ts'
 import { createHttpChat } from './httpChat.ts'
 import type { ChatFace } from './chat.ts'
 import { CHAT_NS, chatEn, chatFr, chatZh } from './chatLocales.ts'
@@ -133,17 +135,13 @@ function remoteFace(ctx: ClientContext): MndtFace | undefined {
 }
 
 /**
- * @param ctx - client root context.
- * @returns a face that picks the per-user API when it is served, else the Remote.
- */
-/**
  * The team channels, over the product API only: where the API is not served, every call refuses
  * with that reason, and the page says the channels are not served here.
+ * @param served - what the gateway says of the API on this origin, probed once for the page.
  * @returns the channel face.
  */
-function chatFace(): ChatFace {
+function chatFace(served: Promise<Probe>): ChatFace {
   const http = createHttpChat()
-  const served = probe()
   const route = async <T>(pick: (face: ChatFace) => Promise<T>): Promise<T> => {
     // A workspace that is down keeps the HTTP face: its calls say so, and recover when it is back.
     if ((await served) === 'absent') throw new Error('the product API is not served on this workstation')
@@ -162,13 +160,18 @@ function chatFace(): ChatFace {
   }
 }
 
-function face(ctx: ClientContext): MndtFace {
+/**
+ * @param ctx - client root context.
+ * @param served - what the gateway says of the API on this origin, probed once for the page.
+ * @returns a face that picks the per-user API when it is served, else the Remote.
+ */
+function face(ctx: ClientContext, served: Promise<Probe>): MndtFace {
   const http = createHttpFace()
   const remote = remoteFace(ctx)
-  const choice = probe().then((served): MndtFace => {
+  const choice = served.then((answer): MndtFace => {
     // Down is not absent: the page keeps the HTTP face, says the workspace does not answer, and
     // « Réessayer » reaches it again once it is back.
-    if (served !== 'absent') return http
+    if (answer !== 'absent') return http
     if (remote !== undefined) return remote
     return absentFace('neither the product API nor the mndt Remote is mounted on this workstation')
   })
@@ -207,8 +210,34 @@ function face(ctx: ClientContext): MndtFace {
   }
 }
 
-/** Required services: slots, copy and the Remote transport. */
-export const inject = ['slots', 'locale', 'remote']
+/** Required services: slots, copy, the Remote transport and the layout (to open at arrival). */
+export const inject = ['slots', 'locale', 'remote', 'layout']
+
+/** The key of the team page, in the `main` slot and in the sidebar. */
+const PAGE = 'mndt'
+
+/** Where this browser last was: on the team page, or in a conversation (per viewer, a convenience). */
+const LAST_VIEW_KEY = 'mndt.arrival.lastView'
+
+/** @returns the view this browser last left, or undefined on a first visit or without storage. */
+function lastView(): 'team' | 'conversation' | undefined {
+  try {
+    const value = window.localStorage.getItem(LAST_VIEW_KEY)
+    return value === 'team' || value === 'conversation' ? value : undefined
+  } catch {
+    // No storage (private window, blocked site data): treated as a first visit.
+    return undefined
+  }
+}
+
+/** @param view - the view the person is now on. */
+function rememberView(view: 'team' | 'conversation'): void {
+  try {
+    window.localStorage.setItem(LAST_VIEW_KEY, view)
+  } catch {
+    // No storage: the next arrival is a first visit, which opens the team page.
+  }
+}
 
 /**
  * Install the page.
@@ -232,17 +261,48 @@ export function apply(ctx: ClientContext): void {
     return () => { style.remove() }
   }, 'ui-mndt: styles')
   const t = ctx.locale.bind(NS)
-  const chat = chatFace()
-  ctx.slots.inject('main', () => ctx.slots.register({
-    name: 'main',
-    key: 'mndt',
-    locale: NS,
-    inject: () => ({ api: face(ctx), t: ctx.locale.bind(NS), chat, tc: ctx.locale.bind(CHAT_NS) }),
-  }, CollabPage))
+  // One probe for the page: both faces route on it, and it decides the arrival.
+  const served = probe()
+  const chat = chatFace(served)
+  ctx.slots.inject('main', () => {
+    const dispose = ctx.slots.register({
+      name: 'main',
+      key: PAGE,
+      locale: NS,
+      inject: () => ({ api: face(ctx, served), t: ctx.locale.bind(NS), chat, tc: ctx.locale.bind(CHAT_NS) }),
+    }, CollabPage)
+    let live = true
+    let decided = false
+    // Remember where the person is, once the arrival is decided: the team page, or a conversation
+    // (`null` in the shell). Other panels (governance) leave the memory as it was.
+    const stopWatching = ctx.layout.panelInfo.subscribe(() => {
+      if (!decided) return
+      const active = ctx.layout.panelInfo.getSnapshot().activePanelId
+      if (active === PAGE) rememberView('team')
+      else if (active === null) rememberView('conversation')
+    })
+    // Where the team API is served (a mndt workbench), the team page is the arrival, not the
+    // generic session home. Elsewhere (plain DSH, local development) nothing changes. A person
+    // who left from a conversation comes back to it: selecting a panel would abort the shell's
+    // session restore. A page already chosen is kept.
+    void served.then((answer) => {
+      if (!live || answer !== 'served') return
+      decided = true
+      if (lastView() === 'conversation') return
+      if (ctx.layout.panelInfo.getSnapshot().activePanelId !== null) return
+      ctx.layout.selectPanel(PAGE as MainPanelId)
+    })
+    return () => {
+      live = false
+      stopWatching()
+      dispose()
+    }
+  })
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
-    id: 'mndt',
-    order: 8,
+    id: PAGE,
+    // First in the list: the team's own page leads.
+    order: -10,
     locale: NS,
     label: () => t('title'),
   }, MndtIcon))

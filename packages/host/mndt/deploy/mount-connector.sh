@@ -20,8 +20,18 @@ set -euo pipefail
 LIVE=${MNDT_HOME:-/data/mndt/live}
 CONNECTORS="$LIVE/connectors"
 FRONT=${MNDT_FRONT:-/opt/mndt-front}
+# The renderer of this checkout when there is one: an installed copy may predate
+# the shared guard (patchfile.py) and append its block after the `[]` dsh writes.
+checkout_render="$(cd "$(dirname "$0")" && pwd)/connectors/render-connectors.py"
+if [ -z "${RENDER_SCRIPT:-}" ] && [ -f "$checkout_render" ]; then RENDER_SCRIPT=$checkout_render; fi
 RENDER="${RENDER_SCRIPT:-/opt/mndt-front/gateway/render-connectors.py}"
 CATALOG="${CONNECTOR_CATALOG:-$(dirname "$RENDER")/catalog.json}"
+# The renderer writes the composition through the shared guard (patchfile.py).
+# A tenant rendered before the guard existed has no copy beside its renderer:
+# the one of this checkout serves then.
+if [ -z "${MNDT_PATCHFILE:-}" ] && [ ! -f "$(dirname "$RENDER")/patchfile.py" ] && [ -f "$(dirname "$0")/patchfile.py" ]; then
+  export MNDT_PATCHFILE="$(cd "$(dirname "$0")" && pwd)/patchfile.py"
+fi
 
 usage() { echo "usage: $0 <serverName> (<command...> | --preset) [--env-file <f>] [--cwd <d>] [--allow <p,..>] [--deny <p,..>] [--no-restart]" >&2; exit 1; }
 [ $# -ge 2 ] || usage

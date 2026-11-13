@@ -308,16 +308,18 @@ describe('the team channels of lot 1 in the page', () => {
     }, () => Date.parse(at))
     render(<CollabPage api={fakeFace()} chat={chat} />)
     await screen.findByTestId('chat-channels')
-    const legacy = screen.getAllByTestId('mobile-switcher')[0]!
-    const select = within(legacy).getByRole('combobox')
-    const groups = [...select.querySelectorAll('optgroup')].map(g => [g.label, [...g.querySelectorAll('option')].map(o => o.textContent)])
+    // The arrival is the person's lane; its header carries the switcher, set on it.
+    await screen.findByTestId('chat-thread')
+    const inChat = (): HTMLSelectElement => within(
+      screen.getAllByTestId('mobile-switcher').find(bar => bar.closest('.mndt-chat') !== null)!,
+    ).getByRole('combobox')
+    await waitFor(() => { expect(inChat().value).toBe('chat:chn_0') })
+    const groups = [...inChat().querySelectorAll('optgroup')].map(g => [g.label, [...g.querySelectorAll('option')].map(o => o.textContent)])
     expect(groups[0]).toEqual(['Channels', ['My lane', '# Compta']])
-    fireEvent.change(select, { target: { value: 'chat:chn_1' } })
-    expect(await screen.findByTestId('chat-thread')).toBeTruthy()
-    // The open channel carries the switcher too, set on itself, and leads back to a legacy channel.
-    const inChat = screen.getAllByTestId('mobile-switcher').find(bar => bar.closest('.mndt-chat') !== null)!
-    const back = within(inChat).getByRole('combobox') as HTMLSelectElement
-    expect(back.value).toBe('chat:chn_1')
+    fireEvent.change(inChat(), { target: { value: 'chat:chn_1' } })
+    await waitFor(() => { expect(inChat().value).toBe('chat:chn_1') })
+    // It leads back to a legacy channel too.
+    const back = inChat()
     fireEvent.change(back, { target: { value: back.querySelector('optgroup:last-of-type option')!.getAttribute('value') } })
     await waitFor(() => { expect((screen.getByTestId('chat-thread').closest('.mndt-chat') as HTMLElement).style.display).toBe('none') })
   })

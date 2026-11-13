@@ -122,7 +122,8 @@ describe('install-connectors.sh', { timeout: 30_000 }, () => {
     expect(readdirSync(join(tools, 'swing/src/mcp')).sort()).toEqual(['__init__.py', 'swing_mcp.py'])
     expect(readFileSync(join(tools, 'dolibarr-mcp/requirements.txt'), 'utf8')).toMatch(/^mcp==\d/m)
     expect(readFileSync(join(tools, 'swing/requirements.txt'), 'utf8')).toMatch(/^httpx==\d/m)
-    expect(JSON.parse(readFileSync(join(tools, 'qonto/package-lock.json'), 'utf8')).packages['node_modules/mcp-remote'].version).toBe('0.1.29')
+    const lock = JSON.parse(readFileSync(join(tools, 'qonto/package-lock.json'), 'utf8')) as { packages: Record<string, { version: string } | undefined> }
+    expect(lock.packages['node_modules/mcp-remote']?.version).toBe('0.1.29')
     for (const tool of ['mcp-proxy.mjs', 'mcp-check.mjs', 'office365-mcp.mjs', 'approvals-mcp.mjs']) expect(existsSync(join(tools, tool))).toBe(true)
     const leaked = spawnSync('grep', ['-rl', 'leak', tools], { encoding: 'utf8' })
     expect(leaked.status).toBe(1)

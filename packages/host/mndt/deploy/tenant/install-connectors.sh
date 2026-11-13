@@ -65,7 +65,7 @@ compose=(docker compose -f "$app/docker-compose.yml")
 umask 022
 
 # ---- 1. The connector machinery, refreshed from this checkout.
-cp "$deploy/connectors/render-connectors.py" "$deploy/connectors/catalog.json" "$app/gateway/"
+cp "$deploy/connectors/render-connectors.py" "$deploy/connectors/catalog.json" "$deploy/patchfile.py" "$app/gateway/"
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs mcp-check.mjs; do
   cp "$deploy/connectors/$tool" "$tools/$tool"
 done

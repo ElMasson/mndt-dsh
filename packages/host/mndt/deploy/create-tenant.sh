@@ -93,7 +93,7 @@ cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # The connector machinery of the adapters lane, at this tenant's paths: the
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
-cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$root$app/gateway/"
+cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs; do
   cp "$here/connectors/$tool" "$root$data/tools/$tool"
 done
@@ -101,6 +101,44 @@ done
 # and /opt/mndt-tools is this tools folder: without it the workbench never starts.
 cp "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
 mkdir -p "$root$data/home/profiles/web"
+
+# The team tenant's defaults, in the home patch (DSH_HOME=/state/home), between
+# markers of their own: the LLM routes block of render-llm-routes.py keeps its
+# markers and every other row. A rerun replaces this block, never duplicates it.
+# Validated by lane B on the assembled dsh web: a patch row's config never
+# reaches a browser plugin, only `disabled` and the server half of `locale` act.
+# `preference` is the home's language, shared by the whole tenant.
+patch="$root$data/home/cordis.patch.yml"
+begin='# >>> tenant d equipe (create-tenant.sh)'
+end='# <<< tenant d equipe (create-tenant.sh)'
+# Written through the shared guard (patchfile.py): the file may hold the `[]`
+# dsh writes at first start, the interface's rows, `!!js`; a file or a result
+# that does not parse is refused and nothing is written.
+python3 "$here/patchfile.py" "$patch" --begin "$begin" --end "$end" <<'YAML' || exit 1
+# Interface en francais, sans Plugins ni Automation.
+- id: locale
+  config:
+    preference: fr
+- id: ui-plugin-manager
+  disabled: true
+- id: ui-schedule
+  disabled: true
+# Ni avis Preview Notice DeepSeek Harness (sa version tenue pour lue), ni invite
+# Get started a saisir une cle DeepSeek : les modeles sont configures cote serveur.
+# La version suit WELCOME_NOTICE_VERSION (ui-settings-models/src/onboarding-copy.ts).
+- id: ui-settings-general
+  config:
+    welcomeNoticeVersion: '2026-09-28.1'
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
+# L'espace de travail par defaut, dans le volume : l'image n'a pas de dossier
+# Documents (xdg-user-dir), sans quoi la premiere arrivee affiche « Impossible
+# de creer l'espace de travail par defaut ». Chemin absolu, sous DSH_HOME.
+- id: workspace-controller
+  config:
+    documentsDirectory: /state/home/documents
+YAML
 
 # The model environment, from the adapters lane's one source of names
 # (deploy/llm/llm.env.example): the keys stay empty, filled in by hand (mode 600).

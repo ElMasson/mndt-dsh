@@ -44,3 +44,42 @@ export const zh = en
 
 
 export type GovernanceKey = keyof typeof en
+
+/** French, for a team that works in French; checked complete against the English key set. */
+export const fr = {
+  title: 'Gouvernance',
+  subtitle: 'Qui peut faire quoi, sur quelle ressource, et ce qui est partagé.',
+  tabConnectors: 'Connecteurs',
+  tabAgents: 'Agents',
+  tabWorkflows: 'Workflows',
+  tabRights: 'Droits',
+  tabSharing: 'Partage',
+  loading: 'Chargement…',
+  empty: 'Aucun droit enregistré pour l\'instant.',
+  error: 'Impossible de lire les données de gouvernance.',
+  subject: 'Personne',
+  role: 'Rôle',
+  scope: 'Portée',
+  actions: 'Action',
+  grant: 'Attribuer un rôle',
+  revoke: 'Retirer',
+  actor: 'Agir en tant que',
+  actorHint: 'Le Host vérifie que cette identité détient rights.write.',
+  submit: 'Attribuer',
+  cancel: 'Annuler',
+  global: 'tout',
+  notWired: 'Cette surface n\'est pas encore branchée.',
+  refused: 'Refusé par le Host',
+  liveTable: 'Table en direct',
+  identityHint: 'L\'autorité a déduit cette identité de votre jeton ou de votre session Entra.',
+  run: 'Lancer',
+  staleTable: 'Table en cache : l\'autorité est injoignable',
+  accepted: 'Accepté',
+  promptLabel: 'Consigne',
+  connectorEnabled: 'activé',
+  connectorDisabled: 'désactivé',
+  roleViewer: 'lecteur',
+  roleOperator: 'opérateur',
+  roleAdmin: 'admin',
+  roleOwner: 'propriétaire',
+} satisfies Record<GovernanceKey, string>

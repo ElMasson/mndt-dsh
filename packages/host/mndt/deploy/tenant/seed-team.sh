@@ -30,6 +30,13 @@ app="$root/opt/mndt/$slug"; data="$root/data/mndt/$slug/live"
 [ -f "$app/docker-compose.yml" ] || { echo "no tenant $slug: run create-tenant.sh first" >&2; exit 1; }
 compose=(docker compose -f "$app/docker-compose.yml")
 
+# The connector machinery beside the gateway, refreshed from this checkout as
+# install-connectors.sh does: a copy installed before the shared guard
+# (patchfile.py) would append its block after the `[]` dsh writes, and the
+# workbench would no longer start.
+mkdir -p "$app/gateway"
+cp "$here/../connectors/render-connectors.py" "$here/../connectors/catalog.json" "$here/../patchfile.py" "$app/gateway/"
+
 if [ -z "$ceiling" ] && [ ! -f "$data/connectors/approvals.json" ]; then
   # The approvals connector, from the versioned catalog, at this tenant's paths.
   MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \

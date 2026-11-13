@@ -38,7 +38,10 @@ function home(): { live: string; patch: string } {
 
 const run = (live: string): string => execFileSync('python3', [render], { env: { ...process.env, MNDT_HOME: live }, encoding: 'utf8' })
 
-describe('connector rows', () => {
+// Each test starts several python3 processes: on a loaded machine the default
+// 5 s is not a bound on them, so the suite gets the margin of the other
+// script suites.
+describe('connector rows', { timeout: 30_000 }, () => {
   test('the catalog names the servers the core references', () => {
     expect(servers.sort()).toEqual(['approvals', 'dolibarr', 'office365', 'qonto', 'swing'])
   })
@@ -82,7 +85,7 @@ describe('connector rows', () => {
   })
 })
 
-describe('LLM routes', () => {
+describe('LLM routes', { timeout: 30_000 }, () => {
   const env = {
     ...process.env,
     SCW_PROJECT_ID: '00000000-0000-4000-8000-000000000000',

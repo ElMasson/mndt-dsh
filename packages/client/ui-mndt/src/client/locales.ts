@@ -6,7 +6,7 @@
  * French copy follows the terms settled in the mndt-web recettes.
  */
 export const en = {
-  title: 'This morning',
+  title: 'Team',
   subtitle: 'What needs a decision, what is running, and what was produced.',
   loading: 'Reading the workbench',
   decisions: 'Waiting for your decision',
@@ -302,7 +302,7 @@ export type MndtKey = keyof typeof en
 
 /** French, every key of `en`: a missing one fails to compile. */
 export const fr: Record<MndtKey, string> = {
-  title: 'Ce matin',
+  title: 'Équipe',
   subtitle: 'Ce qui attend une décision, ce qui tourne et ce qui a été produit.',
   loading: 'Lecture de l\'espace de travail',
   decisions: 'En attente de votre décision',
