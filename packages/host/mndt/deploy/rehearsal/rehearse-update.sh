@@ -55,10 +55,10 @@ app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 web_patch=$data/home/profiles/web/cordis.patch.yml
 mkdir -p "$root/root" "$root/shots" "$root/old"
 # The API answers before dsh web prints its launch URL (it waits for every plugin):
-# the page is ready when the gateway opens a session for a signed-in person.
+# the page is ready when the gateway opens the owner's shell session (under /dsh/).
 page_ready() {
   for _ in $(seq 1 "${1:-150}"); do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' -H "x-forwarded-email: $owner" http://127.0.0.1:18080/)" = 302 ] && return 0
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -H "x-forwarded-email: $owner" http://127.0.0.1:18080/dsh/)" = 302 ] && return 0
     sleep 3
   done
   return 1

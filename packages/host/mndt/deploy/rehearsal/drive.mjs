@@ -31,7 +31,16 @@ page.on('websocket', (ws) => {
 })
 const pageErrors = []
 page.on('pageerror', (error) => { pageErrors.push(String(error)) })
-const landing = await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: 90000 })
+// The team page, at / for everyone the proxy admitted (the standalone page, no shell).
+const team = await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: 90000 })
+await sleep(4000)
+const teamTitle = await page.title()
+const teamLang = await page.evaluate(() => document.documentElement.lang)
+await page.screenshot({ path: `${shots}/team.png` })
+check('team-page', team?.ok() === true && /Équipe/.test(teamTitle) && teamLang.startsWith('fr'), `status ${team?.status()}, title « ${teamTitle} », lang « ${teamLang} »`)
+check('team-no-mux', !sockets.some(s => /remote\.mux/.test(s.url)), `${sockets.length} WebSocket(s) on the team page`)
+// The owner's DSH, under /dsh/ (the « Mode avancé »).
+const landing = await page.goto(`${BASE}/dsh/`, { waitUntil: 'domcontentloaded', timeout: 90000 })
 await sleep(10000)
 const title = await page.title()
 const lang = await page.evaluate(() => document.documentElement.lang)
@@ -70,14 +79,27 @@ const llm = logs('fakellm')
 check('llm-called', /fake-llm call \d+/.test(llm), `${(llm.match(/fake-llm call \d+:[^\n]*/g) ?? []).slice(-1).join('') || 'no call'}`)
 
 const viewer = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': SECOND } })
-await (await viewer.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const viewerTeam = await (await viewer.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const refused = await api('POST', '/channels', { title: 'Interdit' }, viewer)
 check('viewer-403', refused.status === 403, `${refused.status}: ${refused.body.error}`)
+// A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
+const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
+const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })
+const viewerMux = await new Promise((resolve) => {
+  const socket = connect(18080, '127.0.0.1')
+  socket.on('error', () => { resolve('error') })
+  socket.once('connect', () => {
+    socket.write(`GET /api/remote.mux HTTP/1.1\r\nhost: 127.0.0.1:18080\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nx-forwarded-email: ${SECOND}\r\n\r\n`)
+  })
+  socket.once('data', (chunk) => { resolve(String(chunk).split('\r\n')[0] ?? ''); socket.destroy() })
+})
+check('viewer-team', viewerTeam?.ok() === true, `the team page: ${viewerTeam?.status()}`)
+check('viewer-no-shell', viewerShell.status() === 404 && viewerApi.status() === 404 && /404/.test(String(viewerMux)), `/dsh/ ${viewerShell.status()}, /api/session ${viewerApi.status()}, remote.mux « ${viewerMux} »`)
 
 // Abrupt endings: pages closed with their WebSockets open, raw upgrades reset (TCP RST).
 for (let index = 0; index < 4; index += 1) {
   const context = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': OWNER } })
-  await (await context.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await (await context.newPage()).goto(`${BASE}/dsh/`, { waitUntil: 'domcontentloaded' })
   await sleep(2500)
   await context.close()
 }
