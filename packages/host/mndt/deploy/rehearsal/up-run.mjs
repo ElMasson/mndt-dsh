@@ -21,12 +21,31 @@ const over = load(readFileSync(overridePath, 'utf8')) ?? {}
 const services = { ...base.services }
 for (const [name, extra] of Object.entries(over.services ?? {})) services[name] = { ...(services[name] ?? {}), ...extra }
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-const network = `${project}_front`
-try { docker('network', 'inspect', network) } catch { docker('network', 'create', network) }
+// The compose's own networks, internal ones included; an external network (the
+// host's Traefik) has no place in a rehearsal and is left out.
+const declared = { ...(base.networks ?? {}), ...(over.networks ?? {}) }
+const networkName = name => `${project}_${name}`
+for (const [name, spec] of Object.entries(declared)) {
+  if (spec?.external === true) continue
+  try { docker('network', 'inspect', networkName(name)) } catch {
+    docker('network', 'create', ...(spec?.internal === true ? ['--internal'] : []), networkName(name))
+  }
+}
+/** @param service - one service. @returns its networks with their aliases, external ones left out. */
+const attachments = (service) => {
+  const listed = service.networks ?? ['front']
+  const entries = Array.isArray(listed) ? listed.map(name => [name, {}]) : Object.entries(listed).map(([name, spec]) => [name, spec ?? {}])
+  return entries.filter(([name]) => declared[name]?.external !== true).map(([name, spec]) => ({ name, aliases: spec.aliases ?? [] }))
+}
 for (const [name, service] of Object.entries(services)) {
   if (name === 'proxy') continue
   const container = `${project}-${name}`
-  const args = ['run', '-d', '--name', container, '--network', network, '--network-alias', name, '--restart', service.restart ?? 'no']
+  const [first, ...others] = attachments(service)
+  if (first === undefined) throw new Error(`${name}: no network of this rehearsal`)
+  // Created, every network connected, then started: a service resolving one of its
+  // own aliases at boot (the gateway's listen address) finds it already there.
+  const args = ['create', '--name', container, '--network', networkName(first.name), '--network-alias', name,
+    ...first.aliases.flatMap(alias => ['--network-alias', alias]), '--restart', service.restart ?? 'no']
   for (const file of service.env_file ?? []) args.push('--env-file', file)
   for (const [key, value] of Object.entries(service.environment ?? {})) args.push('-e', `${key}=${value}`)
   for (const volume of service.volumes ?? []) args.push('-v', volume)
@@ -37,7 +56,7 @@ for (const [name, service] of Object.entries(services)) {
   let imageId = service.image
   try { imageId = docker('image', 'inspect', '-f', '{{.Id}}', service.image) } catch { /* pulled by run */ }
   const envFiles = (service.env_file ?? []).map((file) => { try { return readFileSync(file, 'utf8') } catch { return '' } })
-  const hash = createHash('sha256').update(JSON.stringify([args, service.command ?? null, imageId, envFiles])).digest('hex').slice(0, 16)
+  const hash = createHash('sha256').update(JSON.stringify([args, others, service.command ?? null, imageId, envFiles])).digest('hex').slice(0, 16)
   let current = ''
   try { current = docker('inspect', '-f', '{{.State.Running}} {{index .Config.Labels "mndt.rehearsal.config"}}', container) } catch { /* absent */ }
   if (current === `true ${hash}`) {
@@ -47,5 +66,10 @@ for (const [name, service] of Object.entries(services)) {
   try { docker('rm', '-f', container) } catch { /* absent */ }
   args.push('--label', `mndt.rehearsal.config=${hash}`, service.image)
   if (Array.isArray(service.command)) args.push(...service.command)
-  console.log(`${name}: ${current === '' ? 'created' : 'recreated'} ${docker(...args).slice(0, 12)}`)
+  const id = docker(...args).slice(0, 12)
+  for (const other of others) {
+    docker('network', 'connect', '--alias', name, ...other.aliases.flatMap(alias => ['--alias', alias]), networkName(other.name), container)
+  }
+  docker('start', container)
+  console.log(`${name}: ${current === '' ? 'created' : 'recreated'} ${id}`)
 }

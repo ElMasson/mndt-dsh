@@ -52,6 +52,9 @@ export function identityOf(
   // A supplied Authorization header means the caller chose the token path: a bad
   // token must never be rescued by a proxy header.
   if (request.authorization !== undefined) {
+    // Behind the sign-on proxy (a team workbench), only the gateway speaks for a
+    // person: provisioned tokens live in /state, which an agent's sandbox reads.
+    if (options.proxyUserHeader !== undefined) return undefined
     const match = /^Bearer\s+(.+)$/i.exec(request.authorization.trim())
     const token = match?.[1]
     if (token === undefined) return undefined

@@ -78,6 +78,17 @@ fi
 # read-only in the gateway and the workbench only; kept across reruns.
 [ -f "$root$conf/gateway_secret" ] || openssl rand -hex 32 > "$root$conf/gateway_secret"
 chmod 400 "$root$conf/gateway_secret"
+# The sign-on proxy's signing key: oauth2-proxy signs each request it relays
+# (GAP-Signature), and the gateway serves nothing else. One value, two files:
+# the gateway reads the key, the proxy its env file; neither is in the compose.
+if [ ! -f "$root$conf/proxy_signature_key" ]; then
+  openssl rand -hex 32 > "$root$conf/proxy_signature_key"
+  rm -f "$root$conf/proxy_signature.env"
+fi
+if [ ! -f "$root$conf/proxy_signature.env" ]; then
+  printf 'OAUTH2_PROXY_SIGNATURE_KEY=sha256:%s\n' "$(cat "$root$conf/proxy_signature_key")" > "$root$conf/proxy_signature.env"
+fi
+chmod 400 "$root$conf/proxy_signature_key" "$root$conf/proxy_signature.env"
 chmod 400 "$root$conf/client_secret" "$root$conf/cookie_secret"
 # The proxy runs as 65532; only root can hand the secrets over.
 if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$conf/cookie_secret"; fi

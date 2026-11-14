@@ -14,6 +14,10 @@ services:
       API: "http://workbench:8795"
       TOKEN_FILE: "/state/web-token"
       GATEWAY_SECRET_FILE: "/run/secrets/mndt-gateway"
+      # Only requests the sign-on proxy signed are served (oauth2-proxy signature_key).
+      PROXY_SIGNATURE_KEY_FILE: "/run/secrets/mndt-proxy-signature"
+      # Listen only on the proxy's network: the workbench and its agents find no gateway port.
+      LISTEN_ALIAS: "gateway-ingress"
       # The fingerprint of gateway/server.mjs, written by create-tenant.sh: the code
       # is mounted, not built in, so `docker compose up -d` recreates the gateway
       # only because this value changes when the code does.
@@ -22,8 +26,11 @@ services:
       - __APP__/gateway:/opt/gateway:ro
       - __DATA__:/state:ro
       - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
+      - __CONF__/proxy_signature_key:/run/secrets/mndt-proxy-signature:ro
     networks:
-      - front
+      front: {}
+      ingress:
+        aliases: [gateway-ingress]
     restart: unless-stopped
 
   proxy:
@@ -33,6 +40,10 @@ services:
       - "--client-secret-file=/etc/mndt-front/client_secret"
       - "--cookie-secret-file=/etc/mndt-front/cookie_secret"
       - "--trusted-proxy-ip=__TRUSTED_PROXY__"
+    # OAUTH2_PROXY_SIGNATURE_KEY (sha256:<key>): the proxy signs each request it
+    # relays; the value stays in a 0400 file, never in this compose.
+    env_file:
+      - __CONF__/proxy_signature.env
     volumes:
       - __CONF__:/etc/mndt-front:ro
     labels:
@@ -43,7 +54,7 @@ services:
       traefik.http.routers.mndt-__SLUG__.tls.certresolver: "letsencrypt"
       traefik.http.services.mndt-__SLUG__.loadbalancer.server.port: "4180"
     networks:
-      - front
+      - ingress
       - edge
     depends_on:
       - gateway
@@ -89,6 +100,9 @@ services:
     restart: unless-stopped
 networks:
   front: {}
+  # The sign-on proxy and the gateway only: the workbench is not on it.
+  ingress:
+    internal: true
   edge:
     external: true
     name: __TRAEFIK_NETWORK__

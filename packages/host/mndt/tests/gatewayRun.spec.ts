@@ -5,6 +5,7 @@ import type { IncomingHttpHeaders, Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
 
 const gatewayScript = join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')
 const running: (ChildProcess | Server)[] = []
@@ -33,7 +34,7 @@ async function api(): Promise<{ url: string; seen: IncomingHttpHeaders[] }> {
 async function gateway(apiUrl: string): Promise<string> {
   const port = 20000 + Math.floor(Math.random() * 20000)
   const child = spawn(process.execPath, [gatewayScript], {
-    env: { ...process.env, PORT: String(port), API: apiUrl, WORKBENCH: apiUrl, TOKEN_FILE: '/nonexistent' },
+    env: { ...process.env, PORT: String(port), API: apiUrl, WORKBENCH: apiUrl, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile() },
     stdio: 'ignore',
   })
   running.push(child)
@@ -50,7 +51,7 @@ describe('gateway', { timeout: 30_000 }, () => {
     const backend = await api()
     const base = await gateway(backend.url)
     backend.seen.length = 0
-    const answer = await fetch(`${base}/mndt-api/approvals`, {
+    const answer = await proxyFetch(base, '/mndt-api/approvals', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-mndt-run': 'trn_someone_else', 'x-forwarded-email': 'a@datanalysis.re' },
       body: '{"kind":"send-email","title":"t"}',
