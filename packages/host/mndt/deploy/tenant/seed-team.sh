@@ -45,14 +45,21 @@ if [ -z "$ceiling" ] && [ ! -f "$data/connectors/approvals.json" ]; then
   # A restart, not up -d: the container's configuration did not change, so up -d
   # would leave it running without the connector it must now load.
   "${compose[@]}" restart workbench
-  echo "waiting for the workbench API"
-  up=0
-  for _ in $(seq 1 60); do
-    if "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"; then up=1; break; fi
-    sleep 2
-  done
-  [ "$up" = 1 ] || { echo "the workbench API did not answer after its restart: docker compose -f $app/docker-compose.yml logs workbench" >&2; exit 1; }
 fi
+
+# Always wait for the API before the seed, not only after a restart of ours:
+# right after `docker compose up -d` (step 13 of the guide) it is not listening
+# yet, and the seed failed with ECONNREFUSED. A refused or failed connection is
+# retried; only the deadline ends the wait, with a message that says where to look.
+wait_secs=${MNDT_API_WAIT_SECONDS:-180}
+echo "waiting for the workbench API (up to ${wait_secs} s)"
+up=0; waited=0
+while [ "$waited" -lt "$wait_secs" ]; do
+  if "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" >/dev/null 2>&1; then up=1; break; fi
+  sleep 2; waited=$((waited + 2))
+done
+[ "$up" = 1 ] || { echo "the workbench API did not answer within ${wait_secs} s: docker compose -f $app/docker-compose.yml logs workbench" >&2; exit 1; }
+echo "the workbench API answers (after ${waited} s)"
 
 qwen_model=$(grep -E '^VLLM_QWEN_MODEL=' "$data/model.env" 2>/dev/null | cut -d= -f2- || true)
 "${compose[@]}" exec -T \
