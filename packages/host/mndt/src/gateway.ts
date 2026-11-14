@@ -162,6 +162,15 @@ export class WorkbenchGateway extends TypertRemoteService {
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
         turns,
+        ...(process.env.DSH_MNDT_ORG_SLUG === undefined || process.env.DSH_MNDT_ORG_SLUG === ''
+          ? {}
+          : {
+            org: {
+              name: process.env.DSH_MNDT_ORG_NAME ?? process.env.DSH_MNDT_ORG_SLUG,
+              slug: process.env.DSH_MNDT_ORG_SLUG,
+              ...(process.env.DSH_MNDT_ENV === undefined || process.env.DSH_MNDT_ENV === '' ? {} : { env: process.env.DSH_MNDT_ENV }),
+            },
+          }),
         port,
         ...(host === undefined || host === '' ? {} : { host }),
       }),
