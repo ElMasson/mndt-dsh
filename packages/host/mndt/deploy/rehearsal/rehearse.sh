@@ -98,7 +98,9 @@ services:
     command: ["node", "/opt/fake/fake-llm.mjs"]
     volumes: ["$here:/opt/fake:ro"]
 YML
-chmod -R a+rX "$root"
+# Readable by the containers, but never under home/: the workbench refuses a
+# credentials file readable beyond its owner (credentials-local, mode 600).
+find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
