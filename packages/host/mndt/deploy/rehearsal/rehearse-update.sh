@@ -151,15 +151,17 @@ tenant "$deploy" || exit 1
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
 echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile"
 
-step "B2. the containers recreated on $new_image (docker compose up -d)"
+step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
 compose_for "$new_image"
 # Readable by the containers, but never under home/: the workbench refuses a
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
-if health 80; then echo "the API answers on the new image"; else echo "KO: no API on the new image"; fi
+# As the guide does: seed-team.sh right after up -d, without waiting here.
+gateway_code=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $project-gateway | grep -c '^MNDT_GATEWAY_CODE=' || true)
+echo "gateway: $(docker inspect -f '{{.State.StartedAt}}' $project-gateway), code fingerprint in its env: $gateway_code"
 
-step "B3. seed-team.sh, then the installed renderer as install-connectors.sh runs it, then a restart"
+step "B3. seed-team.sh right away, then the installed renderer as install-connectors.sh runs it, then a restart"
 own
 seed "$deploy"; seeded=$?; echo "seed-team.sh exit $seeded"
 own
