@@ -45,11 +45,11 @@ describe('the tenant role file', () => {
     const api = createMndtApi({
       service: new WorkbenchService({ store: new MemoryStore() }),
       runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
-      identity: { proxyUserHeader: 'x-forwarded-email' },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'gateway-secret-for-tests' },
       grants: fileGrants(path),
     })
     const create = async (who: string, title: string) =>
-      api({ method: 'POST', path: '/channels', headers: { 'x-forwarded-email': who }, body: JSON.stringify({ title }) })
+      api({ method: 'POST', path: '/channels', headers: { 'x-forwarded-email': who, 'x-mndt-gateway': 'gateway-secret-for-tests' }, body: JSON.stringify({ title }) })
     expect((await create(owner, 'Équipe')).status).toBe(201)
     const refused = await create(member, 'Pas encore')
     expect(refused.status).toBe(403)

@@ -10,12 +10,18 @@
  * Environment: MNDT_API (product API base), MNDT_ACTOR (fallback identity),
  * MNDT_ACTOR_FILE (record a running mission publishes per call).
  */
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR = process.env.MNDT_ACTOR ?? 'duke@datanalysis.re'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
+const GATEWAY_SECRET = (() => {
+  const path = process.env.MNDT_GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
 const MAY_DECIDE = process.env.MNDT_APPROVALS_ALLOW_DECIDE === '1'
 
 /**
@@ -61,6 +67,8 @@ async function call(path, init = {}) {
       'content-type': 'application/json',
       ...(init.headers ?? {}),
       'x-forwarded-email': await actorNow(),
+      // The API believes this identity only with the gateway's secret (a file outside /state).
+      ...(GATEWAY_SECRET === '' ? {} : { 'x-mndt-gateway': GATEWAY_SECRET }),
       ...(await runNow().then(run => (run === '' ? {} : { 'x-mndt-run': run }))),
     },
   })

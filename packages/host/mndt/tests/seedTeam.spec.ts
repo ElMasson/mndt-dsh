@@ -9,6 +9,13 @@ import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { startMndtApi } from '../src/api.ts'
 
 const deploy = join(import.meta.dirname, '..', 'deploy')
+/** The gateway's secret, as the gateway container holds it: in a file the scripts read. */
+const GATEWAY_SECRET = 'gateway-secret-for-tests'
+const secretFile = (): string => {
+  const path = join(mkdtempSync(join(tmpdir(), 'secret-')), 'mndt-gateway')
+  writeFileSync(path, `${GATEWAY_SECRET}\n`)
+  return path
+}
 const owner = 'duke@datanalysis.re'
 const servers: Server[] = []
 afterEach(() => { for (const server of servers.splice(0)) server.close() })
@@ -19,7 +26,7 @@ async function realApi(mounted: readonly string[] = ['approvals']): Promise<{ ur
   const server = startMndtApi({
     service,
     runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
-    identity: { proxyUserHeader: 'x-forwarded-email' },
+    identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: GATEWAY_SECRET },
     grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }] }) },
     // As the workbench does: the API knows which MCP servers are mounted.
     connectors: async () => mounted.map(server => ({ module: '@deepseek-ai/dsh-mcp-client', server, enabled: true })),
@@ -37,7 +44,7 @@ async function realApi(mounted: readonly string[] = ['approvals']): Promise<{ ur
 async function seed(env: Record<string, string>): Promise<string> {
   const { execFile } = await import('node:child_process')
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [join(deploy, 'tenant', 'seed-team.mjs')], { env: { ...process.env, ...env } }, (error, stdout, stderr) => {
+    execFile(process.execPath, [join(deploy, 'tenant', 'seed-team.mjs')], { env: { ...process.env, MNDT_GATEWAY_SECRET_FILE: secretFile(), ...env } }, (error, stdout, stderr) => {
       if (error !== null) reject(new Error(`${error.message}\n${stderr}`))
       else resolve(stdout)
     })

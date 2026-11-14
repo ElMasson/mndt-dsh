@@ -73,6 +73,11 @@ if [ ! -f "$root$conf/client_secret" ]; then
   cp "$root$client_secret_file" "$root$conf/client_secret"
 fi
 [ -f "$root$conf/cookie_secret" ] || openssl rand 32 > "$root$conf/cookie_secret"
+# The gateway's secret: with it alone the API believes the identity header the
+# gateway relays. Outside /state (an agent's sandbox reads /state), mounted
+# read-only in the gateway and the workbench only; kept across reruns.
+[ -f "$root$conf/gateway_secret" ] || openssl rand -hex 32 > "$root$conf/gateway_secret"
+chmod 400 "$root$conf/gateway_secret"
 chmod 400 "$root$conf/client_secret" "$root$conf/cookie_secret"
 # The proxy runs as 65532; only root can hand the secrets over.
 if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$conf/cookie_secret"; fi

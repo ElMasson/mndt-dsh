@@ -53,6 +53,20 @@ export interface MndtConfig {
 
 /** The Remote gateway. */
 /**
+ * @param path - the secret file the deployment mounted, if any.
+ * @returns its trimmed content, or undefined when there is none (never an error that stops the API).
+ */
+function readGatewaySecret(path: string | undefined): string | undefined {
+  if (path === undefined || path === '') return undefined
+  try {
+    const secret = readFileSync(path, 'utf8').trim()
+    return secret === '' ? undefined : secret
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Whether the workstation Remote is closed: it is on a team workbench, where
  * several people reach the same shell behind single sign-on (a proxy user
  * header is configured) and the product API serves each under their own identity.
@@ -124,11 +138,21 @@ export class WorkbenchGateway extends TypertRemoteService {
       prices: readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json')),
       dataDir: dirname(this.statePath),
     })
+    // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
+    // without it, the API never believes the proxy's identity header.
+    const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
+    if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
+      ctx.logger.warn('mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
+    }
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
         service: this.service,
         runner,
-        identity: { tokens, ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }) },
+        identity: {
+          tokens,
+          ...(this.proxyUserHeader === undefined ? {} : { proxyUserHeader: this.proxyUserHeader }),
+          ...(gatewaySecret === undefined ? {} : { gatewaySecret }),
+        },
         grants: this.grants,
         schedulePath: this.schedulePath,
         automationsPath: this.automationsPath,

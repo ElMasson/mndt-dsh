@@ -32,6 +32,14 @@ const MACHINES_TOKEN = process.env.MACHINES_TOKEN ?? ''
 const SHELL_TTL_MS = 5 * 60 * 1000
 const API_PREFIX = '/mndt-api'
 const GATEWAY_COOKIE = 'mndt-session'
+// The secret that makes the identity header believable to the API: a file
+// outside /state, mounted read-only here and in the workbench. Read once.
+const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
+const GATEWAY_SECRET = (() => {
+  const path = process.env.GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /** Sessions this gateway opened, keyed by its own cookie value. */
@@ -93,7 +101,7 @@ function sessionCookie(value) {
  * @param path - upstream path.
  * @param shellCookie - shell session cookie to present upstream, if known.
  */
-function forward(req, res, target, path, shellCookie) {
+function forward(req, res, target, path, shellCookie, extraHeaders = {}) {
   const parts = targetOf(target)
   // Keep the authority the browser used. The shell signs its session cookie for
   // that authority and refuses a cookie signed for another one, so rewriting the
@@ -105,6 +113,7 @@ function forward(req, res, target, path, shellCookie) {
   }
   headers['x-forwarded-proto'] = 'https'
   if (shellCookie !== undefined) headers.cookie = shellCookie
+  Object.assign(headers, extraHeaders)
   const upstream = httpRequest({
     protocol: parts.protocol,
     hostname: parts.host,
@@ -221,6 +230,8 @@ function liveSession(id) {
 }
 
 const server = createServer((req, res) => {
+  // A browser never speaks for the gateway.
+  delete req.headers[GATEWAY_SECRET_HEADER]
   const url = new URL(req.url ?? '/', 'http://gateway')
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     const rest = url.pathname.slice(API_PREFIX.length) || '/'
@@ -228,7 +239,8 @@ const server = createServer((req, res) => {
     // card belongs to: a browser that sends it could file a card in the thread
     // of another channel's turn.
     delete req.headers['x-mndt-run']
-    forward(req, res, API, `${rest}${url.search}`)
+    // Only this gateway vouches for the identity header: the API believes it on this secret alone.
+    forward(req, res, API, `${rest}${url.search}`, undefined, GATEWAY_SECRET === '' ? {} : { [GATEWAY_SECRET_HEADER]: GATEWAY_SECRET })
     return
   }
   const cookies = cookiesOf(req.headers.cookie)
@@ -304,6 +316,7 @@ const server = createServer((req, res) => {
 })
 
 server.on('upgrade', (req, socket, head) => {
+  delete req.headers[GATEWAY_SECRET_HEADER]
   const url = new URL(req.url ?? '/', 'http://gateway')
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     socket.destroy()
@@ -362,6 +375,7 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`mndt gateway: listening on ${PORT}, workbench ${WORKBENCH}, api ${API}`)
+  if (GATEWAY_SECRET === '') console.warn('mndt gateway: no GATEWAY_SECRET_FILE: the API will refuse every identity this gateway relays')
 })
 
 process.on('SIGTERM', () => { server.close(() => { process.exit(0) }) })

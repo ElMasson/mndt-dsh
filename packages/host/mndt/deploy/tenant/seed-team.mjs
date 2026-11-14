@@ -4,13 +4,21 @@
  *   MNDT_API_URL=http://workbench:8795 MNDT_OWNER=<email> AGENTS_JSON='<agents.json>' node seed-team.mjs
  *   ... CEILING='<handle>=<euros>' node seed-team.mjs     # set one agent's monthly ceiling
  *
- * The API reads the owner from x-forwarded-email (the workbench trusts it on
- * its private network, as it trusts the sign-on proxy). An agent already
+ * The API reads the owner from x-forwarded-email, which it believes only with
+ * the gateway's secret (MNDT_GATEWAY_SECRET_FILE, a file outside /state that
+ * the gateway container mounts read-only; seed-team.sh runs this there). An agent already
  * declared is left as it is; a ${VAR} model is read from the environment, and
  * an agent whose model stays empty is skipped and said so. Nothing here
  * touches the ceiling check: CEILING only uses the owner's right to set one.
  */
+import { readFileSync } from 'node:fs'
+
 const api = (process.env.MNDT_API_URL ?? '').replace(/\/$/, '')
+const gatewaySecret = (() => {
+  const path = process.env.MNDT_GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
 const owner = process.env.MNDT_OWNER ?? ''
 if (api === '' || owner === '') {
   console.error('MNDT_API_URL and MNDT_OWNER are required')
@@ -21,7 +29,11 @@ if (api === '' || owner === '') {
 async function call(path, body) {
   const answer = await fetch(`${api}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { 'content-type': 'application/json', 'x-forwarded-email': owner },
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-email': owner,
+      ...(gatewaySecret === '' ? {} : { 'x-mndt-gateway': gatewaySecret }),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const parsed = await answer.json().catch(() => ({}))

@@ -64,6 +64,6 @@ echo "the workbench API answers (after ${waited} s)"
 
 qwen_model=$(grep -E '^VLLM_QWEN_MODEL=' "$data/model.env" 2>/dev/null | cut -d= -f2- || true)
 "${compose[@]}" exec -T \
-  -e MNDT_API_URL=http://workbench:8795 -e MNDT_OWNER="$owner" \
+  -e MNDT_API_URL=http://workbench:8795 -e MNDT_OWNER="$owner" -e MNDT_GATEWAY_SECRET_FILE=/run/secrets/mndt-gateway \
   -e AGENTS_JSON="$(cat "$here/agents.json")" -e VLLM_QWEN_MODEL="$qwen_model" -e CEILING="$ceiling" \
   gateway node --input-type=module - < "$here/seed-team.mjs"

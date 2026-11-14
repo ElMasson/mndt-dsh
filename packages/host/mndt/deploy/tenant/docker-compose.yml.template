@@ -13,6 +13,7 @@ services:
       WORKBENCH: "http://workbench:3111"
       API: "http://workbench:8795"
       TOKEN_FILE: "/state/web-token"
+      GATEWAY_SECRET_FILE: "/run/secrets/mndt-gateway"
       # The fingerprint of gateway/server.mjs, written by create-tenant.sh: the code
       # is mounted, not built in, so `docker compose up -d` recreates the gateway
       # only because this value changes when the code does.
@@ -20,6 +21,7 @@ services:
     volumes:
       - __APP__/gateway:/opt/gateway:ro
       - __DATA__:/state:ro
+      - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
     networks:
       - front
     restart: unless-stopped
@@ -54,6 +56,9 @@ services:
       - __DATA__/model.env
     environment:
       DSH_HOME: /state/home
+      # The gateway's secret (create-tenant.sh, outside /state): the API believes
+      # the proxy identity header only on a request that carries it.
+      DSH_MNDT_GATEWAY_SECRET_FILE: /run/secrets/mndt-gateway
       # Same for the tools folder (entrypoint and connector tools), run from disk
       # rather than the image: one fingerprint of everything create-tenant.sh puts there.
       MNDT_TOOLS_CODE: "__TOOLS_CODE__"
@@ -78,6 +83,7 @@ services:
       - __DATA__:/state
       - __DATA__/tools:/opt/mndt-tools:ro
       - __DATA__/mcp-auth:/state/mcp-auth
+      - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
     networks:
       - front
     restart: unless-stopped

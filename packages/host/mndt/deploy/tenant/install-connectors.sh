@@ -221,5 +221,6 @@ done
 [ "$up" = 1 ] || { echo "the workbench API did not answer after its restart: docker compose -f $app/docker-compose.yml logs workbench" >&2; exit 1; }
 owner=$(sed -n 's/^ *DSH_MNDT_IDENTITY: *//p' "$app/docker-compose.yml" | head -1)
 "${compose[@]}" exec -T \
-  -e MNDT_API_URL=http://workbench:8795 -e MNDT_OWNER="$owner" -e AGENTS_JSON="$(cat "$here/agents.json")" \
+  -e MNDT_API_URL=http://workbench:8795 -e MNDT_OWNER="$owner" -e MNDT_GATEWAY_SECRET_FILE=/run/secrets/mndt-gateway \
+  -e AGENTS_JSON="$(cat "$here/agents.json")" \
   gateway node --input-type=module - < "$deploy/connectors/attach-agent-connectors.mjs"
