@@ -295,6 +295,23 @@ describe('client plugin wiring', () => {
     window.localStorage.clear()
   })
 
+  it('a late answer does not take over: a person who acted before it keeps what they chose', async () => {
+    window.localStorage.clear()
+    let answer: (response: Response) => void = () => undefined
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve })))
+    const selectPanel = vi.fn()
+    const b = bench(undefined, { selectPanel })
+    apply(b.ctx)
+    await vi.waitFor(() => { expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0) })
+    // The person opens a conversation while the workspace is slow to answer.
+    window.dispatchEvent(new Event('pointerdown'))
+    answer({ ok: true, status: 200, json: async () => ({}) } as unknown as Response)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(selectPanel).not.toHaveBeenCalled()
+    window.localStorage.clear()
+  })
+
   it('refuses every call when neither transport is mounted', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('down') }))
     const b = bench()
