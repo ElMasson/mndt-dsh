@@ -106,6 +106,17 @@ for (const [label,url] of tries) {
 process.exit(breached)"
   docker exec -i $project-workbench node --input-type=module -e "$script"
 }
+# A document deposit of a few MiB goes through the proxy and the gateway to the
+# API (the gateway reads up to 20 MiB for this route only): neither 413 nor 401.
+deposit() {
+  local body code
+  body=$(mktemp "$root/deposit-XXXX")
+  printf '{"name":"rehearsal.bin","contentBase64":"%s"}' "$(head -c 3145728 /dev/zero | base64 -w0)" > "$body"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' \
+    --data-binary @"$body" http://127.0.0.1:18080/mndt-api/channels/no-such-channel/files)
+  echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
+  [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
+}
 step() { printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
@@ -228,6 +239,7 @@ echo "check-connectors.sh exit $connectors"
 step "B4 bis. the attack of the security report, from the workbench"
 attack; attacked=$?
 echo "attack exit $attacked (0 = every path refused)"
+deposit; deposited=$?
 
 step "B5. the page, the turn, the resets"
 page=0
@@ -236,4 +248,4 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
