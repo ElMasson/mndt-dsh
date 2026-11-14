@@ -37,6 +37,11 @@ export function can(grants: readonly Grant[], subject: string, capability: Capab
 
 /** A source of the grant table: the authority when in team mode, a file otherwise. */
 export interface GrantSource {
+  /**
+   * @returns the display name of each person who declares one (lower-case e-mail to name), empty when unknown.
+   * A name is shown only; it never grants anything.
+   */
+  names?(): Promise<Readonly<Record<string, string>>>
   /** @returns the grants, or the reason they could not be read. */
   grants(): Promise<{ readonly ok: true; readonly grants: readonly Grant[] } | { readonly ok: false; readonly reason: string }>
 }

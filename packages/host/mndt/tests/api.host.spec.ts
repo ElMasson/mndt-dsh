@@ -131,7 +131,8 @@ describe('duke api', () => {
   it('names the caller the token proves', async () => {
     const { api } = bench()
     const response = await api({ method: 'GET', path: '/me', ...asOwner })
-    expect(response.body).toEqual({ you: owner })
+    // The role comes with the e-mail: the team screen shows « Mode avancé » to the owner only.
+    expect(response.body).toEqual({ you: owner, role: 'owner' })
   })
 
   it('lets an owner run a mission and returns the produced brief', async () => {
