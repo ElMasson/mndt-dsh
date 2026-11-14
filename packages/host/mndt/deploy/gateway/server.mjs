@@ -49,8 +49,14 @@ const PROXY_KEY = (() => {
 // The headers oauth2-proxy signs, in its order (pkg/upstream/http.go, SignatureHeaders).
 const SIGNED_HEADERS = ['content-length', 'content-md5', 'content-type', 'date', 'authorization', 'x-forwarded-user',
   'x-forwarded-email', 'x-forwarded-preferred-user', 'x-forwarded-access-token', 'cookie', 'gap-auth']
-// The largest request body the gateway reads to check its signature (a document deposit is 10 MiB, base64).
-const MAX_SIGNED_BODY = 20 * 1024 * 1024
+// The largest request body the gateway reads to check its signature: 1 MiB, but
+// 20 MiB for a document deposit (10 MiB, base64). A declared length above it is
+// refused before anything is read.
+const MAX_BODY = 1024 * 1024
+const MAX_DEPOSIT_BODY = 20 * 1024 * 1024
+const DEPOSIT_ROUTE = /^\/mndt-api\/channels\/[^/]+\/files\/?$/
+// The sign-on proxy's own cookies (cookie_name "_mndt_<slug>", split as _0, _1 when large).
+const SSO_COOKIE_PREFIX = process.env.SSO_COOKIE_PREFIX ?? '_mndt_'
 const GATEWAY_SECRET = (() => {
   const path = process.env.GATEWAY_SECRET_FILE ?? ''
   if (path === '') return ''
@@ -123,7 +129,7 @@ function forward(req, res, target, path, shellCookie, extraHeaders = {}) {
   // that authority and refuses a cookie signed for another one, so rewriting the
   // host here would break the session right after sign-in. The proxy already
   // forwarded the public host, and the workbench is told to trust it.
-  const headers = { ...req.headers }
+  const headers = withoutProxyCredentials({ ...req.headers }, target === API)
   if (typeof req.headers.host === 'string' && req.headers.host !== '') {
     headers['x-forwarded-host'] = req.headers.host
   }
@@ -247,6 +253,38 @@ function liveSession(id) {
 }
 
 /**
+ * The headers the workbench must never see: the proxy's signature and its own
+ * header, and the person's sign-on cookie (an agent in the workbench reads all).
+ * The API needs no cookie at all.
+ * @param headers - the headers about to be relayed (changed in place).
+ * @param toApi - whether they go to the product API.
+ * @returns the same headers.
+ */
+function withoutProxyCredentials(headers, toApi) {
+  delete headers['gap-signature']
+  delete headers['gap-auth']
+  if (toApi) {
+    delete headers.cookie
+    return headers
+  }
+  if (typeof headers.cookie === 'string') {
+    const kept = headers.cookie.split(';').map(part => part.trim()).filter(part => part !== '' && !part.startsWith(SSO_COOKIE_PREFIX))
+    if (kept.length === 0) delete headers.cookie
+    else headers.cookie = kept.join('; ')
+  }
+  return headers
+}
+
+/**
+ * @param req - incoming request.
+ * @returns the largest body this request may carry.
+ */
+function bodyLimit(req) {
+  const path = (req.url ?? '/').split('?')[0]
+  return req.method === 'POST' && DEPOSIT_ROUTE.test(path) ? MAX_DEPOSIT_BODY : MAX_BODY
+}
+
+/**
  * The string oauth2-proxy signs (hmacauth StringToSign): method, each signed
  * header (values joined by a comma, empty when absent), the DECODED path with
  * the raw query, each on its own line. Proven against oauth2-proxy v7.15.5.
@@ -278,17 +316,19 @@ function signedByProxy(req, body) {
 }
 
 /**
- * Read a request body, at most MAX_SIGNED_BODY bytes.
+ * Read a request body, at most bodyLimit(req) bytes.
  * @param req - incoming request.
  * @returns the body, or undefined when it is too large or the browser left.
  */
 function readBody(req) {
+  const limit = bodyLimit(req)
   return new Promise((resolve) => {
+    if (Number(req.headers['content-length'] ?? 0) > limit) { resolve(undefined); return }
     const chunks = []
     let size = 0
     req.on('data', (chunk) => {
       size += chunk.length
-      if (size > MAX_SIGNED_BODY) { resolve(undefined); req.destroy(); return }
+      if (size > limit) { resolve(undefined); req.destroy(); return }
       chunks.push(chunk)
     })
     req.on('end', () => { resolve(Buffer.concat(chunks)) })
@@ -420,7 +460,7 @@ server.on('upgrade', (req, socket, head) => {
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
   const parts = targetOf(session?.base ?? WORKBENCH)
-  const headers = { ...req.headers }
+  const headers = withoutProxyCredentials({ ...req.headers }, false)
   if (session !== undefined) headers.cookie = session.cookie
   if (typeof req.headers.host === 'string' && req.headers.host !== '') {
     headers['x-forwarded-host'] = req.headers.host

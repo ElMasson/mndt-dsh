@@ -98,6 +98,35 @@ describe('the gateway vouches for its own requests only', () => {
     expect(shell.seen.at(-1)?.['x-mndt-gateway']).toBeUndefined()
   })
 
+  it('never hands the workbench the proxy signature or the sign-on cookie, and the API no cookie at all', async () => {
+    const api = await recorder()
+    const shell = await recorder()
+    const secretFile = join(mkdtempSync(join(tmpdir(), 'secret-')), 'mndt-gateway')
+    writeFileSync(secretFile, `${SECRET}\n`)
+    const base = `http://127.0.0.1:${await gateway(api.url, shell.url, secretFile)}`
+    const cookie = '_mndt_datanalysis=sso-session; _mndt_datanalysis_1=sso-part; theme=dark'
+    await proxyFetch(base, '/some/page', { headers: { cookie, 'x-forwarded-email': owner } })
+    const toShell = shell.seen.at(-1)
+    expect(toShell?.['gap-signature']).toBeUndefined()
+    expect(toShell?.['gap-auth']).toBeUndefined()
+    expect(toShell?.cookie).toBe('theme=dark')
+    await proxyFetch(base, '/mndt-api/me', { headers: { cookie, 'x-forwarded-email': owner } })
+    const toApi = api.seen.at(-1)
+    expect(toApi?.cookie).toBeUndefined()
+    expect(toApi?.['gap-signature']).toBeUndefined()
+  })
+
+  it('reads at most 1 MiB before checking a signature, 20 MiB only for a document deposit', async () => {
+    const api = await recorder()
+    const shell = await recorder()
+    const secretFile = join(mkdtempSync(join(tmpdir(), 'secret-')), 'mndt-gateway')
+    writeFileSync(secretFile, `${SECRET}\n`)
+    const base = `http://127.0.0.1:${await gateway(api.url, shell.url, secretFile)}`
+    const big = JSON.stringify({ text: 'x'.repeat(2 * 1024 * 1024) })
+    expect((await proxyFetch(base, '/mndt-api/channels/chn_1/messages', { method: 'POST', body: big, headers: { 'x-forwarded-email': owner } })).status).toBe(413)
+    expect((await proxyFetch(base, '/mndt-api/channels/chn_1/files', { method: 'POST', body: big, headers: { 'x-forwarded-email': owner } })).status).toBe(200)
+  })
+
   it('serves nothing the sign-on proxy did not sign: no identity relayed, no secret added', async () => {
     const api = await recorder()
     const shell = await recorder()
