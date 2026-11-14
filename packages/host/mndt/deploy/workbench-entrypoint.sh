@@ -34,22 +34,29 @@ pid=$!
 # still published, and the gateway reads the file again when it changes.
 (
   attempt=0
+  published=''
   while kill -0 "$pid" 2>/dev/null; do
     token=$(grep -o 'token=[A-Za-z0-9_-]*' "$LOG" 2>/dev/null | tail -1 | cut -d= -f2 || true)
-    if [ -n "$token" ]; then
-      printf '%s' "$token" > "$TOKEN_FILE"
-      chmod 600 "$TOKEN_FILE"
-      echo "workbench: launch token published after ${attempt} s"
-      exit 0
+    if [ -n "$token" ] && [ "$token" != "$published" ]; then
+      # Written whole or not at all, owner-only: the gateway never reads half a token.
+      (umask 077 && printf '%s' "$token" > "$TOKEN_FILE.tmp") && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+      if [ -z "$published" ]; then
+        echo "workbench: launch token published after ${attempt} s"
+      else
+        echo "workbench: a new launch token was published"
+      fi
+      published=$token
     fi
     attempt=$((attempt + 1))
-    if [ "$attempt" = "${DSH_MNDT_TOKEN_WARN_AFTER:-180}" ]; then
+    if [ -z "$published" ] && [ "$attempt" = "${DSH_MNDT_TOKEN_WARN_AFTER:-180}" ]; then
       echo "workbench: no launch token after ${attempt} s, still waiting; a plugin has not settled (see $LOG)" >&2
     fi
     sleep 1
   done
-  echo "workbench: the web process exited before printing its launch token" >&2
-  tail -20 "$LOG" >&2 || true
+  if [ -z "$published" ]; then
+    echo "workbench: the web process exited before printing its launch token" >&2
+    tail -20 "$LOG" >&2 || true
+  fi
 ) &
 
 wait "$pid"

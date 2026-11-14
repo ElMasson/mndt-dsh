@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -43,6 +43,15 @@ describe('workbench-entrypoint.sh', { timeout: 30_000 }, () => {
     expect(output).toContain('no launch token after 1 s, still waiting')
     expect(output).toMatch(/launch token published after \d+ s/)
     expect(readFileSync(tokenFile, 'utf8')).toBe('late_Token-1')
+  })
+
+  it('keeps the last token printed, writes it owner-only, and never writes a token in its output', async () => {
+    const { code, output, tokenFile } = await run('echo "dsh web: http://x/?token=first_1"; sleep 2; echo "dsh web: http://x/?token=second_2"; sleep 2', 60)
+    expect(code).toBe(0)
+    expect(readFileSync(tokenFile, 'utf8')).toBe('second_2')
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600)
+    expect(output).toContain('a new launch token was published')
+    expect(output).not.toMatch(/first_1|second_2/)
   })
 
   it('stops with the web process when it exits before printing a token, with its log', async () => {
