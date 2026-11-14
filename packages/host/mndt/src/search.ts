@@ -1,4 +1,4 @@
-import type { WorkbenchState } from './types.ts'
+import type { Approval, WorkbenchState } from './types.ts'
 
 /** One search hit the page can show. */
 export interface SearchHitRow {
@@ -20,6 +20,7 @@ function matches(value: string, needle: string): boolean {
  * @param identity - who searches.
  * @param canAdmin - whether the caller holds the administration right.
  * @param query - the raw search text.
+ * @param canReadApproval - whether the caller may read one card (visibility.ts).
  * @returns the newest matching rows, forty at most.
  */
 export function searchState(
@@ -27,6 +28,7 @@ export function searchState(
   identity: string,
   canAdmin: boolean,
   query: string,
+  canReadApproval: (approval: Approval) => boolean,
 ): readonly SearchHitRow[] {
   const needle = query.trim().toLowerCase()
   if (needle === '') return []
@@ -46,7 +48,7 @@ export function searchState(
     hits.push({ id: brief.id, kind: 'brief', label: heading.slice(0, 90), at: brief.createdAt, detail: 'brief' })
   }
   for (const approval of snapshot.approvals) {
-    if (approval.state !== 'pending') continue
+    if (approval.state !== 'pending' || !canReadApproval(approval)) continue
     if (!matches(approval.title, needle) && !matches(approval.id, needle)) continue
     hits.push({
       id: approval.id, kind: 'approval', label: approval.title, at: approval.requestedAt,

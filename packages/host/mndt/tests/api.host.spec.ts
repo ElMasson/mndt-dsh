@@ -214,7 +214,9 @@ describe('duke api', () => {
       ...asViewer,
       body: JSON.stringify({ decision: 'approved' }),
     })
-    expect(byViewer.status).toBe(403)
+    // A card outside any channel is read by the one who asked it and those who
+    // may decide: a viewer who did neither does not see it, so it reads as absent.
+    expect(byViewer.status).toBe(404)
 
     const byOwner = await api({
       method: 'POST',
