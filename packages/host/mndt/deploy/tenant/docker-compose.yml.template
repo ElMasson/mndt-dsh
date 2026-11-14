@@ -13,6 +13,10 @@ services:
       WORKBENCH: "http://workbench:3111"
       API: "http://workbench:8795"
       TOKEN_FILE: "/state/web-token"
+      # The fingerprint of gateway/server.mjs, written by create-tenant.sh: the code
+      # is mounted, not built in, so `docker compose up -d` recreates the gateway
+      # only because this value changes when the code does.
+      MNDT_GATEWAY_CODE: "__GATEWAY_CODE__"
     volumes:
       - __APP__/gateway:/opt/gateway:ro
       - __DATA__:/state:ro
@@ -50,6 +54,8 @@ services:
       - __DATA__/model.env
     environment:
       DSH_HOME: /state/home
+      # Same for the entrypoint, run from the tools folder rather than the image.
+      MNDT_ENTRYPOINT_CODE: "__ENTRYPOINT_CODE__"
       DSH_MNDT_IDENTITY: __OWNER__
       DSH_MNDT_LOCAL_OWNER: __OWNER__
       DSH_MNDT_STATE: /state/state.json

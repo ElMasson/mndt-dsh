@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
@@ -117,6 +118,25 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     writeFileSync(patchPath, 'foo: [\n')
     expect(() => create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')).toThrow()
     expect(readFileSync(patchPath, 'utf8')).toBe('foo: [\n')
+  })
+
+  it('fingerprints the mounted gateway and entrypoint code, so up -d recreates what changed', () => {
+    const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16)
+    const deploy = join(import.meta.dirname, '..', 'deploy')
+    const root = rootWithEntra()
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const composePath = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
+    const compose = readFileSync(composePath, 'utf8')
+    expect(compose).toContain(`MNDT_GATEWAY_CODE: "${sha(join(deploy, 'gateway', 'server.mjs'))}"`)
+    expect(compose).toContain(`MNDT_ENTRYPOINT_CODE: "${sha(join(deploy, 'workbench-entrypoint.sh'))}"`)
+    // The 13/11 update: only server.mjs changed on disk; the rendered compose must change with it.
+    const copy = mkdtempSync(join(tmpdir(), 'deploy-'))
+    cpSync(deploy, copy, { recursive: true })
+    writeFileSync(join(copy, 'gateway', 'server.mjs'), `${readFileSync(join(deploy, 'gateway', 'server.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    const after = readFileSync(composePath, 'utf8')
+    expect(after).not.toBe(compose)
+    expect(after).toContain(`MNDT_GATEWAY_CODE: "${sha(join(copy, 'gateway', 'server.mjs'))}"`)
   })
 
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {
