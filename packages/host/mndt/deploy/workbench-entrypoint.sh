@@ -28,22 +28,28 @@ node /app/apps/cli/lib/bin.js web \
   > "$LOG" 2>&1 &
 pid=$!
 
-attempt=0
-while [ "$attempt" -lt 180 ]; do
-  token=$(grep -o 'token=[A-Za-z0-9_-]*' "$LOG" 2>/dev/null | tail -1 | cut -d= -f2 || true)
-  if [ -n "$token" ]; then
-    printf '%s' "$token" > "$TOKEN_FILE"
-    chmod 600 "$TOKEN_FILE"
-    echo "workbench: launch token published"
-    break
-  fi
-  if ! kill -0 "$pid" 2>/dev/null; then
-    echo "workbench: the web process exited during startup" >&2
-    tail -20 "$LOG" >&2 || true
-    exit 1
-  fi
-  attempt=$((attempt + 1))
-  sleep 1
-done
+# The launch token is printed only once every plugin settled: a connector whose
+# server starts but does not answer can hold it for minutes. Watch for it as long
+# as the web process lives, never give up in silence: a token published late is
+# still published, and the gateway reads the file again when it changes.
+(
+  attempt=0
+  while kill -0 "$pid" 2>/dev/null; do
+    token=$(grep -o 'token=[A-Za-z0-9_-]*' "$LOG" 2>/dev/null | tail -1 | cut -d= -f2 || true)
+    if [ -n "$token" ]; then
+      printf '%s' "$token" > "$TOKEN_FILE"
+      chmod 600 "$TOKEN_FILE"
+      echo "workbench: launch token published after ${attempt} s"
+      exit 0
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" = "${DSH_MNDT_TOKEN_WARN_AFTER:-180}" ]; then
+      echo "workbench: no launch token after ${attempt} s, still waiting; a plugin has not settled (see $LOG)" >&2
+    fi
+    sleep 1
+  done
+  echo "workbench: the web process exited before printing its launch token" >&2
+  tail -20 "$LOG" >&2 || true
+) &
 
 wait "$pid"
