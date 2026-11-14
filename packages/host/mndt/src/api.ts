@@ -97,6 +97,8 @@ export interface MndtApiOptions {
   readonly connectors?: () => Promise<readonly ConnectorInfo[]>
   /** Agent turns of mentions; without it, a mention queues a turn nobody runs. */
   readonly turns?: TurnScheduler
+  /** The organisation the top bar names: its name, its slug and, when declared, its environment (prod, preprod). */
+  readonly org?: { readonly name: string; readonly slug: string; readonly env?: string }
 }
 
 /** Where the standalone team page was built (vite, ui-mndt standalone): index.html and team-assets/. */
@@ -399,7 +401,35 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
 
     try {
-      if (request.method === 'GET' && path === '/me') return respond(200, { you: identity })
+      if (request.method === 'GET' && path === '/me') {
+        // Who the person is for the screen: their e-mail, their role and the name the role file gives them.
+        const table = await grants.grants()
+        const role = table.ok ? roleOf(table.grants, identity) : undefined
+        const name = (await grants.names?.())?.[identity]
+        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }) })
+      }
+
+      if (request.method === 'GET' && path === '/org') {
+        const org = options.org
+        if (org === undefined) return respond(200, { name: '', slug: '' })
+        return respond(200, { name: org.name, slug: org.slug, ...(org.env === undefined || org.env === '' ? {} : { env: org.env }) })
+      }
+
+      if (request.method === 'GET' && path === '/people') {
+        // The team as the role file lists it, for the screen to show names: only to someone of the team.
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (roleOf(table.grants, identity) === undefined) return respond(403, { error: `${identity} holds no role in this team` })
+        const names = (await grants.names?.()) ?? {}
+        const subjects = [...new Set(table.grants.map(grant => grant.subject))]
+        return respond(200, {
+          people: subjects.map(email => ({
+            email,
+            role: roleOf(table.grants, email),
+            ...(names[email] === undefined ? {} : { name: names[email] }),
+          })),
+        })
+      }
 
       if (request.method === 'GET' && path === '/search') {
         const snapshot = await service.snapshot()

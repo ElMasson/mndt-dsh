@@ -52,7 +52,8 @@ export function localGrants(owner: string | undefined): GrantSource {
 
 /**
  * A tenant's own role table, in one file (decided by Stephane, 13/11):
- * `{ "grants": [{ "subject": "<email>", "role": "owner|admin|operator|viewer" }] }`.
+ * `{ "grants": [{ "subject": "<email>", "role": "owner|admin|operator|viewer", "name": "<shown>" }] }`,
+ * `name` optional (80 characters at most), shown by the team screen and never granting anything.
  *
  * The file is read on every request, so a role changes without a restart.
  * Anything wrong refuses the whole table with its reason (a missing file, a
@@ -63,6 +64,24 @@ export function localGrants(owner: string | undefined): GrantSource {
  */
 export function fileGrants(path: string): GrantSource {
   return {
+    async names() {
+      // The display names of the same file; a file that cannot be read gives none
+      // (the grants say why), and a name never changes what anyone may do.
+      try {
+        const rows = (JSON.parse(await readFile(path, 'utf8')) as { grants?: unknown }).grants
+        if (!Array.isArray(rows)) return {}
+        const names: Record<string, string> = {}
+        for (const row of rows) {
+          const { subject, name } = row as { subject?: unknown; name?: unknown }
+          if (typeof subject === 'string' && typeof name === 'string' && name.trim() !== '' && name.trim().length <= 80) {
+            names[subject.trim().toLowerCase()] = name.trim()
+          }
+        }
+        return names
+      } catch {
+        return {}
+      }
+    },
     async grants() {
       let text: string
       try {
@@ -84,6 +103,10 @@ export function fileGrants(path: string): GrantSource {
         const role = asRole((row as { role?: unknown }).role)
         if (typeof subject !== 'string' || subject.trim() === '' || role === undefined) {
           return { ok: false, reason: `the role file ${path}, row ${index + 1}: a subject (e-mail) and a role among owner, admin, operator, viewer are required` }
+        }
+        const name = (row as { name?: unknown }).name
+        if (name !== undefined && (typeof name !== 'string' || name.trim().length > 80)) {
+          return { ok: false, reason: `the role file ${path}, row ${index + 1}: a name is a text of 80 characters at most` }
         }
         grants.push({ subject: subject.trim().toLowerCase(), role })
       }

@@ -22,12 +22,14 @@
 #   --client-conf <f>          an oauth2-proxy config to read client_id from (default: /etc/oauth2-proxy/governance.cfg)
 #   --traefik-network <name>   the docker network Traefik watches (default: traefik)
 #   --trusted-proxy <cidr>     where Traefik connects from (default: 172.16.0.0/12)
+#   --org-name <name>          the organisation the team screen names (default: the slug in capitals)
+#   --env <prod|preprod>       the environment the team screen shows, when declared
 #   --image <image>            the workbench image (default: mndt-workbench:local)
 #   --no-docker                render and install the files, start nothing
 # Environment: MNDT_ROOT prefixes every absolute path (tests render into a temporary root).
 set -euo pipefail
 
-usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
 
 [ $# -ge 2 ] || usage
 slug=$1; domain=$2; shift 2
@@ -37,6 +39,7 @@ slug=$1; domain=$2; shift 2
 owner=''; email_domains=''; entra_tenant='5ed9c3e0-522a-46fa-978a-dd6bc245d710'
 client_id=''; client_secret_file=/etc/oauth2-proxy/client_secret; client_conf=/etc/oauth2-proxy/governance.cfg
 traefik_network=traefik; trusted_proxy=172.16.0.0/12; image=mndt-workbench:local; docker=1
+org_name=''; env_name=''
 while [ $# -gt 0 ]; do
   case $1 in
     --owner) owner=$2; shift 2 ;;
@@ -48,6 +51,8 @@ while [ $# -gt 0 ]; do
     --traefik-network) traefik_network=$2; shift 2 ;;
     --trusted-proxy) trusted_proxy=$2; shift 2 ;;
     --image) image=$2; shift 2 ;;
+    --org-name) org_name=$2; shift 2 ;;
+    --env) env_name=$2; shift 2 ;;
     --no-docker) docker=0; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown option: $1" >&2; usage ;;
@@ -55,6 +60,9 @@ while [ $# -gt 0 ]; do
 done
 [[ $owner =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "--owner <email> is required" >&2; exit 1; }
 [ -n "$email_domains" ] || email_domains=${domain#*.}
+[ -n "$org_name" ] || org_name=$(printf '%s' "$slug" | tr '[:lower:]' '[:upper:]')
+[[ $org_name =~ ^[^\|\"\\]{1,60}$ ]] || { echo "--org-name: 60 characters at most, without | \" or \\" >&2; exit 1; }
+[ -z "$env_name" ] || [[ $env_name =~ ^(prod|preprod)$ ]] || { echo "--env is prod or preprod: $env_name" >&2; exit 1; }
 
 root=${MNDT_ROOT:-}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -109,7 +117,7 @@ render() {
       -e "s|__TRAEFIK_NETWORK__|$traefik_network|g" -e "s|__TRUSTED_PROXY__|$trusted_proxy|g" \
       -e "s|__IMAGE__|$image|g" -e "s|__ENTRA_TENANT__|$entra_tenant|g" \
       -e "s|__CLIENT_ID__|$client_id|g" -e "s|__EMAIL_DOMAINS__|$quoted|g" \
-      -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
+      -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
 }
 render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg"
 chmod 644 "$root$conf/oauth2.cfg"
