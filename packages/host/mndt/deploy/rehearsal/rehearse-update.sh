@@ -176,9 +176,10 @@ MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deplo
 echo "check-connectors.sh exit $connectors"
 
 step "B5. the page, the turn, the resets"
-if page_ready 150; then echo "the page is ready (launch token published)"; else echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
+page=0
+if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
