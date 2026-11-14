@@ -1,5 +1,8 @@
 // The sign-on proxy of the rehearsal: oauth2-proxy without Entra. It takes the
-// identity the rehearsal's browser declares (x-forwarded-email), signs each
+// identity the rehearsal's browser declares (x-forwarded-email) and keeps it in
+// a session cookie, as oauth2-proxy keeps the person's session: a browser does
+// not send a page's extra headers on a WebSocket handshake, the cookie does.
+// It signs each
 // request it relays with the tenant's proxy key exactly as oauth2-proxy does
 // (GAP-Signature, hmacauth sha256), and relays it to the gateway on the ingress
 // network, WebSocket upgrades included. Nothing else reaches the gateway.
@@ -25,9 +28,32 @@ function sign(method, url, headers, body) {
   return `sha256 ${createHmac('sha256', KEY).update(text).update(body).digest('base64')}`
 }
 
+/** The rehearsal's session cookie; the gateway strips every _mndt_ cookie, as it strips the real one. */
+const SESSION = '_mndt_rehearsal_sso'
+
+/** @param req - incoming request. @returns the identity it declares, or the one its session cookie holds. */
+function identityOf(req) {
+  const declared = req.headers['x-forwarded-email']
+  if (typeof declared === 'string' && declared !== '') return declared
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const [name, ...rest] = part.trim().split('=')
+    if (name === SESSION) return decodeURIComponent(rest.join('='))
+  }
+  return ''
+}
+
+/** @param req - incoming request. @returns the session cookie to set, when the request declared an identity. */
+function sessionCookieOf(req) {
+  const declared = req.headers['x-forwarded-email']
+  return typeof declared === 'string' && declared !== '' ? `${SESSION}=${encodeURIComponent(declared)}; Path=/; HttpOnly; SameSite=Lax` : undefined
+}
+
 /** @param req - incoming request. @returns the headers to relay, signed for a body. */
 function relayed(req, body) {
   const headers = { ...req.headers }
+  const email = identityOf(req)
+  if (email === '') delete headers['x-forwarded-email']
+  else headers['x-forwarded-email'] = email
   delete headers['gap-signature']
   headers['gap-auth'] = ''
   if (body.length > 0) headers['content-length'] = String(body.length)
@@ -42,7 +68,10 @@ const server = createServer((req, res) => {
   req.on('end', () => {
     const body = Buffer.concat(chunks)
     const upstream = httpRequest({ hostname: UPSTREAM.hostname, port: UPSTREAM.port, method: req.method, path: req.url, headers: relayed(req, body) }, (answer) => {
-      res.writeHead(answer.statusCode ?? 502, answer.headers)
+      const session = sessionCookieOf(req)
+      const headers = { ...answer.headers }
+      if (session !== undefined) headers['set-cookie'] = [...(headers['set-cookie'] ?? []), session]
+      res.writeHead(answer.statusCode ?? 502, headers)
       answer.on('error', () => { res.destroy() })
       answer.pipe(res)
     })
