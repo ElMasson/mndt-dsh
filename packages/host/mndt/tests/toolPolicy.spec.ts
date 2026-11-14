@@ -20,7 +20,7 @@ const ENGINE_DEFAULTS = [
 const MCP = ['mcp__qonto__list_transactions', 'mcp__approvals__request_approval', 'mcp__dolibarr__get_invoices', 'mcp__office365__list_mail']
 
 type Guard = (execution: { readonly name: string }) => string | undefined
-type FakeTools = ScopedToolsLike & { allow?: readonly string[]; deny?: readonly string[]; guards: Guard[] }
+type FakeTools = ScopedToolsLike & { allow: readonly string[] | undefined; deny: readonly string[] | undefined; guards: Guard[] }
 
 /** @param names - the tools the agent sees. @returns a face recording the restriction and the guards. */
 function fakeTools(names: readonly string[]): FakeTools {
