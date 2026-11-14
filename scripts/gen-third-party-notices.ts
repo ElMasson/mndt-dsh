@@ -801,6 +801,10 @@ ${patchedLines.join('\n')}
 
 The optional experimental Inspector distributes a locally compiled copy of [chrome-devtools-frontend ${DEVTOOLS_NPM_VERSION}](https://www.npmjs.com/package/chrome-devtools-frontend/v/${DEVTOOLS_NPM_VERSION}), from upstream revision [${DEVTOOLS_SOURCE_REVISION}](https://chromium.googlesource.com/devtools/devtools-frontend/+/${DEVTOOLS_SOURCE_REVISION}). The build includes the Chromium [BSD-3-Clause license](packages/experimental/inspector/assets/devtools/LICENSE) and the third-party license and notice files supplied by the npm source. The Chromium root license does not replace those dependencies' licenses.
 
+## mndt team screen icons
+
+The mndt team screen (\`@deepseek-ai/dsh-client-ui-mndt\`) draws nineteen icons whose SVG paths are copied from [lucide-react 0.575.0](https://www.npmjs.com/package/lucide-react/v/0.575.0), under the [ISC license](packages/client/ui-mndt/src/assets/lucide-LICENSE.txt); the package itself is not a dependency.
+
 ${renderClaudeDistribution(claudeDistribution)}
 ${kitRuntime ? `
 ## LibreOffice conversion kit

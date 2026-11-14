@@ -143,3 +143,16 @@ export function chatEnglish(key: ChatKey, values?: ChatValues): string {
     return value === undefined ? match : String(value)
   })
 }
+
+/**
+ * The channels' copy in French, for a page that has no locale service (the standalone team page).
+ * @param key - the message. @param values - placeholders to fill. @returns the text.
+ */
+export function chatFrench(key: ChatKey, values?: ChatValues): string {
+  const template: string = chatFr[key]
+  if (values === undefined) return template
+  return template.replace(/\{(\w+)\}/gu, (match: string, name: string) => {
+    const value = values[name]
+    return value === undefined ? match : String(value)
+  })
+}

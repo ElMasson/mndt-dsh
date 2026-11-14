@@ -7,11 +7,14 @@
  * every post is typed, and the approval card is the only place a decision is made.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
 import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
-import { ChannelAgents, ChannelList, ChannelThread, reasonOf } from './ChannelView.tsx'
+import { CardView, ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
+import { TeamShell } from './TeamShell.tsx'
+import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { renderBrief } from './markdown.tsx'
@@ -42,13 +45,31 @@ export interface CollabPageProps {
   readonly tc?: ChatTranslate | undefined
   /** Open a turn's DSH session, where this workstation can show it. */
   readonly openTrace?: ((sessionId: string) => void) | undefined
+  /**
+   * Draw the page in the team screen's frame, as mndt-web does (top bar, one navigation): the
+   * standalone team page. Without it the page keeps its own channel rail, inside the DSH shell.
+   */
+  readonly team?: TeamFrame | undefined
 }
 
-export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace }: CollabPageProps) {
+/** What the team frame knows beyond the page state. */
+export interface TeamFrame {
+  /** The organisation, where its name is served. */
+  readonly org?: { readonly name: string; readonly env?: string | undefined } | undefined
+  /** The person's name, where it is served. */
+  readonly name?: string | undefined
+  /** Where the full DSH interface is (« Mode avancé »), for the owner only. */
+  readonly advancedHref?: string | undefined
+}
+
+/** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
+type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'settings'
+
+export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<'channel' | 'chat' | 'activity' | 'automations' | 'admin'>('channel')
+  const [view, setView] = useState<View>('channel')
   // Team channels (lot 1): what the workbench serves, or why it could not be read.
   const [chatChannels, setChatChannels] = useState<readonly ChatChannel[] | undefined>(undefined)
   const [chatAgents, setChatAgents] = useState<readonly ChatAgent[]>([])
@@ -495,8 +516,51 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     })
   }
 
-  if (state === undefined) {
+  /** @param page - what the page shows. @returns it, in the team frame where the page has one. */
+  const frame = (page: ReactNode): ReactNode => {
+    if (team === undefined) return page
+    const current = chatChannels?.find(c => c.id === chatId)
+    const place: TeamPlace | undefined = view === 'chat'
+      ? (current === undefined || current.kind === 'solo' ? 'lane' : undefined)
+      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'settings'
+        ? view
+        : 'settings'
     return (
+      <TeamShell
+        t={t}
+        place={place}
+        onPlace={(next) => {
+          if (next === 'lane') {
+            const lane = chatChannels?.find(c => c.kind === 'solo')
+            if (lane !== undefined) setChatId(lane.id)
+            setView('chat')
+            return
+          }
+          setView(next)
+        }}
+        pending={pendingCards.length}
+        channels={(chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({
+          id: c.id, label: c.title || c.name, active: view === 'chat' && c.id === chatId,
+        }))}
+        onChannel={(id) => { setChatId(id); setView('chat') }}
+        agents={chatAgents.filter(a => a.retiredAt === undefined).map(a => ({ id: a.id, label: a.name, active: false }))}
+        onAgent={() => { setView('agents') }}
+        org={team.org}
+        you={state?.you ?? ''}
+        name={team.name}
+        live={error === undefined}
+      >
+        {page}
+      </TeamShell>
+    )
+  }
+  // The cards waiting on a decision: those the thread reads, else those of the page state.
+  const pendingCards: readonly ThreadCard[] = chatCards === undefined
+    ? state?.approvals ?? []
+    : chatCards.filter(card => card.state === undefined || card.state === 'pending')
+
+  if (state === undefined) {
+    return frame(
       <div className="mndt mndt-loading" role="status" aria-live="polite">
         {error === undefined ? t('ui.chargement-de-l-espace') : (
           <div className="mndt-error mndt-error-banner">
@@ -504,7 +568,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <button type="button" className="mndt-button" onClick={() => { void load() }}>{t('ui.reessayer')}</button>
           </div>
         )}
-      </div>
+      </div>,
     )
   }
 
@@ -513,7 +577,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // On a phone the rail is hidden: one switcher reaches the team channels (the lane first) and the
   // legacy ones, whichever view is open.
   const switched = view === 'chat' && chatId !== undefined ? `chat:${chatId}` : `legacy:${channelId}`
-  const mobileSwitcher = (
+  const mobileSwitcher = team !== undefined ? undefined : (
     <div className="mndt-mobile-bar" data-testid="mobile-switcher">
       <select
         className="mndt-input"
@@ -699,111 +763,113 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     URL.revokeObjectURL(url)
   }
 
-  return (
-    <div className="mndt mndt-collab" data-view={view}>
-      <aside className="mndt-channels" aria-label={t('ui.canaux')}>
-        <div className="mndt-channels-head">
-          <span className="mndt-channels-title">{t('ui.mndt')}</span>
-          <span className="mndt-channels-workspace">{t('ui.duke-analytics')}</span>
-        </div>
-        <button type="button" className="mndt-search-open" onClick={() => { setSearch(''); setSearchIndex(0) }}>
-          <span>{t('ui.rechercher')}</span>
-          <kbd>{t('ui.ctrl-k')}</kbd>
-        </button>
-        <div className="mndt-channel-group">
-          <div className="mndt-channel-group-head">
-            <span>{t('ui.vues')}</span>
+  return frame(
+    <div className="mndt mndt-collab" data-view={view} data-team={team === undefined ? undefined : 'true'}>
+      {team !== undefined ? undefined : (
+        <aside className="mndt-channels" aria-label={t('ui.canaux')}>
+          <div className="mndt-channels-head">
+            <span className="mndt-channels-title">{t('ui.mndt')}</span>
+            <span className="mndt-channels-workspace">{t('ui.duke-analytics')}</span>
           </div>
-          <button
-            type="button"
-            className="mndt-channel"
-            data-active={view === 'activity'}
-            onClick={() => { setView('activity') }}
-          >
-            <span className="mndt-channel-hash">{'\u2261'}</span>
-            <span className="mndt-channel-name">{t('ui.activite')}</span>
-            <span className="mndt-channel-badge">{activity.length}</span>
+          <button type="button" className="mndt-search-open" onClick={() => { setSearch(''); setSearchIndex(0) }}>
+            <span>{t('ui.rechercher')}</span>
+            <kbd>{t('ui.ctrl-k')}</kbd>
           </button>
-          <button
-            type="button"
-            className="mndt-channel"
-            data-active={view === 'automations'}
-            onClick={() => { setView('automations') }}
-          >
-            <span className="mndt-channel-hash">{'\u2699'}</span>
-            <span className="mndt-channel-name">{t('ui.automatisations')}</span>
-            <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
-          </button>
-          {state.canAdmin !== true ? undefined : (
+          <div className="mndt-channel-group">
+            <div className="mndt-channel-group-head">
+              <span>{t('ui.vues')}</span>
+            </div>
             <button
               type="button"
               className="mndt-channel"
-              data-active={view === 'admin'}
-              onClick={() => { setView('admin') }}
+              data-active={view === 'activity'}
+              onClick={() => { setView('activity') }}
+            >
+              <span className="mndt-channel-hash">{'\u2261'}</span>
+              <span className="mndt-channel-name">{t('ui.activite')}</span>
+              <span className="mndt-channel-badge">{activity.length}</span>
+            </button>
+            <button
+              type="button"
+              className="mndt-channel"
+              data-active={view === 'automations'}
+              onClick={() => { setView('automations') }}
             >
               <span className="mndt-channel-hash">{'\u2699'}</span>
-              <span className="mndt-channel-name">{t('ui.administration')}</span>
+              <span className="mndt-channel-name">{t('ui.automatisations')}</span>
+              <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
             </button>
-          )}
-        </div>
-        {chat === undefined ? undefined : chatChannels !== undefined ? (
-          <ChannelList
-            channels={chatChannels}
-            selected={view === 'chat' ? chatId : undefined}
-            onSelect={(id) => { setChatId(id); setView('chat') }}
-            onCreate={createChat}
-            t={tc}
-          />
-        ) : chatError === undefined ? undefined : (
-          <p className="mndt-hint mndt-channel-note" role="note" data-testid="chat-not-served">
-            {tc('notServed')} ({chatError})
-          </p>
-        )}
-        {['team', 'mandate', 'system'].map((kind) => {
-          const group = channels.filter(candidate => candidate.kind === kind)
-          if (group.length === 0) return undefined
-          const label = kind === 'team' ? t('ui.equipe') : kind === 'mandate' ? t('ui.mandats') : t('ui.systeme')
-          return (
-            <div key={kind} className="mndt-channel-group">
-              <div className="mndt-channel-group-head">
-                <span>{label}</span>
-                <span className="mndt-channel-group-count">{group.length}</span>
-              </div>
-              {group.map((candidate) => {
-                const unread = unreadOf(candidate)
-                return (
-                  <button
-                    key={candidate.id}
-                    type="button"
-                    className="mndt-channel"
-                    data-active={view === 'channel' && candidate.id === channel?.id}
-                    onClick={() => { setChannelId(candidate.id); setView('channel') }}
-                  >
-                    <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
-                    <span className="mndt-channel-name">{candidate.name}</span>
-                    {candidate.badge !== undefined && candidate.badge > 0 ? <span className="mndt-channel-badge">{candidate.badge}</span> : undefined}
-                    {unread === 0 ? undefined : <span className="mndt-channel-unread">{unread > 9 ? '9+' : unread}</span>}
-                  </button>
-                )
-              })}
-            </div>
-          )
-        })}
-        <div className="mndt-channels-foot">
-          {state.you === '' ? undefined : (
-            // Nobody read yet (the workspace did not answer): no presence, rather than « membre ».
-            <div className="mndt-presence" data-testid="presence">
-              <span className="mndt-dot" data-state="available" />
-              <span>{state.you}</span>
-              <span className="mndt-role">{state.role ?? t('ui.membre')}</span>
-            </div>
-          )}
-          <div className="mndt-presence">
-            <span className="mndt-dot" data-state="working" />
-            <span>{pending} {t('ui.decision')}{pending > 1 ? t('ui.s') : ''} {t('ui.en-attente')}</span>
+            {state.canAdmin !== true ? undefined : (
+              <button
+                type="button"
+                className="mndt-channel"
+                data-active={view === 'admin'}
+                onClick={() => { setView('admin') }}
+              >
+                <span className="mndt-channel-hash">{'\u2699'}</span>
+                <span className="mndt-channel-name">{t('ui.administration')}</span>
+              </button>
+            )}
           </div>
-        </div>
-      </aside>
+          {chat === undefined ? undefined : chatChannels !== undefined ? (
+            <ChannelList
+              channels={chatChannels}
+              selected={view === 'chat' ? chatId : undefined}
+              onSelect={(id) => { setChatId(id); setView('chat') }}
+              onCreate={createChat}
+              t={tc}
+            />
+          ) : chatError === undefined ? undefined : (
+            <p className="mndt-hint mndt-channel-note" role="note" data-testid="chat-not-served">
+              {tc('notServed')} ({chatError})
+            </p>
+          )}
+          {['team', 'mandate', 'system'].map((kind) => {
+            const group = channels.filter(candidate => candidate.kind === kind)
+            if (group.length === 0) return undefined
+            const label = kind === 'team' ? t('ui.equipe') : kind === 'mandate' ? t('ui.mandats') : t('ui.systeme')
+            return (
+              <div key={kind} className="mndt-channel-group">
+                <div className="mndt-channel-group-head">
+                  <span>{label}</span>
+                  <span className="mndt-channel-group-count">{group.length}</span>
+                </div>
+                {group.map((candidate) => {
+                  const unread = unreadOf(candidate)
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className="mndt-channel"
+                      data-active={view === 'channel' && candidate.id === channel?.id}
+                      onClick={() => { setChannelId(candidate.id); setView('channel') }}
+                    >
+                      <span className="mndt-channel-hash">{candidate.kind === 'mandate' ? '\u25CF' : '#'}</span>
+                      <span className="mndt-channel-name">{candidate.name}</span>
+                      {candidate.badge !== undefined && candidate.badge > 0 ? <span className="mndt-channel-badge">{candidate.badge}</span> : undefined}
+                      {unread === 0 ? undefined : <span className="mndt-channel-unread">{unread > 9 ? '9+' : unread}</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })}
+          <div className="mndt-channels-foot">
+            {state.you === '' ? undefined : (
+            // Nobody read yet (the workspace did not answer): no presence, rather than « membre ».
+              <div className="mndt-presence" data-testid="presence">
+                <span className="mndt-dot" data-state="available" />
+                <span>{state.you}</span>
+                <span className="mndt-role">{state.role ?? t('ui.membre')}</span>
+              </div>
+            )}
+            <div className="mndt-presence">
+              <span className="mndt-dot" data-state="working" />
+              <span>{pending} {t('ui.decision')}{pending > 1 ? t('ui.s') : ''} {t('ui.en-attente')}</span>
+            </div>
+          </div>
+        </aside>
+      )}
 
       <section className="mndt-main" style={{ display: view === 'channel' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
@@ -1225,6 +1291,101 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           </>
         )}
       </aside>
+      {team === undefined ? undefined : (
+        <>
+          {view !== 'chat' || chatChannels?.some(c => c.id === chatId) === true ? undefined : (
+            <section className="mw-screen" data-testid="team-lane-missing">
+              <h1 className="mw-title">{t('shell.lane')}</h1>
+              <p className="mw-empty">{chatError === undefined ? t('ui.chargement-de-l-espace') : t('shell.lane-missing')}</p>
+            </section>
+          )}
+          {view !== 'pending' ? undefined : (
+            <section className="mw-screen" data-testid="team-pending">
+              <h1 className="mw-title">{t('shell.pending')}</h1>
+              {cardsError === undefined ? undefined : <p role="alert" className="mndt-error">{t('shell.pending-unread', { reason: cardsError })}</p>}
+              {pendingCards.length === 0
+                ? <p className="mw-empty">{t('shell.pending-none')}</p>
+                : pendingCards.map(card => (
+                  <CardView key={card.id} card={card} canDecide={state.canAdmin === true} onDecide={decideCard} t={tc} />
+                ))}
+            </section>
+          )}
+          {view !== 'memory' ? undefined : (
+            <section className="mw-screen" data-testid="team-memory">
+              <h1 className="mw-title">{t('shell.memory')}</h1>
+              {state.memories.length === 0 ? <p className="mw-empty">{t('shell.memory-none')}</p> : (
+                <ul className="mw-cards">
+                  {state.memories.map(memory => (
+                    <li key={memory.id} className="mw-card">
+                      <p className="mw-card-text">{memory.text}</p>
+                      <p className="mw-card-meta">{t('shell.memory-by', { kind: memory.kind, scope: memory.scope, name: memory.createdBy })}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+          {view !== 'channels' ? undefined : (
+            <section className="mw-screen" data-testid="team-channels">
+              <h1 className="mw-title">{t('shell.channels')}</h1>
+              {chatChannels === undefined
+                ? <p className="mw-empty">{chatError === undefined ? t('ui.chargement-de-l-espace') : `${tc('notServed')} (${chatError})`}</p>
+                : (
+                  <div className="mw-card">
+                    <ChannelList
+                      channels={chatChannels.filter(c => c.kind !== 'solo')}
+                      selected={undefined}
+                      onSelect={(id) => { setChatId(id); setView('chat') }}
+                      onCreate={createChat}
+                      t={tc}
+                    />
+                  </div>
+                )}
+            </section>
+          )}
+          {view !== 'agents' ? undefined : (
+            <section className="mw-screen" data-testid="team-agents">
+              <h1 className="mw-title">{t('shell.agents')}</h1>
+              {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? <p className="mw-empty">{t('shell.agents-none')}</p> : (
+                <ul className="mw-cards">
+                  {chatAgents.filter(a => a.retiredAt === undefined).map(agent => (
+                    <li key={agent.id} className="mw-card" data-testid="team-agent">
+                      <p className="mw-card-text"><b>{agent.name}</b> <span className="mw-card-meta">@{agent.handle}</span></p>
+                      <p className="mw-card-meta">{tc('agentModel', { provider: agent.provider, model: agent.model })}</p>
+                      <p className="mw-card-meta">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+          {view !== 'settings' ? undefined : (
+            <section className="mw-screen" data-testid="team-settings">
+              <h1 className="mw-title">{t('shell.settings')}</h1>
+              <div className="mw-card">
+                <h2 className="mw-card-title">{t('shell.views')}</h2>
+                <div className="mw-actions">
+                  <button type="button" className="mw-button" onClick={() => { setView('activity') }}>{t('ui.activite')}</button>
+                  <button type="button" className="mw-button" onClick={() => { setView('automations') }}>{t('ui.automatisations')}</button>
+                  {state.canAdmin !== true ? undefined : (
+                    <button type="button" className="mw-button" onClick={() => { setView('admin') }}>{t('ui.administration')}</button>
+                  )}
+                  <button type="button" className="mw-button" onClick={() => { setChannelId('team'); setView('channel') }}>{t('shell.legacy-feed')}</button>
+                </div>
+              </div>
+              {team.advancedHref === undefined ? undefined : (
+                <div className="mw-card">
+                  <h2 className="mw-card-title">{t('shell.advanced')}</h2>
+                  <p className="mw-card-meta">{t('shell.advanced-hint')}</p>
+                  <div className="mw-actions">
+                    <a className="mw-button" data-testid="advanced-mode" href={team.advancedHref}>{t('shell.advanced')}</a>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+        </>
+      )}
       {search === undefined ? undefined : (
         <div className="mndt-search-overlay" role="dialog" aria-modal="true" aria-label={t('ui.recherche')}>
           <div className="mndt-search-box">
@@ -1261,7 +1422,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           </div>
         </div>
       )}
-    </div>
+    </div>,
   )
 }
 

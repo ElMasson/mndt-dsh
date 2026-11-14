@@ -203,7 +203,7 @@ function TurnLine(props: {
 /**
  * A card a turn asked for, decided only by its button; a refusal carries its reason.
  */
-function CardView(props: {
+export function CardView(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
   readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
