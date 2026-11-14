@@ -334,8 +334,11 @@ export function ChannelThread(props: {
   readonly t: ChatTranslate
   /** For tests: how often to read again. */
   readonly pollMs?: number
+  /** Draw the feed and composer as mndt-web does (the standalone team page). */
+  readonly look?: 'mndt-web' | undefined
 }): ReactNode {
   const { chat, channel, t } = props
+  const web = props.look === 'mndt-web'
   const [thread, setThread] = useState<readonly ChatMessage[] | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const cursor = useRef<string | undefined>(undefined)
@@ -423,7 +426,7 @@ export function ChannelThread(props: {
         {thread === undefined ? (
           error === undefined ? <p className="mndt-hint">{t('loading')}</p> : undefined
         ) : thread.length === 0 ? (
-          <p className="mndt-hint" data-testid="chat-empty">{t('empty')}</p>
+          <p className={web ? 'mw-feed-empty' : 'mndt-hint'} data-testid="chat-empty">{web ? t('emptyChannel') : t('empty')}</p>
         ) : thread.map(m => (
           <MessageView
             key={m.id}
@@ -438,7 +441,7 @@ export function ChannelThread(props: {
           />
         ))}
       </div>
-      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} />
+      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} look={props.look} />
     </section>
   )
 }
@@ -455,6 +458,7 @@ function Composer(props: {
   readonly agents: readonly ChatAgent[]
   readonly onPosted: (message: ChatMessage) => void
   readonly t: ChatTranslate
+  readonly look?: 'mndt-web' | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const [text, setText] = useState('')
@@ -508,6 +512,75 @@ function Composer(props: {
     }
   }
 
+  const mentions = choices.length === 0 ? undefined : (
+    <ul className="mndt-mention-list" role="listbox" aria-label={t('mentionHint')} data-testid="chat-mentions">
+      {choices.map((a, i) => (
+        <li
+          key={a.id}
+          role="option"
+          aria-selected={i === active}
+          className="mndt-mention"
+          onMouseDown={(event) => { event.preventDefault(); pick(a.handle) }}
+        >
+          <b>@{a.handle}</b> <span className="mndt-hint">{a.name}</span>
+        </li>
+      ))}
+    </ul>
+  )
+
+  if (props.look === 'mndt-web') {
+    // The channel's agents, as the composer offers them: the mode line and the placeholder say who reads.
+    const here = props.agents.filter(a => channel.agents.includes(a.id) && a.retiredAt === undefined)
+    const label = channel.kind === 'solo'
+      ? t('writeToAgents')
+      : here.length === 1
+        ? t('noteOrMentionOne', { name: here[0]?.handle ?? '' })
+        : here.length > 1 ? t('noteOrMentionMany') : t('writeNote')
+    const people = channel.members.length
+    return (
+      <div className="mw-composer" data-testid="chat-composer">
+        <div className="mw-composer-inner">
+          <p className="mw-composer-mode" data-testid="channel-mode">
+            {channel.kind === 'solo' ? (
+              <>
+                <b>{t('laneMode')}</b>{' '}
+                {here.length === 0 ? t('laneNoAgent') : t('laneAgents')}
+              </>
+            ) : (
+              <>
+                <b># {channel.title || channel.name}</b>{' '}
+                {here.length === 0
+                  ? t(people === 1 ? 'visibleOneNoAgent' : 'visibleManyNoAgent', { n: people })
+                  : `${t('visiblePeopleAgents', {
+                    people: people === 1 ? t('onePerson') : t('nPeople', { n: people }),
+                    agents: here.length === 1 ? t('oneAgent') : t('nAgents', { n: here.length }),
+                  })} ${here.length === 1 ? t('agentOnMention', { name: here[0]?.handle ?? '' }) : t('agentsOnMention')} ${t('cardByPerson')}`}
+              </>
+            )}
+          </p>
+          {mentions}
+          <div className="mw-composer-row">
+            <textarea
+              ref={box}
+              className="mw-composer-input"
+              aria-label={label}
+              placeholder={label}
+              rows={1}
+              value={text}
+              onChange={(event) => { setText(event.target.value); setCaret(event.target.selectionStart); setActive(0) }}
+              onSelect={(event) => { setCaret(event.currentTarget.selectionStart) }}
+              onKeyDown={onKey}
+            />
+            <button type="button" className="mw-primary" disabled={!text.trim() || busy} onClick={() => { void send() }}>
+              {t('post')}
+            </button>
+          </div>
+          {error === undefined ? undefined : <p role="alert" className="mw-composer-error">{error}</p>}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="mndt-composer" data-testid="chat-composer">
       <div className="mndt-composer-frame">
@@ -516,21 +589,7 @@ function Composer(props: {
         ) : (
           <span className="mndt-composer-note">{t('notADecision')}</span>
         )}
-        {choices.length === 0 ? undefined : (
-          <ul className="mndt-mention-list" role="listbox" aria-label={t('mentionHint')} data-testid="chat-mentions">
-            {choices.map((a, i) => (
-              <li
-                key={a.id}
-                role="option"
-                aria-selected={i === active}
-                className="mndt-mention"
-                onMouseDown={(event) => { event.preventDefault(); pick(a.handle) }}
-              >
-                <b>@{a.handle}</b> <span className="mndt-hint">{a.name}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        {mentions}
         <textarea
           ref={box}
           className="mndt-input mndt-composer-input"

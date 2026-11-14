@@ -326,6 +326,7 @@ export const en = {
   'shell.views': 'Views',
   'shell.denied': 'Access not authorised: this address is not a member of the workspace.',
   'shell.sign-out': 'Sign out',
+  'shell.env-preprod': 'Preproduction',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -656,6 +657,7 @@ export const fr: Record<MndtKey, string> = {
   'shell.views': 'Vues',
   'shell.denied': 'Accès non autorisé : cette adresse n\'est pas membre de l\'espace.',
   'shell.sign-out': 'Se déconnecter',
+  'shell.env-preprod': 'Préproduction',
 }
 
 /** Substitution values for a message. */
