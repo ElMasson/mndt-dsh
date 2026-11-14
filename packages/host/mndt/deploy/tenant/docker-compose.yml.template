@@ -54,8 +54,9 @@ services:
       - __DATA__/model.env
     environment:
       DSH_HOME: /state/home
-      # Same for the entrypoint, run from the tools folder rather than the image.
-      MNDT_ENTRYPOINT_CODE: "__ENTRYPOINT_CODE__"
+      # Same for the tools folder (entrypoint and connector tools), run from disk
+      # rather than the image: one fingerprint of everything create-tenant.sh puts there.
+      MNDT_TOOLS_CODE: "__TOOLS_CODE__"
       DSH_MNDT_IDENTITY: __OWNER__
       DSH_MNDT_LOCAL_OWNER: __OWNER__
       DSH_MNDT_STATE: /state/state.json
