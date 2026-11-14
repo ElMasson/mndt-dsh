@@ -158,6 +158,10 @@ pnpm applies local patches to the following packages at install time, so shipped
 
 The optional experimental Inspector distributes a locally compiled copy of [chrome-devtools-frontend 1.0.1638082](https://www.npmjs.com/package/chrome-devtools-frontend/v/1.0.1638082), from upstream revision [0e1186138ed519d9659c1874bf6375eca4483c72](https://chromium.googlesource.com/devtools/devtools-frontend/+/0e1186138ed519d9659c1874bf6375eca4483c72). The build includes the Chromium [BSD-3-Clause license](packages/experimental/inspector/assets/devtools/LICENSE) and the third-party license and notice files supplied by the npm source. The Chromium root license does not replace those dependencies' licenses.
 
+## mndt team screen icons
+
+The mndt team screen (`@deepseek-ai/dsh-client-ui-mndt`) draws nineteen icons whose SVG paths are copied from [lucide-react 0.575.0](https://www.npmjs.com/package/lucide-react/v/0.575.0), under the [ISC license](packages/client/ui-mndt/src/assets/lucide-LICENSE.txt); the package itself is not a dependency.
+
 
 ## Official Claude Code platform payloads
 
@@ -258,6 +262,7 @@ External packages **directly declared** for development, tests, types, or toolin
 | [`spdx-expression-parse`](https://github.com/jslicense/spdx-expression-parse.js) | MIT |
 | [`tsdown`](https://github.com/rolldown/tsdown) | MIT |
 | [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server) | Apache-2.0 |
+| [`unrun`](https://github.com/Gugustinette/unrun) | MIT |
 | [`vite`](https://github.com/vitejs/vite) | MIT |
 | [`vite-tsconfig-paths`](https://github.com/aleclarson/vite-tsconfig-paths) | MIT |
 | [`vitepress`](https://github.com/vuejs/vitepress) | MIT |

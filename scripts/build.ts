@@ -95,6 +95,8 @@ export function buildGates(
       gates.push(libraryGate(step, step.id === 'host-src' ? ['native'] : step.needs, env))
     }
     gates.push(pnpmGate('web', 'Web build', ['run', 'build:web'], ['client-bundle'], env))
+    // The standalone mndt team page: a static page apart from the shell, served by the workbench API.
+    gates.push(pnpmGate('team-page', 'mndt team page', ['exec', 'vite', 'build', '--config', 'packages/client/ui-mndt/standalone/vite.config.ts'], ['client-bundle'], env))
   }
   if (scope === 'typecheck') {
     for (const step of contractSteps(root, 'all')) gates.push(libraryGate(step, step.needs, env))
