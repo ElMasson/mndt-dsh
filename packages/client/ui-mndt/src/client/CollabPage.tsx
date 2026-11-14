@@ -14,6 +14,8 @@ import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { CardView, ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
+import { TeamContext } from './TeamContext.tsx'
+import { Icon } from './Icons.tsx'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
@@ -60,6 +62,8 @@ export interface TeamFrame {
   readonly name?: string | undefined
   /** Where the full DSH interface is (« Mode avancé »), for the owner only. */
   readonly advancedHref?: string | undefined
+  /** The team's names by lower-case address, where they are served. */
+  readonly names?: Readonly<Record<string, string>> | undefined
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
@@ -70,6 +74,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
   const [view, setView] = useState<View>('channel')
+  // On a narrow screen the channel's context opens over the page (the team frame only).
+  const [contextOpen, setContextOpen] = useState(false)
   // Team channels (lot 1): what the workbench serves, or why it could not be read.
   const [chatChannels, setChatChannels] = useState<readonly ChatChannel[] | undefined>(undefined)
   const [chatAgents, setChatAgents] = useState<readonly ChatAgent[]>([])
@@ -521,7 +527,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     if (team === undefined) return page
     const current = chatChannels?.find(c => c.id === chatId)
     const place: TeamPlace | undefined = view === 'chat'
-      ? (current === undefined || current.kind === 'solo' ? 'lane' : undefined)
+      ? (current === undefined || current.kind === 'solo' ? 'lane' : 'channels')
       : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'settings'
         ? view
         : 'settings'
@@ -968,6 +974,56 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       {(() => {
         const current = chatChannels?.find(c => c.id === chatId)
         if (chat === undefined || current === undefined) return undefined
+        if (team !== undefined) {
+          // As mndt-web draws a channel: a large title and its kind, the feed with its composer, and
+          // the context card beside it (a full-screen sheet below 1024 px, behind « Contexte »).
+          return (
+            <div className="mw-channel" style={{ display: view === 'chat' ? undefined : 'none' }}>
+              <section className="mw-channel-main" aria-label={current.kind === 'solo' ? tc('lane') : `# ${current.title || current.name}`}>
+                <header className="mw-channel-head">
+                  <div>
+                    <h1 className="mw-title">{current.kind === 'solo' ? tc('lane') : `# ${current.title || current.name}`}</h1>
+                    {current.kind === 'solo' ? undefined : <p className="mw-subtitle">{tc('ctxKindTeam')}</p>}
+                  </div>
+                  <button type="button" className="mw-secondary mw-context-open" onClick={() => { setContextOpen(true) }}>
+                    <Icon name="Info" /> {tc('context')}
+                  </button>
+                </header>
+                <ChannelThread
+                  chat={chat}
+                  channel={current}
+                  agents={chatAgents}
+                  cards={chatCards ?? state.approvals}
+                  cardsError={cardsError}
+                  canDecide={state.canAdmin === true}
+                  onDecide={decideCard}
+                  openTrace={openTrace}
+                  you={state.you}
+                  onSettled={settled}
+                  t={tc}
+                  look="mndt-web"
+                />
+              </section>
+              <aside className="mw-aside" data-open={contextOpen ? 'true' : undefined} aria-label={tc('channelContext')}>
+                {!contextOpen ? undefined : (
+                  <div className="mw-aside-close">
+                    <button type="button" className="mw-secondary" aria-label={tc('closeContext')} onClick={() => { setContextOpen(false) }}>
+                      <Icon name="X" />
+                    </button>
+                  </div>
+                )}
+                <TeamContext
+                  channel={current}
+                  agents={chatAgents}
+                  t={tc}
+                  onAdd={addChatAgent}
+                  names={team.names}
+                  onMemory={() => { setContextOpen(false); setView('memory') }}
+                />
+              </aside>
+            </div>
+          )
+        }
         return (
           <>
             <section className="mndt-main mndt-chat" style={{ display: view === 'chat' ? undefined : 'none' }}>

@@ -6,8 +6,10 @@ import type { TeamShellProps } from '../src/client/TeamShell.tsx'
 import { CollabPage } from '../src/client/CollabPage.tsx'
 import type { MndtFace, PageStateRow } from '../src/client/face.ts'
 import { translate } from '../src/client/locales.ts'
+import { chatFrench } from '../src/client/chatLocales.ts'
+import { createMockChat } from '../src/client/mockChat.ts'
 import { TEAM_CSS } from '../src/client/teamStyles.ts'
-import { TeamApp, frameOf, whoAmI } from '../src/client/TeamApp.tsx'
+import { TeamApp, envLabel, frameOf, namesOf, orgOf, whoAmI } from '../src/client/TeamApp.tsx'
 
 afterEach(() => { cleanup() })
 
@@ -198,6 +200,33 @@ describe('the standalone page, before the frame', () => {
     expect(await whoAmI(async () => { throw new Error('down') })).toEqual({ kind: 'unread' })
   })
 
+  it('refuses someone the API knows but who holds no role in the team', async () => {
+    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re' }))).toEqual({ kind: 'refused' })
+    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re', role: '' }))).toEqual({ kind: 'refused' })
+  })
+
+  it('reads the organisation, and shows none where it is not declared or not read', async () => {
+    expect(await orgOf(async () => answer(200, { name: 'DATANALYSIS', slug: 'datanalysis', env: 'preprod' })))
+      .toEqual({ name: 'DATANALYSIS', slug: 'datanalysis', env: 'preprod' })
+    expect(await orgOf(async () => answer(200, { name: 'DATANALYSIS', slug: 'datanalysis' }))).toEqual({ name: 'DATANALYSIS', slug: 'datanalysis' })
+    expect(await orgOf(async () => answer(200, { name: '', slug: '' }))).toBeUndefined()
+    expect(await orgOf(async () => answer(502, {}))).toBeUndefined()
+    expect(await orgOf(async () => { throw new Error('down') })).toBeUndefined()
+  })
+
+  it('labels pre-production only, as mndt-web does', () => {
+    expect(envLabel('preprod')).toBe('Préproduction')
+    expect(envLabel('prod')).toBeUndefined()
+    expect(envLabel(undefined)).toBeUndefined()
+  })
+
+  it('reads the team\'s names by lower-case address, none where the team is not read', async () => {
+    const people = { people: [{ email: 'Duke@datanalysis.re', role: 'owner', name: 'Stéphane Masson' }, { email: 'b@datanalysis.re', role: 'viewer' }] }
+    expect(await namesOf(async () => answer(200, people))).toEqual({ 'duke@datanalysis.re': 'Stéphane Masson' })
+    expect(await namesOf(async () => answer(403, {}))).toEqual({})
+    expect(await namesOf(async () => { throw new Error('down') })).toEqual({})
+  })
+
   it('gives « Mode avancé » to the owner only', () => {
     expect(frameOf({ kind: 'known', me: { you: 'a', role: 'owner' } }).advancedHref).toBe('/dsh/')
     expect(frameOf({ kind: 'known', me: { you: 'a', role: 'operator' } }).advancedHref).toBeUndefined()
@@ -208,12 +237,103 @@ describe('the standalone page, before the frame', () => {
     render(<TeamApp api={face(state())} chat={undefined as never} identity={Promise.resolve({ kind: 'refused' })} />)
     expect((await screen.findByTestId('team-denied')).textContent).toContain('Accès non autorisé')
     expect(screen.getByRole('link', { name: 'Se déconnecter' }).getAttribute('href')).toBe('/oauth2/sign_out')
+    // Refused, the page read nothing else.
     expect(screen.queryByTestId('team-shell')).toBeNull()
   })
 
   it('a known person gets the frame, with their name', async () => {
-    const identity = Promise.resolve({ kind: 'known', me: { you: 'stephane@datanalysis.re', name: 'Stéphane' } } as const)
-    render(<TeamApp api={face(state())} chat={undefined as never} identity={identity} />)
+    const identity = Promise.resolve({ kind: 'known', me: { you: 'stephane@datanalysis.re', name: 'Stéphane', role: 'owner' } } as const)
+    const fetcher = vi.fn(async (input: string) => input === '/mndt-api/org'
+      ? answer(200, { name: 'DATANALYSIS', slug: 'datanalysis', env: 'preprod' })
+      : answer(200, { people: [] }))
+    render(<TeamApp api={face(state())} chat={undefined as never} identity={identity} fetcher={fetcher} />)
     expect((await screen.findByTestId('account-name')).textContent).toContain('Stéphane')
+    expect(screen.getByTestId('org').textContent).toBe('DATANALYSISPréproduction')
+  })
+})
+
+describe('a channel in the team frame, as mndt-web draws it', () => {
+  const at = '2026-11-14T09:00:00.000Z'
+  const you = 'stephane@datanalysis.re'
+  const assistant = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash', connectors: [], eurPerMonth: 5, eurThisMonth: 0.25, createdBy: you, createdAt: at }
+
+  /** @param agents - the agents in « test ». @returns the page on a team channel, opened. */
+  async function open(agents: readonly string[] = [], names: Readonly<Record<string, string>> = {}): Promise<void> {
+    const chat = createMockChat({
+      you,
+      agents: [assistant],
+      channels: [
+        { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo', members: [you], agents: [], connectors: [], createdBy: you, createdAt: at },
+        { id: 'chn_1', name: 'test', title: 'test', kind: 'team', members: [you, 'lecteur@datanalysis.re'], agents: [...agents], connectors: [], createdBy: you, createdAt: at },
+      ],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} t={translate} tc={chatFrench} team={{ names }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: '# test' }))
+    await screen.findByTestId('context-panel')
+  }
+
+  it('titles the channel with its kind below, and says an empty feed in the centre', async () => {
+    await open()
+    expect(screen.getByRole('heading', { level: 1, name: '# test' })).toBeTruthy()
+    expect(document.querySelector('.mw-subtitle')?.textContent).toBe('Équipe')
+    expect((await screen.findByTestId('chat-empty')).textContent).toBe('Aucun message dans ce canal pour l\'instant.')
+  })
+
+  it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
+    await open()
+    const card = screen.getByTestId('context-panel')
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Mémoire', 'Documents', 'Membres'])
+    expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
+    expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
+    // Members by the part before @, the address kept as title.
+    expect([...card.querySelectorAll('.mw-ctx-member')].map(m => m.textContent)).toEqual(['stephane', 'lecteur'])
+  })
+
+  it('names the members as /people serves them', async () => {
+    await open([], { 'stephane@datanalysis.re': 'Stéphane Masson' })
+    expect([...document.querySelectorAll('.mw-ctx-member')].map(m => m.textContent)).toEqual(['Stéphane Masson', 'lecteur'])
+  })
+
+  it('« Toutes les mémoires » leads to Mémoire', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'Toutes les mémoires' }))
+    expect(screen.getByTestId('team-memory')).toBeTruthy()
+  })
+
+  it('says who reads a channel without an agent, and posts with « Publier »', async () => {
+    await open()
+    expect(screen.getByTestId('channel-mode').textContent).toBe('# test Visible par 2 personnes. Aucun agent ici : personne ne lit ce fil hors de ses membres.')
+    const box = screen.getByPlaceholderText('Écrire une note')
+    fireEvent.change(box, { target: { value: 'bonjour' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Publier' }))
+    await waitFor(() => { expect(screen.getAllByText('bonjour').length).toBeGreaterThan(0) })
+  })
+
+  it('with an agent, says it answers when mentioned and that a person decides its cards', async () => {
+    await open(['agt_1'])
+    expect(screen.getByTestId('channel-mode').textContent).toBe(
+      '# test Visible par 2 personnes et 1 agent. L\'agent répond quand on le mentionne (@assistant). Ce qu\'il propose devient une carte, décidée par une personne.',
+    )
+    expect(screen.getByPlaceholderText('Une note, une question, ou @assistant pour lui parler…')).toBeTruthy()
+    const agent = within(screen.getByTestId('context-panel')).getByTestId('chat-agent')
+    expect(agent.textContent).toContain('LLM : scaleway-genapi · deepseek-v4.1-flash')
+  })
+
+  it('the lane speaks of your agents, with no subtitle', async () => {
+    await open()
+    fireEvent.click(within(screen.getByTestId('side-nav')).getByRole('button', { name: 'Ma lane' }))
+    await waitFor(() => { expect(screen.getByRole('heading', { level: 1, name: 'Ma lane' })).toBeTruthy() })
+    const lane = screen.getAllByTestId('channel-mode').find(p => p.textContent?.startsWith('Conversation'))
+    expect(lane?.textContent).toBe('Conversation avec vos agents Visible par vous seul. Aucun agent ne lit encore votre lane.')
+  })
+
+  it('on a narrow screen, « Contexte » opens the card over the page and closes it', async () => {
+    await open()
+    const aside = document.querySelector('.mw-aside[aria-label="Contexte du canal"]') as HTMLElement
+    expect(aside.dataset.open).toBeUndefined()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Contexte' })[0] as HTMLElement)
+    expect(aside.dataset.open).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Fermer le contexte du canal' }))
+    expect(aside.dataset.open).toBeUndefined()
   })
 })
