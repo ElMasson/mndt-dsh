@@ -52,6 +52,11 @@ describe('seed-team.sh waits for the API', { timeout: 60_000 }, () => {
     expect(existsSync(join(docker.dir, 'seeded'))).toBe(true)
   })
 
+  it('bounds each probe, so an API that accepts without answering cannot hold the wait past its deadline', () => {
+    const script = readFileSync(join(deploy, 'tenant', 'seed-team.sh'), 'utf8')
+    expect(script).toMatch(/fetch\('http:\/\/workbench:8795\/health',\{signal:AbortSignal\.timeout\(5000\)\}\)/)
+  })
+
   it('stops at the deadline with a message that says where to look, and never seeds', () => {
     const root = updatedTenant()
     const docker = fakeDocker(1000)

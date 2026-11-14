@@ -50,12 +50,13 @@ fi
 # Always wait for the API before the seed, not only after a restart of ours:
 # right after `docker compose up -d` (step 13 of the guide) it is not listening
 # yet, and the seed failed with ECONNREFUSED. A refused or failed connection is
-# retried; only the deadline ends the wait, with a message that says where to look.
+# retried, and a probe the API accepts without answering gives up after 5 s;
+# only the deadline ends the wait, with a message that says where to look.
 wait_secs=${MNDT_API_WAIT_SECONDS:-180}
 echo "waiting for the workbench API (up to ${wait_secs} s)"
 up=0; waited=0
 while [ "$waited" -lt "$wait_secs" ]; do
-  if "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" >/dev/null 2>&1; then up=1; break; fi
+  if "${compose[@]}" exec -T gateway node -e "fetch('http://workbench:8795/health',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" >/dev/null 2>&1; then up=1; break; fi
   sleep 2; waited=$((waited + 2))
 done
 [ "$up" = 1 ] || { echo "the workbench API did not answer within ${wait_secs} s: docker compose -f $app/docker-compose.yml logs workbench" >&2; exit 1; }

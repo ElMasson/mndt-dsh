@@ -128,7 +128,11 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const composePath = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
     const compose = readFileSync(composePath, 'utf8')
     expect(compose).toContain(`MNDT_GATEWAY_CODE: "${sha(join(deploy, 'gateway', 'server.mjs'))}"`)
-    expect(compose).toContain(`MNDT_ENTRYPOINT_CODE: "${sha(join(deploy, 'workbench-entrypoint.sh'))}"`)
+    // One fingerprint of everything put in the tools folder: the three connector tools, then the entrypoint.
+    const toolsCode = (dir: string): string => createHash('sha256')
+      .update(Buffer.concat([...['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs'].map(tool => readFileSync(join(dir, 'connectors', tool))), readFileSync(join(dir, 'workbench-entrypoint.sh'))]))
+      .digest('hex').slice(0, 16)
+    expect(compose).toContain(`MNDT_TOOLS_CODE: "${toolsCode(deploy)}"`)
     // The 13/11 update: only server.mjs changed on disk; the rendered compose must change with it.
     const copy = mkdtempSync(join(tmpdir(), 'deploy-'))
     cpSync(deploy, copy, { recursive: true })
@@ -137,6 +141,12 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const after = readFileSync(composePath, 'utf8')
     expect(after).not.toBe(compose)
     expect(after).toContain(`MNDT_GATEWAY_CODE: "${sha(join(copy, 'gateway', 'server.mjs'))}"`)
+    // A connector tool alone (mcp-proxy.mjs) changes the tools fingerprint, so up -d recreates the workbench.
+    writeFileSync(join(copy, 'connectors', 'mcp-proxy.mjs'), `${readFileSync(join(deploy, 'connectors', 'mcp-proxy.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    const third = readFileSync(composePath, 'utf8')
+    expect(third).toContain(`MNDT_TOOLS_CODE: "${toolsCode(copy)}"`)
+    expect(toolsCode(copy)).not.toBe(toolsCode(deploy))
   })
 
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {
