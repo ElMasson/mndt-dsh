@@ -78,12 +78,22 @@ chmod 400 "$root$conf/client_secret" "$root$conf/cookie_secret"
 if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$conf/cookie_secret"; fi
 
 quoted=$(printf '%s' "$email_domains" | awk -F, '{for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i}')
+# Fingerprints of the code the containers mount from disk (gateway/server.mjs,
+# workbench-entrypoint.sh): written into the compose so that `up -d` recreates a
+# container whose code changed, even when its image and settings did not.
+fingerprint() { sha256sum "$1" | cut -c1-16; }
+gateway_code=$(fingerprint "$here/gateway/server.mjs")
+# Everything this script puts in the tools folder, which the workbench runs from
+# disk: the entrypoint and the connector tools. One aggregated fingerprint.
+tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs)
+tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
 render() {
   sed -e "s|__SLUG__|$slug|g" -e "s|__DOMAIN__|$domain|g" -e "s|__OWNER__|$owner|g" \
       -e "s|__APP__|$app|g" -e "s|__CONF__|$conf|g" -e "s|__DATA__|$data|g" \
       -e "s|__TRAEFIK_NETWORK__|$traefik_network|g" -e "s|__TRUSTED_PROXY__|$trusted_proxy|g" \
       -e "s|__IMAGE__|$image|g" -e "s|__ENTRA_TENANT__|$entra_tenant|g" \
-      -e "s|__CLIENT_ID__|$client_id|g" -e "s|__EMAIL_DOMAINS__|$quoted|g" "$1"
+      -e "s|__CLIENT_ID__|$client_id|g" -e "s|__EMAIL_DOMAINS__|$quoted|g" \
+      -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
 }
 render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg"
 chmod 644 "$root$conf/oauth2.cfg"
@@ -94,7 +104,7 @@ cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
 cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
-for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs; do
+for tool in "${tools[@]}"; do
   cp "$here/connectors/$tool" "$root$data/tools/$tool"
 done
 # The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,

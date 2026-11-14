@@ -52,6 +52,21 @@ export interface MndtConfig {
 }
 
 /** The Remote gateway. */
+/**
+ * Whether the workstation Remote is closed: it is on a team workbench, where
+ * several people reach the same shell behind single sign-on (a proxy user
+ * header is configured) and the product API serves each under their own identity.
+ * @param proxyUserHeader - the header the proxy proves the person with, if any.
+ * @returns the Remote's JSON refusal, or undefined when the Remote is open.
+ */
+export function teamRemoteRefusal(proxyUserHeader: string | undefined): string | undefined {
+  if (proxyUserHeader === undefined || proxyUserHeader === '') return undefined
+  return JSON.stringify({
+    ok: false,
+    error: 'on a team workbench the product API (/mndt-api) serves each person under their own identity; the workstation Remote is closed',
+  })
+}
+
 export class WorkbenchGateway extends TypertRemoteService {
   /** Services read here: the agent runtime and the Loader's connector entries. */
   static inject = ['agents', 'loader']
@@ -252,9 +267,23 @@ export class WorkbenchGateway extends TypertRemoteService {
     return can(table.grants, this.identity, capability)
   }
 
+  /**
+   * On a team workbench (several people behind single sign-on), every person
+   * reaches the same shell, so this Remote would act as the workstation's
+   * identity for anyone: read everything, decide a card, run a mission as the
+   * owner. There, the product API serves each person under their own identity,
+   * and the Remote is closed. A workstation of one person keeps it.
+   * @returns the refusal, as the Remote's JSON answer, or undefined when open.
+   */
+  private closedToTeam(): string | undefined {
+    return teamRemoteRefusal(this.proxyUserHeader)
+  }
+
   /** @returns everything the morning page shows, as JSON. */
   @Remote('state')
   async state(): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     try {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
@@ -287,6 +316,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('runMission')
   async runMission(kind: MissionKind, prompt: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const decision = await this.allowed('workflows.write')
     if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     let mission: Mission
@@ -315,11 +346,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('search')
   async search(query: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     try {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
       const canAdmin = table.ok && can(table.grants, this.identity, 'rights.write').allowed
-      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query) } })
+      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true) } })
     } catch (error) {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
@@ -332,6 +365,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('cancelMission')
   async cancelMission(id: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const decision = await this.allowed('workflows.write')
     if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     const rights = await this.allowed('rights.write')
@@ -349,6 +384,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('retryMission')
   async retryMission(id: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const decision = await this.allowed('workflows.write')
     if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     let mission: Mission
@@ -375,6 +412,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('approveBrief')
   async approveBrief(briefId: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const decision = await this.allowed('workflows.write')
     if (!decision.allowed) return JSON.stringify({ ok: false, error: decision.reason })
     try {
@@ -393,6 +432,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('decide')
   async decide(approvalId: string, decision: ApprovalState, reason?: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const allowed = await this.allowed('rights.write')
     if (!allowed.allowed) return JSON.stringify({ ok: false, error: allowed.reason })
     try {
@@ -411,6 +452,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   @Remote('remember')
   async remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<string> {
+    const closed = this.closedToTeam()
+    if (closed !== undefined) return closed
     const allowed = await this.allowed('agents.write')
     if (!allowed.allowed) return JSON.stringify({ ok: false, error: allowed.reason })
     try {

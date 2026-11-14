@@ -25,6 +25,8 @@ import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, writeFile } from 'node:fs/promises'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
+import { canReadApproval, canReadEvent } from './visibility.ts'
+import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
@@ -146,6 +148,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
     const decision = can(table.grants, identity, capability)
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
+  }
+
+  /**
+   * What one person may read, resolved once per request (see visibility.ts).
+   * @param identity - the reader.
+   * @returns their channels and whether they may decide.
+   */
+  const readerOf = async (identity: string): Promise<Reader> => {
+    const table = await grants.grants()
+    return {
+      identity,
+      // Read from the state as it is: reading never creates the person's lane.
+      channels: new Set(((await service.snapshot()).channels ?? [])
+        .filter(channel => channel.members.includes(identity))
+        .map(channel => channel.id)),
+      decider: table.ok && can(table.grants, identity, 'rights.write').allowed,
+    }
   }
 
   /**
@@ -338,7 +357,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const snapshot = await service.snapshot()
         const table = await grants.grants()
         const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
-        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '') })
+        const reader = await readerOf(identity)
+        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '', approval => canReadApproval(reader, approval)) })
       }
 
       if (request.method === 'GET' && path === '/metrics') {
@@ -377,6 +397,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const role = table.ok ? roleOf(table.grants, identity) : undefined
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const canShare = table.ok ? can(table.grants, identity, 'sharing.write').allowed : false
+        const reader = await readerOf(identity)
         const page: PageState = {
           you: identity,
           canWrite: decision.allowed,
@@ -385,9 +406,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           canShare,
           missions: snapshot.missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity).slice(0, 30),
           briefs: snapshot.briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity).slice(0, 30),
-          approvals: snapshot.approvals.filter(approval => approval.state === 'pending'),
+          approvals: snapshot.approvals.filter(approval => approval.state === 'pending' && canReadApproval(reader, approval)),
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
-          events: snapshot.events.slice(-40),
+          events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
           mandates: snapshot.mandates
             .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
             .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
@@ -589,7 +610,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       if (request.method === 'GET' && path === '/approvals') {
         const state = (request.query?.state ?? 'pending') as ApprovalState | 'all'
-        return respond(200, { approvals: await service.listApprovals(state) })
+        // A card is read where it was asked (visibility.ts). `canDecide` says, for
+        // the reader, whether the card is theirs to decide; `mine=1` keeps exactly
+        // those, pending: the « À traiter » queue.
+        const reader = await readerOf(identity)
+        const visible = (await service.listApprovals(state))
+          .filter(approval => canReadApproval(reader, approval))
+          .map(approval => ({ ...approval, canDecide: reader.decider && approval.state === 'pending' }))
+        const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
+        return respond(200, { approvals })
       }
 
       if (request.method === 'POST' && path === '/approvals') {
@@ -617,9 +646,13 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && /^\/approvals\/[^/]+\/decide$/.test(path)) {
+        const id = path.split('/')[2] ?? ''
+        // A card is decided where it is read: a channel's card by a member of that
+        // channel who may decide. Unreadable reads as absent, never as forbidden.
+        const card = (await service.snapshot()).approvals.find(candidate => candidate.id === id)
+        if (card === undefined || !canReadApproval(await readerOf(identity), card)) return respond(404, { error: `no approval ${id}` })
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
-        const id = path.split('/')[2] ?? ''
         const input = parseBody(request.body)
         const decision = input.decision
         if (decision !== 'approved' && decision !== 'rejected') {
@@ -1034,7 +1067,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/events') {
-        return respond(200, { events: await service.events(Number(request.query?.limit ?? 100)) })
+        // The journal of what happened, each line only where its subject is readable.
+        const reader = await readerOf(identity)
+        const snapshot = await service.snapshot()
+        const limit = Number(request.query?.limit ?? 100)
+        const events = snapshot.events.filter(event => canReadEvent(reader, event, snapshot))
+        return respond(200, { events: events.slice(-(Number.isFinite(limit) && limit > 0 ? limit : 100)) })
       }
 
       return respond(404, { error: `no route ${request.method} ${path}` })
