@@ -61,7 +61,11 @@ done
 [[ $owner =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "--owner <email> is required" >&2; exit 1; }
 [ -n "$email_domains" ] || email_domains=${domain#*.}
 [ -n "$org_name" ] || org_name=$(printf '%s' "$slug" | tr '[:lower:]' '[:upper:]')
-[[ $org_name =~ ^[^\|\"\\]{1,60}$ ]] || { echo "--org-name: 60 characters at most, without | \" or \\" >&2; exit 1; }
+# Rendered by sed into a Compose file: a sed or Compose special character would
+# corrupt it (& repeats the match, $ interpolates), a control character breaks the line.
+if [ ${#org_name} -gt 60 ] || [[ $org_name == *[\|\"\\\&\$\`]* ]] || [[ $org_name == *[[:cntrl:]]* ]]; then
+  echo "--org-name: 60 characters at most, without | \" \\ & \$ \` or control characters" >&2; exit 1
+fi
 [ -z "$env_name" ] || [[ $env_name =~ ^(prod|preprod)$ ]] || { echo "--env is prod or preprod: $env_name" >&2; exit 1; }
 
 root=${MNDT_ROOT:-}

@@ -58,7 +58,8 @@ export function identityOf(
     const match = /^Bearer\s+(.+)$/i.exec(request.authorization.trim())
     const token = match?.[1]
     if (token === undefined) return undefined
-    return options.tokens?.[token]?.user
+    // One spelling of a person everywhere: a token's user is compared like a proxied e-mail.
+    return options.tokens?.[token]?.user.trim().toLowerCase()
   }
   const header = options.proxyUserHeader
   if (header === undefined) return undefined

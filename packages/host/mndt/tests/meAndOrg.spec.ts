@@ -77,5 +77,8 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(compose).toContain('DSH_MNDT_ENV: "preprod"')
     expect(() => create('--env', 'staging')).toThrow()
     expect(() => create('--org-name', 'a|b')).toThrow()
+    // Rendered by sed into a Compose file: & would repeat the match, $ would interpolate.
+    for (const name of ['R&D', 'Cost $5', 'a`b`', 'two\nlines']) expect(() => create('--org-name', name), name).toThrow()
+    expect(readFileSync(join(root, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8')).toContain('DSH_MNDT_ORG_NAME: "Datanalysis Réunion"')
   })
 })

@@ -463,8 +463,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
         const input = parseBody(request.body)
         const canAdmin = can(table.grants, identity, 'rights.write').allowed
-        const delegant = typeof input.delegant === 'string' && canAdmin ? input.delegant : identity
-        const delegataire = typeof input.delegataire === 'string' ? input.delegataire : ''
+        const delegant = typeof input.delegant === 'string' && canAdmin ? input.delegant.trim().toLowerCase() : identity
+        const delegataire = typeof input.delegataire === 'string' ? input.delegataire.trim().toLowerCase() : ''
         if (!can(table.grants, delegant, 'workflows.write').allowed) {
           return respond(403, { error: `${delegant} cannot delegate: they do not hold workflows.write` })
         }
