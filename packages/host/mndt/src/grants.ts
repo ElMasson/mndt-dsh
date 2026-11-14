@@ -28,7 +28,7 @@ export function authorityGrants(options: { baseUrl: string; token: string }): Gr
           const role = asRole((row as { role?: unknown }).role)
           if (typeof subject !== 'string' || role === undefined) continue
           const scope = (row as { scope?: unknown }).scope
-          grants.push({ subject, role, ...(typeof scope === 'string' ? { scope } : {}) })
+          grants.push({ subject: subject.trim().toLowerCase(), role, ...(typeof scope === 'string' ? { scope } : {}) })
         }
         return { ok: true, grants }
       } catch (error) {
@@ -51,6 +51,16 @@ export function localGrants(owner: string | undefined): GrantSource {
 }
 
 /**
+ * @param name - a display name from the role file.
+ * @returns whether it can be shown as it is: one line, 1 to 80 characters, no control character.
+ */
+function isShownName(name: string): boolean {
+  const shown = name.trim()
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
+  return shown !== '' && shown.length <= 80 && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(name)
+}
+
+/**
  * A tenant's own role table, in one file (decided by Stephane, 13/11):
  * `{ "grants": [{ "subject": "<email>", "role": "owner|admin|operator|viewer", "name": "<shown>" }] }`,
  * `name` optional (80 characters at most), shown by the team screen and never granting anything.
@@ -70,10 +80,11 @@ export function fileGrants(path: string): GrantSource {
       try {
         const rows = (JSON.parse(await readFile(path, 'utf8')) as { grants?: unknown }).grants
         if (!Array.isArray(rows)) return {}
-        const names: Record<string, string> = {}
+        // A null-prototype table: a subject named __proto__ or constructor stays a plain key.
+        const names: Record<string, string> = Object.create(null) as Record<string, string>
         for (const row of rows) {
           const { subject, name } = row as { subject?: unknown; name?: unknown }
-          if (typeof subject === 'string' && typeof name === 'string' && name.trim() !== '' && name.trim().length <= 80) {
+          if (typeof subject === 'string' && typeof name === 'string' && isShownName(name)) {
             names[subject.trim().toLowerCase()] = name.trim()
           }
         }
@@ -105,8 +116,8 @@ export function fileGrants(path: string): GrantSource {
           return { ok: false, reason: `the role file ${path}, row ${index + 1}: a subject (e-mail) and a role among owner, admin, operator, viewer are required` }
         }
         const name = (row as { name?: unknown }).name
-        if (name !== undefined && (typeof name !== 'string' || name.trim().length > 80)) {
-          return { ok: false, reason: `the role file ${path}, row ${index + 1}: a name is a text of 80 characters at most` }
+        if (name !== undefined && (typeof name !== 'string' || !isShownName(name))) {
+          return { ok: false, reason: `the role file ${path}, row ${index + 1}: a name is one line of 80 characters at most, without control characters` }
         }
         grants.push({ subject: subject.trim().toLowerCase(), role })
       }

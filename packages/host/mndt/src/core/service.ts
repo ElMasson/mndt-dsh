@@ -147,7 +147,13 @@ export class WorkbenchService {
       const loaded = await this.#options.store.load()
       // Older state files predate mandates; they read as no mandates, never as a crash.
       const mandates = (loaded as { mandates?: readonly Mandate[] }).mandates ?? []
-      this.#state = { ...loaded, mandates }
+      // One spelling of a person: members written with capitals before identities were normalised
+      // read as the lower-case e-mail the proxy proves, so nobody loses a channel.
+      const channels = loaded.channels?.map(channel => ({
+        ...channel,
+        members: [...new Set(channel.members.map(email => email.trim().toLowerCase()))],
+      }))
+      this.#state = { ...loaded, mandates, ...(channels === undefined ? {} : { channels }) }
       this.#loaded = true
     }
     return this.#state
@@ -831,7 +837,7 @@ export class WorkbenchService {
         name,
         title: title || name,
         kind: 'team',
-        members: [...new Set([actor, ...(draft.members ?? [])])],
+        members: [...new Set([actor, ...(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
         agents: [...new Set(agents)],
         connectors: [...new Set(draft.connectors ?? [])].sort(),
         createdBy: actor,
@@ -877,8 +883,10 @@ export class WorkbenchService {
       const added = change.addAgents ?? []
       const unknown = added.filter(agentId => !(state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined))
       if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
-      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])])]
-        .filter(email => !(change.removeMembers ?? []).includes(email))
+      // One spelling of a person: an e-mail written Prenom.Nom@ is the same member as prenom.nom@.
+      const removed = (change.removeMembers ?? []).map(email => email.trim().toLowerCase())
+      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
+        .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
       const next: Channel = {
         ...channel,
