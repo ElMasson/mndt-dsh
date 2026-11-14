@@ -102,7 +102,8 @@ export interface MndtApiOptions {
 }
 
 /** Where the standalone team page was built (vite, ui-mndt standalone): index.html and team-assets/. */
-const teamDir = (): string => process.env.DSH_MNDT_TEAM_DIR ?? resolve(import.meta.dirname, '..', '..', '..', 'client', 'ui-mndt', 'lib', 'team')
+// Resolved, so a configured path with a trailing slash names the same folder.
+const teamDir = (): string => resolve(process.env.DSH_MNDT_TEAM_DIR ?? resolve(import.meta.dirname, '..', '..', '..', 'client', 'ui-mndt', 'lib', 'team'))
 const TEAM_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -395,7 +396,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
     // The standalone team page (ui-mndt lib/team): static files, no data, no identity
     // needed (the sign-on proxy already admitted the person; the page reads /me).
-    if (request.method === 'GET' && (path === '/team' || path.startsWith('/team/'))) return await teamFile(path)
+    // GET and HEAD alike: the gateway relays both for the page (HTTP leaves the body out of a HEAD answer).
+    if ((request.method === 'GET' || request.method === 'HEAD') && (path === '/team' || path.startsWith('/team/'))) return await teamFile(path)
 
     const identity = identityOf(request, options.identity)
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
