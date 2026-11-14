@@ -9,6 +9,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { gapSignature, proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
 
+const SHELL_OWNER = 'duke@datanalysis.re'
+
 const gatewayScript = join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')
 const cleanup: (() => void)[] = []
 afterEach(() => { for (const stop of cleanup.splice(0)) stop() })
@@ -49,7 +51,7 @@ async function workbench(upgrade: Upgrade): Promise<string> {
 async function gateway(target: string): Promise<{ port: number; child: ChildProcess }> {
   const port = 20000 + Math.floor(Math.random() * 20000)
   const child = spawn(process.execPath, [gatewayScript], {
-    env: { ...process.env, PORT: String(port), API: target, WORKBENCH: target, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile() },
+    env: { ...process.env, PORT: String(port), API: target, WORKBENCH: target, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: SHELL_OWNER },
     stdio: 'ignore',
   })
   cleanup.push(() => { child.kill() })
@@ -66,7 +68,8 @@ async function openSocket(port: number): Promise<{ socket: Socket; status: strin
   socket.on('error', () => undefined)
   await new Promise<void>((resolve) => { socket.once('connect', () => { resolve() }) })
   // Signed as the sign-on proxy relays it: the gateway answers nothing else.
-  socket.write(`GET /shell HTTP/1.1\r\nhost: equipe.datanalysis.re\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\ngap-signature: ${gapSignature('GET', '/shell', {})}\r\n\r\n`)
+  // The shell's WebSocket is the owner's alone.
+  socket.write(`GET /shell HTTP/1.1\r\nhost: equipe.datanalysis.re\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nx-forwarded-email: ${SHELL_OWNER}\r\ngap-signature: ${gapSignature('GET', '/shell', { 'x-forwarded-email': SHELL_OWNER })}\r\n\r\n`)
   const status = await new Promise<string>((resolve) => {
     socket.once('data', (chunk) => { resolve(String(chunk).split('\r\n')[0] ?? '') })
     socket.once('close', () => { resolve('closed') })
@@ -107,7 +110,7 @@ describe('the gateway survives connections that end abruptly', { timeout: 30_000
 
   it('the workbench cutting an answer after its headers', async () => {
     const { port, child } = await gateway(await workbench('accept'))
-    await proxyFetch(`http://127.0.0.1:${port}`, '/cut').then(r => r.text()).catch(() => 'cut')
+    await proxyFetch(`http://127.0.0.1:${port}`, '/cut', { headers: { 'x-forwarded-email': SHELL_OWNER } }).then(r => r.text()).catch(() => 'cut')
     await stillServes(port, child)
   })
 

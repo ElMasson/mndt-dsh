@@ -22,7 +22,8 @@ import { normalise, readAutomations, runAutomation, writeAutomations } from './a
 import type { Automation } from './automations.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, realpath, writeFile } from 'node:fs/promises'
+import { extname, resolve } from 'node:path'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { canReadApproval, canReadEvent } from './visibility.ts'
@@ -48,6 +49,8 @@ export interface MndtApiRequest {
 export interface MndtApiResponse {
   readonly status: number
   readonly body: unknown
+  /** A file answered as it is (the team page), instead of the JSON body. */
+  readonly file?: { readonly contentType: string; readonly data: Buffer }
 }
 
 /** Runs one mission for real. */
@@ -94,6 +97,47 @@ export interface MndtApiOptions {
   readonly connectors?: () => Promise<readonly ConnectorInfo[]>
   /** Agent turns of mentions; without it, a mention queues a turn nobody runs. */
   readonly turns?: TurnScheduler
+}
+
+/** Where the standalone team page was built (vite, ui-mndt standalone): index.html and team-assets/. */
+const teamDir = (): string => process.env.DSH_MNDT_TEAM_DIR ?? resolve(import.meta.dirname, '..', '..', '..', 'client', 'ui-mndt', 'lib', 'team')
+const TEAM_TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.json': 'application/json; charset=utf-8',
+}
+
+/**
+ * One file of the team page: `/team` and `/team/` are its index; anything else is a plain
+ * file under the page's folder (no listing, no path out of it, no hidden file).
+ * @param path - the request path, `/team…`.
+ * @returns the file, or 404.
+ */
+async function teamFile(path: string): Promise<MndtApiResponse> {
+  const rest = path.replace(/^\/team\/?/, '') || 'index.html'
+  let name: string
+  try { name = decodeURIComponent(rest) } catch { return respond(404, { error: 'no such file of the team page' }) }
+  const root = teamDir()
+  const target = resolve(root, name)
+  if (!target.startsWith(`${root}/`) || name.split('/').some(part => part === '' || part.startsWith('.'))) {
+    return respond(404, { error: 'no such file of the team page' })
+  }
+  const type = TEAM_TYPES[extname(target)]
+  if (type === undefined) return respond(404, { error: 'no such file of the team page' })
+  try {
+    // The file as it really is: a symbolic link leading out of the built folder serves nothing.
+    const [realRoot, real] = await Promise.all([realpath(root), realpath(target)])
+    if (!real.startsWith(`${realRoot}/`)) return respond(404, { error: 'no such file of the team page' })
+    const data = await readFile(real)
+    return { status: 200, body: undefined, file: { contentType: type, data } }
+  } catch {
+    return respond(404, { error: 'no such file of the team page' })
+  }
 }
 
 /** The API handler. */
@@ -346,6 +390,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     const path = request.path.replace(/\/+$/, '') || '/'
 
     if (request.method === 'GET' && path === '/health') return respond(200, { ok: true })
+
+    // The standalone team page (ui-mndt lib/team): static files, no data, no identity
+    // needed (the sign-on proxy already admitted the person; the page reads /me).
+    if (request.method === 'GET' && (path === '/team' || path.startsWith('/team/'))) return await teamFile(path)
 
     const identity = identityOf(request, options.identity)
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
@@ -1131,6 +1179,16 @@ export function startMndtApi(options: MndtListenOptions): Server {
         ),
         ...(body === undefined ? {} : { body }),
       })
+      if (result.file !== undefined) {
+        response.writeHead(result.status, {
+          'content-type': result.file.contentType,
+          'x-content-type-options': 'nosniff',
+          // The page names its assets by content hash: they never change; the page itself is always re-read.
+          'cache-control': result.file.contentType.startsWith('text/html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+        })
+        response.end(result.file.data)
+        return
+      }
       response.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify(result.body))
     })()

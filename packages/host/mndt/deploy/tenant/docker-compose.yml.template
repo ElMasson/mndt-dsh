@@ -18,6 +18,8 @@ services:
       PROXY_SIGNATURE_KEY_FILE: "/run/secrets/mndt-proxy-signature"
       # Listen only on the proxy's network: the workbench and its agents find no gateway port.
       LISTEN_ALIAS: "gateway-ingress"
+      # The only person who gets the DSH shell (under /dsh/); everyone else, the team page.
+      OWNER: __OWNER__
       # The fingerprint of gateway/server.mjs, written by create-tenant.sh: the code
       # is mounted, not built in, so `docker compose up -d` recreates the gateway
       # only because this value changes when the code does.

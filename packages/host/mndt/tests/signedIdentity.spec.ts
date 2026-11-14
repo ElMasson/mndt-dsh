@@ -71,7 +71,7 @@ describe('the gateway vouches for its own requests only', () => {
     const child: ChildProcess = spawn(process.execPath, [join(deploy, 'gateway', 'server.mjs')], {
       env: {
         ...process.env, PORT: String(port), API: api, WORKBENCH: workbench, TOKEN_FILE: '/nonexistent',
-        GATEWAY_SECRET_FILE: secretFile, PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(),
+        GATEWAY_SECRET_FILE: secretFile, PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: owner,
       },
       stdio: 'ignore',
     })
