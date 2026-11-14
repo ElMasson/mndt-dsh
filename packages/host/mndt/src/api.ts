@@ -589,7 +589,21 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       if (request.method === 'GET' && path === '/approvals') {
         const state = (request.query?.state ?? 'pending') as ApprovalState | 'all'
-        return respond(200, { approvals: await service.listApprovals(state) })
+        // A card is read where it was asked: a channel's card by that channel's
+        // members only (its title and payload carry the channel's content); a card
+        // outside any channel by the one who asked it and those who may decide.
+        // `canDecide` says, for the reader, whether the card is theirs to decide;
+        // `mine=1` keeps exactly those, pending: the « À traiter » queue.
+        const table = await grants.grants()
+        const decider = table.ok && can(table.grants, identity, 'rights.write').allowed
+        const theirs = new Set((await service.channelsOf(identity)).map(channel => channel.id))
+        const visible = (await service.listApprovals(state))
+          .filter(approval => approval.channelId !== undefined
+            ? theirs.has(approval.channelId)
+            : decider || approval.requestedBy === identity)
+          .map(approval => ({ ...approval, canDecide: decider && approval.state === 'pending' }))
+        const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
+        return respond(200, { approvals })
       }
 
       if (request.method === 'POST' && path === '/approvals') {
