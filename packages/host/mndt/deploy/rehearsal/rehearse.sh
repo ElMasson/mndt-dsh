@@ -49,6 +49,15 @@ trap cleanup EXIT
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
+# The API answers before dsh web prints its launch URL (it waits for every plugin):
+# the page is ready when the gateway opens a session for a signed-in person.
+page_ready() {
+  for _ in $(seq 1 "${1:-150}"); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -H "x-forwarded-email: $owner" http://127.0.0.1:18080/)" = 302 ] && return 0
+    sleep 3
+  done
+  return 1
+}
 step() { printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
@@ -121,6 +130,7 @@ MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deplo
 echo "check-connectors.sh exit $connectors"
 
 step "5. the page, the turn, the resets"
+if page_ready 150; then echo "the page is ready (launch token published)"; else echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
