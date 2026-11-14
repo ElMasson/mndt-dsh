@@ -17,11 +17,19 @@ import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
+import { applyToolPolicy, channelPolicy } from './tool-policy.ts'
+import type { ScopedToolsLike, ToolPolicy } from './tool-policy.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
   /** Extra framing per mission kind, prepended to the caller's instruction. */
   readonly frame?: (mission: Mission) => string
+  /**
+   * The allow-list of the mission's agent. A team instance passes one (people
+   * other than the owner start missions there); omitted, the mission keeps the
+   * engine's whole composition, as on a solo workstation.
+   */
+  readonly tools?: ToolPolicy
 }
 
 /** Default framing: the product's voice and its evidence discipline. */
@@ -86,10 +94,14 @@ export class DshMissionRunner {
     }
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
     const selection = model === undefined ? undefined : model.currentSelection()
+    const policy = this.#options.tools
     const created = await this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,
       ...(selection === undefined ? {} : { agentOptions: { provider: selection.provider, model: selection.model } }),
+      ...(policy === undefined ? {} : {
+        setup: (agentCtx: unknown) => { applyToolPolicy((agentCtx as { tools: ScopedToolsLike }).tools, policy) },
+      }),
     })
     await publishActor(mission.createdBy, mission.id)
     const childSessionId = created.agent.session.header.id
@@ -149,28 +161,11 @@ export class DshMissionRunner {
   }
 }
 
-/** @param name - a tool name. @returns the MCP server it comes from, if it is an MCP tool. */
-export function mcpServerOf(name: string): string | undefined {
-  if (!name.startsWith('mcp__')) return undefined
-  const end = name.indexOf('__', 'mcp__'.length)
-  return end < 0 ? undefined : name.slice('mcp__'.length, end)
-}
-
-/** The servers every turn may reach: asking for a card is never an action. */
-export const ALWAYS_SERVERS: readonly string[] = ['approvals']
-
-/** The scoped tools face the turn setup uses, structurally. */
-interface ScopedToolsLike {
-  schemas(): readonly { readonly name: string }[]
-  restrict(filter: { readonly deny: readonly string[] }): () => void
-  guard(guard: (execution: { readonly name: string }) => string | undefined): () => void
-}
-
 /**
  * Run one agent turn on DSH: the agent's own model, its channel's folder as
- * the working directory, and only the MCP servers its channel allows. The
- * servers outside are hidden (restrict) and refused at execution (guard), so a
- * server mounted after the turn started is refused too.
+ * the working directory, and only what its channel's allow-list names (the
+ * channel's MCP servers and the approvals, see tool-policy.ts): everything else
+ * is hidden and refused at execution, including the engine's own tools.
  */
 export class DshTurnRunner implements TurnEngine {
   readonly #ctx: Context
@@ -193,21 +188,14 @@ export class DshTurnRunner implements TurnEngine {
     const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
-    const allowed = new Set([...input.servers, ...ALWAYS_SERVERS])
     const created = await this.#ctx.agents.create({
       sessionId: input.turnId as never,
       meta: { cwd: input.cwd },
       // The agent's own model, never the workstation default.
       agentOptions: { provider: input.agent.provider, model: input.agent.model },
+      // Deny by default: the channel's servers and the approvals, nothing else.
       setup: (agentCtx: unknown) => {
-        const tools = (agentCtx as { tools: ScopedToolsLike }).tools
-        const outside = tools.schemas().map(tool => tool.name)
-          .filter((name) => { const server = mcpServerOf(name); return server !== undefined && !allowed.has(server) })
-        if (outside.length > 0) tools.restrict({ deny: outside })
-        tools.guard((execution) => {
-          const server = mcpServerOf(execution.name)
-          return server === undefined || allowed.has(server) ? undefined : `the MCP server ${server} is not allowed in this channel`
-        })
+        applyToolPolicy((agentCtx as { tools: ScopedToolsLike }).tools, channelPolicy(input.servers))
       },
     })
     await publishActor(input.actor, input.turnId)

@@ -25,6 +25,7 @@ import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { authorityGrants, fileGrants, localGrants } from './grants.ts'
 import { DshMissionRunner, DshTurnRunner } from './runner.ts'
+import { TEAM_MISSION_POLICY } from './tool-policy.ts'
 import { TurnScheduler } from './turns.ts'
 import { readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
@@ -128,7 +129,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // The composition may pin the bind address; otherwise the deployment names it
     // through the environment, which is what a container needs.
     const host = config.host ?? process.env.DSH_MNDT_HOST
-    const runner = new DshMissionRunner(ctx)
+    const runner = this.missionRunner(ctx)
     // Agent turns of mentions: the price grid is the adapters lane's
     // deploy/llm/prices.json, copied beside the state (or MNDT_PRICES_FILE);
     // a model without a price, or priced null, is refused, never free.
@@ -229,7 +230,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       running.add(item.id)
       void (async () => {
         try {
-          const outcome = await runAutomation(this.service, new DshMissionRunner(ctx), item)
+          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item)
           const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
           const patch: Partial<Automation> = {
             lastMissionId: outcome.missionId,
@@ -308,6 +309,15 @@ export class WorkbenchGateway extends TypertRemoteService {
    * and the Remote is closed. A workstation of one person keeps it.
    * @returns the refusal, as the Remote's JSON answer, or undefined when open.
    */
+  /**
+   * @param ctx - the host context.
+   * @returns the mission runner: on a team instance, its agent gets the team's
+   * allow-list (MCP tools only), never the engine's shell, files, web or subagents.
+   */
+  private missionRunner(ctx: Context): DshMissionRunner {
+    return new DshMissionRunner(ctx, this.proxyUserHeader === undefined || this.proxyUserHeader === '' ? {} : { tools: TEAM_MISSION_POLICY })
+  }
+
   private closedToTeam(): string | undefined {
     return teamRemoteRefusal(this.proxyUserHeader)
   }
@@ -361,7 +371,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
     try {
-      const result = await new DshMissionRunner(this.ctx).run(mission)
+      const result = await this.missionRunner(this.ctx).run(mission)
       const finished = await this.service.completeMission(mission.id, result)
       return JSON.stringify({ ok: true, value: finished })
     } catch (error) {
@@ -429,7 +439,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
     try {
-      const result = await new DshMissionRunner(this.ctx).run(mission)
+      const result = await this.missionRunner(this.ctx).run(mission)
       return JSON.stringify({ ok: true, value: await this.service.completeMission(mission.id, result) })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)

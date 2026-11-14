@@ -68,6 +68,14 @@ if (qwen !== undefined && channel !== undefined) {
 }
 const llm = logs('fakellm')
 check('llm-called', /fake-llm call \d+/.test(llm), `${(llm.match(/fake-llm call \d+:[^\n]*/g) ?? []).slice(-1).join('') || 'no call'}`)
+// The allow-list of a channel turn: @qwen has no connector, so the approvals
+// server's open tools and nothing else; a tool more or a tool less fails.
+const EXPECTED_TOOLS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
+const offeredLines = [...llm.matchAll(/fake-llm tools \d+: (\[[^\n]*\])/g)].map(match => JSON.parse(match[1]))
+const unexpected = offeredLines.filter(list => JSON.stringify(list) !== JSON.stringify(EXPECTED_TOOLS))
+check('turn-tools', offeredLines.length > 0 && unexpected.length === 0, offeredLines.length === 0
+  ? 'no call logged its tools'
+  : unexpected.length === 0 ? `every call offered exactly ${JSON.stringify(EXPECTED_TOOLS)}` : `offered ${JSON.stringify(unexpected[0])}`)
 
 const viewer = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': SECOND } })
 await (await viewer.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })

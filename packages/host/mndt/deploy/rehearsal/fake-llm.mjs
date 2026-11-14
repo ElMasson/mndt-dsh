@@ -21,6 +21,10 @@ createServer((req, res) => {
     let request = {}
     try { request = JSON.parse(body) } catch { /* not JSON */ }
     console.log(`fake-llm call ${calls}: ${req.method} ${req.url} model=${request.model} stream=${request.stream}`)
+    // The tools the turn offered the model, sorted: the rehearsal compares them
+    // with the channel's allow-list, exactly.
+    const offered = (request.tools ?? []).map(tool => tool.function?.name ?? tool.name).sort()
+    console.log(`fake-llm tools ${calls}: ${JSON.stringify(offered)}`)
     const created = Math.floor(Date.now() / 1000)
     if (request.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
