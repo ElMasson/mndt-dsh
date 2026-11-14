@@ -59,4 +59,9 @@ pid=$!
   fi
 ) &
 
-wait "$pid"
+# dsh web's exit code is the container's; the second wait lets the watcher finish
+# its last words (and the log's last lines) before PID 1 ends.
+status=0
+wait "$pid" || status=$?
+wait
+exit "$status"
