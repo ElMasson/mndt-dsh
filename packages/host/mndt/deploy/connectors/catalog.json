@@ -91,7 +91,8 @@
     "envFile": "approvals.env",
     "env": {
       "MNDT_ACTOR_FILE": "/state/mission-actor.json",
-      "MNDT_APPROVALS_ALLOW_DECIDE": "0"
+      "MNDT_APPROVALS_ALLOW_DECIDE": "0",
+      "MNDT_GATEWAY_SECRET_FILE": "/run/secrets/mndt-gateway"
     },
     "allow": [
       "request_approval",

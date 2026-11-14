@@ -199,7 +199,7 @@ describe('attach-agent-connectors.mjs', { timeout: 30_000 }, () => {
     const server = startMndtApi({
       service,
       runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
-      identity: { proxyUserHeader: 'x-forwarded-email' },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'gateway-secret-for-tests' },
       grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }] }) },
       connectors: async () => mounted.map(name => ({ module: '@deepseek-ai/dsh-mcp-client', server: name, enabled: true })),
       port: 0,
@@ -208,8 +208,11 @@ describe('attach-agent-connectors.mjs', { timeout: 30_000 }, () => {
     await new Promise<void>((resolve) => { if (server.listening) resolve(); else server.once('listening', () => { resolve() }) })
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     const agentsJson = readFileSync(join(deploy, 'tenant', 'agents.json'), 'utf8')
+    // The gateway's secret, in a file as the gateway container holds it.
+    const secretFile = join(mkdtempSync(join(tmpdir(), 'secret-')), 'mndt-gateway')
+    writeFileSync(secretFile, 'gateway-secret-for-tests\n')
     const node = (script: string): Promise<string> => new Promise((resolve, reject) => {
-      execFile(process.execPath, [script], { env: { ...process.env, MNDT_API_URL: url, MNDT_OWNER: owner, AGENTS_JSON: agentsJson, VLLM_QWEN_MODEL: 'q' } },
+      execFile(process.execPath, [script], { env: { ...process.env, MNDT_GATEWAY_SECRET_FILE: secretFile, MNDT_API_URL: url, MNDT_OWNER: owner, AGENTS_JSON: agentsJson, VLLM_QWEN_MODEL: 'q' } },
         (error, stdout, stderr) => { if (error !== null) reject(new Error(`${error.message}\n${stderr}`)); else resolve(stdout) })
     })
     await node(join(deploy, 'tenant', 'seed-team.mjs'))

@@ -9,7 +9,15 @@
  * through the API, and never removes one (an owner's own choice stays).
  * Idempotent: an agent that already has them is left as it is.
  */
+import { readFileSync } from 'node:fs'
+
 const api = (process.env.MNDT_API_URL ?? '').replace(/\/$/, '')
+// The API believes the owner header only with the gateway's secret (a file outside /state).
+const gatewaySecret = (() => {
+  const path = process.env.MNDT_GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
 const owner = process.env.MNDT_OWNER ?? ''
 if (api === '' || owner === '') {
   console.error('MNDT_API_URL and MNDT_OWNER are required')
@@ -20,7 +28,11 @@ if (api === '' || owner === '') {
 async function call(path, body) {
   const answer = await fetch(`${api}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { 'content-type': 'application/json', 'x-forwarded-email': owner },
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-email': owner,
+      ...(gatewaySecret === '' ? {} : { 'x-mndt-gateway': gatewaySecret }),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const parsed = await answer.json().catch(() => ({}))

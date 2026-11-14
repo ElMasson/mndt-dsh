@@ -5,7 +5,11 @@
  * proven by a bearer token the deployment provisioned, or asserted by the
  * authenticating proxy in front of us. Everything else is nobody.
  */
+import { timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+
+/** The header the front gateway adds to every call it relays: the shared secret that makes its identity header trustworthy. */
+export const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
 
 /** One provisioned token and the identity it proves. */
 export interface ProvisionedToken {
@@ -22,6 +26,14 @@ export interface IdentityOptions {
    * Set this only when the API is reachable solely through that proxy.
    */
   readonly proxyUserHeader?: string
+  /**
+   * The secret only the front gateway holds (a file outside /state, mounted
+   * read-only). The proxy header is believed only on a request carrying it in
+   * `x-mndt-gateway`: anyone else who reaches the API (a container on the same
+   * network, an agent's command) cannot declare an identity. Without a secret,
+   * the proxy header is never believed.
+   */
+  readonly gatewaySecret?: string
 }
 
 /** The headers the API reads, lowercased. */
@@ -40,6 +52,9 @@ export function identityOf(
   // A supplied Authorization header means the caller chose the token path: a bad
   // token must never be rescued by a proxy header.
   if (request.authorization !== undefined) {
+    // Behind the sign-on proxy (a team workbench), only the gateway speaks for a
+    // person: provisioned tokens live in /state, which an agent's sandbox reads.
+    if (options.proxyUserHeader !== undefined) return undefined
     const match = /^Bearer\s+(.+)$/i.exec(request.authorization.trim())
     const token = match?.[1]
     if (token === undefined) return undefined
@@ -47,10 +62,23 @@ export function identityOf(
   }
   const header = options.proxyUserHeader
   if (header === undefined) return undefined
+  if (!fromGateway(request.headers?.[GATEWAY_SECRET_HEADER], options.gatewaySecret)) return undefined
   const raw = request.headers?.[header.toLowerCase()]
   if (raw === undefined) return undefined
   const identity = raw.trim().toLowerCase()
   return identity === '' ? undefined : identity
+}
+
+/**
+ * @param presented - the secret a request carries, if any.
+ * @param secret - the gateway's secret; absent, nothing is from the gateway.
+ * @returns whether the request comes from the front gateway (constant-time comparison).
+ */
+function fromGateway(presented: string | undefined, secret: string | undefined): boolean {
+  if (secret === undefined || secret === '' || presented === undefined) return false
+  const a = Buffer.from(presented)
+  const b = Buffer.from(secret)
+  return a.length === b.length && timingSafeEqual(a, b)
 }
 
 /**

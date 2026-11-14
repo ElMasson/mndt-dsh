@@ -44,8 +44,8 @@ touch "$root/.mndt-rehearsal"
 # screenshots and the logs.
 cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
-    docker rm -f $project-gateway $project-workbench $project-fakellm >/dev/null 2>&1
-    docker network rm ${project}_front >/dev/null 2>&1
+    docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
+    docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
   fi
   echo "rehearsal root: $root"
 }
@@ -62,6 +62,60 @@ page_ready() {
     sleep 3
   done
   return 1
+}
+# The tenant's real topology, without Entra: the signing proxy stands in for
+# oauth2-proxy on the ingress network (an internal network cannot publish a
+# port, so the proxy also joins an "outside" network that does); the gateway
+# listens only there and publishes nothing.
+signed_override() {
+  cat > "$root/compose.override.yml" <<YML
+networks:
+  outside: {}
+services:
+  workbench:
+    # Nothing leaves this machine: the managed endpoint answers nowhere.
+    extra_hosts: ["api.scaleway.ai:127.0.0.1"]
+  fakellm:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/fake/fake-llm.mjs"]
+    volumes: ["$here:/opt/fake:ro"]
+  signer:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/rehearsal/signing-proxy.mjs"]
+    environment:
+      PROXY_SIGNATURE_KEY_FILE: /run/secrets/mndt-proxy-signature
+      UPSTREAM: http://gateway-ingress:8080
+    volumes: ["$here:/opt/rehearsal:ro", "$root/etc/mndt/datanalysis/proxy_signature_key:/run/secrets/mndt-proxy-signature:ro"]
+    ports: ["127.0.0.1:18080:8080"]
+    networks: [ingress, outside]
+YML
+}
+# The attack of the security report, from the workbench (where an agent's
+# commands run): the owner's header to the gateway, to its proxy-side name, and
+# to the API without the gateway's secret. Every one must fail.
+attack() {
+  local script
+  script="const owner='$owner'
+const tries=[['gateway:8080','http://gateway:8080/mndt-api/me'],['gateway-ingress:8080','http://gateway-ingress:8080/mndt-api/me'],['api without secret','http://127.0.0.1:8795/me']]
+let breached=0
+for (const [label,url] of tries) {
+  try { const r = await fetch(url,{headers:{'x-forwarded-email':owner},signal:AbortSignal.timeout(5000)}); const b = await r.text()
+    const ok = r.status === 200 && b.includes(owner); if (ok) breached=1; console.log((ok?'BREACHED ':'refused  ')+label+': '+r.status)
+  } catch (e) { console.log('refused  '+label+': '+(e.cause?.code ?? e.name)) }
+}
+process.exit(breached)"
+  docker exec -i $project-workbench node --input-type=module -e "$script"
+}
+# A document deposit of a few MiB goes through the proxy and the gateway to the
+# API (the gateway reads up to 20 MiB for this route only): neither 413 nor 401.
+deposit() {
+  local body code
+  body=$(mktemp "$root/deposit-XXXX")
+  printf '{"name":"rehearsal.bin","contentBase64":"%s"}' "$(head -c 3145728 /dev/zero | base64 -w0)" > "$body"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' \
+    --data-binary @"$body" http://127.0.0.1:18080/mndt-api/channels/no-such-channel/files)
+  echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
+  [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
 }
 step() { printf '\n== %s\n' "$*"; }
 health() {
@@ -80,7 +134,7 @@ tenant() { # <deploy dir>
     --client-id 00000000-0000-0000-0000-000000000000 --client-secret-file /root/entra_client_secret --no-docker
 }
 compose_for() { # <image>
-  sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" \
+  sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
       -e "s#image: mndt-workbench:local#image: $1#" \
       -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
       -e "s#TRUSTED_HOST: equipe.datanalysis.re#TRUSTED_HOST: 127.0.0.1:18080#" \
@@ -153,6 +207,7 @@ echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connector
 
 step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
 compose_for "$new_image"
+signed_override
 # Readable by the containers, but never under home/: the workbench refuses a
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
@@ -181,6 +236,11 @@ cp "$deploy/connectors/mcp-check.mjs" "$data/tools/mcp-check.mjs"
 MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deploy/tenant/check-connectors.sh" datanalysis; connectors=$?
 echo "check-connectors.sh exit $connectors"
 
+step "B4 bis. the attack of the security report, from the workbench"
+attack; attacked=$?
+echo "attack exit $attacked (0 = every path refused)"
+deposit; deposited=$?
+
 step "B5. the page, the turn, the resets"
 page=0
 if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
@@ -188,4 +248,4 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]

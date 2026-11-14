@@ -19,7 +19,8 @@
  *
  * Node only, no dependency: it must start inside a bare runtime image.
  */
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { lookup } from 'node:dns/promises'
 import { readFileSync, statSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
 
@@ -32,6 +33,35 @@ const MACHINES_TOKEN = process.env.MACHINES_TOKEN ?? ''
 const SHELL_TTL_MS = 5 * 60 * 1000
 const API_PREFIX = '/mndt-api'
 const GATEWAY_COOKIE = 'mndt-session'
+// The secret that makes the identity header believable to the API: a file
+// outside /state, mounted read-only here and in the workbench. Read once.
+const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
+// The sign-on proxy's key (oauth2-proxy `signature_key`, a file outside /state).
+// The gateway serves only requests the proxy signed (GAP-Signature): a request
+// from anywhere else (a container of the tenant's network, an agent's command)
+// is refused before any identity is relayed or any secret added. Without a key,
+// nothing is served: closed, not open.
+const PROXY_KEY = (() => {
+  const path = process.env.PROXY_SIGNATURE_KEY_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
+// The headers oauth2-proxy signs, in its order (pkg/upstream/http.go, SignatureHeaders).
+const SIGNED_HEADERS = ['content-length', 'content-md5', 'content-type', 'date', 'authorization', 'x-forwarded-user',
+  'x-forwarded-email', 'x-forwarded-preferred-user', 'x-forwarded-access-token', 'cookie', 'gap-auth']
+// The largest request body the gateway reads to check its signature: 1 MiB, but
+// 20 MiB for a document deposit (10 MiB, base64). A declared length above it is
+// refused before anything is read.
+const MAX_BODY = 1024 * 1024
+const MAX_DEPOSIT_BODY = 20 * 1024 * 1024
+const DEPOSIT_ROUTE = /^\/mndt-api\/channels\/[^/]+\/files\/?$/
+// The sign-on proxy's own cookies (cookie_name "_mndt_<slug>", split as _0, _1 when large).
+const SSO_COOKIE_PREFIX = process.env.SSO_COOKIE_PREFIX ?? '_mndt_'
+const GATEWAY_SECRET = (() => {
+  const path = process.env.GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /** Sessions this gateway opened, keyed by its own cookie value. */
@@ -93,18 +123,19 @@ function sessionCookie(value) {
  * @param path - upstream path.
  * @param shellCookie - shell session cookie to present upstream, if known.
  */
-function forward(req, res, target, path, shellCookie) {
+function forward(req, res, target, path, shellCookie, extraHeaders = {}) {
   const parts = targetOf(target)
   // Keep the authority the browser used. The shell signs its session cookie for
   // that authority and refuses a cookie signed for another one, so rewriting the
   // host here would break the session right after sign-in. The proxy already
   // forwarded the public host, and the workbench is told to trust it.
-  const headers = { ...req.headers }
+  const headers = withoutProxyCredentials({ ...req.headers }, target === API)
   if (typeof req.headers.host === 'string' && req.headers.host !== '') {
     headers['x-forwarded-host'] = req.headers.host
   }
   headers['x-forwarded-proto'] = 'https'
   if (shellCookie !== undefined) headers.cookie = shellCookie
+  Object.assign(headers, extraHeaders)
   const upstream = httpRequest({
     protocol: parts.protocol,
     hostname: parts.host,
@@ -132,7 +163,8 @@ function forward(req, res, target, path, shellCookie) {
   // socket: drop the upstream call, and never let the reset reach the process.
   req.on('error', () => { upstream.destroy() })
   res.on('close', () => { if (!res.writableFinished) upstream.destroy() })
-  req.pipe(upstream)
+  if (req.bufferedBody !== undefined) upstream.end(req.bufferedBody)
+  else req.pipe(upstream)
 }
 
 /** @param value - header value or undefined. @returns one header string. */
@@ -220,7 +252,115 @@ function liveSession(id) {
   return found
 }
 
+/**
+ * The headers the workbench must never see: the proxy's signature and its own
+ * header, and the person's sign-on cookie (an agent in the workbench reads all).
+ * The API needs no cookie at all.
+ * @param headers - the headers about to be relayed (changed in place).
+ * @param toApi - whether they go to the product API.
+ * @returns the same headers.
+ */
+function withoutProxyCredentials(headers, toApi) {
+  delete headers['gap-signature']
+  delete headers['gap-auth']
+  if (toApi) {
+    delete headers.cookie
+    return headers
+  }
+  if (typeof headers.cookie === 'string') {
+    const kept = headers.cookie.split(';').map(part => part.trim()).filter(part => part !== '' && !part.startsWith(SSO_COOKIE_PREFIX))
+    if (kept.length === 0) delete headers.cookie
+    else headers.cookie = kept.join('; ')
+  }
+  return headers
+}
+
+/**
+ * @param req - incoming request.
+ * @returns the largest body this request may carry.
+ */
+function bodyLimit(req) {
+  const path = (req.url ?? '/').split('?')[0]
+  return req.method === 'POST' && DEPOSIT_ROUTE.test(path) ? MAX_DEPOSIT_BODY : MAX_BODY
+}
+
+/**
+ * The string oauth2-proxy signs (hmacauth StringToSign): method, each signed
+ * header (values joined by a comma, empty when absent), the DECODED path with
+ * the raw query, each on its own line. Proven against oauth2-proxy v7.15.5.
+ * @param req - incoming request.
+ * @returns the text to sign, before the body.
+ */
+function stringToSign(req) {
+  const raw = req.url ?? '/'
+  const q = raw.indexOf('?')
+  const rawPath = q === -1 ? raw : raw.slice(0, q)
+  let path
+  try { path = decodeURIComponent(rawPath) } catch { path = rawPath }
+  const target = q === -1 ? path : `${path}?${raw.slice(q + 1)}`
+  return `${req.method}\n${SIGNED_HEADERS.map(name => `${(req.headersDistinct[name] ?? []).join(',')}\n`).join('')}${target}\n`
+}
+
+/**
+ * @param req - incoming request.
+ * @param body - its whole body (empty for none).
+ * @returns whether the sign-on proxy signed exactly this request.
+ */
+function signedByProxy(req, body) {
+  if (PROXY_KEY === '') return false
+  const presented = firstHeader(req.headers['gap-signature'])
+  const expected = `sha256 ${createHmac('sha256', PROXY_KEY).update(stringToSign(req)).update(body).digest('base64')}`
+  const a = Buffer.from(presented)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+/**
+ * Read a request body, at most bodyLimit(req) bytes.
+ * @param req - incoming request.
+ * @returns the body, or undefined when it is too large or the browser left.
+ */
+function readBody(req) {
+  const limit = bodyLimit(req)
+  return new Promise((resolve) => {
+    if (Number(req.headers['content-length'] ?? 0) > limit) { resolve(undefined); return }
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) { resolve(undefined); req.destroy(); return }
+      chunks.push(chunk)
+    })
+    req.on('end', () => { resolve(Buffer.concat(chunks)) })
+    req.on('error', () => { resolve(undefined) })
+  })
+}
+
 const server = createServer((req, res) => {
+  void (async () => {
+    const body = await readBody(req)
+    if (body === undefined) {
+      if (!res.headersSent && !res.destroyed) { res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8' }); res.end('gateway: request too large') }
+      return
+    }
+    if (!signedByProxy(req, body)) {
+      res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('gateway: this request does not come from the sign-on proxy')
+      return
+    }
+    req.bufferedBody = body
+    serve(req, res)
+  })()
+})
+
+/**
+ * Serve one request the sign-on proxy signed.
+ * @param req - incoming request, its body already read.
+ * @param res - outgoing response.
+ */
+function serve(req, res) {
+  // A browser never speaks for the gateway.
+  delete req.headers[GATEWAY_SECRET_HEADER]
   const url = new URL(req.url ?? '/', 'http://gateway')
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     const rest = url.pathname.slice(API_PREFIX.length) || '/'
@@ -228,7 +368,8 @@ const server = createServer((req, res) => {
     // card belongs to: a browser that sends it could file a card in the thread
     // of another channel's turn.
     delete req.headers['x-mndt-run']
-    forward(req, res, API, `${rest}${url.search}`)
+    // Only this gateway vouches for the identity header: the API believes it on this secret alone.
+    forward(req, res, API, `${rest}${url.search}`, undefined, GATEWAY_SECRET === '' ? {} : { [GATEWAY_SECRET_HEADER]: GATEWAY_SECRET })
     return
   }
   const cookies = cookiesOf(req.headers.cookie)
@@ -301,9 +442,15 @@ const server = createServer((req, res) => {
     return
   }
   forward(req, res, WORKBENCH, `${url.pathname}${url.search}`)
-})
+}
 
 server.on('upgrade', (req, socket, head) => {
+  delete req.headers[GATEWAY_SECRET_HEADER]
+  socket.on('error', () => undefined)
+  if (!signedByProxy(req, Buffer.alloc(0))) {
+    socket.end('HTTP/1.1 401 Unauthorized\r\nconnection: close\r\ncontent-length: 0\r\n\r\n')
+    return
+  }
   const url = new URL(req.url ?? '/', 'http://gateway')
   if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
     socket.destroy()
@@ -313,7 +460,7 @@ server.on('upgrade', (req, socket, head) => {
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
   const parts = targetOf(session?.base ?? WORKBENCH)
-  const headers = { ...req.headers }
+  const headers = withoutProxyCredentials({ ...req.headers }, false)
   if (session !== undefined) headers.cookie = session.cookie
   if (typeof req.headers.host === 'string' && req.headers.host !== '') {
     headers['x-forwarded-host'] = req.headers.host
@@ -360,8 +507,23 @@ server.on('upgrade', (req, socket, head) => {
   upstream.end()
 })
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`mndt gateway: listening on ${PORT}, workbench ${WORKBENCH}, api ${API}`)
+// Listen only where the sign-on proxy reaches us: the address of LISTEN_ALIAS, a
+// name that resolves on the proxy's network only. The tenant's network (the
+// workbench, its agents) then finds no gateway port at all.
+const listenHost = await (async () => {
+  const alias = process.env.LISTEN_ALIAS ?? ''
+  if (alias === '') return process.env.LISTEN_HOST ?? '0.0.0.0'
+  try {
+    return (await lookup(alias, { family: 4 })).address
+  } catch (error) {
+    console.error(`mndt gateway: cannot resolve LISTEN_ALIAS ${alias}: ${error.message}`)
+    process.exit(1)
+  }
+})()
+server.listen(PORT, listenHost, () => {
+  console.log(`mndt gateway: listening on ${listenHost}:${PORT}, workbench ${WORKBENCH}, api ${API}`)
+  if (PROXY_KEY === '') console.warn('mndt gateway: no PROXY_SIGNATURE_KEY_FILE: every request is refused')
+  if (GATEWAY_SECRET === '') console.warn('mndt gateway: no GATEWAY_SECRET_FILE: the API will refuse every identity this gateway relays')
 })
 
 process.on('SIGTERM', () => { server.close(() => { process.exit(0) }) })
