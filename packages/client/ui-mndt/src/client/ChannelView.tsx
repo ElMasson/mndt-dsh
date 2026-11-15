@@ -18,6 +18,9 @@ import type { MentionQuery } from './mention.ts'
 import { isHostDown } from './hostDown.ts'
 import { renderBrief } from './markdown.tsx'
 import { authorName, mergeThread, personName, settledTurns } from './thread.ts'
+import { clock, euros, pageLanguage } from './format.ts'
+
+export { euros } from './format.ts'
 
 /** How often the thread is read again, in milliseconds. */
 export const POLL_MS = 2000
@@ -47,31 +50,6 @@ export function reasonOf(error: unknown, t: ChatTranslate): string {
   if (error instanceof ChatRefusal && error.status === 403) return t('forbidden')
   if (isHostDown(error)) return t('hostDown')
   return error instanceof Error ? error.message : String(error)
-}
-
-/**
- * The language the page is shown in (the locale plugin sets it on the document), not the browser's:
- * an English browser on a French workspace reads « 17:50 » and « 1 020 », not « 05:50 PM » and « 1,020 ».
- * @returns the page's language, or undefined where none is declared.
- */
-function pageLanguage(): string | undefined {
-  if (typeof document === 'undefined') return undefined
-  return document.documentElement.lang === '' ? undefined : document.documentElement.lang
-}
-
-/**
- * An amount in euros, small ones kept readable.
- * @param eur - the amount.
- * @returns it formatted in the page's language.
- */
-export function euros(eur: number): string {
-  return new Intl.NumberFormat(pageLanguage() ?? 'fr', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(eur)
-}
-
-/** @param iso - an instant. @returns its time of day, in the page's language. */
-function clock(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(pageLanguage(), { hour: '2-digit', minute: '2-digit' })
 }
 
 /* ------------------------------------------------------------------ the list */

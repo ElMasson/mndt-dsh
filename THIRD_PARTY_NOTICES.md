@@ -160,7 +160,7 @@ The optional experimental Inspector distributes a locally compiled copy of [chro
 
 ## mndt team screen icons
 
-The mndt team screen (`@deepseek-ai/dsh-client-ui-mndt`) draws nineteen icons whose SVG paths are copied from [lucide-react 0.575.0](https://www.npmjs.com/package/lucide-react/v/0.575.0), under the [ISC license](packages/client/ui-mndt/src/assets/lucide-LICENSE.txt); the package itself is not a dependency.
+The mndt team screen (`@deepseek-ai/dsh-client-ui-mndt`) draws icons whose SVG paths are copied from [lucide-react 0.575.0](https://www.npmjs.com/package/lucide-react/v/0.575.0), under the [ISC license](packages/client/ui-mndt/src/assets/lucide-LICENSE.txt); the package itself is not a dependency.
 
 
 ## Official Claude Code platform payloads
