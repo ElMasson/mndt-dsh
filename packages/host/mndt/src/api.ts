@@ -26,7 +26,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -198,6 +198,24 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   }
 
   /**
+   * Starting a mission on a team instance is the owner's alone (Missions is off
+   * for members, shown « bientôt »); the rest of the team reads it as absent.
+   * Automations start missions too, so creating, changing, enabling or running
+   * one, and moving the briefing's hour, are closed the same way.
+   * @param identity - the caller.
+   * @returns the refusal, or undefined when they may start one.
+   */
+  const missionsClosed = async (identity: string): Promise<MndtApiResponse | undefined> => {
+    if (!teamInstance) return undefined
+    const table = await grants.grants()
+    const owner = table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner')
+    return owner ? undefined : respond(404, { error: 'not found' })
+  }
+
+  /** A team instance: people other than the owner reach this API through the sign-on proxy. */
+  const teamInstance = options.identity.proxyUserHeader !== undefined && options.identity.proxyUserHeader !== ''
+
+  /**
    * What one person may read, resolved once per request (see visibility.ts).
    * @param identity - the reader.
    * @returns their channels and whether they may decide.
@@ -211,6 +229,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         .filter(channel => channel.members.includes(identity))
         .map(channel => channel.id)),
       decider: table.ok && can(table.grants, identity, 'rights.write').allowed,
+      // On a team instance, missions and briefs are read by role (visibility.ts).
+      ...(teamInstance
+        ? { missionRole: table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner') ? 'owner' as const : 'member' as const }
+        : {}),
     }
   }
 
@@ -408,7 +430,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const role = table.ok ? roleOf(table.grants, identity) : undefined
         const name = (await grants.names?.())?.[identity]
-        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }) })
+        // `shell`: whether this person gets the DSH shell. On a team instance only
+        // the gateway knows (its OWNER) and says so, on its secret, in x-mndt-shell;
+        // a second owner of the role file does not get it. Solo: the person at the
+        // workstation has it.
+        const shell = !teamInstance || request.headers?.['x-mndt-shell'] === '1'
+        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell })
       }
 
       if (request.method === 'GET' && path === '/org') {
@@ -438,7 +465,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
         const reader = await readerOf(identity)
-        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '', approval => canReadApproval(reader, approval)) })
+        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '', approval => canReadApproval(reader, approval), item => canReadMission(reader, item)) })
       }
 
       if (request.method === 'GET' && path === '/metrics') {
@@ -484,8 +511,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(role === undefined ? {} : { role }),
           canAdmin,
           canShare,
-          missions: snapshot.missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity).slice(0, 30),
-          briefs: snapshot.briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity).slice(0, 30),
+          missions: snapshot.missions.filter(mission => canReadMission(reader, mission)).slice(0, 30),
+          briefs: snapshot.briefs.filter(brief => canReadMission(reader, brief)).slice(0, 30),
           approvals: snapshot.approvals.filter(approval => approval.state === 'pending' && canReadApproval(reader, approval)),
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
@@ -571,7 +598,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/journal') {
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
-        const events = await service.events(500)
+        const all = await service.events(500)
+        // On a team instance the journal shows only lines whose subject the reader may read.
+        const reader = teamInstance ? await readerOf(identity) : undefined
+        const snapshot = reader === undefined ? undefined : await service.snapshot()
+        const events = reader === undefined || snapshot === undefined ? all : all.filter(event => canReadEvent(reader, event, snapshot))
         if (request.query?.format === 'csv') return respond(200, { format: 'csv', filename: 'journal.csv', text: journalCsv(events) })
         return respond(200, { format: 'json', entries: events })
       }
@@ -579,10 +610,13 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/missions') {
         const status = request.query?.status
         const missions = await service.listMissions(status === undefined ? {} : { status: status as MissionStatus })
-        return respond(200, { missions: missions.filter(mission => mission.visibility === 'team' || mission.createdBy === identity) })
+        const reader = await readerOf(identity)
+        return respond(200, { missions: missions.filter(mission => canReadMission(reader, mission)) })
       }
 
       if (request.method === 'POST' && path === '/missions') {
+        const closed = await missionsClosed(identity)
+        if (closed !== undefined) return closed
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
@@ -613,6 +647,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.slice('/missions/'.length, -'/cancel'.length)
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
+        const target = await service.getMission(id)
+        if (target === undefined || !canReadMission(await readerOf(identity), target)) return respond(404, { error: `no mission ${id}` })
         const table = await grants.grants()
         if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
         try {
@@ -625,10 +661,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       if (request.method === 'POST' && path.startsWith('/missions/') && path.endsWith('/retry')) {
         const id = path.slice('/missions/'.length, -'/retry'.length)
+        const closed = await missionsClosed(identity)
+        if (closed !== undefined) return closed
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const original = await service.getMission(id)
-        if (original === undefined) return respond(404, { error: `no mission ${id}` })
+        if (original === undefined || !canReadMission(await readerOf(identity), original)) return respond(404, { error: `no mission ${id}` })
         if (original.status !== 'failed') {
           return respond(409, { error: `mission ${id} is ${original.status}; only a failed mission can be retried` })
         }
@@ -656,27 +694,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.slice('/missions/'.length)
         const mission = await service.getMission(id)
         if (mission === undefined) return respond(404, { error: `no mission ${id}` })
-        if (mission.visibility === 'private' && mission.createdBy !== identity) {
-          return respond(403, { error: `mission ${id} is private to ${mission.createdBy}` })
-        }
+        // Unreadable reads as absent, never as « private to someone ».
+        if (!canReadMission(await readerOf(identity), mission)) return respond(404, { error: `no mission ${id}` })
         const brief = mission.briefId === undefined ? undefined : await service.getBrief(mission.briefId)
         return respond(200, { mission, brief })
       }
 
       if (request.method === 'GET' && path === '/briefs') {
         const briefs = await service.listBriefs()
-        return respond(200, {
-          briefs: briefs.filter(brief => (brief.visibility ?? 'team') === 'team' || brief.createdBy === identity),
-        })
+        const reader = await readerOf(identity)
+        return respond(200, { briefs: briefs.filter(brief => canReadMission(reader, brief)) })
       }
 
       if (request.method === 'GET' && path.startsWith('/briefs/')) {
         const id = path.slice('/briefs/'.length)
         const brief = await service.getBrief(id)
         if (brief === undefined) return respond(404, { error: `no brief ${id}` })
-        if ((brief.visibility ?? 'team') === 'private' && brief.createdBy !== identity) {
-          return respond(403, { error: `brief ${id} is private to ${brief.createdBy}` })
-        }
+        if (!canReadMission(await readerOf(identity), brief)) return respond(404, { error: `no brief ${id}` })
         return respond(200, { brief })
       }
 
@@ -684,6 +718,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const id = path.split('/')[2] ?? ''
+        const stored = await service.getBrief(id)
+        if (stored === undefined || !canReadMission(await readerOf(identity), stored)) return respond(404, { error: `no brief ${id}` })
         const brief = await service.approveBrief(id, identity)
         return respond(200, { brief })
       }
@@ -745,7 +781,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'POST' && /^\/missions\/[^/]+\/visibility$/.test(path)) {
         const id = path.split('/')[2] ?? ''
         const mission = await service.getMission(id)
-        if (mission === undefined) return respond(404, { error: `no mission ${id}` })
+        if (mission === undefined || !canReadMission(await readerOf(identity), mission)) return respond(404, { error: `no mission ${id}` })
         if (mission.createdBy !== identity) {
           const denied = await authorise(identity, 'sharing.write')
           if (denied !== undefined) return denied
@@ -971,6 +1007,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/schedule') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         let at: string | undefined = process.env.DSH_MNDT_BRIEFING_AT
         if (options.automationsPath !== undefined) {
           const items = await readAutomations(options.automationsPath).catch(() => [])
@@ -988,6 +1026,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/schedule') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
@@ -1007,6 +1047,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/automations') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
         const items = await readAutomations(options.automationsPath)
         const table = await grants.grants()
@@ -1015,6 +1057,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/automations') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
@@ -1026,15 +1070,22 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(existing ?? {}),
           ...input,
           ...(id === undefined ? {} : { id }),
-          createdBy: existing?.createdBy ?? identity,
+          // On a team instance the owner who saves an automation takes it over,
+          // a system one included: they have read its prompt.
+          createdBy: teamInstance ? identity : existing?.createdBy ?? identity,
         })
         if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
-        const next = existing === undefined ? [...items, proposed] : items.map(item => (item.id === proposed.id ? proposed : item))
+        // Who enabled it is the server's record, never the request's.
+        const { enabledBy: _claimed, ...rest } = proposed
+        const recorded: Automation = proposed.enabled ? { ...rest, enabledBy: identity } : rest
+        const next = existing === undefined ? [...items, recorded] : items.map(item => (item.id === recorded.id ? recorded : item))
         await writeAutomations(options.automationsPath, next)
-        return respond(existing === undefined ? 201 : 200, { automation: proposed })
+        return respond(existing === undefined ? 201 : 200, { automation: recorded })
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/toggle$/.test(path)) {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
@@ -1043,12 +1094,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (typeof input.enabled !== 'boolean') return respond(400, { error: 'enabled must be true or false' })
         const items = await readAutomations(options.automationsPath)
         if (!items.some(item => item.id === id)) return respond(404, { error: `no automation ${id}` })
-        const next = items.map(item => (item.id === id ? { ...item, enabled: input.enabled === true } : item))
+        const next = items.map((item) => {
+          if (item.id !== id) return item
+          const { enabledBy: _previous, ...rest } = item
+          return input.enabled === true ? { ...rest, enabled: true, enabledBy: identity } : { ...rest, enabled: false }
+        })
         await writeAutomations(options.automationsPath, next)
         return respond(200, { automation: next.find(item => item.id === id) })
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/run$/.test(path)) {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
@@ -1056,7 +1113,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const items = await readAutomations(options.automationsPath)
         const item = items.find(candidate => candidate.id === id)
         if (item === undefined) return respond(404, { error: `no automation ${id}` })
-        const outcome = await runAutomation(service, runner, item)
+        const outcome = await runAutomation(service, runner, item, teamInstance ? identity : undefined)
         const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
         const patch: Partial<Automation> = {
           lastMissionId: outcome.missionId,

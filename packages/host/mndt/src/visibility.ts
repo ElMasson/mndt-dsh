@@ -6,8 +6,12 @@
  *
  * - A channel's card, message, update: its members only.
  * - A card outside any channel (a mission's): the one who asked it, and those
- *   who may decide (`rights.write`).
- * - A mission, a brief, a memory note: shared with the team, or its author.
+ *   who may decide (`rights.write`); on a team instance, the one who asked it
+ *   alone, plus the owners for an old card asked under « scheduler ».
+ * - A mission, a brief: shared with the team, or its author. On a team
+ *   instance (missions and automations are the owner's): the owner reads the
+ *   shared ones, theirs and the automations'; anyone else, only their own.
+ * - A memory note: shared with the team, or its author.
  * - A mandate: its two parties, and those who administer rights.
  * - An agent: the whole team (agents are declared for the team).
  */
@@ -20,6 +24,26 @@ export interface Reader {
   readonly channels: ReadonlySet<string>
   /** Whether the person may decide cards and administer rights (`rights.write`). */
   readonly decider: boolean
+  /**
+   * Missions and briefs on a team instance: `owner` for the owner, `member` for
+   * anyone else. Absent on a solo workstation, where the shared rule applies.
+   */
+  readonly missionRole?: 'owner' | 'member'
+}
+
+/** The author an automation's run is recorded under before a team instance names the owner. */
+export const AUTOMATION_AUTHOR = 'scheduler'
+
+/**
+ * @param reader - who reads.
+ * @param item - a mission or a brief.
+ * @returns whether the reader may see it (its prompt, its text, its sources).
+ */
+export function canReadMission(reader: Reader, item: { readonly visibility?: 'team' | 'private'; readonly createdBy: string }): boolean {
+  if (item.createdBy === reader.identity) return true
+  if (reader.missionRole === 'member') return false
+  if (reader.missionRole === 'owner' && item.createdBy === AUTOMATION_AUTHOR) return true
+  return (item.visibility ?? 'team') === 'team'
 }
 
 /**
@@ -30,6 +54,14 @@ export interface Reader {
 export function canReadApproval(reader: Reader, approval: Approval): boolean {
   if (approval.channelId !== undefined)
     return reader.channels.has(approval.channelId)
+  // A card outside any channel is a mission's. On a team instance it follows its
+  // brief: the one who asked it alone (for an automation, the owner who enabled
+  // it), plus the owners for an old card asked under « scheduler ». Never a
+  // decider who did not ask it, another owner included.
+  if (reader.missionRole !== undefined) {
+    return approval.requestedBy === reader.identity
+      || (reader.missionRole === 'owner' && approval.requestedBy === AUTOMATION_AUTHOR)
+  }
   return reader.decider || approval.requestedBy === reader.identity
 }
 
@@ -62,20 +94,13 @@ export function canReadEvent(
       const mission = state.missions.find(
         candidate => candidate.id === event.subject,
       )
-      return (
-        mission !== undefined &&
-        (mission.visibility === 'team' || mission.createdBy === reader.identity)
-      )
+      return mission !== undefined && canReadMission(reader, mission)
     }
     case 'brief': {
       const brief = state.briefs.find(
         candidate => candidate.id === event.subject,
       )
-      return (
-        brief !== undefined &&
-        ((brief.visibility ?? 'team') === 'team' ||
-          brief.createdBy === reader.identity)
-      )
+      return brief !== undefined && canReadMission(reader, brief)
     }
     case 'memory': {
       const note = state.memories.find(

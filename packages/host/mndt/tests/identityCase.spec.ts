@@ -31,7 +31,8 @@ describe('one spelling of a person, whatever case Entra uses', () => {
   it('keeps the role and the name of Prenom.Nom@ as of prenom.nom@', async () => {
     const api = bench()
     const me = await api({ method: 'GET', path: '/me', headers: as('Stephane.Masson@Datanalysis.re') })
-    expect(me.body).toEqual({ you: 'stephane.masson@datanalysis.re', name: 'Stéphane Masson', role: 'owner' })
+    // Team instance, no x-mndt-shell from the gateway: no shell.
+    expect(me.body).toEqual({ you: 'stephane.masson@datanalysis.re', name: 'Stéphane Masson', role: 'owner', shell: false })
   })
 
   it('makes one member of an e-mail written in capitals, who reads the channel and is removed by any spelling', async () => {

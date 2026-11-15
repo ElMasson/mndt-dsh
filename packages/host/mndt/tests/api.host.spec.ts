@@ -132,7 +132,8 @@ describe('duke api', () => {
     const { api } = bench()
     const response = await api({ method: 'GET', path: '/me', ...asOwner })
     // The role comes with the e-mail: the team screen shows « Mode avancé » to the owner only.
-    expect(response.body).toEqual({ you: owner, role: 'owner' })
+    // Solo (no sign-on proxy): the person at the workstation has the shell.
+    expect(response.body).toEqual({ you: owner, role: 'owner', shell: true })
   })
 
   it('lets an owner run a mission and returns the produced brief', async () => {
@@ -192,8 +193,10 @@ describe('duke api', () => {
     const id = (created.body as { mission: { id: string } }).mission.id
 
     expect((await api({ method: 'GET', path: `/missions/${id}`, ...asOwner })).status).toBe(200)
+    // Unreadable reads as absent (visibility.ts), never as « private to <author> ».
     const seenByViewer = await api({ method: 'GET', path: `/missions/${id}`, ...asViewer })
-    expect(seenByViewer.status).toBe(403)
+    expect(seenByViewer.status).toBe(404)
+    expect(JSON.stringify(seenByViewer.body)).not.toContain('@')
     const list = await api({ method: 'GET', path: '/missions', ...asViewer })
     expect((list.body as { missions: unknown[] }).missions).toHaveLength(0)
   })
@@ -300,8 +303,14 @@ describe('hybrid sharing', () => {
     const { api } = bench()
     const created = await api({ method: 'POST', path: '/missions', ...asOwner, body: JSON.stringify({ kind: 'custom', prompt: 'prepare une note' }) })
     const mission = (created.body as { mission: { id: string } }).mission
+    // Private to the owner: the viewer cannot read it, so it is absent to them.
     const refused = await api({ method: 'POST', path: `/missions/${mission.id}/visibility`, ...asViewer, body: JSON.stringify({ visibility: 'team' }) })
-    expect(refused.status).toBe(403)
+    expect(refused.status).toBe(404)
+    // Shared: the viewer reads it, and still may not change who reads it.
+    const shared = await api({ method: 'POST', path: '/missions', ...asOwner, body: JSON.stringify({ kind: 'custom', prompt: 'note partagee', visibility: 'team' }) })
+    const sharedId = (shared.body as { mission: { id: string } }).mission.id
+    const forbidden = await api({ method: 'POST', path: `/missions/${sharedId}/visibility`, ...asViewer, body: JSON.stringify({ visibility: 'private' }) })
+    expect(forbidden.status).toBe(403)
   })
 
   it('keeps a note personal until it is shared', async () => {
