@@ -31,7 +31,10 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const compose = readFileSync(join(root, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8')
     expect(oauth).toContain('redirect_url = "https://equipe.datanalysis.re/oauth2/callback"')
     expect(oauth).toContain('client_id = "app-1234"')
-    expect(oauth).toContain('email_domains = ["datanalysis.re"]')
+    // Who may sign in: the role table's addresses only, never a whole domain.
+    expect(oauth).toContain('authenticated_emails_file = "/etc/mndt-front/authenticated_emails"')
+    expect(oauth).not.toMatch(/^email_domains/m)
+    expect(readFileSync(join(root, 'etc/mndt/datanalysis/authenticated_emails'), 'utf8')).toBe('duke@datanalysis.re\n')
     expect(compose).toContain('Host(`equipe.datanalysis.re`)')
     expect(compose).toContain('DSH_MNDT_IDENTITY: duke@datanalysis.re')
     expect(compose).toContain('/data/mndt/datanalysis/live:/state')

@@ -197,9 +197,12 @@ if [ ! -f "$root$data/grants.json" ]; then
   printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json"
   chmod 600 "$root$data/grants.json"
 fi
+# Who may sign in, from the role table (render-authenticated-emails.py); the
+# email domains filter it, they never admit by themselves.
+python3 "$here/tenant/render-authenticated-emails.py" "$root$data/grants.json" "$root$conf/authenticated_emails" "$email_domains" || exit 1
 [ -f "$root$data/state.json" ] || printf '{\n  "version": 1,\n  "missions": [],\n  "briefs": [],\n  "memories": [],\n  "approvals": [],\n  "events": [],\n  "mandates": []\n}\n' > "$root$data/state.json"
 
-echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for $email_domains)"
+echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for the addresses of grants.json within $email_domains)"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"
 echo "  fill in $data/model.env before the first agent turn"
 echo "  then, once the stack runs: tenant/seed-team.sh $slug --owner $owner"
