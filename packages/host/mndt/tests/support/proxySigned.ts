@@ -66,5 +66,6 @@ export function proxyFetch(
     headers['content-length'] = String(body.length)
   }
   headers['gap-signature'] = gapSignature(method, path, headers, body, init.key)
-  return fetch(`${base}${path}`, { method, headers, ...(body === undefined ? {} : { body }) })
+  // Never followed here: a browser comes back through the proxy, which signs the next request anew.
+  return fetch(`${base}${path}`, { method, headers, redirect: 'manual', ...(body === undefined ? {} : { body }) })
 }
