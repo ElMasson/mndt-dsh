@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -131,5 +131,15 @@ describe.skipIf(!landlockUsable)('sandbox-local: a read allow-list gives each se
     expect(other.result.status).not.toBe(0)
     expect(other.result.stdout).not.toContain('canary-a')
     expect(readFileSync(join(dirA, 'note'), 'utf8')).toBe('canary-a\n')
+    // Neither the commands' spill files (written by the workbench in the shared
+    // /tmp) nor the directory of the calls without a session are readable.
+    const spill = await tempDir(tmpdir())
+    writeFileSync(join(spill, 'stdout'), 'canary-spill\n')
+    const agentless = await runConfined(sandbox, 'printf "%s" "$TMPDIR"', { mode: 'workspace-write', workspaceRoot: workdir })
+    const dirNone = agentless.result.stdout.trim()
+    writeFileSync(join(dirNone, 'note'), 'canary-agentless\n')
+    const peek = await runConfined(sandbox, `cat "${spill}/stdout" "${dirNone}/note"; ls "${tmpdir()}"`, policy('session-b'))
+    expect(peek.result.stdout).not.toContain('canary-')
+    expect(peek.result.status).not.toBe(0)
   })
 })

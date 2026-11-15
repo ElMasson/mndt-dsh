@@ -62,6 +62,9 @@ function keptEnv(name: string): boolean {
   return KEPT_ENV.includes(name) || name.startsWith('LC_') || name.toUpperCase().startsWith('DSH_')
 }
 
+/** A session's private temp directory unused for this long is removed (12 h). */
+export const PRIVATE_TEMP_IDLE_MS = 12 * 60 * 60 * 1000
+
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
   /**
@@ -158,6 +161,8 @@ export interface SandboxInternals {
   probeWindowsAcl?: () => boolean
   /** Replaces the private-temp-directory removal at provider dispose (a throwing fake exercises the cleanup-failure path). */
   rmTempDir?: (path: string) => void
+  /** The clock of the private temp directories' idle pruning (ms). */
+  now?: () => number
 }
 
 /** The chain's verdict: which runner confines, and how completely it enforces. */
@@ -297,7 +302,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   private readonly workspaceGrants = new Map<string, AclWriteGrant>()
   private readonly tempCapabilities = new Map<string, AclTempCapability>()
   /** Landlock with a read allow-list: each session's private temp directory (removed on provider dispose). */
-  private readonly landlockTemps = new Map<string, string>()
+  private readonly landlockTemps = new Map<string, { dir: string; lastUsed: number }>()
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -415,12 +420,37 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   private landlockPrivateTemp(sessionId: SessionId | undefined): string {
     const key = sessionId ?? ''
-    let dir = this.landlockTemps.get(key)
-    if (dir === undefined) {
-      dir = mkdtempSync(join(tmpdir(), 'dsh-run-'))
-      this.landlockTemps.set(key, dir)
+    const now = (this.internals.now ?? Date.now)()
+    const known = this.landlockTemps.get(key)
+    if (known !== undefined) {
+      known.lastUsed = now
+      return known.dir
     }
+    // A channel's turn is a session of its own: without this, one directory
+    // per turn would stay until the server stops.
+    this.pruneLandlockTemps(now)
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-run-'))
+    this.landlockTemps.set(key, { dir, lastUsed: now })
     return dir
+  }
+
+  /**
+   * Remove the private temp directories no confined run has used for
+   * {@link PRIVATE_TEMP_IDLE_MS}. A session that comes back after that gets a
+   * fresh, empty directory: temporary files, not a store.
+   * @param now - the current time, in ms.
+   */
+  private pruneLandlockTemps(now: number): void {
+    for (const [key, entry] of this.landlockTemps) {
+      if (now - entry.lastUsed < PRIVATE_TEMP_IDLE_MS) continue
+      try {
+        this.removeTempDir(entry.dir)
+        this.landlockTemps.delete(key)
+      } catch (error) {
+        this.ctx.logger.warn(`sandbox-local: could not remove the idle private temp directory ${entry.dir}`)
+        this.ctx.logger.warn(error)
+      }
+    }
   }
 
   /**
@@ -558,7 +588,7 @@ export class LocalSandboxProvider extends SandboxProvider {
 
   /** Remove the Landlock private temp directories; failures are reported, not thrown (as for the ACL grants). */
   private removeLandlockTemps(): void {
-    for (const dir of this.landlockTemps.values()) {
+    for (const { dir } of this.landlockTemps.values()) {
       try {
         this.removeTempDir(dir)
       } catch (error) {

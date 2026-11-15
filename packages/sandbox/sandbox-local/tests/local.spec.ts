@@ -567,6 +567,24 @@ describe('a private temp directory per session under Landlock with a read allow-
     expect(confined.argv.join(' ')).not.toContain('canary-value')
   })
 
+  it('removes a session\'s directory once idle for 12 h, keeps a busy one, and gives a returning session a fresh one', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    let now = 0
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher(), now: () => now })
+    const at = async (session: string) => tempOf((await sandbox.confine(['true'], { ...WW, sessionId: session as never })).argv)
+    const idle = await at('turn-1')
+    const busy = await at('turn-2')
+    now = 11 * 3_600_000
+    expect(await at('turn-2')).toBe(busy)
+    now = 13 * 3_600_000
+    await at('turn-3') // a new session triggers the pruning
+    expect(existsSync(idle)).toBe(false)
+    expect(existsSync(busy)).toBe(true)
+    const back = await at('turn-1')
+    expect(back).not.toBe(idle)
+    expect(existsSync(back)).toBe(true)
+  })
+
   it('changes nothing without an allow-list: the shared /tmp, no prefix', async () => {
     const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
     const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
