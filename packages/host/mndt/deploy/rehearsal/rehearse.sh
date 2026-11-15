@@ -120,7 +120,7 @@ health() {
   done
   return 1
 }
-workbench_log() { echo "--- last lines of home/web.log"; tail -15 "$data/home/web.log" 2>/dev/null; }
+workbench_log() { echo "--- last lines of the shell log (/run/mndt-launch/web.log)"; docker exec $project-workbench tail -15 /run/mndt-launch/web.log 2>/dev/null; }
 
 step "1. tenant, keys, routes, roles (root $root)"
 printf 'secret' > "$root/root/entra_client_secret"
@@ -132,6 +132,7 @@ VLLM_API_KEY=placeholder
 SCW_PROJECT_ID=11111111-2222-3333-4444-555555555555
 VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
 VLLM_QWEN_MODEL=fake-qwen
+CANARY_SECRET_MODEL_ENV=CANARY_SECRET_model_env_value
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
 # An admin who is not the owner: missions and automations stay closed to them.
@@ -152,6 +153,16 @@ for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
   echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
 done
+step "1 bis. nothing of an operator's machine in the image"
+# .git (its config may carry a credential), environment files but the examples,
+# npm credentials, and key-shaped strings in the image's own code.
+image_secrets=$(docker run --rm --entrypoint sh "$image" -c '
+  find /app /etc -name .git -prune -print 2>/dev/null | head -3
+  find /app /etc \( -name "*.env" -o -name ".env" -o -name ".env.*" \) -not -name "*.example" -not -path "*/node_modules/*" 2>/dev/null | head -3
+  find /app /etc /root -name .npmrc -not -path "*/node_modules/*" -exec grep -l "_authToken" {} + 2>/dev/null | head -3
+  grep -rIlE "(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16})" /app --exclude-dir=node_modules --exclude="*.js" --exclude="*.mjs" --exclude="*.cjs" --exclude="*.map" 2>/dev/null | head -3' 2>&1)
+if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environment file, no npm credential, no key-shaped string in /app and /etc"; imaged=0
+else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -201,4 +212,27 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+step "6. the sandbox of the running workbench, canaries where its secrets live"
+# The model.env canary is in the workbench's environment (env_file): the probe
+# must not reach it. The others where the instance keeps its secrets, plus two
+# where reading is allowed (the probe must see those, or it proves nothing).
+printf '{ "CANARY_SECRET_tokens": { "user": "nobody@datanalysis.re" } }\n' > "$data/tokens.json"
+printf 'CANARY_SECRET_connector_env=1\n' > "$data/connectors/probe-canary.env"
+printf '// CANARY_SEARCHED_tools\n' > "$data/tools/canary-searched.mjs"
+docker exec -u 0 $project-workbench sh -c 'mkdir -p /state/channels/chn_other/files /state/home/sessions/--state-channels-chn_other-files-- /state/channels/chn_probe/files /tmp/probe-tools \
+  && echo CANARY_SECRET_other_channel > /state/channels/chn_other/files/note.txt \
+  && echo CANARY_SECRET_transcript > /state/home/sessions/--state-channels-chn_other-files--/turn.jsonl \
+  && echo CANARY_SECRET_dev_shm > /dev/shm/canary && echo CANARY_SEARCHED_tmp > /tmp/searched.txt'
+docker cp "$here/probe.sh" $project-workbench:/state/channels/chn_probe/files/probe.sh >/dev/null
+docker cp "$here/sandbox-probe.mjs" $project-workbench:/tmp/probe-tools/sandbox-probe.mjs >/dev/null
+planted=$(docker exec $project-workbench sh -c 'tr "\0" "\n" < /proc/1/environ | grep -c CANARY_SECRET_MODEL_ENV; grep -c . /run/mndt-launch/web-token')
+probe_out=$(docker exec $project-workbench node /tmp/probe-tools/sandbox-probe.mjs /state/channels/chn_probe/files probe.sh 2>&1)
+echo "$probe_out" | grep -E '^(RUNNER|READ|LEAK|SEEN|CROSS|DONE|WITNESS|SANDBOX-REFUSED)' | sed 's/^/    /'
+live=0
+[ "$(echo "$planted" | head -1)" -ge 1 ] && [ "$(echo "$planted" | tail -1)" -ge 1 ] || { echo "KO  live-planted   the model.env canary is not in the workbench's environment, or no launch token: the probe would prove nothing"; live=1; }
+leaks=$(echo "$probe_out" | grep -cE '^(LEAK|CROSS)')
+if [ "$leaks" = 0 ]; then echo "OK  live-no-leak   on the running workbench: no LEAK, no CROSS (environment, /proc, /state, /run, /dev/shm, /root)"; else echo "KO  live-no-leak   $leaks LEAK/CROSS line(s)"; live=1; fi
+if echo "$probe_out" | grep -q 'SEARCHED_tools' && echo "$probe_out" | grep -q 'SEARCHED_tmp'; then echo "OK  live-searched  the probe read /opt/mndt-tools and /tmp"; else echo "KO  live-searched  the probe did not read the allowed places"; live=1; fi
+if echo "$probe_out" | grep -q '^DONE6' && echo "$probe_out" | grep -q '^WITNESS own-channel-file' && echo "$probe_out" | grep -q '^RUNNER .*landlock'; then echo "OK  live-witness   Landlock, every step done, the agent still writes in its channel"; else echo "KO  live-witness   $(echo "$probe_out" | grep -E '^(RUNNER|SANDBOX-REFUSED)' | head -1)"; live=1; fi
+
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]

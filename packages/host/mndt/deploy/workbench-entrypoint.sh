@@ -15,12 +15,16 @@ if [ -z "$WEB_BIND" ]; then
 fi
 [ -n "$WEB_BIND" ] || WEB_BIND=127.0.0.1
 mkdir -p "$STATE"
-LOG="$STATE/web.log"
+# The shell prints its launch token in this log: on a team tenant it lives with
+# the published token, outside /state (DSH_MNDT_WEB_LOG).
+LOG="${DSH_MNDT_WEB_LOG:-$STATE/web.log}"
 TOKEN_FILE="${DSH_MNDT_WEB_TOKEN_FILE:-/state/web-token}"
 rm -f "$TOKEN_FILE"
 # A token published elsewhere than /state (team tenant): the one an earlier
-# version left under /state goes, it never stays where agents' state lives.
+# version left under /state goes, and the log that printed it, they never stay
+# where agents' state lives.
 if [ "$TOKEN_FILE" != "/state/web-token" ]; then rm -f /state/web-token; fi
+if [ "$LOG" != "$STATE/web.log" ]; then rm -f "$STATE/web.log"; fi
 
 node /app/apps/cli/lib/bin.js web \
   --host "$WEB_BIND" \

@@ -4,37 +4,63 @@
  * @module @deepseek-ai/dsh-sandbox-local/profiles
  */
 
-import { existsSync } from 'node:fs'
-import { isAbsolute, normalize } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-system/landlock-run'
 import { SandboxUnavailableError, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 
-/** Names the directories a confined command may read; unset, it reads all of `/` (the default). */
+/** Names what a confined command may read; unset, it reads all of `/` (the default). */
 export const READ_ROOTS_ENV = 'DSH_SANDBOX_READ_ROOTS'
 
 /**
+ * What a read allow-list may never open, whatever a root's spelling or a link
+ * leads to: the instance's state and secrets (`/state`, `/data`, `/run`,
+ * `/root`) and the other processes (`/proc`: their environment holds the
+ * model keys). A root inside one of them, or above one of them, is refused.
+ */
+export const NEVER_READABLE: readonly string[] = ['/state', '/data', '/run', '/root', '/proc']
+
+/** @param root - a resolved path. @param guarded - a guarded one. @returns whether either holds the other. */
+function overlaps(root: string, guarded: string): boolean {
+  return root === guarded || root.startsWith(`${guarded}/`) || guarded.startsWith(`${root}/`)
+}
+
+/**
  * The read allow-list a deployment sets (`DSH_SANDBOX_READ_ROOTS`, colon-separated
- * absolute directories): a team workbench keeps its secrets, its state and other
- * channels out of an agent's reach. Unset or empty, nothing changes.
+ * absolute paths, directories or single files such as `/dev/null`): a team
+ * workbench keeps its secrets, its state and other channels out of an agent's
+ * reach. Unset, nothing changes: the default reads `/`.
  *
- * Fails closed: a relative path, a `..`, `/` itself, or a list left empty once the
- * directories missing on this host are dropped, refuses the command; never a
- * silent fall back to reading `/`.
+ * Fails closed, never a silent fall back to reading `/`:
+ * - set but blank: refused (a value meant to restrict that restricts nothing);
+ * - a relative path or a `..`;
+ * - a root that resolves (links followed, as the launcher follows them) to `/`,
+ *   or that overlaps a path of NEVER_READABLE;
+ * - a list left empty once the paths missing on this host are dropped.
  * @param env - the environment to read (the process's by default).
- * @returns the readable roots, or undefined when no allow-list is set.
+ * @returns the readable roots, resolved, or undefined when no allow-list is set.
  */
 export function readRoots(env: Readonly<Record<string, string | undefined>> = process.env): readonly string[] | undefined {
   const raw = env[READ_ROOTS_ENV]
-  if (raw === undefined || raw.trim() === '') return undefined
+  if (raw === undefined) return undefined
+  if (raw.trim() === '') {
+    throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} is set but blank: unset it to read /, or name what may be read`)
+  }
   const roots: string[] = []
   for (const entry of raw.split(':').map(part => part.trim()).filter(part => part !== '')) {
-    if (!isAbsolute(entry) || entry.split('/').includes('..') || normalize(entry) === '/') {
-      throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names "${entry}": an absolute directory other than /, without ..`)
+    if (!isAbsolute(entry) || entry.split('/').includes('..')) {
+      throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names "${entry}": an absolute path without ..`)
     }
-    if (existsSync(entry)) roots.push(normalize(entry).replace(/\/+$/, ''))
+    if (!existsSync(entry)) continue
+    // The launcher follows a link: the root is what it leads to.
+    const resolved = realpathSync(entry)
+    if (resolved === '/' || NEVER_READABLE.some(guarded => overlaps(resolved, guarded))) {
+      throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names "${entry}" (${resolved}): / and ${NEVER_READABLE.join(', ')} are never readable`)
+    }
+    if (!roots.includes(resolved)) roots.push(resolved)
   }
-  if (roots.length === 0) throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names no directory present on this host`)
+  if (roots.length === 0) throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names nothing present on this host`)
   return roots
 }
 

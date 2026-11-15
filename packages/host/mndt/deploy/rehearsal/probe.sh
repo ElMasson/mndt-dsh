@@ -6,36 +6,46 @@
 set +e
 here=$(pwd)
 
-echo "STEP1 canaries in every file this command can read"
-# The canaries are planted at run time, in the volumes (/state, /run/secrets,
-# /opt/mndt-tools) and in /etc, /root, /tmp: everything is searched except the
-# image's own trees, built before any canary existed (/usr, /app, /lib*, /bin,
-# /sbin), and the pseudo filesystems. The tool waits 120 s: a search cut short
-# prints TIMEOUT1, never DONE1.
-timeout 80 grep -r -a -o -I 'CANAR[Y]_[A-Za-z0-9_]*' / \
-  --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev --exclude-dir=usr --exclude-dir=app \
-  --exclude-dir=lib --exclude-dir=lib64 --exclude-dir=bin --exclude-dir=sbin 2>/dev/null > "$here/.probe-hits"
-searched=$?
-grep -v "^$here/" "$here/.probe-hits" | sed 's/^/LEAK file /'
-rm -f "$here/.probe-hits"
-if [ "$searched" = 124 ]; then echo TIMEOUT1; else echo DONE1; fi
+echo "STEP1 canaries in every place this command can read, one root at a time"
+# Two kinds of canaries, planted at run time: CANAR[Y]_SECRET_* where the instance
+# keeps its secrets (finding one is a LEAK), CANAR[Y]_SEARCHED_* where reading is
+# allowed (finding one proves the search really read there: SEEN). Each root is
+# walked on its own: a root that cannot be listed reads 0 files, never « done ».
+# The image's own trees (/usr, /app, /lib*, /bin, /sbin) hold no canary.
+total=0
+for root in /state /data /run /root /home /tmp /dev/shm /opt/mndt-tools /opt /etc /var /srv /mnt; do
+  [ -e "$root" ] || continue
+  files=$(timeout 30 find "$root" -xdev -type f -readable 2>/dev/null | grep -v "^$here/" | head -20000)
+  count=$(printf '%s' "$files" | grep -c . || true)
+  total=$((total + count))
+  echo "READ $root $count file(s)"
+  [ "$count" -gt 0 ] || continue
+  printf '%s\n' "$files" | timeout 60 xargs -d '\n' grep -a -o -I 'CANAR[Y]_\(SECRET\|SEARCHED\)_[A-Za-z0-9_]*' 2>/dev/null | sort -u | while IFS= read -r hit; do
+    case "$hit" in
+      *CANAR[Y]_SECRET_*) echo "LEAK file $hit" ;;
+      *) echo "SEEN file $hit" ;;
+    esac
+  done
+done
+if [ "$total" -gt 0 ]; then echo "DONE1 $total file(s) read"; else echo "NOREAD1 no file could be read at all"; fi
 
 echo "STEP2 canaries in the environment and in every process's environment and command line"
-env | grep -o 'CANAR[Y]_[A-Za-z0-9_]*' | sed 's/^/LEAK env /'
+env | grep -o 'CANAR[Y]_SECRET_[A-Za-z0-9_]*' | sed 's/^/LEAK env /'
 for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do
-  timeout 2 tr '\0' '\n' < "$f" 2>/dev/null | grep -o 'CANAR[Y]_[A-Za-z0-9_]*' | sed "s#^#LEAK $f #"
+  timeout 2 tr '\0' '\n' < "$f" 2>/dev/null | grep -o 'CANAR[Y]_SECRET_[A-Za-z0-9_]*' | sed "s#^#LEAK $f #"
 done
 # Secrets by name in any process's environment (a model key, any secret): the
 # name only, never the value, which this output would carry to the logs.
 for f in /proc/[0-9]*/environ; do
-  timeout 2 tr '\0' '\n' < "$f" 2>/dev/null | grep -E -o '^(SCW_GENAPI_KEY|VLLM_API_KEY|[A-Z_]*SECRET[A-Z_]*|CANAR[Y]_[A-Z_]*)=' | sed "s#^#LEAK $f #"
+  timeout 2 tr '\0' '\n' < "$f" 2>/dev/null | grep -E -o '^(SCW_GENAPI_KEY|VLLM_API_KEY|[A-Z_]*SECRET[A-Z_]*|CANAR[Y]_SECRET_[A-Z_]*)=' | sed "s#^#LEAK $f #"
 done
 echo "inherited file descriptors: $(ls -l /proc/self/fd 2>/dev/null | tail -n +2 | awk '{print $NF}' | tr '\n' ' ')"
 echo DONE2
 
 echo "STEP3 secrets by their paths"
-for p in /state/web-token /run/secrets/mndt-gateway /run/secrets/mndt-proxy-signature /state/grants.json /state/tokens.json \
-         /state/model.env /state/state.json /state/connectors /state/home/sessions /root; do
+for p in /run/mndt-launch/web-token /run/mndt-launch/web.log /state/web-token /run/secrets/mndt-gateway /run/secrets/mndt-proxy-signature \
+         /state/grants.json /state/tokens.json /state/model.env /state/state.json /state/connectors /state/home/sessions /root \
+         /proc/1/environ /dev/shm /dev/pts; do
   if [ -d "$p" ]; then ls "$p" >/dev/null 2>&1 && echo "LEAK readable $p"
   elif [ -e "$p" ] || [ -L "$p" ]; then head -c 1 "$p" >/dev/null 2>&1 && echo "LEAK readable $p"
   fi

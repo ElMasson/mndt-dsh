@@ -258,7 +258,7 @@ seed "$deploy"; seeded=$?; echo "seed-team.sh exit $seeded"
 own
 MNDT_HOME=$data python3 "$app/gateway/render-connectors.py"; rendered=$?; echo "installed renderer exit $rendered"
 docker restart $project-workbench >/dev/null
-if health 80; then echo "the workbench came back"; else echo "KO: the workbench does not come back"; echo "workbench: $(state)"; tail -15 "$data/home/web.log" 2>/dev/null; fi
+if health 80; then echo "the workbench came back"; else echo "KO: the workbench does not come back"; echo "workbench: $(state)"; docker exec $project-workbench tail -15 /run/mndt-launch/web.log 2>/dev/null; fi
 
 step "B4. both patch files, then the connectors without any model"
 checked=0

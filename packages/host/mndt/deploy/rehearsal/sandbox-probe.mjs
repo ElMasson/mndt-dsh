@@ -24,7 +24,11 @@ try {
   process.exit(0)
 }
 console.log(`RUNNER ${confined.argv[0]} enforcement=${confined.enforcement} read=${confined.argv.filter((_a, i, all) => all[i - 1] === '--read' || all[i - 1] === '--ro').join(',') || '?'}`)
-const run = spawnSync(confined.argv[0], confined.argv.slice(1), { cwd: workspaceRoot, encoding: 'utf8', timeout: 150000 })
+// The command gets what an agent's command gets: no inherited environment (the
+// workbench's holds the model keys), only a path and a home.
+const run = spawnSync(confined.argv[0], confined.argv.slice(1), {
+  cwd: workspaceRoot, encoding: 'utf8', timeout: 150000, env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp', LANG: 'C.UTF-8' },
+})
 process.stdout.write(run.stdout ?? '')
 process.stdout.write(run.stderr ? `STDERR ${run.stderr.slice(0, 2000)}\n` : '')
 console.log(`EXIT ${run.status}`)
