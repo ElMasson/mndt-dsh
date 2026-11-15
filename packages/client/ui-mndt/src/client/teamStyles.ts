@@ -53,13 +53,6 @@ export const TEAM_CSS = `
   padding: 2px 6px; border: 1px solid #F0DDBB; border-radius: 10px;
   background: #FDF3E2; color: var(--mw-warning); font-size: 12px; font-weight: 500; line-height: 16px;
 }
-.mw-spaces { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; }
-.mw-select {
-  max-width: 192px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding: 6px 12px; border: 1px solid var(--mw-line); border-radius: 12px;
-  background: var(--mw-card); color: var(--mw-charcoal); font: inherit; font-size: 14px; line-height: 20px;
-}
-.mw-select:disabled { opacity: 0.6; }
 .mw-header-end { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mw-live { display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--mw-slate); }
 .mw-live[data-state="live"] svg { color: var(--mw-success); }
@@ -68,8 +61,6 @@ export const TEAM_CSS = `
 .mw-account-text { display: none; min-width: 0; flex-direction: column; align-items: flex-start; line-height: 1.25; }
 .mw-account-name, .mw-account-email { max-width: 192px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mw-account-email { font-size: 12px; color: var(--mw-slate); }
-.mw-header-spaces { border-top: 1px solid var(--mw-line); padding: 8px 16px; }
-.mw-md-only { display: none; }
 
 .mw-body { display: flex; flex: 1; min-height: 0; }
 .mw-nav {
@@ -381,11 +372,25 @@ export const TEAM_CSS = `
 .mw-deposit-file { display: block; width: 100%; font-size: 12px; }
 .mw-app .mw-deposit-send { align-self: flex-start; }
 
+/* Pills: one click to put an agent or a connector in a channel, or to take it out. */
+.mw-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.mw-app .mw-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+  border: 1px solid var(--mw-line); border-radius: 999px; background: var(--mw-card);
+  color: var(--mw-charcoal); font-size: 13px; line-height: 18px; cursor: pointer;
+  transition: background-color 160ms var(--mw-ease), color 160ms var(--mw-ease);
+}
+.mw-app .mw-pill:hover:not([aria-disabled="true"]) { background: var(--mw-surface); }
+.mw-app .mw-pill[aria-pressed="true"] { border-color: var(--mw-charcoal); background: var(--mw-charcoal); color: #FFFFFF; }
+.mw-app .mw-pill[aria-disabled="true"] { cursor: default; opacity: 0.55; }
+.mw-app .mw-pill[aria-disabled="true"]:hover { background: var(--mw-card); }
+.mw-app .mw-pill[aria-pressed="true"][aria-disabled="true"] { opacity: 0.8; background: var(--mw-charcoal); }
+@media (max-width: 767px) { .mw-app .mw-pill { min-height: 36px; padding: 6px 12px; } }
+.mw-pill-note { font-size: 11px; opacity: 0.8; }
+
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }
 @media (min-width: 768px) {
-  .mw-md-only { display: block; }
-  .mw-header-spaces { display: none; }
   .mw-nav { display: flex; }
   .mw-bottom { display: none; }
   .mw-page { padding-bottom: 0; }

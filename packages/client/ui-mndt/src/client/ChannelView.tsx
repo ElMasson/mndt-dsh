@@ -55,6 +55,10 @@ export interface ThreadCard extends ApprovalRow {
 export function reasonOf(error: unknown, t: ChatTranslate): string {
   // A 403 says the reader's role: the Host's English sentence is replaced by the page's own.
   if (error instanceof ChatRefusal && error.status === 403) return t('forbidden')
+  // The API names a connector that is not mounted in English: said in the page's words.
+  if (error instanceof ChatRefusal && error.status === 400 && error.message.startsWith('connector not mounted: ')) {
+    return t('connNotMounted', { names: error.message.slice('connector not mounted: '.length) })
+  }
   if (isHostDown(error)) return t('hostDown')
   return error instanceof Error ? error.message : String(error)
 }

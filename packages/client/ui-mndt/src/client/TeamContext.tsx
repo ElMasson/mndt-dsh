@@ -3,9 +3,9 @@
  * of sections, CANAL, MANDATS, AGENTS, MÉMOIRE, DOCUMENTS, MEMBRES. Only what the workspace serves
  * is said; a section whose route does not exist yet says so (« Bientôt »), it shows nothing made up.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatChannel } from './chat.ts'
+import type { ChatAgent, ChatChannel, MountedConnector } from './chat.ts'
 import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
@@ -36,8 +36,18 @@ export interface TeamContextProps {
   readonly t: ChatTranslate
   /** Open the memory place (« Toutes les mémoires »). */
   readonly onMemory: () => void
-  /** Add an agent to the channel; resolves to the Host's reason when refused. */
-  readonly onAdd?: ((agentId: string) => Promise<string | undefined>) | undefined
+  /** Put an agent in the channel or take it out; resolves to the Host's reason when refused. */
+  readonly onToggleAgent?: ((agentId: string, inChannel: boolean) => Promise<string | undefined>) | undefined
+  /** Whether an agent can be taken out of the channel here (the face offers it). */
+  readonly canRemoveAgents?: boolean | undefined
+  /** Add a connector to the channel or take it out; resolves to the Host's reason when refused. */
+  readonly onToggleConnector?: ((server: string, inChannel: boolean) => Promise<string | undefined>) | undefined
+  /** The connectors mounted on the workbench; undefined while unread, `absent` where not served. */
+  readonly mounted?: readonly MountedConnector[] | 'absent' | undefined
+  /** Why the mounted connectors could not be read, if they could not. */
+  readonly mountedError?: string | undefined
+  /** Whether the reader may change the channel's agents and connectors (workflows.write). */
+  readonly canManage?: boolean | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The documents route; without it the section says « Bientôt ». */
@@ -48,18 +58,37 @@ export interface TeamContextProps {
 export function TeamContext(props: TeamContextProps): ReactNode {
   const { channel, t } = props
   const here = props.agents.filter(a => channel.agents.includes(a.id))
-  const addable = props.agents.filter(a => !channel.agents.includes(a.id) && a.retiredAt === undefined)
-  const [choice, setChoice] = useState('')
-  const [busy, setBusy] = useState(false)
+  // Every declared agent, as a pill: in the channel or not, one click puts it in or takes it out.
+  const declared = props.agents.filter(a => a.retiredAt === undefined || channel.agents.includes(a.id))
+  const canManage = props.canManage === true
+  // One change at a time: a ref, so a second click in the same frame cannot start another.
+  const busy = useRef(false)
+  const [pending, setPending] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
-  const add = async (): Promise<void> => {
-    if (choice === '' || busy || props.onAdd === undefined) return
-    setBusy(true)
-    const refused = await props.onAdd(choice)
-    setBusy(false)
-    setError(refused)
-    if (refused === undefined) setChoice('')
+  const [connectorError, setConnectorError] = useState<string | undefined>(undefined)
+  const run = async (key: string, work: () => Promise<string | undefined>, say: (reason: string | undefined) => void): Promise<void> => {
+    if (busy.current) return
+    busy.current = true
+    setPending(key)
+    say(await work())
+    busy.current = false
+    setPending(undefined)
   }
+  const toggleAgent = (agentId: string): void => {
+    if (props.onToggleAgent === undefined) return
+    const on = !channel.agents.includes(agentId)
+    void run(`agent:${agentId}`, () => props.onToggleAgent?.(agentId, on) ?? Promise.resolve(undefined), setError)
+  }
+  const toggleConnector = (server: string): void => {
+    if (props.onToggleConnector === undefined) return
+    const on = !channel.connectors.includes(server)
+    void run(`connector:${server}`, () => props.onToggleConnector?.(server, on) ?? Promise.resolve(undefined), setConnectorError)
+  }
+  const served = props.mounted === undefined || props.mounted === 'absent' ? undefined : props.mounted
+  // The pills: what is mounted, and what the channel holds that is no longer mounted.
+  const servers = [...new Set([...(served ?? []).map(m => m.server), ...channel.connectors])].sort()
+  const enabled = new Set((served ?? []).filter(m => m.enabled).map(m => m.server))
+  const connectorsWritable = canManage && served !== undefined && props.onToggleConnector !== undefined
   return (
     <div className="mw-ctx" data-testid="context-panel">
       <Section title={t('ctxChannel')}>
@@ -69,6 +98,29 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         <p className="mw-ctx-muted">{t('ctxMandatesSoon')}</p>
       </Section>
       <Section title={t('agents')}>
+        {declared.length === 0 ? <p className="mw-ctx-muted">{t('agentsNoneDeclared')}</p> : (
+          <div className="mw-pills" role="group" aria-label={t('agentsOfChannel')} data-testid="agent-pills">
+            {declared.map((a) => {
+              const on = channel.agents.includes(a.id)
+              // Taking an agent out needs the face to offer it; otherwise its pill stays as it is.
+              const inert = !canManage || (on && props.canRemoveAgents !== true)
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="mw-pill"
+                  aria-pressed={on}
+                  aria-disabled={inert || pending !== undefined}
+                  aria-label={on ? t('pillRemoveAgent', { handle: a.handle }) : t('pillAddAgent', { handle: a.handle })}
+                  onClick={() => { if (!inert) toggleAgent(a.id) }}
+                >
+                  @{a.handle}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {canManage || declared.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
         {here.length === 0 ? <p className="mw-ctx-muted">{t('agentNone')}</p> : (
           <ul className="mw-ctx-list">
             {here.map(a => (
@@ -82,16 +134,42 @@ export function TeamContext(props: TeamContextProps): ReactNode {
             ))}
           </ul>
         )}
-        {props.onAdd === undefined || addable.length === 0 ? undefined : (
-          <form className="mw-ctx-add" onSubmit={(event) => { event.preventDefault(); void add() }} data-testid="chat-agent-add">
-            <select className="mw-ctx-select" aria-label={t('addAgent')} value={choice} onChange={(event) => { setChoice(event.target.value) }}>
-              <option value="">{t('chooseAgent')}</option>
-              {addable.map(a => <option key={a.id} value={a.id}>@{a.handle} · {a.name}</option>)}
-            </select>
-            <button type="submit" className="mw-secondary" disabled={choice === '' || busy}>{t('add')}</button>
-          </form>
-        )}
         {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
+      </Section>
+      <Section title={t('ctxConnectors')}>
+        {props.mountedError !== undefined ? <p className="mw-ctx-muted" role="alert">{t('connUnreadable', { reason: props.mountedError })}</p> : undefined}
+        {props.mounted === undefined && props.mountedError === undefined ? <p className="mw-ctx-muted">{t('docLoading')}</p> : undefined}
+        {props.mounted === 'absent' ? <p className="mw-ctx-muted" data-testid="connectors-not-served">{t('connNotServed')}</p> : undefined}
+        {served !== undefined && servers.length === 0 ? <p className="mw-ctx-muted">{t('connNone')}</p> : undefined}
+        {servers.length === 0 ? undefined : (
+          <div className="mw-pills" role="group" aria-label={t('ctxConnectors')} data-testid="connector-pills">
+            {servers.map((server) => {
+              const on = channel.connectors.includes(server)
+              const off = served !== undefined && !enabled.has(server)
+              // A connector that is not mounted cannot be added; one the channel still holds can be taken out.
+              const inert = !connectorsWritable || (off && !on)
+              const action = on ? t('pillRemoveConnector', { server }) : t('pillAddConnector', { server })
+              return (
+                <button
+                  key={server}
+                  type="button"
+                  className="mw-pill"
+                  aria-pressed={on}
+                  aria-disabled={inert || pending !== undefined}
+                  aria-label={off ? `${action}, ${t('connOff')}` : action}
+                  data-off={off ? 'true' : undefined}
+                  title={off ? t('connOff') : undefined}
+                  onClick={() => { if (!inert) toggleConnector(server) }}
+                >
+                  {server}
+                  {off ? <span className="mw-pill-note" aria-hidden="true">{t('connOff')}</span> : undefined}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {canManage || servers.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
+        {connectorError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{connectorError}</p>}
       </Section>
       <Section title={t('ctxMemory')}>
         <p className="mw-ctx-small mw-ctx-muted">

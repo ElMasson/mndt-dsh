@@ -7,7 +7,9 @@
  * (queued, running, then done with the agent's answer, or refused past the monthly ceiling with a
  * system message), as the Host would between two reads.
  */
+import { ChatRefusal } from './chat.ts'
 import type {
+  MountedConnector,
   ChannelCreate,
   ChatAgent,
   ChatCard,
@@ -56,6 +58,8 @@ export interface MockSeed {
   readonly channels: readonly ChatChannel[]
   readonly messages?: readonly ChatMessage[]
   readonly cards?: readonly ChatCard[]
+  /** The connectors mounted on the workbench; a channel may only hold an enabled one. */
+  readonly mounted?: readonly MountedConnector[]
 }
 
 /** The double, with its clock step. */
@@ -221,6 +225,29 @@ export function createMockChat(
         channels.set(c.id, next)
         return next
       })
+    },
+    removeAgents(channelId, agentIds) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        const next = { ...c, agents: c.agents.filter(id => !agentIds.includes(id)) }
+        channels.set(c.id, next)
+        return next
+      })
+    },
+    setConnectors(channelId, servers) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        const on = new Set((seed.mounted ?? []).filter(m => m.enabled).map(m => m.server))
+        const missing = servers.filter(server => !on.has(server))
+        // As the API: a connector that is not mounted is refused, with its name.
+        if (missing.length > 0) throw new ChatRefusal(`connector not mounted: ${missing.join(', ')}`, 400)
+        const next = { ...c, connectors: [...new Set(servers)].sort() }
+        channels.set(c.id, next)
+        return next
+      })
+    },
+    mounted() {
+      return settle(() => [...(seed.mounted ?? [])])
     },
     tick() {
       for (const m of [...messages.values()]) {

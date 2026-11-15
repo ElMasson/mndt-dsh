@@ -135,6 +135,21 @@ export const chatEn = {
   docRefused: 'The deposit was refused: {reason}',
   docForbidden: 'Your role does not allow depositing here.',
   docDownload: 'Download {name}',
+  ctxConnectors: 'Connectors',
+  connNone: 'No connector is mounted on this workspace.',
+  connOff: 'not mounted',
+  connUnreadable: 'The connectors could not be read: {reason}',
+  chipsReadOnly: 'Your role does not allow changing this channel.',
+  agentsNoneDeclared: 'No agent is declared yet.',
+  agentsOfChannel: 'Agents of this channel',
+  pillAddAgent: 'Add @{handle} to the channel',
+  pillRemoveAgent: 'Take @{handle} out of the channel',
+  pillAddConnector: 'Add {server} to the channel',
+  pillRemoveConnector: 'Take {server} out of the channel',
+  connRemoveFirst: 'Take out first {names}, no longer mounted.',
+  connNotServed: 'The list of mounted connectors is not served here: the channel\'s connectors cannot be changed from this page.',
+  channelGone: 'This channel can no longer be read.',
+  connNotMounted: 'This connector is not mounted: {names}.',
 } as const
 
 /** One copy key. */
@@ -270,6 +285,21 @@ export const chatFr: Record<ChatKey, string> = {
   docRefused: 'Le dépôt a été refusé : {reason}',
   docForbidden: 'Votre rôle ne permet pas de déposer ici.',
   docDownload: 'Télécharger {name}',
+  ctxConnectors: 'Connecteurs',
+  connNone: 'Aucun connecteur n\'est branché sur cet espace.',
+  connOff: 'non branché',
+  connUnreadable: 'Les connecteurs n\'ont pas pu être lus : {reason}',
+  chipsReadOnly: 'Votre rôle ne permet pas de modifier ce canal.',
+  agentsNoneDeclared: 'Aucun agent n\'est encore déclaré.',
+  agentsOfChannel: 'Agents de ce canal',
+  pillAddAgent: 'Ajouter @{handle} au canal',
+  pillRemoveAgent: 'Retirer @{handle} du canal',
+  pillAddConnector: 'Ajouter {server} au canal',
+  pillRemoveConnector: 'Retirer {server} du canal',
+  connRemoveFirst: 'Retirez d\'abord {names}, qui n\'est plus branché.',
+  connNotServed: 'La liste des connecteurs branchés n\'est pas servie ici : les connecteurs du canal ne se changent pas depuis cette page.',
+  channelGone: 'Ce canal n\'est plus lisible.',
+  connNotMounted: 'Ce connecteur n\'est pas branché : {names}.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
