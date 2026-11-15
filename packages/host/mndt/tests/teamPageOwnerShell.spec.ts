@@ -83,10 +83,10 @@ describe('the gateway: the team page for everyone, the shell for the owner alone
     cleanup.push(() => { server.closeAllConnections(); server.close() })
     return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen }
   }
-  async function gateway(api: string, shell: string): Promise<string> {
+  async function gateway(api: string, shell: string, extra: Record<string, string> = {}): Promise<string> {
     const port = 20000 + Math.floor(Math.random() * 20000)
     const child: ChildProcess = spawn(process.execPath, [join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')], {
-      env: { ...process.env, PORT: String(port), API: api, WORKBENCH: shell, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: owner },
+      env: { ...process.env, PORT: String(port), API: api, WORKBENCH: shell, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: owner, ...extra },
       stdio: 'ignore',
     })
     cleanup.push(() => { child.kill() })
@@ -117,6 +117,18 @@ describe('the gateway: the team page for everyone, the shell for the owner alone
     }
     expect(api.seen.map(request => request.path)).toEqual(['/team/index.html', '/team/team-assets/app-1a2b.js', '/team/index.html', '/team/team-assets/app-1a2b.js'])
     expect(shell.seen).toHaveLength(0)
+  })
+
+  it('tells the API who gets the shell (the owner alone), and never relays a browser that claims it', async () => {
+    const api = await recorder()
+    const shell = await recorder()
+    const secret = join(mkdtempSync(join(tmpdir(), 'gateway-secret-')), 'gateway_secret')
+    writeFileSync(secret, 'secret-for-tests\n')
+    const base = await gateway(api.url, shell.url, { GATEWAY_SECRET_FILE: secret })
+    api.seen.length = 0
+    expect((await proxyFetch(base, '/mndt-api/me', { headers: { 'x-forwarded-email': owner } })).status).toBe(200)
+    expect((await proxyFetch(base, '/mndt-api/me', { headers: { 'x-forwarded-email': viewer, 'x-mndt-shell': '1' } })).status).toBe(200)
+    expect(api.seen.map(request => request.headers['x-mndt-shell'])).toEqual(['1', undefined])
   })
 
   it('serves the page only behind the sign-on proxy: unsigned, it is refused before reaching the API', async () => {

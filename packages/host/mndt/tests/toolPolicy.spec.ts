@@ -252,6 +252,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     }
     const ctx = {
       on: host.on,
+      logger: { warn: () => undefined },
       // As in production: this plugin does not inject `tools`, so reading it throws.
       get tools(): never { throw new Error('cannot get property "tools" without inject') },
       get: (name: string) => ({ tools: host.tools, workflowEngine: engine, subagents } as Record<string, unknown>)[name],
@@ -313,7 +314,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     expect(solo.seen.child?.ctx.tools.allow).toBeUndefined()
   })
 
-  it('lifts the policy last: after the workflow and the agent, even when a disposal throws', async () => {
+  it('lifts the policy last, after the workflow and the agent, and keeps it when one of them cannot be released', async () => {
     const ordered = fakeCtx()
     await new DshTurnRunner(ordered.ctx).run(turn())
     expect(ordered.seen.guardsAtRunDispose).toBe(1)
@@ -322,7 +323,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
 
     const failing = fakeCtx({ agentDisposeThrows: true })
     await expect(new DshTurnRunner(failing.ctx).run(turn())).rejects.toThrow(/dispose failed/)
-    expect(failing.guards.size).toBe(0)
+    // An agent that could not be released keeps its guard: the run fails closed.
+    expect(failing.guards.size).toBe(1)
   })
 
   it('refuses to start when the workflow\'s children would run out of process, or its provider cannot be read', async () => {

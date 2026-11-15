@@ -430,7 +430,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const role = table.ok ? roleOf(table.grants, identity) : undefined
         const name = (await grants.names?.())?.[identity]
-        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }) })
+        // `shell`: whether this person gets the DSH shell. On a team instance only
+        // the gateway knows (its OWNER) and says so, on its secret, in x-mndt-shell;
+        // a second owner of the role file does not get it. Solo: the person at the
+        // workstation has it.
+        const shell = !teamInstance || request.headers?.['x-mndt-shell'] === '1'
+        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell })
       }
 
       if (request.method === 'GET' && path === '/org') {
@@ -593,7 +598,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/journal') {
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
-        const events = await service.events(500)
+        const all = await service.events(500)
+        // On a team instance the journal shows only lines whose subject the reader may read.
+        const reader = teamInstance ? await readerOf(identity) : undefined
+        const snapshot = reader === undefined ? undefined : await service.snapshot()
+        const events = reader === undefined || snapshot === undefined ? all : all.filter(event => canReadEvent(reader, event, snapshot))
         if (request.query?.format === 'csv') return respond(200, { format: 'csv', filename: 'journal.csv', text: journalCsv(events) })
         return respond(200, { format: 'json', entries: events })
       }
@@ -638,6 +647,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.slice('/missions/'.length, -'/cancel'.length)
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
+        const target = await service.getMission(id)
+        if (target === undefined || !canReadMission(await readerOf(identity), target)) return respond(404, { error: `no mission ${id}` })
         const table = await grants.grants()
         if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
         try {
@@ -655,7 +666,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const original = await service.getMission(id)
-        if (original === undefined) return respond(404, { error: `no mission ${id}` })
+        if (original === undefined || !canReadMission(await readerOf(identity), original)) return respond(404, { error: `no mission ${id}` })
         if (original.status !== 'failed') {
           return respond(409, { error: `mission ${id} is ${original.status}; only a failed mission can be retried` })
         }
@@ -707,6 +718,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const id = path.split('/')[2] ?? ''
+        const stored = await service.getBrief(id)
+        if (stored === undefined || !canReadMission(await readerOf(identity), stored)) return respond(404, { error: `no brief ${id}` })
         const brief = await service.approveBrief(id, identity)
         return respond(200, { brief })
       }
@@ -768,7 +781,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'POST' && /^\/missions\/[^/]+\/visibility$/.test(path)) {
         const id = path.split('/')[2] ?? ''
         const mission = await service.getMission(id)
-        if (mission === undefined) return respond(404, { error: `no mission ${id}` })
+        if (mission === undefined || !canReadMission(await readerOf(identity), mission)) return respond(404, { error: `no mission ${id}` })
         if (mission.createdBy !== identity) {
           const denied = await authorise(identity, 'sharing.write')
           if (denied !== undefined) return denied
@@ -994,6 +1007,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/schedule') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         let at: string | undefined = process.env.DSH_MNDT_BRIEFING_AT
         if (options.automationsPath !== undefined) {
           const items = await readAutomations(options.automationsPath).catch(() => [])
@@ -1032,6 +1047,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'GET' && path === '/automations') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
         const items = await readAutomations(options.automationsPath)
         const table = await grants.grants()
@@ -1053,7 +1070,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(existing ?? {}),
           ...input,
           ...(id === undefined ? {} : { id }),
-          createdBy: existing?.createdBy ?? identity,
+          // On a team instance the owner who saves an automation takes it over,
+          // a system one included: they have read its prompt.
+          createdBy: teamInstance ? identity : existing?.createdBy ?? identity,
         })
         if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
         // Who enabled it is the server's record, never the request's.

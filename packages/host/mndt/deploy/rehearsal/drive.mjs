@@ -17,7 +17,11 @@ const check = (step, ok, note) => { results.push({ step, ok }); console.log(`${o
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const started = (service) => docker('inspect', '-f', '{{.State.StartedAt}} restarts={{.RestartCount}}', `${project}-${service}`)
-const logs = (service) => execFileSync('docker', ['logs', `${project}-${service}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+// What happened since this drive started: an update rehearsal keeps the fake
+// model and the state of the version before it, whose calls and missions are not
+// this version's to judge.
+const DRIVE_START = new Date().toISOString()
+const logs = (service) => execFileSync('docker', ['logs', '--since', DRIVE_START, `${project}-${service}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
 const gatewayBefore = started('gateway')
 const browser = await chromium.launch()
@@ -144,6 +148,13 @@ await (await adminContext.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentlo
 const adminRun = await api('POST', '/automations/auto_briefing/run', {}, adminContext)
 const adminMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-admin' }, adminContext)
 check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404, `POST /automations/auto_briefing/run ${adminRun.status}, POST /missions ${adminMission.status} by ${ADMIN} (admin, not owner)`)
+// The scheduler's first pass on a team instance: auto_briefing, enabled by the
+// deployment and by no owner, is switched off with its reason; it ran nothing.
+const registry = (await api('GET', '/automations')).body.items ?? []
+const briefingItem = registry.find(item => item.id === 'auto_briefing')
+const missionsBefore = ((await api('GET', '/missions')).body.missions ?? []).filter(mission => mission.kind === 'briefing' && mission.createdAt >= DRIVE_START).length
+check('scheduler-first-pass', briefingItem?.enabled === false && /owner/.test(briefingItem?.lastOutcome ?? '') && missionsBefore === 0,
+  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} », briefing missions before any run: ${missionsBefore}`)
 // A briefing the owner runs is theirs and private: neither a member nor the admin reads it.
 const briefing = await api('POST', '/automations/auto_briefing/run', {}, owner, 180000)
   .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
@@ -156,6 +167,13 @@ const viewerReads = await readsOf(viewer)
 const adminReads = await readsOf(adminContext)
 check('briefing-private', briefing.status === 200 && ownerReads.missions > 0 && viewerReads.missions + viewerReads.briefs + adminReads.missions + adminReads.briefs === 0,
   `run ${briefing.status} ${briefing.body.error ?? ''}; owner reads ${ownerReads.missions} mission(s) ${ownerReads.briefs} brief(s); ${SECOND} ${JSON.stringify(viewerReads)}; ${ADMIN} ${JSON.stringify(adminReads)}`)
+// The admin reads the journal, finds the owner's brief there, and tries to approve it.
+const ownerBriefs = (await api('GET', '/briefs')).body.briefs ?? []
+const journal = await api('GET', '/journal', undefined, adminContext)
+const leakedIds = ownerBriefs.filter(brief => JSON.stringify(journal.body.entries ?? []).includes(brief.missionId ?? brief.id)).length
+const approve = ownerBriefs[0] === undefined ? { status: 0 } : await api('POST', `/briefs/${ownerBriefs[0].id}/approve`, {}, adminContext)
+check('admin-no-owner-brief', ownerBriefs.length > 0 && leakedIds === 0 && approve.status === 404,
+  `journal ${journal.status}: ${leakedIds} of the owner's ${ownerBriefs.length} brief(s) named; approve by ${ADMIN}: ${approve.status}`)
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
 const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })

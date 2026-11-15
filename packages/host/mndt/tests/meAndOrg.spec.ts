@@ -33,10 +33,10 @@ const get = async (api: ReturnType<typeof bench>, token: string, path: string) =
 describe('who the person is, for the team screen', () => {
   it('/me gives the e-mail, the role and the name the role file declares', async () => {
     const api = bench()
-    expect((await get(api, 'tok-owner', '/me')).body).toEqual({ you: owner, name: 'Stéphane Masson', role: 'owner' })
-    expect((await get(api, 'tok-viewer', '/me')).body).toEqual({ you: viewer, role: 'viewer' })
+    expect((await get(api, 'tok-owner', '/me')).body).toEqual({ you: owner, name: 'Stéphane Masson', role: 'owner', shell: true })
+    expect((await get(api, 'tok-viewer', '/me')).body).toEqual({ you: viewer, role: 'viewer', shell: true })
     // Someone without a role is told who they are, nothing more.
-    expect((await get(api, 'tok-stranger', '/me')).body).toEqual({ you: stranger })
+    expect((await get(api, 'tok-stranger', '/me')).body).toEqual({ you: stranger, shell: true })
   })
 
   it('/org names the organisation, its slug and its environment', async () => {
