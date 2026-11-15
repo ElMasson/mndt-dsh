@@ -15,7 +15,7 @@ import { pageLanguage, when } from './format.ts'
 import { Icon } from './Icons.tsx'
 import { shownName } from './TeamFeed.tsx'
 
-/** What mndt-web accepts to deposit. */
+/** What a deposit may be (.pdf .txt .md .csv, as the API accepts). */
 const ACCEPT = '.pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv'
 
 /** @param bytes - a size. @returns it in the units a person reads (« 1,2 Mo »). */
