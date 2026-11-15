@@ -12,11 +12,20 @@
  *
  * CLI contract (mirrors the `bwrap` runner argv shape the executor wraps):
  *
- *   landlock-run [--ro <path>]... [--rw <path>]... -- <argv>...
+ *   landlock-run [--ro <path>]... [--rw <path>]...
+ *                [--keep-env <name>]... [--keep-env-prefix <prefix>]...
+ *                [--set-env <name>=<value>]... -- <argv>...
  *   landlock-run --probe
  *
  * `--ro` grants read+execute beneath the path; `--rw` grants full filesystem
- * access beneath the path. Everything else is denied (Landlock is an
+ * access beneath the path.
+ *
+ * Environment allow-list: as soon as one `--keep-env` or `--keep-env-prefix`
+ * is given, the command receives ONLY the variables of the launcher's own
+ * environment (the one its caller really handed it, explicit additions
+ * included) whose name is kept, plus every `--set-env`. Without any of them
+ * the environment passes unchanged. Applied here, at the last step, it cannot
+ * be bypassed by a variable the caller adds after building the argv. Everything else is denied (Landlock is an
  * allow-list). `--probe` builds a maximal ruleset and reports whether the
  * running kernel actually enforces it — the executor's functional probe.
  *
@@ -136,6 +145,13 @@ struct cli {
   size_t ro_count;
   const char **rw;
   size_t rw_count;
+  const char **keep;
+  size_t keep_count;
+  const char **keep_prefix;
+  size_t keep_prefix_count;
+  const char **set;
+  size_t set_count;
+  int filter_env;
   char **command; /* NULL-terminated tail of main's argv */
 };
 
@@ -147,7 +163,12 @@ static int parse(int argc, char **argv, struct cli *cli) {
   /* argc bounds each grant list; the launcher execs or exits, so no free. */
   cli->ro = calloc(argc > 0 ? (size_t)argc : 1, sizeof *cli->ro);
   cli->rw = calloc(argc > 0 ? (size_t)argc : 1, sizeof *cli->rw);
-  if (cli->ro == NULL || cli->rw == NULL) return fail("out of memory", NULL);
+  cli->keep = calloc(argc > 0 ? (size_t)argc : 1, sizeof *cli->keep);
+  cli->keep_prefix = calloc(argc > 0 ? (size_t)argc : 1, sizeof *cli->keep_prefix);
+  cli->set = calloc(argc > 0 ? (size_t)argc : 1, sizeof *cli->set);
+  if (cli->ro == NULL || cli->rw == NULL || cli->keep == NULL || cli->keep_prefix == NULL || cli->set == NULL) {
+    return fail("out of memory", NULL);
+  }
 
   int index = 1;
   while (index < argc) {
@@ -167,6 +188,24 @@ static int parse(int argc, char **argv, struct cli *cli) {
       } else {
         cli->rw[cli->rw_count++] = argv[index + 1];
       }
+      index += 2;
+    } else if (strcmp(arg, "--keep-env") == 0 || strcmp(arg, "--keep-env-prefix") == 0) {
+      if (index + 1 >= argc || argv[index + 1][0] == '\0' || strchr(argv[index + 1], '=') != NULL) {
+        return fail_usage(arg, " requires a variable name without =");
+      }
+      if (strcmp(arg, "--keep-env") == 0) {
+        cli->keep[cli->keep_count++] = argv[index + 1];
+      } else {
+        cli->keep_prefix[cli->keep_prefix_count++] = argv[index + 1];
+      }
+      cli->filter_env = 1;
+      index += 2;
+    } else if (strcmp(arg, "--set-env") == 0) {
+      const char *eq = index + 1 < argc ? strchr(argv[index + 1], '=') : NULL;
+      if (eq == NULL || eq == argv[index + 1]) {
+        return fail_usage(arg, " requires <name>=<value>");
+      }
+      cli->set[cli->set_count++] = argv[index + 1];
       index += 2;
     } else if (strcmp(arg, "--") == 0) {
       cli->command = &argv[index + 1];
@@ -261,6 +300,51 @@ static int restrict_self(const struct cli *cli, int *partial) {
   return 0;
 }
 
+/* Whether `entry` (NAME=value) names a variable the allow-list keeps. */
+static int kept(const struct cli *cli, const char *entry) {
+  const char *eq = strchr(entry, '=');
+  if (eq == NULL || eq == entry) return 0; /* not a NAME=value entry: dropped */
+  size_t name_len = (size_t)(eq - entry);
+  for (size_t i = 0; i < cli->keep_count; i++) {
+    if (strlen(cli->keep[i]) == name_len && strncmp(cli->keep[i], entry, name_len) == 0) return 1;
+  }
+  for (size_t i = 0; i < cli->keep_prefix_count; i++) {
+    size_t prefix_len = strlen(cli->keep_prefix[i]);
+    if (prefix_len <= name_len && strncmp(cli->keep_prefix[i], entry, prefix_len) == 0) return 1;
+  }
+  return 0;
+}
+
+/* Whether `entry` (NAME=value) is overridden by a --set-env of the same name. */
+static int overridden(const struct cli *cli, const char *entry) {
+  const char *eq = strchr(entry, '=');
+  if (eq == NULL) return 0;
+  size_t name_len = (size_t)(eq - entry);
+  for (size_t i = 0; i < cli->set_count; i++) {
+    if (strncmp(cli->set[i], entry, name_len) == 0 && cli->set[i][name_len] == '=') return 1;
+  }
+  return 0;
+}
+
+extern char **environ;
+
+/* The command's environment: the kept variables, then every --set-env; or
+ * the launcher's own, unchanged, plus the --set-env, without an allow-list. */
+static char **command_env(const struct cli *cli) {
+  size_t count = 0;
+  for (char **entry = environ; *entry != NULL; entry++) count++;
+  char **env = calloc(count + cli->set_count + 1, sizeof *env);
+  if (env == NULL) return NULL;
+  size_t n = 0;
+  for (char **entry = environ; *entry != NULL; entry++) {
+    if (overridden(cli, *entry)) continue;
+    if (!cli->filter_env || kept(cli, *entry)) env[n++] = *entry;
+  }
+  for (size_t i = 0; i < cli->set_count; i++) env[n++] = (char *)cli->set[i];
+  env[n] = NULL;
+  return env;
+}
+
 int main(int argc, char **argv) {
   struct cli cli = { 0 };
   int code = parse(argc, argv, &cli);
@@ -292,6 +376,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "landlock-run: partial enforcement (older Landlock ABI)\n");
   }
 
+  char **env = command_env(&cli);
+  if (env == NULL) return fail("out of memory", NULL);
+  /* execvp searches PATH in the launcher's own environment, then the command
+   * starts with exactly `env`. */
+  environ = env;
   execvp(cli.command[0], cli.command);
   /* exec only returns on failure. */
   return fail("exec failed", strerror(errno));

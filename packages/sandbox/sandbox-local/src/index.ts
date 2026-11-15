@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   LAUNCHER_BIN,
@@ -40,27 +41,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { bwrapProfileArgs, landlockProfileArgs, readRoots, seatbeltProfileArgs } from './profiles.ts'
-
-/**
- * The ambient variables a confined command keeps under a read allow-list: the
- * shell's ordinary context, nothing an operator configures. Every other one of
- * the workbench's variables is unset (see privateTempPrefix).
- */
-export const KEPT_ENV: readonly string[] = [
-  'PATH', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'NODE_VERSION',
-  // What the shell executors set for every command (bash-local ENV_OVERRIDES).
-  'NO_COLOR', 'PAGER', 'GIT_PAGER',
-]
-
-/**
- * @param name - an environment variable's name.
- * @returns whether a confined command keeps it under a read allow-list: the
- *   kept names, the locale, and `DSH_*` (the subprocess layer already drops every
- *   ambient `DSH_*`: the ones a command sees are the facts set for it).
- */
-function keptEnv(name: string): boolean {
-  return KEPT_ENV.includes(name) || name.startsWith('LC_') || name.toUpperCase().startsWith('DSH_')
-}
 
 /** A session's private temp directory unused for this long is removed (12 h). */
 export const PRIVATE_TEMP_IDLE_MS = 12 * 60 * 60 * 1000
@@ -366,7 +346,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     const selected = this.selectRunner(policy.mode)
     const runnerArgv = this.runnerArgv(selected.runner, policy)
     return Promise.resolve<ConfinedArgv>({
-      argv: [...runnerArgv, '--', ...this.privateTempPrefix(selected.runner, policy), ...argv],
+      argv: [...runnerArgv, '--', ...argv],
       enforcement: selected.enforcement,
       denialSignatures: DENIAL_SIGNATURES[selected.runner],
       runnerFailureRules: RUNNER_FAILURE_RULES[selected.runner],
@@ -389,37 +369,18 @@ export class LocalSandboxProvider extends SandboxProvider {
   }
 
   /**
-   * Under Landlock with a read allow-list (a team tenant), the confined command
-   * starts through `env`, which:
-   * - unsets every variable of this process's environment outside
-   *   {@link KEPT_ENV}: the name filter of the subprocess layer drops only names
-   *   holding KEY, PASSWORD, SECRET or TOKEN, and a credential under another name
-   *   (a URL with a password, a `*_PASS`, a `*_AUTH`) would otherwise reach the
-   *   command. Names only, never a value, appear in the argv; a variable the
-   *   caller sets explicitly under a new name survives;
-   * - under workspace-write, points TMPDIR, TMP, TEMP and HOME at the session's
-   *   private directory: the shared /tmp and /root are not readable.
-   * Nothing for the other runners or without a list.
-   */
-  private privateTempPrefix(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
-    if (runner !== 'landlock' || readRoots() === undefined) return []
-    const unset = Object.keys(process.env).filter(name => !keptEnv(name)).sort().flatMap(name => ['-u', name])
-    if (policy.mode !== 'workspace-write') return ['/usr/bin/env', ...unset]
-    const dir = this.landlockPrivateTemp(policy.sessionId)
-    return ['/usr/bin/env', ...unset, `TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`]
-  }
-
-  /**
    * The private temp directory of one session under Landlock with a read
    * allow-list: random (mkdtemp, mode 0700), created on the session's first
-   * confined run, removed at provider dispose. Calls without a session (the
-   * workflow engine's scripts) share one directory of their own, never a
-   * session's. A fresh provider always draws new paths.
+   * confined run, removed when idle (PRIVATE_TEMP_IDLE_MS) or at provider
+   * dispose. A call without a session (a workflow engine's script) gets a
+   * directory of its own for that call alone, never shared with another call
+   * nor with a session (confine() does not see the end of the call: the
+   * directory goes with the idle pruning). A fresh provider draws new paths.
    * @param sessionId - the calling session, if any.
    * @returns the directory.
    */
   private landlockPrivateTemp(sessionId: SessionId | undefined): string {
-    const key = sessionId ?? ''
+    const key = sessionId ?? `call:${randomUUID()}`
     const now = (this.internals.now ?? Date.now)()
     const known = this.landlockTemps.get(key)
     if (known !== undefined) {

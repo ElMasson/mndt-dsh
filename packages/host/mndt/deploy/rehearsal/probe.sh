@@ -1,5 +1,7 @@
-# The sandbox probe of the rehearsal, run by a real agent turn through the
-# engine's bash tool, inside the sandbox, in its channel's folder. It carries no
+# The sandbox probe of the rehearsal, confined by the image's own sandbox-local
+# provider (sandbox-probe.mjs), inside the sandbox, in a channel's folder. The
+# real executor path (one provider, real sessions, a caller's spec.env) is proved
+# by bash-sandbox/tests/read-allowlist.e2e.ts. It carries no
 # canary itself: it looks for the pattern CANAR[Y]_ (a regex that never matches
 # its own text). Each step ends with DONE<n>; the rehearsal fails on any LEAK,
 # OPEN or CROSS line, and on any missing DONE or WITNESS line.

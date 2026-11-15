@@ -91,6 +91,24 @@ export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[]
  *   own temp directory, granted instead of `/tmp`; required in that case.
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
+/**
+ * The ambient variables a confined command keeps under a read allow-list: the
+ * shell's ordinary context and what the shell executors set for every command
+ * (bash-local ENV_OVERRIDES), plus NODE_OPTIONS (the image's heap setting for
+ * the code runtimes). Every other variable, the ones a caller adds included,
+ * is dropped by the launcher itself, right before exec.
+ */
+export const KEPT_ENV: readonly string[] = [
+  'PATH', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'NODE_VERSION', 'NODE_OPTIONS',
+  'NO_COLOR', 'PAGER', 'GIT_PAGER',
+]
+
+/**
+ * Name prefixes kept the same way: the locale, and the DSH_* facts set for the
+ * command (the subprocess layer drops every ambient DSH_*).
+ */
+export const KEPT_ENV_PREFIXES: readonly string[] = ['LC_', 'DSH_']
+
 export function landlockProfileArgs(
   policy: SandboxPolicy,
   roots: readonly string[] | null = readRoots() ?? null,
@@ -110,7 +128,13 @@ export function landlockProfileArgs(
       readWrite.push(privateTemp, policy.workspaceRoot)
     }
   }
-  return landlockGrantArgs({ readOnly: roots === null ? ['/'] : [...roots], readWrite })
+  if (roots === null) return landlockGrantArgs({ readOnly: ['/'], readWrite })
+  // Under a read allow-list the launcher filters the command's final environment
+  // to KEPT_ENV and points the temp variables and HOME at the private directory.
+  const setEnv = privateTemp === undefined || policy.mode !== 'workspace-write'
+    ? {}
+    : { TMPDIR: privateTemp, TMP: privateTemp, TEMP: privateTemp, HOME: privateTemp }
+  return landlockGrantArgs({ readOnly: [...roots], readWrite, keepEnv: KEPT_ENV, keepEnvPrefixes: KEPT_ENV_PREFIXES, setEnv })
 }
 
 /** Quote one path as an SBPL string literal. */

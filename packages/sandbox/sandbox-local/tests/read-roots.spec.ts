@@ -18,7 +18,10 @@ describe('the read allow-list (DSH_SANDBOX_READ_ROOTS)', () => {
     const present = mkdtempSync(join(tmpdir(), 'root-'))
     const roots = readRoots({ [READ_ROOTS_ENV]: `/usr:${present}/:/no/such/dir` })
     expect(roots).toEqual(['/usr', present])
-    expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).toEqual(['--ro', '/usr', '--ro', present, '--rw', '/dev/null', '--rw', '/tmp/dsh-run-a', '--rw', '/ws'])
+    const args = landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')
+    expect(args.slice(0, 10)).toEqual(['--ro', '/usr', '--ro', present, '--rw', '/dev/null', '--rw', '/tmp/dsh-run-a', '--rw', '/ws'])
+    // The launcher keeps only the allow-listed environment and points the temp and HOME at the private directory.
+    expect(args).toEqual(expect.arrayContaining(['--keep-env', 'PATH', '--keep-env-prefix', 'DSH_', '--set-env', 'TMPDIR=/tmp/dsh-run-a', '--set-env', 'HOME=/tmp/dsh-run-a']))
     // / is never among the readable roots once an allow-list is set, nor the shared /tmp.
     expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).not.toContain('/')
     expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).not.toContain('/tmp')
@@ -28,7 +31,10 @@ describe('the read allow-list (DSH_SANDBOX_READ_ROOTS)', () => {
     expect(() => landlockProfileArgs(WW, ['/usr'])).toThrow(SandboxUnavailableError)
     expect(() => landlockProfileArgs(WW, ['/usr'])).toThrow(/no private temp directory/)
     // read-only writes nothing but /dev/null: no temp at all.
-    expect(landlockProfileArgs({ mode: 'read-only', workspaceRoot: '/ws' }, ['/usr'])).toEqual(['--ro', '/usr', '--rw', '/dev/null'])
+    const readOnly = landlockProfileArgs({ mode: 'read-only', workspaceRoot: '/ws' }, ['/usr'])
+    expect(readOnly.slice(0, 4)).toEqual(['--ro', '/usr', '--rw', '/dev/null'])
+    expect(readOnly).toContain('--keep-env')
+    expect(readOnly).not.toContain('--set-env')
   })
 
   it('fails closed on a value that could reopen /, or that names nothing present', () => {

@@ -512,13 +512,12 @@ describe('the windows-acl probe (runner invocation contract)', () => {
 describe('a private temp directory per session under Landlock with a read allow-list', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 
-  /** The TMPDIR the confined argv sets, after the separator: env, its unsets, then the temp and HOME. */
+  /** The TMPDIR the launcher sets (--set-env, before the separator), with TMP, TEMP and HOME the same. */
   function tempOf(argv: readonly string[]): string {
-    const after = argv.slice(argv.indexOf('--') + 1)
-    expect(after[0]).toBe('/usr/bin/env')
-    const at = after.findIndex(arg => arg.startsWith('TMPDIR='))
-    const dir = after[at]?.replace(/^TMPDIR=/, '') ?? ''
-    expect(after.slice(at, at + 4)).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`])
+    const grants = argv.slice(0, argv.indexOf('--'))
+    const set = grants.flatMap((arg, i) => (grants[i - 1] === '--set-env' ? [arg] : []))
+    const dir = set.find(entry => entry.startsWith('TMPDIR='))?.replace(/^TMPDIR=/, '') ?? ''
+    expect(set).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`])
     return dir
   }
 
@@ -532,38 +531,39 @@ describe('a private temp directory per session under Landlock with a read allow-
     const a2 = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
     const b = await sandbox.confine(['true'], { ...WW, sessionId: 'session-b' as never })
     const agentless = await sandbox.confine(['true'], WW)
+    const agentless2 = await sandbox.confine(['true'], WW)
     const [dirA, dirB, dirNone] = [tempOf(a.argv), tempOf(b.argv), tempOf(agentless.argv)]
     expect(tempOf(a2.argv)).toBe(dirA)
-    expect(new Set([dirA, dirB, dirNone]).size).toBe(3)
+    // A call without a session gets a directory for itself alone, never another call's.
+    expect(new Set([dirA, dirB, dirNone, tempOf(agentless2.argv)]).size).toBe(4)
     for (const dir of [dirA, dirB, dirNone]) expect(statSync(dir).mode & 0o777).toBe(0o700)
+    // The command itself is not wrapped: the launcher filters the environment.
+    expect(a.argv.slice(a.argv.indexOf('--') + 1)).toEqual(['sh', '-c', 'true'])
     // The grant names the session's private directory, never /tmp nor another session's.
     const grants = a.argv.slice(1, a.argv.indexOf('--'))
     expect(grants).toContain(dirA)
     expect(grants).not.toContain('/tmp')
     expect(grants).not.toContain(dirB)
     expect(a.argv.slice(-3)).toEqual(['sh', '-c', 'true'])
-    // read-only writes nothing: no temp, no HOME, the environment still pruned.
+    // read-only writes nothing: no temp, no HOME, the environment still filtered.
     const ro = await sandbox.confine(['true'], { ...RO, sessionId: 'session-a' as never })
-    const roAfter = ro.argv.slice(ro.argv.indexOf('--') + 1)
-    expect(roAfter[0]).toBe('/usr/bin/env')
-    expect(roAfter.at(-1)).toBe('true')
-    expect(roAfter.some(arg => arg.includes('='))).toBe(false)
+    expect(ro.argv.slice(ro.argv.indexOf('--') + 1)).toEqual(['true'])
+    expect(ro.argv).toContain('--keep-env')
+    expect(ro.argv).not.toContain('--set-env')
     await ctx.fiber.dispose()
     for (const dir of [dirA, dirB, dirNone]) expect(existsSync(dir)).toBe(false)
   })
 
-  it('unsets every ambient variable outside the kept ones, by name only, whatever the name', async () => {
+  it('hands the launcher the kept names only, never a value of the environment', async () => {
     vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
     vi.stubEnv('DATABASE_URL', 'postgres://u:canary-value@h/db')
-    vi.stubEnv('QONTO_PASS', 'canary-value')
-    vi.stubEnv('LC_ALL', 'C.UTF-8')
     const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
     const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
-    const after = confined.argv.slice(confined.argv.indexOf('--') + 1)
-    const unset = after.flatMap((arg, i) => (after[i - 1] === '-u' ? [arg] : []))
-    expect(unset).toEqual(expect.arrayContaining(['DATABASE_URL', 'QONTO_PASS']))
-    for (const kept of ['PATH', 'LC_ALL', 'NO_COLOR', 'DSH_SANDBOX_READ_ROOTS']) expect(unset).not.toContain(kept)
-    // Names only: no value of the environment is ever in the argv.
+    const grants = confined.argv.slice(0, confined.argv.indexOf('--'))
+    const kept = grants.flatMap((arg, i) => (grants[i - 1] === '--keep-env' ? [arg] : []))
+    expect(kept).toEqual(expect.arrayContaining(['PATH', 'NO_COLOR', 'NODE_OPTIONS']))
+    expect(kept).not.toContain('DATABASE_URL')
+    expect(grants.flatMap((arg, i) => (grants[i - 1] === '--keep-env-prefix' ? [arg] : []))).toEqual(['LC_', 'DSH_'])
     expect(confined.argv.join(' ')).not.toContain('canary-value')
   })
 

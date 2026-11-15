@@ -5,7 +5,9 @@ This file pins the launcher's externally observable behavior — the cross-repo 
 ## Invocation grammar
 
 ```text
-landlock-run [--ro <path>]... [--rw <path>]... -- <argv>...
+landlock-run [--ro <path>]... [--rw <path>]...
+             [--keep-env <name>]... [--keep-env-prefix <prefix>]...
+             [--set-env <name>=<value>]... -- <argv>...
 landlock-run --probe
 ```
 
@@ -13,7 +15,9 @@ landlock-run --probe
 - `--rw <path>`: grant full filesystem access beneath `<path>` (every access the negotiated kernel ABI can govern).
 - Everything not granted is denied — Landlock rulesets are allow-lists.
 - A grant on a non-directory keeps only its file-compatible access bits (this is how a `--rw /dev/null` grant works).
-- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvp` with the launcher's environment unchanged.
+- `--keep-env <name>`, `--keep-env-prefix <prefix>`: the environment allow-list. As soon as one is given, the command receives only the variables of the launcher's own environment whose name equals a kept name or starts with a kept prefix. A name or prefix containing `=`, or empty, is a usage error.
+- `--set-env <name>=<value>`: a variable set for the command, over any of the same name (an empty name is a usage error).
+- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvp` (which searches the launcher's own `PATH`). Without `--keep-env*` the command gets the launcher's environment unchanged, plus any `--set-env`.
 - `--probe`: mutually exclusive with grants and a command.
 - No other flags, no environment-variable inputs.
 
