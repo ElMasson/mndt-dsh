@@ -212,8 +212,10 @@ export const TEAM_CSS = `
   padding: 16px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
 }
 .mw-aside[data-open] {
-  display: block; position: absolute; inset: 0; z-index: 40; width: auto; max-height: none;
-  border: 0; border-radius: 0;
+  /* As mndt-web opens it on a phone (fixed inset-0): over the whole screen, composer and bars included. */
+  display: block; position: fixed; inset: 0; z-index: 50; width: auto; max-height: none; overflow-y: auto;
+  /* flex-start would size a fixed box to its content: stretched, it covers the screen. */
+  align-self: stretch; border: 0; border-radius: 0;
 }
 .mw-aside-close { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .mw-ctx { display: flex; flex-direction: column; gap: 16px; font-size: 14px; line-height: 20px; }
@@ -239,7 +241,7 @@ export const TEAM_CSS = `
 }
 @media (min-width: 1024px) {
   .mw-aside { display: block; }
-  .mw-aside[data-open] { position: static; width: 320px; max-height: calc(100% - 24px); border: 1px solid var(--mw-line); border-radius: 16px; }
+  .mw-aside[data-open] { position: static; z-index: auto; align-self: flex-start; width: 320px; max-height: calc(100% - 24px); border: 1px solid var(--mw-line); border-radius: 16px; }
   .mw-aside-close { display: none; }
   .mw-app .mw-context-open { display: none; }
 }
