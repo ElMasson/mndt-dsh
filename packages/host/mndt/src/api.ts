@@ -471,13 +471,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/metrics') {
         const snapshot = await service.snapshot()
         const now = Date.now()
-        const count = (status: MissionStatus): number => snapshot.missions.filter(mission => mission.status === status).length
-        const pending = snapshot.approvals.filter(approval => approval.state === 'pending')
+        // On a team instance the counts are of what the reader may read: a count of
+        // the owner's private missions or of cards they cannot see says too much.
+        const reader = teamInstance ? await readerOf(identity) : undefined
+        const missions = reader === undefined ? snapshot.missions : snapshot.missions.filter(mission => canReadMission(reader, mission))
+        const briefs = reader === undefined ? snapshot.briefs : snapshot.briefs.filter(brief => canReadMission(reader, brief))
+        const count = (status: MissionStatus): number => missions.filter(mission => mission.status === status).length
+        const pending = snapshot.approvals.filter(approval => approval.state === 'pending' && (reader === undefined || canReadApproval(reader, approval)))
         const ages = pending
           .map(approval => (now - Date.parse(approval.requestedAt)) / 3_600_000)
           .filter(hours => Number.isFinite(hours))
         let automationsEnabled = 0
-        if (options.automationsPath !== undefined) {
+        if (options.automationsPath !== undefined && (reader === undefined || reader.missionRole === 'owner')) {
           const items = await readAutomations(options.automationsPath).catch(() => [])
           automationsEnabled = items.filter(item => item.enabled).length
         }
@@ -487,7 +492,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           up: 1,
           uptimeSeconds: Math.round(process.uptime()),
           missions: { queued: count('queued'), running: count('running'), done: count('done'), failed: count('failed') },
-          briefs: snapshot.briefs.length,
+          briefs: briefs.length,
           approvalsPending: pending.length,
           oldestApprovalHours: ages.length === 0 ? 0 : Math.round(Math.max(...ages)),
           activeMandates,
@@ -798,7 +803,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.split('/')[2] ?? ''
         const notes = await service.recall({ limit: 500 })
         const note = notes.find(candidate => candidate.id === id)
-        if (note === undefined) return respond(404, { error: `no memory ${id}` })
+        // A note the caller may not read is absent to them: holding sharing.write
+        // lets a person share what they read, never publish another's private note.
+        if (note === undefined || (note.scope !== 'team' && note.createdBy !== identity)) return respond(404, { error: `no memory ${id}` })
         if (note.createdBy !== identity) {
           const denied = await authorise(identity, 'sharing.write')
           if (denied !== undefined) return denied

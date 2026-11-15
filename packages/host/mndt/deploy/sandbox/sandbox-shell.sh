@@ -41,6 +41,7 @@ else
     --cpus 1 \
     -e DSH_HOME=/state/home \
     -e DSH_MNDT_IDENTITY="$identity" \
+    -e DSH_MNDT_SOLO_WORKSTATION=1 \
     -e DSH_MNDT_WEB_TOKEN_FILE=/state/web-token \
     -e PUBLIC_URL=https://mndt.duke-analytics.com/ \
     -e TRUSTED_HOST=mndt.duke-analytics.com \

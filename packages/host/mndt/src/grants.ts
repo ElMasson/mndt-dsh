@@ -9,6 +9,7 @@ import { asRole } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import type { Grant } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { readFile } from 'node:fs/promises'
 import type { GrantSource } from './policy.ts'
+import { isPlainAscii } from './identity.ts'
 
 /** Ask the team authority for its grant table. */
 export function authorityGrants(options: { baseUrl: string; token: string }): GrantSource {
@@ -114,6 +115,9 @@ export function fileGrants(path: string): GrantSource {
         const role = asRole((row as { role?: unknown }).role)
         if (typeof subject !== 'string' || subject.trim() === '' || role === undefined) {
           return { ok: false, reason: `the role file ${path}, row ${index + 1}: a subject (e-mail) and a role among owner, admin, operator, viewer are required` }
+        }
+        if (!isPlainAscii(subject)) {
+          return { ok: false, reason: `the role file ${path}, row ${index + 1}: the subject is not a plain ASCII e-mail` }
         }
         const name = (row as { name?: unknown }).name
         if (name !== undefined && (typeof name !== 'string' || !isShownName(name))) {

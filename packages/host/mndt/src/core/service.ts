@@ -37,6 +37,18 @@ import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { SLUG, freeSlug, mentionsOf, slugOf } from './conversation.ts'
+import { isPlainAscii } from './address.ts'
+
+/**
+ * @param members - the e-mails a person adds to a channel.
+ * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
+ * spelling would be lower-cased onto another person's address.
+ */
+function plainMembers(members: readonly string[]): readonly string[] {
+  const refused = members.filter(email => !isPlainAscii(email))
+  if (refused.length > 0) throw new Error(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
+  return members
+}
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -837,7 +849,7 @@ export class WorkbenchService {
         name,
         title: title || name,
         kind: 'team',
-        members: [...new Set([actor, ...(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
+        members: [...new Set([actor, ...plainMembers(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
         agents: [...new Set(agents)],
         connectors: [...new Set(draft.connectors ?? [])].sort(),
         createdBy: actor,
@@ -885,7 +897,7 @@ export class WorkbenchService {
       if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
       // One spelling of a person: an e-mail written Prenom.Nom@ is the same member as prenom.nom@.
       const removed = (change.removeMembers ?? []).map(email => email.trim().toLowerCase())
-      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
+      const members = [...new Set([...channel.members, ...plainMembers(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
       const next: Channel = {

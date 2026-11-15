@@ -120,17 +120,23 @@ export function automationRefusal(item: Automation, team: boolean, owners: Reado
 }
 
 /**
- * Whether the workstation Remote is closed: it is on a team workbench, where
- * several people reach the same shell behind single sign-on (a proxy user
- * header is configured) and the product API serves each under their own identity.
+ * Whether the workstation Remote is closed. Closed by default: it serves one
+ * person's workstation, so it opens only on a host declared solo
+ * (DSH_MNDT_SOLO_WORKSTATION=1, see soloWorkstation), never behind the sign-on
+ * proxy, where the product API serves each person under their own identity. A
+ * missing or mistyped setting closes it rather than opening it to a team.
  * @param proxyUserHeader - the header the proxy proves the person with, if any.
+ * @param env - the environment.
  * @returns the Remote's JSON refusal, or undefined when the Remote is open.
  */
-export function teamRemoteRefusal(proxyUserHeader: string | undefined): string | undefined {
-  if (proxyUserHeader === undefined || proxyUserHeader === '') return undefined
+export function teamRemoteRefusal(proxyUserHeader: string | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (soloWorkstation(proxyUserHeader, env)) return undefined
+  const team = proxyUserHeader !== undefined && proxyUserHeader !== ''
   return JSON.stringify({
     ok: false,
-    error: 'on a team workbench the product API (/mndt-api) serves each person under their own identity; the workstation Remote is closed',
+    error: team
+      ? 'on a team workbench the product API (/mndt-api) serves each person under their own identity; the workstation Remote is closed'
+      : 'the workstation Remote is closed unless this host is declared solo: set DSH_MNDT_SOLO_WORKSTATION=1',
   })
 }
 

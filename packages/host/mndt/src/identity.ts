@@ -7,6 +7,7 @@
  */
 import { timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { isPlainAscii } from './core/address.ts'
 
 /** The header the front gateway adds to every call it relays: the shared secret that makes its identity header trustworthy. */
 export const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
@@ -69,7 +70,7 @@ export function identityOf(
   // An e-mail proven by the proxy is printable ASCII only: toLowerCase() folds a few Unicode
   // characters onto ASCII ones (the Kelvin sign becomes k), which could make another person's
   // spelling match. Anything else proves nothing.
-  if (!/^[\x21-\x7e]+$/.test(raw.trim())) return undefined
+  if (!isPlainAscii(raw)) return undefined
   const identity = raw.trim().toLowerCase()
   return identity === '' ? undefined : identity
 }
@@ -111,3 +112,5 @@ export async function loadTokens(path: string): Promise<Record<string, Provision
   }
   return tokens
 }
+
+export { isPlainAscii }
