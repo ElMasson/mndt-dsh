@@ -60,7 +60,11 @@ export function isDocument(row: unknown): row is ChannelDocument {
     && (d.pages === undefined || typeof d.pages === 'number') && (d.dataClass === undefined || typeof d.dataClass === 'string')
 }
 
-/** The largest file a deposit carries, as on mndt-web (the gateway allows the base64 overhead). */
+/**
+ * The largest file a deposit carries, as on mndt-web. The gateway will have to admit the base64
+ * overhead on this route (about 28 MiB of body): today its large limit is granted to `…/files` only
+ * (exigences_route_documents_canal_15-11.md, requirement 1).
+ */
 export const MAX_DEPOSIT_BYTES = 20 * 1024 * 1024
 
 /** @param file - a file. @returns its bytes in base64, without the data URL prefix. */
@@ -97,9 +101,13 @@ export function createHttpDocuments(fetcher: DocumentsFetcher = (input, init) =>
       if (response.status === 501) return 'absent'
       if (response.status === 404) {
         const refused: unknown = await response.json().catch(() => undefined)
-        const error = typeof refused === 'object' && refused !== null ? (refused as { error?: unknown }).error : undefined
-        if (typeof error !== 'string' || error.startsWith('no route')) return 'absent'
-        throw new DocumentsRefusal(error, 404)
+        const { error, code } = typeof refused === 'object' && refused !== null
+          ? refused as { error?: unknown; code?: unknown }
+          : { error: undefined, code: undefined }
+        // The API's code says which 404 it is; its message is read only where no code is served.
+        if (code === 'no-route') return 'absent'
+        if (code !== 'no-channel' && (typeof error !== 'string' || error.startsWith('no route'))) return 'absent'
+        throw new DocumentsRefusal(typeof error === 'string' ? error : 'no channel', 404)
       }
       if (!response.ok) throw await refusalOf(response)
       const body = await response.json() as { documents?: unknown; canDeposit?: unknown; dataClasses?: unknown }

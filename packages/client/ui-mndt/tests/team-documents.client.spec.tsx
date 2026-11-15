@@ -25,6 +25,12 @@ describe('the documents route, as the page reads it', () => {
     expect(await createHttpDocuments(async () => answer(404, { error: 'no route GET /channels/chn_1/documents' })).list('chn_1')).toBe('absent')
   })
 
+  it('reads the API\'s code when it serves one, before its message', async () => {
+    expect(await createHttpDocuments(async () => answer(404, { code: 'no-route', error: 'anything' })).list('chn_1')).toBe('absent')
+    await expect(createHttpDocuments(async () => answer(404, { code: 'no-channel', error: 'no route, reworded' })).list('chn_1'))
+      .rejects.toMatchObject({ status: 404 })
+  })
+
   it('a channel the reader cannot read (#55, « no channel ») is a refusal, not « Bientôt »', async () => {
     await expect(createHttpDocuments(async () => answer(404, { error: 'no channel chn_1' })).list('chn_1')).rejects.toMatchObject({ status: 404 })
   })
