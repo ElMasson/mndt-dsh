@@ -1,0 +1,14 @@
+# The workbench image is built from a checkout (Dockerfile.workbench, COPY . /src):
+# nothing of the operator's machine goes into it. The clone's history and remote
+# (.git, whose config may carry a credential), any environment file but the
+# versioned examples, npm credentials, and dependencies installed locally (the
+# image installs its own from the lockfile).
+**/.git
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+**/*.env
+!**/*.env.example
+**/.npmrc
+**/node_modules

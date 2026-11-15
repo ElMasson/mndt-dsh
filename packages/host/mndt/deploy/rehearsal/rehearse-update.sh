@@ -13,8 +13,11 @@
 # by the identity header given to the gateway.
 #
 #   rehearse-update.sh <old image> <new image> [rehearsal root]
-# OLD_REF (default 96d2801d8a) names the old tenant scripts. KEEP=1 leaves the
-# containers running.
+# OLD_REF (default 96d2801d8a, the 13/11 breakage) names the old tenant scripts. OLD_STATE=installed
+# starts instead from an instance installed and working at OLD_REF, required then
+# (47169065bf, the one of 14/11): no 13/11 breakage to reproduce; an automation briefing runs
+# on it first, so the update must stop serving that old shared brief to the
+# team. KEEP=1 leaves the containers running.
 set -uo pipefail
 old_image=${1:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
@@ -22,6 +25,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 old_ref=${OLD_REF:-96d2801d8a}
+old_state=${OLD_STATE:-broken}
+if [ "$old_state" = installed ] && [ -z "${OLD_REF:-}" ]; then echo "refused: OLD_STATE=installed needs OLD_REF, the commit the instance runs (47169065bf on 16/11)" >&2; exit 2; fi
 project=mndt-rehearsal
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
@@ -50,7 +55,7 @@ cleanup() {
   echo "rehearsal root: $root"
 }
 trap cleanup EXIT
-owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
+owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 web_patch=$data/home/profiles/web/cordis.patch.yml
 mkdir -p "$root/root" "$root/shots" "$root/old"
@@ -159,7 +164,12 @@ VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
 VLLM_QWEN_MODEL=fake-qwen
 ENV
 MNDT_HOME=$data python3 "$old/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
-printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" } ] }\n' $owner $viewer > "$data/grants.json"
+# A mission (the old briefing) runs on the default model: the fake one here too.
+for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
+  sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
+done
+# An admin who is not the owner too: the drive checks that missions stay closed to them.
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 compose_for "$old_image"
 cat > "$root/compose.override.yml" <<YML
 services:
@@ -179,6 +189,21 @@ find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "first start: the API answers"; else echo "KO: no API after the first start"; fi
 
+if [ "$old_state" = installed ]; then
+  step "A2. the instance as installed at $old_ref: its own seed-team.sh, then an automation briefing run by the owner"
+  own
+  seed "$old"; echo "old seed-team.sh exit $?"
+  if health 80; then echo "installed: the API answers"; else echo "KO: the installed instance does not answer"; fi
+  # On the old version a briefing is the team's (createdBy « scheduler »,
+  # visibility team): after the update it must no longer reach a non-owner.
+  old_run=$(curl -s -m 200 -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' -d '{}' \
+    http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
+  old_seen=$(curl -s -m 20 -H "x-forwarded-email: $viewer" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+  echo "old briefing run by the owner: $old_run; briefs the viewer reads on the old version: $old_seen"
+  # The starting point this rehearsal needs: an old shared brief the team reads
+  # (the update must stop serving it). Without it, the update proves nothing.
+  if [ "$old_run" = 200 ] && [ "$old_seen" -ge 1 ]; then broke=1; else broke=0; echo "KO: no old shared brief to hide, the update below would prove nothing"; fi
+else
 step "A2. the old seed-team.sh: its block lands after the [] (expected to break)"
 own
 seed "$old"; echo "old seed-team.sh exit $?"
@@ -199,10 +224,22 @@ own
 seed "$old"; echo "old seed-team.sh (agents) exit $?"
 echo "installed renderer before step 13: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile (0 = before the guard)"
 
+fi
+
 step "B1. step 13: create-tenant.sh with the same arguments, the LLM routes"
 own
 tenant "$deploy" || exit 1
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
+# As rehearse.sh: a mission runs on the default model, here the fake one, and a
+# second MCP server is mounted that no channel allows (the drive's tool probe).
+for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
+  sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
+done
+mkdir -p "$data/tools"
+cp "$deploy/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs"
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO: the facts server was not mounted"
 echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile"
 
 step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
@@ -216,13 +253,24 @@ node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $projec
 gateway_code=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $project-gateway | grep -c '^MNDT_GATEWAY_CODE=' || true)
 echo "gateway: $(docker inspect -f '{{.State.StartedAt}}' $project-gateway), code fingerprint in its env: $gateway_code"
 
-step "B3. seed-team.sh right away, then the installed renderer as install-connectors.sh runs it, then a restart"
+step "B3. seed-team.sh right away (it restarts the workbench itself when approvals changed), then the installed renderer"
+started_before=$(docker inspect -f '{{.State.StartedAt}}' $project-workbench)
 own
 seed "$deploy"; seeded=$?; echo "seed-team.sh exit $seeded"
+started_after=$(docker inspect -f '{{.State.StartedAt}}' $project-workbench)
+# From the instance as installed the approvals descriptor is rewritten: seed-team.sh
+# must have restarted the workbench on its own (no restart of ours hides it).
+restarted=0
+if [ "$old_state" = installed ]; then
+  if [ "$started_before" != "$started_after" ]; then echo "OK  seed-restart   seed-team.sh restarted the workbench after rewriting approvals"
+  else echo "KO  seed-restart   seed-team.sh rewrote approvals but did not restart the workbench"; restarted=1; fi
+fi
 own
+patch_before=$(sha256sum < "$web_patch" 2>/dev/null)
 MNDT_HOME=$data python3 "$app/gateway/render-connectors.py"; rendered=$?; echo "installed renderer exit $rendered"
-docker restart $project-workbench >/dev/null
-if health 80; then echo "the workbench came back"; else echo "KO: the workbench does not come back"; echo "workbench: $(state)"; tail -15 "$data/home/web.log" 2>/dev/null; fi
+# As install-connectors.sh: a restart only when the renderer changed the patch.
+if [ "$(sha256sum < "$web_patch" 2>/dev/null)" != "$patch_before" ]; then echo "the renderer changed the patch: restart"; docker restart $project-workbench >/dev/null; else echo "the renderer changed nothing"; fi
+if health 80; then echo "the workbench answers"; else echo "KO: the workbench does not answer"; echo "workbench: $(state)"; docker exec $project-workbench tail -15 /run/mndt-launch/web.log 2>/dev/null; fi
 
 step "B4. both patch files, then the connectors without any model"
 checked=0
@@ -242,10 +290,14 @@ echo "attack exit $attacked (0 = every path refused)"
 deposit; deposited=$?
 
 step "B5. the page, the turn, the resets"
+# The launch token and the shell's log left under /state by the old version are gone.
+gone=0
+if [ -e "$data/web-token" ]; then echo "KO  web-token-gone  $data/web-token is still there"; gone=1; else echo "OK  web-token-gone  no launch token under /state"; fi
+if [ -e "$data/home/web.log" ]; then echo "KO  web-log-gone    $data/home/web.log is still there"; gone=1; else echo "OK  web-log-gone    no shell log under /state"; fi
 page=0
 if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]

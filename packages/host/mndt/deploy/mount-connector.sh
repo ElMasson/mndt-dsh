@@ -86,9 +86,27 @@ else:
         data['allow'] = split(allow)
     if deny:
         data['deny'] = split(deny)
-with open(path, 'w', encoding='utf-8') as handle:
-    json.dump(data, handle, indent=2)
-    handle.write('\n')
+import os
+import shutil
+import tempfile
+text = json.dumps(data, indent=2) + '\n'
+previous = open(path, encoding='utf-8').read() if os.path.exists(path) else None
+if previous is not None and previous != text:
+    # A descriptor that differs (an earlier version's, or edited by hand) is kept
+    # beside the new one and named, never replaced in silence.
+    kept = f'{path}.avant-{os.getpid()}'
+    shutil.copy2(path, kept)
+    print('descripteur different remplace, ancien garde dans:', kept)
+# Written whole or not at all: a temporary file in the same folder, then renamed.
+fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix=f'.{os.path.basename(path)}.')
+try:
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(text)
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 print('descripteur ecrit:', path)
 PY
 
@@ -97,7 +115,9 @@ if [ -n "$env_named" ] && [ -f "$CONNECTORS/$(basename "$env_named")" ]; then
   chmod 600 "$CONNECTORS/$(basename "$env_named")"
 fi
 
-python3 "$RENDER"
+# A render refused (a patch that does not parse) stops here, said: the workbench
+# is never restarted on a patch that does not carry the connector.
+python3 "$RENDER" || { echo "rendu refuse: le patch n'a pas ete modifie, le workbench n'est pas redemarre; reparer le patch puis relancer" >&2; exit 1; }
 if [ "$restart" = 1 ]; then
   cd "$FRONT"
   docker compose restart workbench
