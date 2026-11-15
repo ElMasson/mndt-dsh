@@ -182,6 +182,12 @@ describe('a card in the feed', () => {
     expect(screen.getByTestId('chat-card-decision').textContent).toContain('pas avant la revue')
   })
 
+  it('a card a turn asked for says the agent, for the person accountable', () => {
+    const asked = card({ requestedBy: 'duke@datanalysis.re', requestedByAgent: { id: 'agt_3', handle: 'qwen' } })
+    render(<WebCard card={asked} canDecide={false} onDecide={vi.fn()} names={{ 'duke@datanalysis.re': 'Duke' }} t={chatFrench} />)
+    expect(screen.getByText(/^Demandée par @qwen, pour Duke · /u)).toBeTruthy()
+  })
+
   it('someone who may not decide is told so', () => {
     render(<WebCard card={card()} canDecide={false} onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.getByText('Vous ne pouvez pas décider de cette approbation.')).toBeTruthy()

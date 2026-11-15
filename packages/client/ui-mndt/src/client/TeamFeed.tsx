@@ -141,7 +141,10 @@ export function WebCard(props: {
         <p className="mw-card-title">{card.title}</p>
         <StatusBadge state={card.state} t={t} />
       </div>
-      <p className="mw-card-meta">{t('webAskedBy', { name: shownName(card.requestedBy, props.names) })} · {when(card.requestedAt)}</p>
+      <p className="mw-card-meta">{card.requestedByAgent === undefined
+        ? t('webAskedBy', { name: shownName(card.requestedBy, props.names) })
+      // The turn's agent asked, on behalf of the person who mentioned it and holds the rights.
+        : t('webAskedByAgent', { agent: `@${card.requestedByAgent.handle}`, name: shownName(card.requestedBy, props.names) })} · {when(card.requestedAt)}</p>
       {state !== 'pending' ? (
         <div className="mw-decided" data-testid="chat-card-decision">
           <p>
