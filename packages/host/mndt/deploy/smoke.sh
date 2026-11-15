@@ -15,6 +15,12 @@ HOST=${MNDT_PUBLIC_HOST:-mndt.duke-analytics.com}
 EXPECTED_CONNECTORS=${MNDT_SMOKE_CONNECTORS:-workbench_facts attio approvals office365}
 WORKBENCH_CONTAINER=${MNDT_WORKBENCH_CONTAINER:-mndt-front-workbench-1}
 failures=0
+# The shell's launch token: under the state folder on the historical stack, in the
+# workbench's `launch` volume on a team tenant (#78), read there without printing it.
+launch_token() {
+  if [ -s "$LIVE/web-token" ]; then cat "$LIVE/web-token"
+  else docker exec "$WORKBENCH_CONTAINER" cat "${MNDT_WEB_TOKEN_IN_CONTAINER:-/run/mndt-launch/web-token}" 2>/dev/null; fi
+}
 
 check() {
   local label=$1 expected=$2 actual=$3
@@ -30,7 +36,7 @@ check() {
 # few seconds later. Wait for that, so a green run means the stack is healthy and
 # a red one means it is not.
 for _ in $(seq 1 20); do
-  if curl -s -m 3 "$API/health" | grep -q '"ok":true' && [ -s "$LIVE/web-token" ]; then
+  if curl -s -m 3 "$API/health" | grep -q '"ok":true' && [ -n "$(launch_token)" ]; then
     break
   fi
   sleep 3
@@ -93,12 +99,12 @@ if [ -n "${MNDT_SMOKE_LLM_ROUTES:-}" ]; then
   check "cle Scaleway fournie au workbench" '^1$' "${key_set:-0}"
 fi
 
-if [ -f "$LIVE/web-token" ]; then
-  token=$(cat "$LIVE/web-token")
+token=$(launch_token)
+if [ -n "$token" ]; then
   page=$(curl -s -c /tmp/smoke-jar -b /tmp/smoke-jar -L -o /dev/null -w '%{http_code}' -m 20 "$PAGE/?token=$token")
   check "page servie avec jeton" '^200$' "$page"
 else
-  printf 'FAIL  jeton du shell absent de %s\n' "$LIVE/web-token"
+  printf 'FAIL  jeton du shell absent (ni %s, ni /run/mndt-launch/web-token dans %s)\n' "$LIVE/web-token" "$WORKBENCH_CONTAINER"
   failures=$((failures + 1))
 fi
 

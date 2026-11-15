@@ -94,6 +94,18 @@ function WebTurn(props: { readonly turn: ChatTurn; readonly agent: ChatAgent | u
   )
 }
 
+/**
+ * @param card - a card as served.
+ * @returns the handle of the agent whose turn asked for it, only when the API served a non-empty
+ * text: `null`, `{}`, an empty or non-text handle all fall back to the person's line.
+ */
+export function agentHandleOf(card: ThreadCard): string | undefined {
+  const agent: unknown = card.requestedByAgent
+  if (typeof agent !== 'object' || agent === null) return undefined
+  const handle = (agent as { handle?: unknown }).handle
+  return typeof handle === 'string' && handle !== '' ? handle : undefined
+}
+
 /** The verdict of a card, coloured as mndt-web colours it. */
 function StatusBadge(props: { readonly state: ThreadCard['state']; readonly t: ChatTranslate }): ReactNode {
   const state = props.state ?? 'pending'
@@ -121,6 +133,12 @@ export function WebCard(props: {
 }): ReactNode {
   const { card, t } = props
   const state = card.state ?? 'pending'
+  // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
+  // the screen cannot read falls back to the person's line.
+  const handle = agentHandleOf(card)
+  const askedBy = handle === undefined
+    ? t('webAskedBy', { name: shownName(card.requestedBy, props.names) })
+    : t('webAskedByAgent', { agent: `@${handle}`, name: shownName(card.requestedBy, props.names) })
   const [reason, setReason] = useState('')
   const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -141,7 +159,7 @@ export function WebCard(props: {
         <p className="mw-card-title">{card.title}</p>
         <StatusBadge state={card.state} t={t} />
       </div>
-      <p className="mw-card-meta">{t('webAskedBy', { name: shownName(card.requestedBy, props.names) })} · {when(card.requestedAt)}</p>
+      <p className="mw-card-meta">{askedBy} · {when(card.requestedAt)}</p>
       {state !== 'pending' ? (
         <div className="mw-decided" data-testid="chat-card-decision">
           <p>

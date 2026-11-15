@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WebCard, WebMessage, placeOf, shownName } from '../src/client/TeamFeed.tsx'
+import { WebCard, WebMessage, agentHandleOf, placeOf, shownName } from '../src/client/TeamFeed.tsx'
 import type { ThreadCard } from '../src/client/ChannelView.tsx'
 import type { ChatAgent, ChatMessage } from '../src/client/chat.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
@@ -180,6 +180,24 @@ describe('a card in the feed', () => {
     ))
     expect(screen.getByTestId('chat-card-decision').textContent).toContain('Rejetée par Stéphane Masson')
     expect(screen.getByTestId('chat-card-decision').textContent).toContain('pas avant la revue')
+  })
+
+  it('a card a turn asked for says the agent, for the person accountable', () => {
+    const asked = card({ requestedBy: 'duke@datanalysis.re', requestedByAgent: { id: 'agt_3', handle: 'qwen' } })
+    render(<WebCard card={asked} canDecide={false} onDecide={vi.fn()} names={{ 'duke@datanalysis.re': 'Duke' }} t={chatFrench} />)
+    expect(screen.getByText(/^Demandée par @qwen, pour Duke · /u)).toBeTruthy()
+  })
+
+  it('a malformed agent field falls back to the person: null, {}, an empty or non-text handle', () => {
+    for (const requestedByAgent of [null, {}, { id: 'a', handle: '' }, { id: 'a', handle: { x: 1 } }, { id: 'a', handle: 7 }]) {
+      const odd = card({ requestedBy: 'duke@datanalysis.re', requestedByAgent: requestedByAgent as never })
+      expect(agentHandleOf(odd)).toBeUndefined()
+      const names = { 'duke@datanalysis.re': 'Duke' }
+      const { unmount } = render(<WebCard card={odd} canDecide={false} onDecide={vi.fn()} names={names} t={chatFrench} />)
+      expect(screen.getByText(/^Demandée par Duke · /u)).toBeTruthy()
+      expect(document.body.textContent).not.toMatch(/@undefined|@\[object|par @,/u)
+      unmount()
+    }
   })
 
   it('someone who may not decide is told so', () => {

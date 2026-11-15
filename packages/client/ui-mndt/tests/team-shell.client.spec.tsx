@@ -451,6 +451,39 @@ describe('À traiter is what the person has to decide', () => {
     expect(queue.textContent).not.toContain('Seulement lisible')
   })
 
+  it('a mission\'s card in À traiter says « Mission » where a channel\'s card links its channel', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [],
+      channels: [{ id: 'chn_1', name: 'test', title: 'test', kind: 'team', members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }],
+      cards: [
+        { id: 'apr_m', kind: 'publish', title: 'De la mission', requestedBy: 'x', requestedAt: at, state: 'pending', canDecide: true, missionId: 'mis_1' },
+        { id: 'apr_c', kind: 'publish', title: 'Du canal', requestedBy: 'x', requestedAt: at, channelId: 'chn_1', messageId: 'm', state: 'pending', canDecide: true },
+      ],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const queue = screen.getByTestId('team-pending')
+    await waitFor(() => { expect(within(queue).getByTestId('queue-from-mission').textContent).toBe('Mission') })
+    expect(within(queue).getByRole('button', { name: '# test' })).toBeTruthy()
+  })
+
+  it('a card of a channel the person cannot see shows no channel name in À traiter', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [],
+      channels: [],
+      cards: [{ id: 'apr_x', kind: 'publish', title: 'Ailleurs', requestedBy: 'x', requestedAt: at, channelId: 'chn_secret', messageId: 'm', state: 'pending', canDecide: true }],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const queue = screen.getByTestId('team-pending')
+    await waitFor(() => { expect(queue.textContent).toContain('Ailleurs') })
+    expect(queue.textContent).not.toContain('chn_secret')
+    expect(queue.querySelector('.mw-queue-where')).toBeNull()
+    expect(within(queue).queryByTestId('queue-from-mission')).toBeNull()
+  })
+
   it('a note of a kind the screen does not know is a « Note », never an object member', async () => {
     const memories = [{ id: 'm', scope: 'team', kind: 'constructor', text: 'x', createdBy: 'a@b.c' }]
     render(<CollabPage api={face(state({ memories }))} team={{}} />)

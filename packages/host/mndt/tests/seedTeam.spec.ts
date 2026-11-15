@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -154,6 +154,44 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     expect(restarts()).toBe(1)
     // A second run with the same catalog changes nothing and restarts nothing.
     expect(run()).toContain('approvals: descriptor up to date')
+    expect(restarts()).toBe(1)
+  })
+
+  it('restarts once the render succeeds, after a first run whose render failed on an unreadable patch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    const old = JSON.stringify({ serverName: 'approvals', command: ['node', '/opt/mndt-tools/approvals-mcp.mjs'], deny: ['decide_approval'] })
+    writeFileSync(join(data, 'connectors', 'approvals.json'), old)
+    // A web patch that does not parse: the render refuses it and changes nothing.
+    const patch = join(data, 'home', 'profiles', 'web', 'cordis.patch.yml')
+    mkdirSync(join(data, 'home', 'profiles', 'web'), { recursive: true })
+    writeFileSync(patch, '- id: broken\n  config: [\n')
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const log = join(root, 'docker.log')
+    writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho "$*" >> ${log}\ncat > /dev/null\nexit 0\n`, { mode: 0o755 })
+    const run = () => spawnSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8',
+    })
+    const restarts = () => (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter(line => line.endsWith('restart workbench')).length
+    const first = run()
+    expect(first.status).not.toBe(0)
+    expect(first.stderr).toContain('rendu refuse')
+    // The earlier descriptor is replaced, said, and kept beside.
+    expect(first.stdout).toContain('descripteur different remplace, ancien garde dans:')
+    expect(restarts()).toBe(0)
+    // The owner fixes the patch and reruns: the descriptor is the same, the render now changes the patch.
+    writeFileSync(patch, '[]\n')
+    expect(run().status).toBe(0)
+    expect(restarts()).toBe(1)
+    expect(run().stdout).toContain('approvals: descriptor up to date')
     expect(restarts()).toBe(1)
   })
 

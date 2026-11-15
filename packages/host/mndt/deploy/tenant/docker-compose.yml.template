@@ -72,7 +72,7 @@ services:
     environment:
       DSH_HOME: /state/home
       # Where the entrypoint publishes the shell's launch token for the gateway:
-      # outside /state, and outside what an agent's commands may read.
+      # outside /state, in the `launch` volume only the gateway shares.
       DSH_MNDT_WEB_TOKEN_FILE: /run/mndt-launch/web-token
       # The shell's log prints that token too: kept beside it, never under /state.
       DSH_MNDT_WEB_LOG: /run/mndt-launch/web.log

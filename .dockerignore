@@ -3,7 +3,7 @@
 # (.git, whose config may carry a credential), any environment file but the
 # versioned examples, npm credentials, and dependencies installed locally (the
 # image installs its own from the lockfile).
-.git
+**/.git
 **/.env
 **/.env.*
 !**/.env.example
