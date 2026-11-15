@@ -44,6 +44,10 @@ services:
       - "--trusted-proxy-ip=__TRUSTED_PROXY__"
     # OAUTH2_PROXY_SIGNATURE_KEY (sha256:<key>): the proxy signs each request it
     # relays; the value stays in a 0400 file, never in this compose.
+    environment:
+      # The fingerprint of oauth2.cfg, written by create-tenant.sh: `up -d`
+      # recreates the proxy when its configuration changed (it reads it once).
+      MNDT_PROXY_CONF: "__PROXY_CONF__"
     env_file:
       - __CONF__/proxy_signature.env
     volumes:

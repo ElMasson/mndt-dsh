@@ -4,73 +4,119 @@
 oauth2-proxy admits an address that is in `authenticated_emails_file` OR whose
 domain is in `email_domains`: a domain list alone lets every account of the
 directory in. The tenant's oauth2.cfg therefore names only this file, and this
-script writes it from grants.json: every subject, lowercase, plain ASCII, and
-within the allowed domains (the domains stay a second lock, never a way in).
+script writes it from grants.json.
 
-    render-authenticated-emails.py <grants.json> <output file> <domain[,domain...]>
+    render-authenticated-emails.py <grants.json> <output file> <domain[,domain...]> --owner <email>
 
-The output is replaced atomically (mode 644: addresses, no secret). A role
-table that cannot be read, or that would leave nobody, changes nothing and
-exits 1: the last good list stays.
+The role table is validated as the product API reads it (src/grants.ts): a
+subject is a plain ASCII e-mail, a role is owner, admin, operator or viewer, a
+name is one line of 80 characters at most. One invalid row refuses the whole
+table, as the API does. Strict on top of that:
+- every subject must be an address within the allowed domains (the domains are
+  a second lock, never a way in): one outside refuses the list rather than
+  dropping that person in silence;
+- the owner must be in it: a list without the owner would lock them out.
+
+Any refusal changes nothing and exits 1: the last good list stays. The output
+is replaced atomically, mode 640, owned by the proxy (65532) when run as root.
 """
+
 import json
 import os
 import re
 import sys
 import tempfile
 
-ADDRESS = re.compile(r'^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$')
+ADDRESS = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
+PRINTABLE = re.compile(r"^[\x21-\x7e]+$")
+ROLES = {"owner", "admin", "operator", "viewer"}
+PROXY_UID = 65532
+
+
+def refuse(reason: str) -> int:
+    """@param reason - why. @returns the exit code of a refusal, the list unchanged."""
+    print(f"refused: {reason}; the sign-in list is unchanged", file=sys.stderr)
+    return 1
+
+
+def shown_name(value: object) -> bool:
+    """@param value - a row's name. @returns whether it is one line of 80 characters at most, without control characters."""
+    return (
+        isinstance(value, str)
+        and value.strip() != ""
+        and len(value) <= 80
+        and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+    )
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 4:
-        print(__doc__.strip().splitlines()[0], file=sys.stderr)
-        print('usage: render-authenticated-emails.py <grants.json> <output file> <domain[,domain...]>', file=sys.stderr)
+    args = argv[1:]
+    owner = ""
+    if "--owner" in args:
+        at = args.index("--owner")
+        owner = args[at + 1].strip() if at + 1 < len(args) else ""
+        del args[at : at + 2]
+    if len(args) != 3 or owner == "":
+        print(
+            "usage: render-authenticated-emails.py <grants.json> <output file> <domain[,domain...]> --owner <email>",
+            file=sys.stderr,
+        )
         return 2
-    grants_path, output, domains_arg = argv[1], argv[2], argv[3]
-    domains = {domain.strip().lower() for domain in domains_arg.split(',') if domain.strip()}
+    grants_path, output, domains_arg = args
+    domains = {domain.strip().lower() for domain in domains_arg.split(",") if domain.strip()}
+    if not PRINTABLE.match(owner):
+        return refuse("the owner is not a plain ASCII e-mail")
+    owner = owner.lower()
     try:
-        with open(grants_path, encoding='utf-8') as handle:
+        with open(grants_path, encoding="utf-8") as handle:
             table = json.load(handle)
     except (OSError, ValueError) as error:
-        print(f'refused: cannot read {grants_path}: {error}; the sign-in list is unchanged', file=sys.stderr)
-        return 1
-    rows = table.get('grants') if isinstance(table, dict) else None
+        return refuse(f"cannot read {grants_path}: {error}")
+    rows = table.get("grants") if isinstance(table, dict) else None
     if not isinstance(rows, list):
-        print(f'refused: {grants_path} has no "grants" list; the sign-in list is unchanged', file=sys.stderr)
-        return 1
+        return refuse(f'{grants_path} has no "grants" list')
     admitted: list[str] = []
-    for row in rows:
-        subject = row.get('subject') if isinstance(row, dict) else None
-        if not isinstance(subject, str):
-            continue
-        address = subject.strip()
-        # Plain ASCII only, before lower-casing: lower() folds a few Unicode
-        # characters onto ASCII ones (the Kelvin sign onto k), as #64 refuses.
-        if not address.isascii():
-            print(f'skipped: {subject!r} is not a plain ASCII address', file=sys.stderr)
-            continue
-        address = address.lower()
+    for index, row in enumerate(rows, start=1):
+        subject = row.get("subject") if isinstance(row, dict) else None
+        role = row.get("role") if isinstance(row, dict) else None
+        if not isinstance(subject, str) or subject.strip() == "" or role not in ROLES:
+            return refuse(
+                f"{grants_path}, row {index}: a subject (e-mail) and a role among owner, admin, operator, viewer are required"
+            )
+        # Plain ASCII before lower-casing: lower() folds a few Unicode characters
+        # onto ASCII ones (the Kelvin sign onto k), as the API refuses (#75).
+        if not PRINTABLE.match(subject.strip()):
+            return refuse(f"{grants_path}, row {index}: the subject is not a plain ASCII e-mail")
+        if "name" in row and not shown_name(row["name"]):
+            return refuse(
+                f"{grants_path}, row {index}: a name is one line of 80 characters at most, without control characters"
+            )
+        address = subject.strip().lower()
         if not ADDRESS.match(address):
-            print(f'skipped: {subject!r} is not an address', file=sys.stderr)
-            continue
-        if address.rsplit('@', 1)[1] not in domains:
-            print(f'skipped: {address} is outside {",".join(sorted(domains))}', file=sys.stderr)
-            continue
+            return refuse(f"{grants_path}, row {index}: {address} is not an e-mail address")
+        if address.rsplit("@", 1)[1] not in domains:
+            return refuse(
+                f"{grants_path}, row {index}: {address} is outside {','.join(sorted(domains))} (pass --email-domains with every domain of the team)"
+            )
         if address not in admitted:
             admitted.append(address)
-    if not admitted:
-        print('refused: nobody would be allowed to sign in; the sign-in list is unchanged', file=sys.stderr)
-        return 1
+    if owner not in admitted:
+        return refuse(f"the owner {owner} is not in {grants_path}: the list would lock them out")
     folder = os.path.dirname(os.path.abspath(output))
-    fd, temporary = tempfile.mkstemp(dir=folder, prefix='.authenticated_emails.')
-    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-        handle.write(''.join(f'{address}\n' for address in admitted))
-    os.chmod(temporary, 0o644)
-    os.replace(temporary, output)
-    print(f'sign-in list: {len(admitted)} address(es) in {output}')
+    fd, temporary = tempfile.mkstemp(dir=folder, prefix=".authenticated_emails.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("".join(f"{address}\n" for address in admitted))
+        os.chmod(temporary, 0o640)
+        if os.geteuid() == 0:
+            os.chown(temporary, PROXY_UID, PROXY_UID)
+        os.replace(temporary, output)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"sign-in list: {len(admitted)} address(es) in {output}")
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main(sys.argv))

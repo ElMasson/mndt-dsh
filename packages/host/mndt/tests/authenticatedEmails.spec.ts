@@ -1,47 +1,99 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const script = join(import.meta.dirname, '..', 'deploy', 'tenant', 'render-authenticated-emails.py')
+const deploy = join(import.meta.dirname, '..', 'deploy')
+const script = join(deploy, 'tenant', 'render-authenticated-emails.py')
+const owner = 'duke@datanalysis.re'
 
 /** @param grants - the role table. @param previous - an earlier list, if any. @returns the run and the list it leaves. */
-function render(grants: unknown, previous?: string): { status: number | null; stderr: string; list: string | undefined; output: string } {
+type Rendered = { status: number | null; stderr: string; list: string | undefined; output: string }
+function render(grants: unknown, previous?: string, who = owner): Rendered {
   const dir = mkdtempSync(join(tmpdir(), 'emails-'))
   const output = join(dir, 'authenticated_emails')
   if (previous !== undefined) writeFileSync(output, previous)
   writeFileSync(join(dir, 'grants.json'), typeof grants === 'string' ? grants : JSON.stringify(grants))
-  const run = spawnSync('python3', [script, join(dir, 'grants.json'), output, 'datanalysis.re,duke-analytics.com'], { encoding: 'utf8' })
+  const run = spawnSync('python3', [script, join(dir, 'grants.json'), output, 'datanalysis.re,duke-analytics.com', '--owner', who], { encoding: 'utf8' })
   return { status: run.status, stderr: run.stderr, list: existsSync(output) ? readFileSync(output, 'utf8') : undefined, output }
 }
 
+const row = (subject: string, role = 'viewer') => ({ subject, role })
+
 describe('the sign-in list, from the role table', { timeout: 30_000 }, () => {
-  it('admits every subject, lowercase, once, within the allowed domains', () => {
-    const run = render({ grants: [
-      { subject: 'Duke@Datanalysis.re', role: 'owner' },
-      { subject: 'smarion@datanalysis.re', role: 'viewer' },
-      { subject: 'duke@datanalysis.re', role: 'admin' },
-      { subject: 'stephane@duke-analytics.com', role: 'operator' },
-      { subject: 'someone@gmail.com', role: 'viewer' },
-    ] })
+  it('admits every subject, lowercase, once, within the allowed domains, mode 640', () => {
+    const run = render({ grants: [row('Duke@Datanalysis.re', 'owner'), row('smarion@datanalysis.re'), row('duke@datanalysis.re', 'admin'), row('stephane@duke-analytics.com', 'operator')] })
     expect(run.status).toBe(0)
     expect(run.list).toBe('duke@datanalysis.re\nsmarion@datanalysis.re\nstephane@duke-analytics.com\n')
-    expect(run.stderr).toContain('someone@gmail.com is outside')
-    expect(statSync(run.output).mode & 0o777).toBe(0o644)
+    expect(statSync(run.output).mode & 0o777).toBe(0o640)
   })
 
-  it('never admits an address that is not plain ASCII (the Kelvin sign folds onto k)', () => {
-    const run = render({ grants: [{ subject: 'duke@datanalysis.re', role: 'owner' }, { subject: 'du\u212Ae@datanalysis.re', role: 'viewer' }] })
-    expect(run.list).toBe('duke@datanalysis.re\n')
-    expect(run.stderr).toContain('not a plain ASCII address')
-  })
-
-  it('changes nothing when the table cannot be read or would leave nobody', () => {
-    for (const grants of ['{ broken', { other: [] }, { grants: [{ subject: 'x@gmail.com', role: 'owner' }] }]) {
-      const run = render(grants, 'duke@datanalysis.re\n')
-      expect(run.status, JSON.stringify(grants)).toBe(1)
-      expect(run.list).toBe('duke@datanalysis.re\n')
+  it('refuses the whole list, unchanged, for an address outside the domains, a suffix or an injection', () => {
+    for (const subject of ['someone@gmail.com', 'x@evil-datanalysis.re', 'x@datanalysis.re.evil.com', '*', 'a@datanalysis.re,b@gmail.com',
+      'a@datanalysis.re\nb@gmail.com', '@datanalysis.re', 'duKe@datanalysis.re']) {
+      const run = render({ grants: [row(owner, 'owner'), row(subject)] }, 'duke@datanalysis.re\n')
+      expect(run.status, JSON.stringify(subject)).toBe(1)
+      expect(run.list, JSON.stringify(subject)).toBe('duke@datanalysis.re\n')
+      expect(run.stderr).toContain('refused:')
     }
+  })
+
+  it('reads the table as the API does: an unknown role or a bad name refuses it all', () => {
+    for (const grants of [{ grants: [row(owner, 'owner'), row('smarion@datanalysis.re', 'boss')] },
+      { grants: [row(owner, 'owner'), { subject: 'smarion@datanalysis.re', role: 'viewer', name: 'a\nb' }] }]) {
+      expect(render(grants, 'duke@datanalysis.re\n').status).toBe(1)
+    }
+  })
+
+  it('never writes a list without the owner, nor from an unreadable table', () => {
+    const missing = render({ grants: [row('smarion@datanalysis.re', 'owner')] }, 'duke@datanalysis.re\n')
+    expect(missing.status).toBe(1)
+    expect(missing.stderr).toContain('would lock them out')
+    for (const grants of ['{ broken', { other: [] }]) expect(render(grants, 'duke@datanalysis.re\n').status).toBe(1)
+  })
+})
+
+describe('create-tenant.sh and the proxy', { timeout: 60_000 }, () => {
+  /** @returns a root where create-tenant.sh can render the tenant. */
+  function rootWithEntra(): string {
+    const root = mkdtempSync(join(tmpdir(), 'tenant-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1234"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 'entra-secret')
+    return root
+  }
+  const create = (root: string, ...extra: string[]) => spawnSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re',
+    '--owner', owner, ...extra, '--no-docker'], { env: { ...process.env, MNDT_ROOT: root }, encoding: 'utf8' })
+  const proxyConf = (root: string) => /MNDT_PROXY_CONF: "([0-9a-f]+)"/.exec(readFileSync(join(root, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8'))?.[1]
+
+  it('on a rerun of an existing tenant, recreates the proxy when its configuration changed, and only then', () => {
+    const root = rootWithEntra()
+    expect(create(root).status).toBe(0)
+    const first = proxyConf(root)
+    expect(first).toMatch(/^[0-9a-f]{16}$/)
+    expect(create(root).status).toBe(0)
+    expect(proxyConf(root)).toBe(first)
+    // A tenant from before this change: its compose has no MNDT_PROXY_CONF at all and its
+    // configuration names domains; the rerun rewrites both, so `up -d` recreates the proxy once.
+    const cfg = join(root, 'etc/mndt/datanalysis/oauth2.cfg')
+    writeFileSync(cfg, 'email_domains = ["datanalysis.re"]\n')
+    const compose = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
+    writeFileSync(compose, readFileSync(compose, 'utf8').replace(/ *MNDT_PROXY_CONF: "[0-9a-f]+"\n/, ''))
+    expect(proxyConf(root)).toBeUndefined()
+    expect(create(root).status).toBe(0)
+    expect(readFileSync(cfg, 'utf8')).toContain('authenticated_emails_file')
+    expect(proxyConf(root)).toBe(first)
+  })
+
+  it('leaves the configuration as it was when the list is refused', () => {
+    const root = rootWithEntra()
+    expect(create(root).status).toBe(0)
+    const cfg = join(root, 'etc/mndt/datanalysis/oauth2.cfg')
+    writeFileSync(cfg, 'previous configuration\n')
+    writeFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), JSON.stringify({ grants: [row(owner, 'owner'), row('x@gmail.com')] }))
+    const refused = create(root)
+    expect(refused.status).not.toBe(0)
+    expect(readFileSync(cfg, 'utf8')).toBe('previous configuration\n')
   })
 })
