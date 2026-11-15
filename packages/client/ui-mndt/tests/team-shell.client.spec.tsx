@@ -232,9 +232,13 @@ describe('the standalone page, before the frame', () => {
     expect(await namesOf(async () => { throw new Error('down') })).toEqual({})
   })
 
-  it('gives « Mode avancé » to the owner only', () => {
-    expect(frameOf({ kind: 'known', me: { you: 'a', role: 'owner' } }).advancedHref).toBe('/dsh/')
-    expect(frameOf({ kind: 'known', me: { you: 'a', role: 'operator' } }).advancedHref).toBeUndefined()
+  it('gives « Mode avancé » to whom the gateway gives the shell, and to nobody else', () => {
+    expect(frameOf({ kind: 'known', me: { you: 'a', role: 'owner', shell: true } }).advancedHref).toBe('/dsh/')
+    // A second owner of the grants, without the gateway's shell, is not offered a link to a 404.
+    expect(frameOf({ kind: 'known', me: { you: 'b', role: 'owner', shell: false } }).advancedHref).toBeUndefined()
+    // An API without the field: no link.
+    expect(frameOf({ kind: 'known', me: { you: 'a', role: 'owner' } }).advancedHref).toBeUndefined()
+    expect(frameOf({ kind: 'known', me: { you: 'a', role: 'operator', shell: false } }).advancedHref).toBeUndefined()
     expect(frameOf({ kind: 'unread' }).advancedHref).toBeUndefined()
   })
 
@@ -247,7 +251,7 @@ describe('the standalone page, before the frame', () => {
   })
 
   it('a known person gets the frame, with their name', async () => {
-    const identity = Promise.resolve({ kind: 'known', me: { you: 'stephane@datanalysis.re', name: 'Stéphane', role: 'owner' } } as const)
+    const identity = Promise.resolve({ kind: 'known', me: { you: 'stephane@datanalysis.re', name: 'Stéphane', role: 'owner', shell: true } } as const)
     const fetcher = vi.fn(async (input: string) => input === '/mndt-api/org'
       ? answer(200, { name: 'DATANALYSIS', slug: 'datanalysis', env: 'preprod' })
       : answer(200, { people: [] }))

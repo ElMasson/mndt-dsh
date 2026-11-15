@@ -25,6 +25,8 @@ export interface Me {
   readonly you: string
   readonly name?: string
   readonly role?: string
+  /** Whether the gateway gives this person the DSH shell, under /dsh/. */
+  readonly shell?: boolean
 }
 
 /** What `/me` answered: the person, a refusal, or a workspace that could not be read. */
@@ -134,7 +136,9 @@ export function frameOf(identity: Identity, org?: Org, names: Readonly<Record<st
   const me = identity.kind === 'known' ? identity.me : undefined
   return {
     name: me?.name,
-    advancedHref: me?.role === 'owner' ? ADVANCED_HREF : undefined,
+    // « Mode avancé » only for whom the gateway gives the DSH shell (`/me.shell`, #70): a second
+    // owner of the grants who is not the gateway's would see the tile, then a 404. Absent = no.
+    advancedHref: me?.shell === true ? ADVANCED_HREF : undefined,
     owner: me?.role === 'owner',
     org: org === undefined ? undefined : { name: org.name, env: envLabel(org.env) },
     names,
