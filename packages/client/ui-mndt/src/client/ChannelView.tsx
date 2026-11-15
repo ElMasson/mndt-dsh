@@ -19,6 +19,7 @@ import { isHostDown } from './hostDown.ts'
 import { renderBrief } from './markdown.tsx'
 import { authorName, mergeThread, personName, settledTurns } from './thread.ts'
 import { clock, euros, pageLanguage } from './format.ts'
+import { DaySeparator, WebMessage, placeOf } from './TeamFeed.tsx'
 
 export { euros } from './format.ts'
 
@@ -314,6 +315,10 @@ export function ChannelThread(props: {
   readonly pollMs?: number
   /** Draw the feed and composer as mndt-web does (the standalone team page). */
   readonly look?: 'mndt-web' | undefined
+  /** The team's names by lower-case address (the mndt-web look). */
+  readonly names?: Readonly<Record<string, string>> | undefined
+  /** Open À traiter, where the waiting cards are (the mndt-web look). */
+  readonly onPending?: (() => void) | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const web = props.look === 'mndt-web'
@@ -405,7 +410,26 @@ export function ChannelThread(props: {
           error === undefined ? <p className="mndt-hint">{t('loading')}</p> : undefined
         ) : thread.length === 0 ? (
           <p className={web ? 'mw-feed-empty' : 'mndt-hint'} data-testid="chat-empty">{web ? t('emptyChannel') : t('empty')}</p>
-        ) : thread.map(m => (
+        ) : web ? thread.map((m, index) => {
+          const place = placeOf(thread[index - 1], m)
+          return (
+            <div key={m.id} className="mw-feed-item">
+              {place.newDay ? <DaySeparator at={m.createdAt} /> : undefined}
+              <WebMessage
+                message={m}
+                header={place.header}
+                agents={byAgent}
+                cards={cardsOf(m.id)}
+                canDecide={props.canDecide}
+                onDecide={props.onDecide}
+                onRemove={removeOf(m)}
+                onPending={props.onPending}
+                names={props.names}
+                t={t}
+              />
+            </div>
+          )
+        }) : thread.map(m => (
           <MessageView
             key={m.id}
             message={m}

@@ -337,3 +337,34 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
     expect(aside.dataset.open).toBeUndefined()
   })
 })
+
+describe('À traiter and Mémoire, as mndt-web draws them', () => {
+  it('Mémoire sorts the notes by the scopes the core keeps, with their kind and keeper', async () => {
+    const memories = [
+      { id: 'm1', scope: 'user', kind: 'preference', text: 'Relances depuis contact@', createdBy: 'stephane@datanalysis.re' },
+      { id: 'm2', scope: 'team', kind: 'fact', text: 'Sodiac paie à 60 jours', createdBy: 'smarion@datanalysis.re' },
+    ]
+    render(<CollabPage api={face(state({ memories }))} team={{ names: { 'smarion@datanalysis.re': 'Sophie Marion' } }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Mémoire' }))
+    const columns = [...screen.getByTestId('team-memory').querySelectorAll('.mw-memory-column')]
+    expect(columns.map(c => c.querySelector('h2')?.textContent)).toEqual(['Moi', 'Équipe', 'Missions'])
+    expect(columns[0]?.textContent).toContain('Relances depuis contact@')
+    expect(columns[1]?.textContent).toContain('FaitGardée par Sophie Marion')
+    expect(columns[2]?.textContent).toContain('Rien n\'est encore mémorisé.')
+  })
+
+  it('À traiter counts the waiting cards and offers to decide them there', async () => {
+    render(<CollabPage api={face(state())} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const queue = screen.getByTestId('team-pending')
+    expect(queue.querySelector('.mw-counts')?.textContent).toBe('1 en attente')
+    expect(within(queue).getByRole('button', { name: 'Valider' })).toBeTruthy()
+    expect(within(queue).getByText('En attente de décision')).toBeTruthy()
+  })
+
+  it('says when nothing waits, in the empty box of mndt-web', async () => {
+    render(<CollabPage api={face(state({ approvals: [] }))} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'À traiter' }))
+    expect(screen.getByTestId('team-pending').querySelector('.mw-empty-state')?.textContent).toBe('Rien ne requiert votre attention pour le moment.')
+  })
+})
