@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TeamDocuments, sizeOf } from '../src/client/TeamDocuments.tsx'
-import { DocumentsRefusal, createHttpDocuments, createMockDocuments } from '../src/client/documents.ts'
+import { DocumentsRefusal, MAX_DEPOSIT_BYTES, base64Of, createHttpDocuments } from '../src/client/documents.ts'
+import { createMockDocuments } from './doubles/documents.ts'
 import type { DocumentsFace } from '../src/client/documents.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
 
@@ -19,9 +20,13 @@ function answer(status: number, body: unknown = {}): Response {
 }
 
 describe('the documents route, as the page reads it', () => {
-  it('a 404 or a 501 on a known channel means the route is not served', async () => {
-    expect(await createHttpDocuments(async () => answer(404)).list('chn_1')).toBe('absent')
+  it('a 501, or the API\'s « no route » 404, means the route is not served', async () => {
     expect(await createHttpDocuments(async () => answer(501)).list('chn_1')).toBe('absent')
+    expect(await createHttpDocuments(async () => answer(404, { error: 'no route GET /channels/chn_1/documents' })).list('chn_1')).toBe('absent')
+  })
+
+  it('a channel the reader cannot read (#55, « no channel ») is a refusal, not « Bientôt »', async () => {
+    await expect(createHttpDocuments(async () => answer(404, { error: 'no channel chn_1' })).list('chn_1')).rejects.toMatchObject({ status: 404 })
   })
 
   it('reads the list, what the reader may do, and the classes only when served', async () => {
@@ -31,12 +36,31 @@ describe('the documents route, as the page reads it', () => {
     expect(await classed.list('chn_1')).toEqual({ documents: [], canDeposit: false, dataClasses: ['C-int'] })
   })
 
-  it('deposits as multipart on the team API, and carries a refusal with its status', async () => {
-    const fetcher = vi.fn(async (_input: string, _init?: RequestInit) => answer(413, { error: 'too large' }))
+  it('deposits as JSON with the file in base64 on the team API, and carries a refusal with its status', async () => {
+    const fetcher = vi.fn(async (_input: string, _init?: RequestInit) => answer(415, { error: 'unsupported' }))
     const face = createHttpDocuments(fetcher)
-    await expect(face.deposit('chn 1', new File(['x'], 'a.pdf'))).rejects.toMatchObject({ status: 413, message: 'too large' })
+    await expect(face.deposit('chn 1', new File(['bonjour'], 'note.txt', { type: 'text/plain' }))).rejects.toMatchObject({ status: 415, message: 'unsupported' })
     expect(fetcher.mock.calls[0]?.[0]).toBe('/mndt-api/channels/chn%201/documents')
-    expect(fetcher.mock.calls[0]?.[1]?.body).toBeInstanceOf(FormData)
+    const raw = fetcher.mock.calls[0]?.[1]?.body
+    const sent = JSON.parse(typeof raw === 'string' ? raw : '{}') as Record<string, unknown>
+    expect(sent).toEqual({ name: 'note.txt', type: 'text/plain', contentBase64: 'Ym9uam91cg==' })
+  })
+
+  it('refuses a file over 20 MB before sending it', async () => {
+    const fetcher = vi.fn(async () => answer(201, {}))
+    const big = new File([new Uint8Array(MAX_DEPOSIT_BYTES + 1)], 'gros.pdf', { type: 'application/pdf' })
+    await expect(createHttpDocuments(fetcher).deposit('chn_1', big)).rejects.toMatchObject({ status: 413 })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('encodes any bytes in base64', async () => {
+    expect(await base64Of(new Blob([new Uint8Array([0, 255, 128, 10])]))).toBe('AP+ACg==')
+  })
+
+  it('drops a row that is not a document instead of drawing it', async () => {
+    const rows = [doc, { ...doc, id: 'doc_2', name: 42 }, null, { id: 'doc_3' }]
+    const page = await createHttpDocuments(async () => answer(200, { documents: rows, canDeposit: false })).list('chn_1')
+    expect(page === 'absent' ? [] : page.documents.map(d => d.id)).toEqual(['doc_1'])
   })
 
   it('says sizes as a person reads them', () => {

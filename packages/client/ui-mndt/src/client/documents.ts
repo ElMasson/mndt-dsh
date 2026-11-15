@@ -1,8 +1,8 @@
 /**
- * A channel's documents, as the team page reads them (contract sent to A1 on 15/11, after mndt-web's
- * `ChannelDocuments`): the list with what the reader may do, a deposit as multipart, a retirement
- * with its reason. Until the route exists the list answers « absent », and the page says « Bientôt »
- * without offering anything.
+ * A channel's documents, as the team page reads them (contract agreed with A1 on 15/11, after
+ * mndt-web's `ChannelDocuments`): the list with what the reader may do, a deposit as JSON with the
+ * file in base64 (the API reads bodies as text), a retirement with its reason. Until the route exists
+ * the list answers « absent », and the page says « Bientôt » without offering anything.
  */
 import { readWithin } from './deadline.ts'
 
@@ -50,6 +50,29 @@ export type DocumentsFetcher = (input: string, init?: RequestInit) => Promise<Re
 
 const BASE = '/mndt-api'
 
+/** @param row - one row as served. @returns whether it has the shape of a document. */
+export function isDocument(row: unknown): row is ChannelDocument {
+  if (typeof row !== 'object' || row === null) return false
+  const d = row as Record<string, unknown>
+  return typeof d.id === 'string' && typeof d.name === 'string' && typeof d.size === 'number' && Number.isFinite(d.size)
+    && typeof d.type === 'string' && typeof d.uploadedBy === 'string' && typeof d.uploadedAt === 'string'
+    && typeof d.canRetire === 'boolean'
+    && (d.pages === undefined || typeof d.pages === 'number') && (d.dataClass === undefined || typeof d.dataClass === 'string')
+}
+
+/** The largest file a deposit carries, as on mndt-web (the gateway allows the base64 overhead). */
+export const MAX_DEPOSIT_BYTES = 20 * 1024 * 1024
+
+/** @param file - a file. @returns its bytes in base64, without the data URL prefix. */
+export async function base64Of(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  const chunk = 0x8000
+  for (let at = 0; at < bytes.length; at += chunk) binary += String.fromCharCode(...bytes.subarray(at, at + chunk))
+  return btoa(binary)
+}
+
+
 /** @param response - a refused answer. @returns its refusal, with the API's reason when it gave one. */
 async function refusalOf(response: Response): Promise<DocumentsRefusal> {
   const body: unknown = await response.json().catch(() => ({}))
@@ -69,21 +92,41 @@ export function createHttpDocuments(fetcher: DocumentsFetcher = (input, init) =>
     async list(channelId) {
       const path = `/channels/${id(channelId)}/documents`
       const response = await readWithin(path, signal => fetcher(`${BASE}${path}`, { credentials: 'include', signal }))
-      // A channel the page just read answers 404 (or 501) only where the route does not exist yet.
-      if (response.status === 404 || response.status === 501) return 'absent'
+      // 501 while the route is not served. A 404 is either the API's generic « no route … » there, or
+      // a channel the reader cannot read (#55, « no channel <id> »): a refusal, said as such.
+      if (response.status === 501) return 'absent'
+      if (response.status === 404) {
+        const refused: unknown = await response.json().catch(() => undefined)
+        const error = typeof refused === 'object' && refused !== null ? (refused as { error?: unknown }).error : undefined
+        if (typeof error !== 'string' || error.startsWith('no route')) return 'absent'
+        throw new DocumentsRefusal(error, 404)
+      }
       if (!response.ok) throw await refusalOf(response)
-      const body = await response.json() as Partial<DocumentsPage>
+      const body = await response.json() as { documents?: unknown; canDeposit?: unknown; dataClasses?: unknown }
       return {
-        documents: Array.isArray(body.documents) ? body.documents : [],
+        // A row of another shape is dropped rather than drawn: the page never renders what it cannot read.
+        documents: Array.isArray(body.documents) ? body.documents.filter(isDocument) : [],
         canDeposit: body.canDeposit === true,
-        ...(Array.isArray(body.dataClasses) && body.dataClasses.length > 0 ? { dataClasses: body.dataClasses } : {}),
+        ...(Array.isArray(body.dataClasses) && body.dataClasses.length > 0
+          ? { dataClasses: body.dataClasses.filter((c): c is string => typeof c === 'string') }
+          : {}),
       }
     },
     async deposit(channelId, file, dataClass) {
-      const form = new FormData()
-      form.append('file', file)
-      if (dataClass !== undefined) form.append('dataClass', dataClass)
-      const response = await fetcher(`${BASE}/channels/${id(channelId)}/documents`, { method: 'POST', credentials: 'include', body: form })
+      // Refused before sending: a file over the limit would only cost the upload to be refused.
+      if (file.size > MAX_DEPOSIT_BYTES) throw new DocumentsRefusal('too large', 413)
+      const body = {
+        name: file.name,
+        type: file.type,
+        contentBase64: await base64Of(file),
+        ...(dataClass === undefined ? {} : { dataClass }),
+      }
+      const response = await fetcher(`${BASE}/channels/${id(channelId)}/documents`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
       if (!response.ok) throw await refusalOf(response)
       return (await response.json() as { document: ChannelDocument }).document
     },
@@ -96,41 +139,6 @@ export function createHttpDocuments(fetcher: DocumentsFetcher = (input, init) =>
       })
       if (!response.ok) throw await refusalOf(response)
       return (await response.json() as { document: ChannelDocument }).document
-    },
-  }
-}
-
-/** What the double starts with, per channel; `absent` plays a workbench without the route. */
-export type DocumentsSeed = Readonly<Record<string, DocumentsPage>> | 'absent'
-
-/**
- * A double of the route, for the tests and the rehearsal: deposits and retirements change its lists.
- * @param seed - the lists it starts with, or `absent`.
- * @param you - who deposits.
- * @returns the face.
- */
-export function createMockDocuments(seed: DocumentsSeed, you = 'stephane@datanalysis.re'): DocumentsFace {
-  const pages = new Map<string, DocumentsPage>(seed === 'absent' ? [] : Object.entries(seed))
-  let next = 1
-  const pageOf = (channelId: string): DocumentsPage => pages.get(channelId) ?? { documents: [], canDeposit: true }
-  return {
-    list: channelId => Promise.resolve(seed === 'absent' ? 'absent' : pageOf(channelId)),
-    deposit(channelId, file, dataClass) {
-      const page = pageOf(channelId)
-      if (file.size > 20 * 1024 * 1024) return Promise.reject(new DocumentsRefusal('too large', 413))
-      const document: ChannelDocument = {
-        id: `doc_${next++}`, name: file.name, size: file.size, type: file.type, uploadedBy: you,
-        uploadedAt: new Date().toISOString(), canRetire: true, ...(dataClass === undefined ? {} : { dataClass }),
-      }
-      pages.set(channelId, { ...page, documents: [...page.documents, document] })
-      return Promise.resolve(document)
-    },
-    retire(channelId, documentId) {
-      const page = pageOf(channelId)
-      const found = page.documents.find(d => d.id === documentId)
-      if (found === undefined) return Promise.reject(new DocumentsRefusal('unknown document', 404))
-      pages.set(channelId, { ...page, documents: page.documents.filter(d => d.id !== documentId) })
-      return Promise.resolve(found)
     },
   }
 }
