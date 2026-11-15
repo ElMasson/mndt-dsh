@@ -41,6 +41,27 @@ import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkil
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { bwrapProfileArgs, landlockProfileArgs, readRoots, seatbeltProfileArgs } from './profiles.ts'
 
+/**
+ * The ambient variables a confined command keeps under a read allow-list: the
+ * shell's ordinary context, nothing an operator configures. Every other one of
+ * the workbench's variables is unset (see privateTempPrefix).
+ */
+export const KEPT_ENV: readonly string[] = [
+  'PATH', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'NODE_VERSION',
+  // What the shell executors set for every command (bash-local ENV_OVERRIDES).
+  'NO_COLOR', 'PAGER', 'GIT_PAGER',
+]
+
+/**
+ * @param name - an environment variable's name.
+ * @returns whether a confined command keeps it under a read allow-list: the
+ *   kept names, the locale, and `DSH_*` (the subprocess layer already drops every
+ *   ambient `DSH_*`: the ones a command sees are the facts set for it).
+ */
+function keptEnv(name: string): boolean {
+  return KEPT_ENV.includes(name) || name.startsWith('LC_') || name.toUpperCase().startsWith('DSH_')
+}
+
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
   /**
@@ -363,15 +384,24 @@ export class LocalSandboxProvider extends SandboxProvider {
   }
 
   /**
-   * Under Landlock with a read allow-list, a workspace-write run writes its
-   * temporary files in its session's private directory, not in the shared
-   * `/tmp` (which it can no longer open): `env` sets TMPDIR, TMP and TEMP
-   * before the command. Nothing for the other runners or without a list.
+   * Under Landlock with a read allow-list (a team tenant), the confined command
+   * starts through `env`, which:
+   * - unsets every variable of this process's environment outside
+   *   {@link KEPT_ENV}: the name filter of the subprocess layer drops only names
+   *   holding KEY, PASSWORD, SECRET or TOKEN, and a credential under another name
+   *   (a URL with a password, a `*_PASS`, a `*_AUTH`) would otherwise reach the
+   *   command. Names only, never a value, appear in the argv; a variable the
+   *   caller sets explicitly under a new name survives;
+   * - under workspace-write, points TMPDIR, TMP, TEMP and HOME at the session's
+   *   private directory: the shared /tmp and /root are not readable.
+   * Nothing for the other runners or without a list.
    */
   private privateTempPrefix(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
-    if (runner !== 'landlock' || policy.mode !== 'workspace-write' || readRoots() === undefined) return []
+    if (runner !== 'landlock' || readRoots() === undefined) return []
+    const unset = Object.keys(process.env).filter(name => !keptEnv(name)).sort().flatMap(name => ['-u', name])
+    if (policy.mode !== 'workspace-write') return ['/usr/bin/env', ...unset]
     const dir = this.landlockPrivateTemp(policy.sessionId)
-    return ['/usr/bin/env', `TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`]
+    return ['/usr/bin/env', ...unset, `TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`]
   }
 
   /**

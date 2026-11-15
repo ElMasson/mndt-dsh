@@ -512,12 +512,13 @@ describe('the windows-acl probe (runner invocation contract)', () => {
 describe('a private temp directory per session under Landlock with a read allow-list', () => {
   afterEach(() => { vi.unstubAllEnvs() })
 
-  /** The TMPDIR the confined argv sets, after the separator. */
+  /** The TMPDIR the confined argv sets, after the separator: env, its unsets, then the temp and HOME. */
   function tempOf(argv: readonly string[]): string {
     const after = argv.slice(argv.indexOf('--') + 1)
-    expect(after.slice(0, 1)).toEqual(['/usr/bin/env'])
-    const dir = after[1]?.replace(/^TMPDIR=/, '') ?? ''
-    expect(after.slice(1, 4)).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`])
+    expect(after[0]).toBe('/usr/bin/env')
+    const at = after.findIndex(arg => arg.startsWith('TMPDIR='))
+    const dir = after[at]?.replace(/^TMPDIR=/, '') ?? ''
+    expect(after.slice(at, at + 4)).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`])
     return dir
   }
 
@@ -541,11 +542,29 @@ describe('a private temp directory per session under Landlock with a read allow-
     expect(grants).not.toContain('/tmp')
     expect(grants).not.toContain(dirB)
     expect(a.argv.slice(-3)).toEqual(['sh', '-c', 'true'])
-    // read-only writes nothing: no temp, no prefix.
+    // read-only writes nothing: no temp, no HOME, the environment still pruned.
     const ro = await sandbox.confine(['true'], { ...RO, sessionId: 'session-a' as never })
-    expect(ro.argv.slice(ro.argv.indexOf('--') + 1)).toEqual(['true'])
+    const roAfter = ro.argv.slice(ro.argv.indexOf('--') + 1)
+    expect(roAfter[0]).toBe('/usr/bin/env')
+    expect(roAfter.at(-1)).toBe('true')
+    expect(roAfter.some(arg => arg.includes('='))).toBe(false)
     await ctx.fiber.dispose()
     for (const dir of [dirA, dirB, dirNone]) expect(existsSync(dir)).toBe(false)
+  })
+
+  it('unsets every ambient variable outside the kept ones, by name only, whatever the name', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    vi.stubEnv('DATABASE_URL', 'postgres://u:canary-value@h/db')
+    vi.stubEnv('QONTO_PASS', 'canary-value')
+    vi.stubEnv('LC_ALL', 'C.UTF-8')
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    const after = confined.argv.slice(confined.argv.indexOf('--') + 1)
+    const unset = after.flatMap((arg, i) => (after[i - 1] === '-u' ? [arg] : []))
+    expect(unset).toEqual(expect.arrayContaining(['DATABASE_URL', 'QONTO_PASS']))
+    for (const kept of ['PATH', 'LC_ALL', 'NO_COLOR', 'DSH_SANDBOX_READ_ROOTS']) expect(unset).not.toContain(kept)
+    // Names only: no value of the environment is ever in the argv.
+    expect(confined.argv.join(' ')).not.toContain('canary-value')
   })
 
   it('changes nothing without an allow-list: the shared /tmp, no prefix', async () => {
