@@ -10,18 +10,42 @@ const owner = 'duke@datanalysis.re'
 
 /** @param grants - the role table. @param previous - an earlier list, if any. @returns the run and the list it leaves. */
 type Rendered = { status: number | null; stderr: string; list: string | undefined; output: string }
-function render(grants: unknown, previous?: string, who = owner): Rendered {
+function render(grants: unknown, previous?: string, who = owner, privileged = false): Rendered {
   const dir = mkdtempSync(join(tmpdir(), 'emails-'))
   const output = join(dir, 'authenticated_emails')
   if (previous !== undefined) writeFileSync(output, previous)
   writeFileSync(join(dir, 'grants.json'), typeof grants === 'string' ? grants : JSON.stringify(grants))
-  const run = spawnSync('python3', [script, join(dir, 'grants.json'), output, 'datanalysis.re,duke-analytics.com', '--owner', who], { encoding: 'utf8' })
+  // Tests run unprivileged: the owner change to the proxy (65532) needs root.
+  const env = privileged ? { ...process.env, MNDT_EMAILS_UNPRIVILEGED: '' } : { ...process.env, MNDT_EMAILS_UNPRIVILEGED: '1' }
+  const run = spawnSync('python3', [script, join(dir, 'grants.json'), output, 'datanalysis.re,duke-analytics.com', '--owner', who], { encoding: 'utf8', env })
   return { status: run.status, stderr: run.stderr, list: existsSync(output) ? readFileSync(output, 'utf8') : undefined, output }
 }
 
 const row = (subject: string, role = 'viewer') => ({ subject, role })
 
 describe('the sign-in list, from the role table', { timeout: 30_000 }, () => {
+  it.skipIf(process.getuid?.() === 0)('refuses to run without root, before writing anything: the proxy could not read the list', () => {
+    const run = render({ grants: [row(owner, 'owner')] }, 'duke@datanalysis.re\n', owner, true)
+    expect(run.status).toBe(1)
+    expect(run.stderr).toContain('run as root')
+    expect(run.list).toBe('duke@datanalysis.re\n')
+  })
+
+  it('validates a name as the API does: trimmed, 80 UTF-16 units, no line separator', () => {
+    const named = (name: string) => render({ grants: [{ ...row(owner, 'owner'), name }] }, 'previous\n')
+    expect(named(`  ${'a'.repeat(80)}  `).status).toBe(0)
+    expect(named('😀'.repeat(41)).status).toBe(1) // 82 UTF-16 units, 41 code points
+    expect(named('😀'.repeat(40)).status).toBe(0)
+    for (const bad of ['a\u2028b', 'a\u2029b', 'a\nb', '   ']) expect(named(bad).status, JSON.stringify(bad)).toBe(1)
+  })
+
+  it('says, on a domain refusal, that every domain must be passed and that the proxy keeps its configuration', () => {
+    const run = render({ grants: [row(owner, 'owner'), row('x@other.re')] }, 'duke@datanalysis.re\n')
+    expect(run.status).toBe(1)
+    expect(run.stderr).toContain('EVERY domain of the team, datanalysis.re included')
+    expect(run.stderr).toContain('keeps its previous configuration')
+  })
+
   it('admits every subject, lowercase, once, within the allowed domains, mode 640', () => {
     const run = render({ grants: [row('Duke@Datanalysis.re', 'owner'), row('smarion@datanalysis.re'), row('duke@datanalysis.re', 'admin'), row('stephane@duke-analytics.com', 'operator')] })
     expect(run.status).toBe(0)
@@ -84,6 +108,35 @@ describe('create-tenant.sh and the proxy', { timeout: 60_000 }, () => {
     expect(create(root).status).toBe(0)
     expect(readFileSync(cfg, 'utf8')).toContain('authenticated_emails_file')
     expect(proxyConf(root)).toBe(first)
+  })
+
+  it('recreates the proxy when only the list changed, and writes the list 640', () => {
+    const root = rootWithEntra()
+    expect(create(root).status).toBe(0)
+    const first = proxyConf(root)
+    const grants = join(root, 'data/mndt/datanalysis/live/grants.json')
+    writeFileSync(grants, JSON.stringify({ grants: [row(owner, 'owner'), row('smarion@datanalysis.re')] }))
+    expect(create(root).status).toBe(0)
+    expect(readFileSync(join(root, 'etc/mndt/datanalysis/authenticated_emails'), 'utf8')).toBe('duke@datanalysis.re\nsmarion@datanalysis.re\n')
+    expect(proxyConf(root)).not.toBe(first)
+    expect(statSync(join(root, 'etc/mndt/datanalysis/authenticated_emails')).mode & 0o777).toBe(0o640)
+  })
+
+  it('writes nothing of the proxy when a step before it fails (a patch that does not parse)', () => {
+    const root = rootWithEntra()
+    expect(create(root).status).toBe(0)
+    const cfg = join(root, 'etc/mndt/datanalysis/oauth2.cfg')
+    const list = join(root, 'etc/mndt/datanalysis/authenticated_emails')
+    const compose = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
+    writeFileSync(cfg, 'previous configuration\n')
+    const before = [readFileSync(list, 'utf8'), readFileSync(compose, 'utf8')]
+    writeFileSync(join(root, 'data/mndt/datanalysis/live/grants.json'), JSON.stringify({ grants: [row(owner, 'owner'), row('smarion@datanalysis.re')] }))
+    writeFileSync(join(root, 'data/mndt/datanalysis/live/home/cordis.patch.yml'), '- id: [unclosed\n')
+    const failed = create(root)
+    expect(failed.status).not.toBe(0)
+    expect(readFileSync(cfg, 'utf8')).toBe('previous configuration\n')
+    expect([readFileSync(list, 'utf8'), readFileSync(compose, 'utf8')]).toEqual(before)
+    expect(existsSync(`${cfg}.new`)).toBe(false)
   })
 
   it('leaves the configuration as it was when the list is refused', () => {

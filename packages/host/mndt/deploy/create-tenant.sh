@@ -105,7 +105,6 @@ chmod 400 "$root$conf/client_secret" "$root$conf/cookie_secret"
 # The proxy runs as 65532; only root can hand the secrets over.
 if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$conf/cookie_secret"; fi
 
-quoted=$(printf '%s' "$email_domains" | awk -F, '{for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i}')
 # Fingerprints of the code the containers mount from disk (gateway/server.mjs,
 # workbench-entrypoint.sh): written into the compose so that `up -d` recreates a
 # container whose code changed, even when its image and settings did not.
@@ -121,7 +120,7 @@ render() {
       -e "s|__APP__|$app|g" -e "s|__CONF__|$conf|g" -e "s|__DATA__|$data|g" \
       -e "s|__TRAEFIK_NETWORK__|$traefik_network|g" -e "s|__TRUSTED_PROXY__|$trusted_proxy|g" \
       -e "s|__IMAGE__|$image|g" -e "s|__ENTRA_TENANT__|$entra_tenant|g" \
-      -e "s|__CLIENT_ID__|$client_id|g" -e "s|__EMAIL_DOMAINS__|$quoted|g" \
+      -e "s|__CLIENT_ID__|$client_id|g" \
       -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
 }
 # The tenant's role table: the owner first; the team is added by hand, and a
@@ -131,17 +130,6 @@ if [ ! -f "$root$data/grants.json" ]; then
   ( umask 077 && printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json" )
   chmod 600 "$root$data/grants.json"
 fi
-# Who may sign in, from the role table, written BEFORE the configuration that
-# names it: a refusal (an invalid table, an address outside the domains, the
-# owner missing) leaves the previous list and the previous configuration as they
-# were, never a configuration pointing at a list that is not there.
-python3 "$here/tenant/render-authenticated-emails.py" "$root$data/grants.json" "$root$conf/authenticated_emails" "$email_domains" --owner "$owner" || exit 1
-render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg.new" && mv -f "$root$conf/oauth2.cfg.new" "$root$conf/oauth2.cfg"
-chmod 644 "$root$conf/oauth2.cfg"
-# The proxy reads oauth2.cfg once, at start: its fingerprint in the compose makes
-# `up -d` recreate it when the configuration changes (as the gateway's code, #53).
-proxy_conf=$(fingerprint "$root$conf/oauth2.cfg")
-render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/docker-compose.yml"
 mkdir -p "$root$app/gateway"
 cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # The connector machinery of the adapters lane, at this tenant's paths: the
@@ -207,6 +195,29 @@ if [ ! -f "$root$data/prices.json" ] && [ -f "$here/llm/prices.json" ]; then
 fi
 [ -f "$root$data/prices.json" ] || echo "  no price grid yet: copy deploy/llm/prices.json to $data/prices.json, or every agent turn is refused"
 [ -f "$root$data/state.json" ] || printf '{\n  "version": 1,\n  "missions": [],\n  "briefs": [],\n  "memories": [],\n  "approvals": [],\n  "events": [],\n  "mandates": []\n}\n' > "$root$data/state.json"
+
+# The proxy's side, LAST, right before `up -d`: who may sign in, its
+# configuration and the compose that fingerprints both. Written at the end so
+# that a failure of anything above (a patch, a copy) leaves the proxy's files
+# as they were, never a new configuration that the running proxy ignores.
+# The list from the role table, BEFORE the configuration that names it: a
+# refusal (an invalid table, an address outside the domains, the owner missing,
+# no root) leaves the previous list and the previous configuration as they were.
+# A tenant rendered into a test root (MNDT_ROOT) by an unprivileged user cannot
+# hand the list to the proxy's 65532: that run alone writes it without.
+if [ -n "$root" ] && [ "$(id -u)" != 0 ]; then export MNDT_EMAILS_UNPRIVILEGED=1; fi
+python3 "$here/tenant/render-authenticated-emails.py" "$root$data/grants.json" "$root$conf/authenticated_emails" "$email_domains" --owner "$owner" || exit 1
+trap 'rm -f "$root$conf/oauth2.cfg.new"' EXIT
+if ! render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg.new" || ! chmod 644 "$root$conf/oauth2.cfg.new" \
+   || ! mv -f "$root$conf/oauth2.cfg.new" "$root$conf/oauth2.cfg"; then
+  echo "refused: the proxy configuration could not be written; the previous one stays" >&2
+  exit 1
+fi
+# The proxy reads oauth2.cfg once, at start, and watches the list. The
+# fingerprint of BOTH in the compose makes `up -d` recreate it when either
+# changed (as the gateway's code, #53).
+proxy_conf=$(cat "$root$conf/oauth2.cfg" "$root$conf/authenticated_emails" | sha256sum | cut -c1-16)
+render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/docker-compose.yml"
 
 echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for the addresses of grants.json within $email_domains)"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"

@@ -18,7 +18,15 @@ table, as the API does. Strict on top of that:
 - the owner must be in it: a list without the owner would lock them out.
 
 Any refusal changes nothing and exits 1: the last good list stays. The output
-is replaced atomically, mode 640, owned by the proxy (65532) when run as root.
+is replaced atomically (a rename: oauth2-proxy v7.15.5 watches the file and
+applies the new list without a restart, to existing cookies too), mode 640,
+owned by the proxy (65532).
+
+Root is required, checked before anything is written: a list the proxy (65532)
+cannot read stops it at its next start, and with `restart: unless-stopped` it
+restarts in a loop and nobody signs in, the owner included (measured with the
+real binary, sso-test/emails-list.sh). Tests only: MNDT_EMAILS_UNPRIVILEGED=1
+writes without the owner change.
 """
 
 import json
@@ -40,12 +48,16 @@ def refuse(reason: str) -> int:
 
 
 def shown_name(value: object) -> bool:
-    """@param value - a row's name. @returns whether it is one line of 80 characters at most, without control characters."""
+    """As the API's isShownName (src/grants.ts): trimmed, 1 to 80 UTF-16 units,
+    no control character nor line/paragraph separator (U+2028, U+2029).
+    @param value - a row's name. @returns whether it can be shown as it is."""
+    if not isinstance(value, str):
+        return False
+    shown = value.strip()
     return (
-        isinstance(value, str)
-        and value.strip() != ""
-        and len(value) <= 80
-        and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+        shown != ""
+        and len(shown.encode("utf-16-le")) // 2 <= 80
+        and not any(ord(c) < 32 or ord(c) == 127 or c in "\u2028\u2029" for c in value)
     )
 
 
@@ -63,6 +75,11 @@ def main(argv: list[str]) -> int:
         )
         return 2
     grants_path, output, domains_arg = args
+    unprivileged = os.environ.get("MNDT_EMAILS_UNPRIVILEGED") == "1"
+    if os.geteuid() != 0 and not unprivileged:
+        return refuse(
+            "run as root: the list must belong to the proxy (65532), or the proxy cannot read it and stops at its next start"
+        )
     domains = {domain.strip().lower() for domain in domains_arg.split(",") if domain.strip()}
     if not PRINTABLE.match(owner):
         return refuse("the owner is not a plain ASCII e-mail")
@@ -96,7 +113,9 @@ def main(argv: list[str]) -> int:
             return refuse(f"{grants_path}, row {index}: {address} is not an e-mail address")
         if address.rsplit("@", 1)[1] not in domains:
             return refuse(
-                f"{grants_path}, row {index}: {address} is outside {','.join(sorted(domains))} (pass --email-domains with every domain of the team)"
+                f"{grants_path}, row {index}: {address} is outside {','.join(sorted(domains))}; "
+                "pass --email-domains with EVERY domain of the team, datanalysis.re included "
+                "(until then the proxy keeps its previous configuration)"
             )
         if address not in admitted:
             admitted.append(address)
@@ -108,7 +127,7 @@ def main(argv: list[str]) -> int:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write("".join(f"{address}\n" for address in admitted))
         os.chmod(temporary, 0o640)
-        if os.geteuid() == 0:
+        if not unprivileged:
             os.chown(temporary, PROXY_UID, PROXY_UID)
         os.replace(temporary, output)
     finally:
