@@ -26,6 +26,15 @@ export type IconName =
   | 'Sparkles'
   | 'Upload'
   | 'MessageSquare'
+  | 'Users'
+  | 'Building2'
+  | 'UserCog'
+  | 'CheckCircle2'
+  | 'XCircle'
+  | 'Clock'
+  | 'AlertTriangle'
+  | 'Inbox'
+  | 'Activity'
 
 /** One SVG element of an icon: its tag and attributes. */
 type IconNode = readonly (readonly [string, Readonly<Record<string, string>>])[]
@@ -50,6 +59,15 @@ const NODES: Readonly<Record<IconName, IconNode>> = {
   Sparkles: [['path', { d: 'M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z' }], ['path', { d: 'M20 2v4' }], ['path', { d: 'M22 4h-4' }], ['circle', { cx: '4', cy: '20', r: '2' }]],
   Upload: [['path', { d: 'M12 3v12' }], ['path', { d: 'm17 8-5-5-5 5' }], ['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }]],
   MessageSquare: [['path', { d: 'M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z' }]],
+  Users: [['path', { d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2' }], ['path', { d: 'M16 3.128a4 4 0 0 1 0 7.744' }], ['path', { d: 'M22 21v-2a4 4 0 0 0-3-3.87' }], ['circle', { cx: '9', cy: '7', r: '4' }]],
+  Building2: [['path', { d: 'M10 12h4' }], ['path', { d: 'M10 8h4' }], ['path', { d: 'M14 21v-3a2 2 0 0 0-4 0v3' }], ['path', { d: 'M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2' }], ['path', { d: 'M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16' }]],
+  UserCog: [['path', { d: 'M10 15H6a4 4 0 0 0-4 4v2' }], ['path', { d: 'm14.305 16.53.923-.382' }], ['path', { d: 'm15.228 13.852-.923-.383' }], ['path', { d: 'm16.852 12.228-.383-.923' }], ['path', { d: 'm16.852 17.772-.383.924' }], ['path', { d: 'm19.148 12.228.383-.923' }], ['path', { d: 'm19.53 18.696-.382-.924' }], ['path', { d: 'm20.772 13.852.924-.383' }], ['path', { d: 'm20.772 16.148.924.383' }], ['circle', { cx: '18', cy: '15', r: '3' }], ['circle', { cx: '9', cy: '7', r: '4' }]],
+  CheckCircle2: [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'm9 12 2 2 4-4' }]],
+  XCircle: [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'm15 9-6 6' }], ['path', { d: 'm9 9 6 6' }]],
+  Clock: [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'M12 6v6l4 2' }]],
+  AlertTriangle: [['path', { d: 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3' }], ['path', { d: 'M12 9v4' }], ['path', { d: 'M12 17h.01' }]],
+  Inbox: [['polyline', { points: '22 12 16 12 14 15 10 15 8 12 2 12' }], ['path', { d: 'M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }]],
+  Activity: [['path', { d: 'M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2' }]],
 }
 
 /**
