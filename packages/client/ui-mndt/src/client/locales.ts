@@ -339,6 +339,11 @@ export const en = {
   'shell.memory-kind-preference': 'Preference',
   'shell.memory-kind-other': 'Note',
   'shell.memory-kept-by': 'Kept by {name}',
+  'shell.settings-activity': 'What happened in the workspace.',
+  'shell.settings-admin': 'The people, their rights and the mandates.',
+  'shell.settings-automations': 'The workspace\'s scheduled tasks.',
+  'shell.settings-legacy': 'Missions and briefs, the owner\'s.',
+  'shell.owner-only': 'Reserved to the owner of the workspace.',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -682,6 +687,11 @@ export const fr: Record<MndtKey, string> = {
   'shell.memory-kind-preference': 'Préférence',
   'shell.memory-kind-other': 'Note',
   'shell.memory-kept-by': 'Gardée par {name}',
+  'shell.settings-activity': 'Ce qui s\'est passé dans l\'espace.',
+  'shell.settings-admin': 'Les personnes, leurs droits et les mandats.',
+  'shell.settings-automations': 'Les tâches planifiées de l\'espace.',
+  'shell.settings-legacy': 'Missions et briefs, réservés au propriétaire.',
+  'shell.owner-only': 'Réservé au propriétaire de l\'espace.',
 }
 
 /** Substitution values for a message. */

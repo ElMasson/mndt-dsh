@@ -134,6 +134,7 @@ export function frameOf(identity: Identity, org?: Org, names: Readonly<Record<st
   return {
     name: me?.name,
     advancedHref: me?.role === 'owner' ? ADVANCED_HREF : undefined,
+    owner: me?.role === 'owner',
     org: org === undefined ? undefined : { name: org.name, env: envLabel(org.env) },
     names,
   }

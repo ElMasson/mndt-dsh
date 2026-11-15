@@ -102,6 +102,8 @@ export interface ChatCard {
   readonly decidedAt?: string
   /** Why it was refused, kept in the log. */
   readonly reason?: string
+  /** Whether the reader may decide it, as the API says for them (pending cards only). */
+  readonly canDecide?: boolean
 }
 
 /** A page of changes: every message created or changed since an instant, and the next instant. */
