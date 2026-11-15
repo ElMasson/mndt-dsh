@@ -203,6 +203,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   /**
    * Starting a mission on a team instance is the owner's alone (Missions is off
    * for members, shown « bientôt »); the rest of the team reads it as absent.
+   * Automations start missions too, so creating, changing, enabling or running
+   * one, and moving the briefing's hour, are closed the same way.
    * @param identity - the caller.
    * @returns the refusal, or undefined when they may start one.
    */
@@ -1008,6 +1010,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/schedule') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
@@ -1035,6 +1039,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/automations') {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
@@ -1055,6 +1061,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/toggle$/.test(path)) {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
@@ -1069,6 +1077,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/run$/.test(path)) {
+        const closedToTeam = await missionsClosed(identity)
+        if (closedToTeam !== undefined) return closedToTeam
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })

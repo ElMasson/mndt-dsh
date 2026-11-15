@@ -79,6 +79,21 @@ export function soloWorkstation(proxyUserHeader: string | undefined, env: NodeJS
 }
 
 /**
+ * @param item - an automation due to run.
+ * @param team - whether this is a team instance.
+ * @param grants - the role table.
+ * @returns whether the scheduler may run it: on a team instance only the
+ * system's own automations and the owner's, never one a member stored (a
+ * mission is the owner's alone there).
+ */
+export function automationMayRun(
+  item: Automation, team: boolean, grants: readonly { readonly subject: string; readonly role: string }[] | undefined,
+): boolean {
+  if (!team || item.createdBy === 'scheduler') return true
+  return grants !== undefined && grants.some(grant => grant.subject === item.createdBy.toLowerCase() && grant.role === 'owner')
+}
+
+/**
  * Whether the workstation Remote is closed: it is on a team workbench, where
  * several people reach the same shell behind single sign-on (a proxy user
  * header is configured) and the product API serves each under their own identity.
@@ -271,9 +286,17 @@ export class WorkbenchGateway extends TypertRemoteService {
             }
           }
           const now = new Date()
+          const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
+          const table = team ? await this.grants.grants() : undefined
           for (const item of dueAutomations(items, now)) {
             if (running.has(item.id)) continue
             await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
+            if (!automationMayRun(item, team, table?.ok === true ? table.grants : undefined)) {
+              // Marked as fired, so it is not retried every tick; said, never silent.
+              await persist(candidate => (candidate.id === item.id ? { ...candidate, lastOutcome: 'refused: not the owner\'s' } : candidate))
+              ctx.logger.warn(`mndt: automation ${item.id} by ${item.createdBy} not run: on a team instance only the owner's automations run`)
+              continue
+            }
             fire(item)
           }
         } catch (error) {

@@ -46,7 +46,7 @@ cleanup() {
   echo "rehearsal root: $root"
 }
 trap cleanup EXIT
-owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
+owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
 # The API answers before dsh web prints its launch URL (it waits for every plugin):
@@ -134,7 +134,8 @@ VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
 VLLM_QWEN_MODEL=fake-qwen
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
-printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" } ] }\n' $owner $viewer > "$data/grants.json"
+# An admin who is not the owner: missions and automations stay closed to them.
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
     -e "s#image: mndt-workbench:local#image: $image#" \
     -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \

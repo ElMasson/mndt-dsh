@@ -58,6 +58,26 @@ interface WorkflowEngineLike {
   start(input: { script: string; meta: { name: string; description: string }; parent: unknown }): {
     readonly id: string
     readonly result: Promise<unknown>
+    /** Awaits the script and its children's quiescence; idempotent. */
+    dispose?(): Promise<void>
+  }
+}
+
+/**
+ * The policy follows a run's children through the live agents of this process.
+ * A child started by an external provider (another CLI, another process) would
+ * not be one of them: its tool calls would escape the guard. A run under a
+ * policy therefore requires the workflow engine's child provider to run in
+ * process, and refuses to start otherwise, an unreadable setting included.
+ * @param ctx - the host context.
+ * @param engine - the workflow engine.
+ */
+function assertInProcessChildren(ctx: Context, engine: WorkflowEngineLike): void {
+  const configured = (engine as { config?: { provider?: unknown } }).config?.provider
+  const subagents = ctx.get('subagents') as { getProvider(name: string): { start?: unknown } | undefined } | undefined
+  const provider = typeof configured === 'string' ? subagents?.getProvider(configured) : undefined
+  if (provider === undefined || typeof provider.start === 'function') {
+    throw new Error(`mndt: the workflow's child provider (${String(configured)}) is not an in-process one, so a run cannot be held to its tool policy`)
   }
 }
 
@@ -133,6 +153,7 @@ export class DshMissionRunner {
     }
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
     const selection = model === undefined ? undefined : model.currentSelection()
+    if (this.#options.tools !== undefined) assertInProcessChildren(this.#ctx, engine)
     const { created, unscope } = await createUnderPolicy(this.#ctx, this.#options.tools, mission.id, () => this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,
@@ -168,9 +189,10 @@ export class DshMissionRunner {
         failures.push(reason.kind === 'error' ? `the agent turn failed: ${reason.error.message}` : `the agent turn ended ${reason.kind}`)
       }
     })
+    let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
       const prompt = (this.#options.frame ?? defaultFrame)(mission)
-      const run = engine.start({
+      run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },
         parent: created.agent,
@@ -188,11 +210,17 @@ export class DshMissionRunner {
         : settledTokensOf(settled)
       return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
     } finally {
-      stopAgentEnd()
-      stopTurnEnd()
-      await clearActor()
-      await created.dispose()
-      unscope()
+      // The policy is lifted last, once the workflow's children and the agent
+      // are gone, and even when one of their disposals throws.
+      try {
+        await run?.dispose?.()
+        stopAgentEnd()
+        stopTurnEnd()
+        await clearActor()
+        await created.dispose()
+      } finally {
+        unscope()
+      }
     }
   }
 }
@@ -226,6 +254,7 @@ export class DshTurnRunner implements TurnEngine {
     await mkdir(input.cwd, { recursive: true })
     // Deny by default: the channel's servers and the approvals, nothing else.
     const policy = channelPolicy(input.servers)
+    assertInProcessChildren(this.#ctx, engine)
     const { created, unscope } = await createUnderPolicy(this.#ctx, policy, input.turnId, () => this.#ctx.agents.create({
       sessionId: input.turnId as never,
       meta: { cwd: input.cwd },
@@ -256,8 +285,9 @@ export class DshTurnRunner implements TurnEngine {
     // A deleted message or an agent leaving the channel stops the turn at once.
     const abort = (): void => { void created.dispose() }
     input.signal.addEventListener('abort', abort, { once: true })
+    let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
-      const run = engine.start({
+      run = engine.start({
         script: `return await agent(${JSON.stringify(input.prompt)})`,
         meta: { name: 'mndt-turn', description: `@${input.agent.handle} in #${input.channel.name}` },
         parent: created.agent,
@@ -270,11 +300,17 @@ export class DshTurnRunner implements TurnEngine {
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
       return { text, sessionId, ...(tokens === undefined ? {} : { tokens }) }
     } finally {
-      input.signal.removeEventListener('abort', abort)
-      stopEvents()
-      await clearActor()
-      await created.dispose()
-      unscope()
+      // The policy is lifted last, once the workflow's children and the agent
+      // are gone, and even when one of their disposals throws.
+      try {
+        input.signal.removeEventListener('abort', abort)
+        await run?.dispose?.()
+        stopEvents()
+        await clearActor()
+        await created.dispose()
+      } finally {
+        unscope()
+      }
     }
   }
 }

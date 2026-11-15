@@ -11,6 +11,7 @@ const { chromium } = await import(playwrightModule)
 const BASE = 'http://127.0.0.1:18080'
 const OWNER = 'duke@datanalysis.re'
 const SECOND = 'smarion@datanalysis.re'
+const ADMIN = 'jadmin@datanalysis.re'
 const results = []
 const check = (step, ok, note) => { results.push({ step, ok }); console.log(`${ok ? 'OK ' : 'KO '} ${step.padEnd(14)} ${note}`) }
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
@@ -137,6 +138,12 @@ const refused = await api('POST', '/channels', { title: 'Interdit' }, viewer)
 check('viewer-403', refused.status === 403, `${refused.status}: ${refused.body.error}`)
 const memberMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-membre' }, viewer)
 check('member-no-mission', memberMission.status === 404, `POST /missions by ${SECOND}: ${memberMission.status}`)
+// An admin who is not the owner: neither a mission nor an automation run.
+const adminContext = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': ADMIN } })
+await (await adminContext.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const adminRun = await api('POST', '/automations/auto_briefing/run', {}, adminContext)
+const adminMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-admin' }, adminContext)
+check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404, `POST /automations/auto_briefing/run ${adminRun.status}, POST /missions ${adminMission.status} by ${ADMIN} (admin, not owner)`)
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
 const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })

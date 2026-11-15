@@ -209,35 +209,66 @@ describe('the runners scope it before the agent exists, and lift it after', () =
    * @param createdAs - the session id the fake engine gives the agent (its requested id when omitted).
    * @returns a host whose run creates an agent and a workflow child, and records what each saw.
    */
-  function fakeCtx(createdAs?: string) {
+  /** How the fake host's run ends and which child provider its workflow engine uses. */
+  interface FakeOptions {
+    readonly createdAs?: string
+    readonly provider?: { readonly name?: string; readonly start?: () => void; readonly unregistered?: true } | 'unreadable'
+    readonly agentDisposeThrows?: boolean
+  }
+
+  function fakeCtx(options: FakeOptions = {}) {
     const { host, announce, refused, guards } = fakeHost()
     type Announced = ReturnType<typeof agentOf>
-    type Seen = { root?: Announced; child?: Announced; childBash?: string | undefined; guardsAtCreate?: number }
+    interface Seen {
+      root?: Announced
+      child?: Announced
+      childBash?: string | undefined
+      guardsAtCreate?: number
+      guardsAtRunDispose?: number
+      runDisposedBeforeAgent?: boolean
+    }
     const seen: Seen = {}
+    let runDisposed = false
+    const provider = options.provider ?? {}
+    const engine = {
+      ...(provider === 'unreadable' ? {} : { config: { provider: provider.name ?? 'spawn' } }),
+      start: () => {
+        // The workflow child: the agent that actually calls the model.
+        const child = agentOf('child_1', seen.root!.session.header.id)
+        announce(child)
+        seen.child = child
+        seen.childBash = refused('bash', child)
+        return {
+          id: 'run-1',
+          result: Promise.resolve('Réponse.'),
+          dispose: async () => { runDisposed = true; seen.guardsAtRunDispose = guards.size },
+        }
+      },
+    }
+    const subagents = {
+      getProvider: (name: string) => (provider !== 'unreadable' && provider.unregistered !== true && name === (provider.name ?? 'spawn')
+        ? (provider.start === undefined ? {} : { start: provider.start })
+        : undefined),
+    }
     const ctx = {
       on: host.on,
       // As in production: this plugin does not inject `tools`, so reading it throws.
       get tools(): never { throw new Error('cannot get property "tools" without inject') },
-      get: (name: string) => (name === 'tools' ? host.tools : name === 'workflowEngine'
-        ? {
-          start: () => {
-            // The workflow child: the agent that actually calls the model.
-            const child = agentOf('child_1', seen.root!.session.header.id)
-            announce(child)
-            seen.child = child
-            seen.childBash = refused('bash', child)
-            return { id: 'run-1', result: Promise.resolve('Réponse.') }
-          },
-        }
-        : undefined),
+      get: (name: string) => ({ tools: host.tools, workflowEngine: engine, subagents } as Record<string, unknown>)[name],
       agents: {
         get: host.agents.get,
-        create: async (options: { sessionId: string }) => {
+        create: async (create: { sessionId: string }) => {
           seen.guardsAtCreate = guards.size
-          const root = agentOf(createdAs ?? options.sessionId)
+          const root = agentOf(options.createdAs ?? create.sessionId)
           announce(root)
           seen.root = root
-          return { agent: root, dispose: async () => undefined }
+          return {
+            agent: root,
+            dispose: async () => {
+              seen.runDisposedBeforeAgent = runDisposed
+              if (options.agentDisposeThrows === true) throw new Error('dispose failed')
+            },
+          }
         },
       },
     }
@@ -264,7 +295,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
   })
 
   it('fails closed when the agent is not created under the session its policy is keyed by', async () => {
-    const { ctx, guards } = fakeCtx('another_session')
+    const { ctx, guards } = fakeCtx({ createdAs: 'another_session' })
     await expect(new DshTurnRunner(ctx).run(turn())).rejects.toThrow(/tool policy would not apply/)
     expect(guards.size).toBe(0)
   })
@@ -280,6 +311,28 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     await new DshMissionRunner(solo.ctx).run(mission)
     expect(solo.seen.guardsAtCreate).toBe(0)
     expect(solo.seen.child?.ctx.tools.allow).toBeUndefined()
+  })
+
+  it('lifts the policy last: after the workflow and the agent, even when a disposal throws', async () => {
+    const ordered = fakeCtx()
+    await new DshTurnRunner(ordered.ctx).run(turn())
+    expect(ordered.seen.guardsAtRunDispose).toBe(1)
+    expect(ordered.seen.runDisposedBeforeAgent).toBe(true)
+    expect(ordered.guards.size).toBe(0)
+
+    const failing = fakeCtx({ agentDisposeThrows: true })
+    await expect(new DshTurnRunner(failing.ctx).run(turn())).rejects.toThrow(/dispose failed/)
+    expect(failing.guards.size).toBe(0)
+  })
+
+  it('refuses to start when the workflow\'s children would run out of process, or its provider cannot be read', async () => {
+    const cases: NonNullable<FakeOptions['provider']>[] = [{ name: 'claude-code', start: () => undefined }, 'unreadable', { name: 'spawn', unregistered: true }]
+    for (const provider of cases) {
+      const { ctx, guards, seen } = fakeCtx({ provider })
+      await expect(new DshTurnRunner(ctx).run(turn())).rejects.toThrow(/not an in-process one/)
+      expect(seen.root).toBeUndefined()
+      expect(guards.size).toBe(0)
+    }
   })
 
   it('the whole composition only on a host declared solo, never behind the sign-on proxy', () => {
