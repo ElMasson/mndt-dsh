@@ -12,7 +12,9 @@ services:
       PORT: "8080"
       WORKBENCH: "http://workbench:3111"
       API: "http://workbench:8795"
-      TOKEN_FILE: "/state/web-token"
+      # The shell's launch token, in a volume of its own: never under /state,
+      # which this gateway no longer mounts at all.
+      TOKEN_FILE: "/run/mndt-launch/web-token"
       GATEWAY_SECRET_FILE: "/run/secrets/mndt-gateway"
       # Only requests the sign-on proxy signed are served (oauth2-proxy signature_key).
       PROXY_SIGNATURE_KEY_FILE: "/run/secrets/mndt-proxy-signature"
@@ -26,7 +28,7 @@ services:
       MNDT_GATEWAY_CODE: "__GATEWAY_CODE__"
     volumes:
       - __APP__/gateway:/opt/gateway:ro
-      - __DATA__:/state:ro
+      - launch:/run/mndt-launch:ro
       - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
       - __CONF__/proxy_signature_key:/run/secrets/mndt-proxy-signature:ro
     networks:
@@ -69,6 +71,9 @@ services:
       - __DATA__/model.env
     environment:
       DSH_HOME: /state/home
+      # Where the entrypoint publishes the shell's launch token for the gateway:
+      # outside /state, and outside what an agent's commands may read.
+      DSH_MNDT_WEB_TOKEN_FILE: /run/mndt-launch/web-token
       # What an agent's commands may read: the system and the image, never /state
       # (secrets, roles, other channels, sessions), /run (the shell's launch token,
       # the gateway secret) or /root. They write in their channel's folder and /tmp
@@ -106,9 +111,13 @@ services:
       - __DATA__/tools:/opt/mndt-tools:ro
       - __DATA__/mcp-auth:/state/mcp-auth
       - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
+      - launch:/run/mndt-launch
     networks:
       - front
     restart: unless-stopped
+volumes:
+  # The shell's launch token, shared by the workbench (writes) and the gateway (reads).
+  launch: {}
 networks:
   front: {}
   # The sign-on proxy and the gateway only: the workbench is not on it.

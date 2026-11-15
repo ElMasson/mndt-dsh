@@ -18,6 +18,9 @@ mkdir -p "$STATE"
 LOG="$STATE/web.log"
 TOKEN_FILE="${DSH_MNDT_WEB_TOKEN_FILE:-/state/web-token}"
 rm -f "$TOKEN_FILE"
+# A token published elsewhere than /state (team tenant): the one an earlier
+# version left under /state goes, it never stays where agents' state lives.
+if [ "$TOKEN_FILE" != "/state/web-token" ]; then rm -f /state/web-token; fi
 
 node /app/apps/cli/lib/bin.js web \
   --host "$WEB_BIND" \
