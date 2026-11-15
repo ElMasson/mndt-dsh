@@ -26,6 +26,7 @@ import { searchState } from './search.ts'
 import { authorityGrants, fileGrants, localGrants } from './grants.ts'
 import { DshMissionRunner, DshTurnRunner } from './runner.ts'
 import { TEAM_MISSION_POLICY } from './tool-policy.ts'
+import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
 import { readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
@@ -79,18 +80,23 @@ export function soloWorkstation(proxyUserHeader: string | undefined, env: NodeJS
 }
 
 /**
- * @param item - an automation due to run.
+ * @param item - an automation.
  * @param team - whether this is a team instance.
- * @param grants - the role table.
+ * @param owner - the owner of the team instance, if the role table names one.
  * @returns whether the scheduler may run it: on a team instance only the
- * system's own automations and the owner's, never one a member stored (a
- * mission is the owner's alone there).
+ * system's automations and the owner's, and only once the owner enabled them
+ * (`enabledBy`, written by the server). Before that, they do not run.
  */
-export function automationMayRun(
-  item: Automation, team: boolean, grants: readonly { readonly subject: string; readonly role: string }[] | undefined,
-): boolean {
-  if (!team || item.createdBy === 'scheduler') return true
-  return grants !== undefined && grants.some(grant => grant.subject === item.createdBy.toLowerCase() && grant.role === 'owner')
+export function automationMayRun(item: Automation, team: boolean, owner: string | undefined): boolean {
+  if (!team) return true
+  if (owner === undefined) return false
+  return (item.createdBy === 'scheduler' || item.createdBy.toLowerCase() === owner) && item.enabledBy?.toLowerCase() === owner
+}
+
+/** @param grants - the role table. @returns the owner it names, if exactly one. */
+export function ownerOf(grants: readonly { readonly subject: string; readonly role: string }[]): string | undefined {
+  const owners = grants.filter(grant => grant.role === 'owner')
+  return owners.length === 1 ? owners[0]?.subject : undefined
 }
 
 /**
@@ -252,11 +258,11 @@ export class WorkbenchGateway extends TypertRemoteService {
       const current = await readAutomations(this.automationsPath, legacyAt)
       await writeAutomations(this.automationsPath, current.map(patch))
     }
-    const fire = (item: Automation): void => {
+    const fire = (item: Automation, owner: string | undefined): void => {
       running.add(item.id)
       void (async () => {
         try {
-          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item)
+          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item, owner)
           const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
           const patch: Partial<Automation> = {
             lastMissionId: outcome.missionId,
@@ -288,16 +294,29 @@ export class WorkbenchGateway extends TypertRemoteService {
           const now = new Date()
           const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
           const table = team ? await this.grants.grants() : undefined
+          const owner = table?.ok === true ? ownerOf(table.grants) : undefined
+          if (team && owner === undefined) {
+            // Without a readable owner nothing runs, and nothing is switched off either.
+            ctx.logger.warn('mndt: automations skipped: the role table names no single owner, or cannot be read')
+            return
+          }
+          if (team) {
+            // On a team instance an automation runs once the owner enabled it. One
+            // enabled otherwise (the deployment default auto_briefing included) is
+            // switched off, said in the registry, so the page shows what runs.
+            const stray = items.filter(item => item.enabled && !automationMayRun(item, true, owner))
+            if (stray.length > 0) {
+              await persist(candidate => (stray.some(item => item.id === candidate.id)
+                ? { ...candidate, enabled: false, lastOutcome: 'disabled: on a team instance only the owner enables an automation' }
+                : candidate))
+              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} disabled: on a team instance only the owner enables an automation`)
+              items = await readAutomations(this.automationsPath, legacyAt)
+            }
+          }
           for (const item of dueAutomations(items, now)) {
             if (running.has(item.id)) continue
             await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
-            if (!automationMayRun(item, team, table?.ok === true ? table.grants : undefined)) {
-              // Marked as fired, so it is not retried every tick; said, never silent.
-              await persist(candidate => (candidate.id === item.id ? { ...candidate, lastOutcome: 'refused: not the owner\'s' } : candidate))
-              ctx.logger.warn(`mndt: automation ${item.id} by ${item.createdBy} not run: on a team instance only the owner's automations run`)
-              continue
-            }
-            fire(item)
+            fire(item, team ? owner : undefined)
           }
         } catch (error) {
           ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
@@ -431,7 +450,8 @@ export class WorkbenchGateway extends TypertRemoteService {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
       const canAdmin = table.ok && can(table.grants, this.identity, 'rights.write').allowed
-      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true) } })
+      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true,
+        item => canReadMission({ identity: this.identity, channels: new Set(), decider: canAdmin }, item)) } })
     } catch (error) {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }

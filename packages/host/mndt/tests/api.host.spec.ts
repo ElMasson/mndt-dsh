@@ -192,8 +192,10 @@ describe('duke api', () => {
     const id = (created.body as { mission: { id: string } }).mission.id
 
     expect((await api({ method: 'GET', path: `/missions/${id}`, ...asOwner })).status).toBe(200)
+    // Unreadable reads as absent (visibility.ts), never as « private to <author> ».
     const seenByViewer = await api({ method: 'GET', path: `/missions/${id}`, ...asViewer })
-    expect(seenByViewer.status).toBe(403)
+    expect(seenByViewer.status).toBe(404)
+    expect(JSON.stringify(seenByViewer.body)).not.toContain('@')
     const list = await api({ method: 'GET', path: '/missions', ...asViewer })
     expect((list.body as { missions: unknown[] }).missions).toHaveLength(0)
   })

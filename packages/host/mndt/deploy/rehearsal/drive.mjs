@@ -144,6 +144,18 @@ await (await adminContext.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentlo
 const adminRun = await api('POST', '/automations/auto_briefing/run', {}, adminContext)
 const adminMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-admin' }, adminContext)
 check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404, `POST /automations/auto_briefing/run ${adminRun.status}, POST /missions ${adminMission.status} by ${ADMIN} (admin, not owner)`)
+// A briefing the owner runs is theirs and private: neither a member nor the admin reads it.
+const briefing = await api('POST', '/automations/auto_briefing/run', {}, owner, 180000)
+  .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
+const readsOf = async context => ({
+  missions: ((await api('GET', '/missions', undefined, context)).body.missions ?? []).length,
+  briefs: ((await api('GET', '/briefs', undefined, context)).body.briefs ?? []).length,
+})
+const ownerReads = await readsOf(owner)
+const viewerReads = await readsOf(viewer)
+const adminReads = await readsOf(adminContext)
+check('briefing-private', briefing.status === 200 && ownerReads.missions > 0 && viewerReads.missions + viewerReads.briefs + adminReads.missions + adminReads.briefs === 0,
+  `run ${briefing.status} ${briefing.body.error ?? ''}; owner reads ${ownerReads.missions} mission(s) ${ownerReads.briefs} brief(s); ${SECOND} ${JSON.stringify(viewerReads)}; ${ADMIN} ${JSON.stringify(adminReads)}`)
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
 const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })
