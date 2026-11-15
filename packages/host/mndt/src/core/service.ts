@@ -158,7 +158,13 @@ export class WorkbenchService {
     if (!this.#loaded) {
       const loaded = await this.#options.store.load()
       // Older state files predate mandates; they read as no mandates, never as a crash.
-      const mandates = (loaded as { mandates?: readonly Mandate[] }).mandates ?? []
+      // Its parties read as the lower-case e-mail the proxy proves, as channel
+      // members do: a mandate written with capitals before #60 keeps working.
+      const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map(mandate => ({
+        ...mandate,
+        delegant: mandate.delegant.trim().toLowerCase(),
+        delegataire: mandate.delegataire.trim().toLowerCase(),
+      }))
       // One spelling of a person: members written with capitals before identities were normalised
       // read as the lower-case e-mail the proxy proves, so nobody loses a channel.
       const channels = loaded.channels?.map(channel => ({
@@ -836,7 +842,8 @@ export class WorkbenchService {
     return this.#write((state) => {
       const taken = new Set((state.channels ?? []).map(channel => channel.name))
       if (draft.name !== undefined && taken.has(draft.name)) {
-        throw new Error(`the channel #${draft.name} exists`)
+        // Neutral: the name may be a private channel's the caller is not in.
+        throw new Error(`the name #${draft.name} is not available`)
       }
       // A name the person chose is theirs; one derived from a title takes the
       // first free suffix instead of failing.

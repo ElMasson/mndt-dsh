@@ -117,3 +117,26 @@ describe('the counts of /metrics on a team instance', () => {
     expect(ofAdmin.automationsEnabled).toBe(0)
   })
 })
+
+describe('part 2: names and parties', () => {
+  it('a taken channel name is refused in neutral words: no « exists » about a channel one is not in', async () => {
+    const { api, as } = bench()
+    await api({ method: 'POST', path: '/channels', ...as('tok-owner'), body: JSON.stringify({ name: 'direction' }) })
+    const refused = await api({ method: 'POST', path: '/channels', ...as('tok-viewer'), body: JSON.stringify({ name: 'direction' }) })
+    expect(refused.status).toBe(409)
+    expect((refused.body as { error: string }).error).toBe('the name #direction is not available')
+  })
+
+  it('reads the parties of a mandate stored with capitals as the lower-case e-mail', async () => {
+    const store = new MemoryStore()
+    const service = new WorkbenchService({ store })
+    const state = await store.load()
+    await store.save({ ...state, mandates: [{
+      id: 'mnd_old', delegant: 'Duke@Datanalysis.re', delegataire: ' SMarion@Datanalysis.re ', purpose: 'p', connectors: [],
+      missionKinds: ['briefing'], dailyCap: 1, expiresOn: '2099-01-01', state: 'active', createdAt: '2026-11-01T00:00:00Z',
+    }] })
+    const mandate = await service.mandate('mnd_old')
+    expect(mandate?.delegant).toBe('duke@datanalysis.re')
+    expect(mandate?.delegataire).toBe('smarion@datanalysis.re')
+  })
+})

@@ -282,7 +282,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     } catch (error) {
       const reason = messageOf(error)
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
-      if (/taken|exists/.test(reason)) return respond(409, { error: reason })
+      if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason })
     }
   }
