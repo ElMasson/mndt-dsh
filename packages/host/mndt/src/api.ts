@@ -1070,9 +1070,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(existing ?? {}),
           ...input,
           ...(id === undefined ? {} : { id }),
-          // On a team instance the owner who saves an automation takes it over:
-          // they have read its prompt. The system's own keep their author.
-          createdBy: teamInstance && existing !== undefined && existing.createdBy !== 'scheduler' ? identity : existing?.createdBy ?? identity,
+          // On a team instance the owner who saves an automation takes it over,
+          // a system one included: they have read its prompt.
+          createdBy: teamInstance ? identity : existing?.createdBy ?? identity,
         })
         if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
         // Who enabled it is the server's record, never the request's.

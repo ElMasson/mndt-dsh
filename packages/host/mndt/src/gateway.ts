@@ -31,7 +31,7 @@ import { TurnScheduler } from './turns.ts'
 import { readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
-import { dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 
 /** How the deployment configures the product. */
@@ -100,7 +100,15 @@ export function ownersOf(grants: readonly { readonly subject: string; readonly r
 export function automationRefusal(item: Automation, team: boolean, owners: ReadonlySet<string>): string | undefined {
   if (!team) return undefined
   const author = item.createdBy.toLowerCase()
-  if (item.createdBy !== 'scheduler' && !owners.has(author)) {
+  if (item.createdBy === 'scheduler') {
+    // A system automation runs as shipped, or once an owner saved it (it is then
+    // theirs). An admin could change its prompt before #63: a prompt that is not
+    // the code's runs only after an owner read it and saved it.
+    const shipped = defaultAutomations().find(candidate => candidate.id === item.id)
+    if (shipped === undefined || shipped.prompt !== item.prompt) {
+      return 'disabled: its prompt is not the one shipped; on a team instance an owner reads it, saves it, then enables it'
+    }
+  } else if (!owners.has(author)) {
     return `disabled: created by ${item.createdBy}; on a team instance an owner opens it, checks its prompt and saves it to take it over, then enables it`
   }
   if (item.enabledBy === undefined || !owners.has(item.enabledBy.toLowerCase())) {

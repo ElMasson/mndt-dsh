@@ -6,8 +6,8 @@
  *
  * - A channel's card, message, update: its members only.
  * - A card outside any channel (a mission's): the one who asked it, and those
- *   who may decide (`rights.write`); on a team instance, the owner and the one
- *   who asked only.
+ *   who may decide (`rights.write`); on a team instance, the one who asked it
+ *   alone, plus the owners for an old card asked under « scheduler ».
  * - A mission, a brief: shared with the team, or its author. On a team
  *   instance (missions and automations are the owner's): the owner reads the
  *   shared ones, theirs and the automations'; anyone else, only their own.
@@ -54,10 +54,14 @@ export function canReadMission(reader: Reader, item: { readonly visibility?: 'te
 export function canReadApproval(reader: Reader, approval: Approval): boolean {
   if (approval.channelId !== undefined)
     return reader.channels.has(approval.channelId)
-  // A card outside any channel is a mission's. On a team instance missions are
-  // the owner's, so only the owner and the one who asked read it, never a
-  // decider who is not the owner.
-  if (reader.missionRole === 'member') return approval.requestedBy === reader.identity
+  // A card outside any channel is a mission's. On a team instance it follows its
+  // brief: the one who asked it alone (for an automation, the owner who enabled
+  // it), plus the owners for an old card asked under « scheduler ». Never a
+  // decider who did not ask it, another owner included.
+  if (reader.missionRole !== undefined) {
+    return approval.requestedBy === reader.identity
+      || (reader.missionRole === 'owner' && approval.requestedBy === AUTOMATION_AUTHOR)
+  }
   return reader.decider || approval.requestedBy === reader.identity
 }
 
