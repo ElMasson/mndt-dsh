@@ -92,7 +92,7 @@ export const TEAM_CSS = `
 .mw-soon { margin-left: auto; font-size: 12px; color: var(--mw-mist); }
 .mw-badge {
   margin-left: auto; padding: 0 6px; border-radius: 10px;
-  background: var(--mw-charcoal); color: #FFFFFF; font-size: 12px; font-weight: 400; line-height: 18px;
+  background: var(--mw-charcoal); color: #FFFFFF; font-size: 12px; font-weight: 500; line-height: 20px;
 }
 .mw-sublist { margin: 0; padding: 0; list-style: none; }
 .mw-app .mw-sublink {
@@ -249,14 +249,14 @@ export const TEAM_CSS = `
 .mw-day { display: flex; align-items: center; gap: 12px; margin: 12px 0; font-size: 12px; color: var(--mw-slate); }
 .mw-day-line { flex: 1; height: 1px; background: var(--mw-line); }
 .mw-message {
-  display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 12px;
+  position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 12px;
   transition: background-color 160ms var(--mw-ease);
 }
 .mw-message:hover { background: var(--mw-surface); }
 .mw-message-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; line-height: 20px; }
 .mw-message-name { font-weight: 500; }
 .mw-message-time { font-size: 12px; color: var(--mw-slate); }
-.mw-message-actions { margin-left: auto; display: inline-flex; gap: 8px; opacity: 0; transition: opacity 160ms var(--mw-ease); }
+.mw-message-actions { position: absolute; top: 6px; right: 8px; display: inline-flex; gap: 8px; opacity: 0; transition: opacity 160ms var(--mw-ease); }
 .mw-message:hover .mw-message-actions, .mw-message-actions:focus-within { opacity: 1; }
 .mw-app .mw-text-button {
   padding: 0; border: 0; background: none; color: var(--mw-slate); font-size: 12px; text-decoration: underline; cursor: pointer;
@@ -320,6 +320,27 @@ export const TEAM_CSS = `
 .mw-decide-error { margin: 0; font-size: 12px; color: #B3261E; }
 .mw-cannot { margin: 0; padding: 16px; border: 1px solid var(--mw-line); border-radius: 16px; font-size: 14px; font-weight: 500; }
 @media (min-width: 640px) { .mw-decide-buttons { display: flex; flex-wrap: wrap; } }
+
+/* À traiter and Mémoire, as mndt-web draws them (ApprovalQueueScreen, MemoryScreen, EmptyState). */
+.mw-empty-state {
+  padding: 32px; border: 1px dashed var(--mw-line); border-radius: 16px; background: var(--mw-card); text-align: center;
+}
+.mw-empty-state p { margin: 0; font-size: 14px; font-weight: 500; }
+.mw-alert { margin: 0; font-size: 14px; color: #B3261E; }
+.mw-counts { display: flex; gap: 12px; margin: 0; font-size: 14px; }
+.mw-queue { display: flex; flex-direction: column; gap: 12px; max-width: 768px; }
+.mw-queue-item { display: flex; flex-direction: column; gap: 4px; }
+.mw-app .mw-queue-where { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--mw-slate); font-size: 12px; text-decoration: underline; cursor: pointer; }
+.mw-intro { margin: 0; font-size: 14px; color: var(--mw-slate); }
+.mw-memory-columns { display: grid; gap: 16px; }
+.mw-memory-column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mw-memory-title { display: flex; align-items: center; gap: 8px; margin: 0; font-family: "Space Grotesk", Inter, sans-serif; font-size: 16px; font-weight: 600; }
+.mw-memory-help { margin: 0; font-size: 13px; color: var(--mw-slate); }
+.mw-memory-none { margin: 0; font-size: 14px; color: var(--mw-slate); }
+.mw-memory-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card); font-size: 14px; }
+.mw-memory-text { margin: 0; font-weight: 500; white-space: pre-wrap; }
+.mw-memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--mw-slate); }
+@media (min-width: 1024px) { .mw-memory-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }

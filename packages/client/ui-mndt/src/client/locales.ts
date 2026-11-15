@@ -327,6 +327,18 @@ export const en = {
   'shell.denied': 'Access not authorised: this address is not a member of the workspace.',
   'shell.sign-out': 'Sign out',
   'shell.env-preprod': 'Preproduction',
+  'shell.memory-intro': 'Nothing enters memory unless a person keeps it.',
+  'shell.memory-user': 'Me',
+  'shell.memory-user-help': 'Seen by you only.',
+  'shell.memory-team': 'Team',
+  'shell.memory-team-help': 'Seen by the team.',
+  'shell.memory-mission': 'Missions',
+  'shell.memory-mission-help': 'Kept along a mission.',
+  'shell.memory-kind-fact': 'Fact',
+  'shell.memory-kind-decision': 'Decision',
+  'shell.memory-kind-preference': 'Preference',
+  'shell.memory-kind-other': 'Note',
+  'shell.memory-kept-by': 'Kept by {name}',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -658,6 +670,18 @@ export const fr: Record<MndtKey, string> = {
   'shell.denied': 'Accès non autorisé : cette adresse n\'est pas membre de l\'espace.',
   'shell.sign-out': 'Se déconnecter',
   'shell.env-preprod': 'Préproduction',
+  'shell.memory-intro': 'Rien n\'entre en mémoire sans qu\'une personne la garde.',
+  'shell.memory-user': 'Moi',
+  'shell.memory-user-help': 'Vue par vous seul.',
+  'shell.memory-team': 'Équipe',
+  'shell.memory-team-help': 'Vue par l\'équipe.',
+  'shell.memory-mission': 'Missions',
+  'shell.memory-mission-help': 'Retenue au fil d\'une mission.',
+  'shell.memory-kind-fact': 'Fait',
+  'shell.memory-kind-decision': 'Décision',
+  'shell.memory-kind-preference': 'Préférence',
+  'shell.memory-kind-other': 'Note',
+  'shell.memory-kept-by': 'Gardée par {name}',
 }
 
 /** Substitution values for a message. */

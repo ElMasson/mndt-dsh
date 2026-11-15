@@ -12,9 +12,12 @@ import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.t
 import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
-import { CardView, ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
+import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
+import { WebCard, shownName } from './TeamFeed.tsx'
+import type { IconName } from './Icons.tsx'
+import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
@@ -52,6 +55,20 @@ export interface CollabPageProps {
    * standalone team page. Without it the page keeps its own channel rail, inside the DSH shell.
    */
   readonly team?: TeamFrame | undefined
+}
+
+/** The memory's columns, one per scope the core keeps (there is no company scope to show). */
+const MEMORY_COLUMNS: readonly { readonly scope: string; readonly icon: IconName; readonly title: MndtKey; readonly help: MndtKey }[] = [
+  { scope: 'user', icon: 'Lock', title: 'shell.memory-user', help: 'shell.memory-user-help' },
+  { scope: 'team', icon: 'Users', title: 'shell.memory-team', help: 'shell.memory-team-help' },
+  { scope: 'mission', icon: 'Boxes', title: 'shell.memory-mission', help: 'shell.memory-mission-help' },
+]
+
+/** The kinds of note the core records, as the screen names them. */
+const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
+  fact: 'shell.memory-kind-fact',
+  decision: 'shell.memory-kind-decision',
+  preference: 'shell.memory-kind-preference',
 }
 
 /** What the team frame knows beyond the page state. */
@@ -1360,27 +1377,55 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           {view !== 'pending' ? undefined : (
             <section className="mw-screen" data-testid="team-pending">
               <h1 className="mw-title">{t('shell.pending')}</h1>
-              {cardsError === undefined ? undefined : <p role="alert" className="mndt-error">{t('shell.pending-unread', { reason: cardsError })}</p>}
-              {pendingCards.length === 0
-                ? <p className="mw-empty">{t('shell.pending-none')}</p>
-                : pendingCards.map(card => (
-                  <CardView key={card.id} card={card} canDecide={state.canAdmin === true} onDecide={decideCard} t={tc} />
-                ))}
+              {cardsError === undefined ? undefined : <p role="alert" className="mw-alert">{t('shell.pending-unread', { reason: cardsError })}</p>}
+              {pendingCards.length === 0 ? (
+                <div className="mw-empty-state"><p>{t('shell.pending-none')}</p></div>
+              ) : (
+                <>
+                  <p className="mw-counts">{t('shell.pending-count', { count: pendingCards.length })}</p>
+                  <div className="mw-queue">
+                    {pendingCards.map((card) => {
+                      const where = chatChannels?.find(c => c.id === card.channelId)
+                      return (
+                        <div key={card.id} className="mw-queue-item">
+                          {where === undefined ? undefined : (
+                            <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
+                              {where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
+                            </button>
+                          )}
+                          <WebCard card={card} canDecide={state.canAdmin === true} onDecide={decideCard} names={team.names} t={tc} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
             </section>
           )}
           {view !== 'memory' ? undefined : (
             <section className="mw-screen" data-testid="team-memory">
               <h1 className="mw-title">{t('shell.memory')}</h1>
-              {state.memories.length === 0 ? <p className="mw-empty">{t('shell.memory-none')}</p> : (
-                <ul className="mw-cards">
-                  {state.memories.map(memory => (
-                    <li key={memory.id} className="mw-card">
-                      <p className="mw-card-text">{memory.text}</p>
-                      <p className="mw-card-meta">{t('shell.memory-by', { kind: memory.kind, scope: memory.scope, name: memory.createdBy })}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <p className="mw-intro">{t('shell.memory-intro')}</p>
+              <div className="mw-memory-columns">
+                {MEMORY_COLUMNS.map((column) => {
+                  const notes = state.memories.filter(memory => memory.scope === column.scope)
+                  return (
+                    <section key={column.scope} className="mw-memory-column" aria-label={t(column.title)}>
+                      <h2 className="mw-memory-title"><Icon name={column.icon} />{t(column.title)}</h2>
+                      <p className="mw-memory-help">{t(column.help)}</p>
+                      {notes.length === 0 ? <p className="mw-memory-none">{t('shell.memory-none')}</p> : notes.map(memory => (
+                        <article key={memory.id} className="mw-memory-card" data-testid="team-memory-card">
+                          <p className="mw-memory-text">{memory.text}</p>
+                          <p className="mw-memory-meta">
+                            <span className="mw-chip">{t(MEMORY_KINDS[memory.kind] ?? 'shell.memory-kind-other')}</span>
+                            {t('shell.memory-kept-by', { name: shownName(memory.createdBy, team.names) })}
+                          </p>
+                        </article>
+                      ))}
+                    </section>
+                  )
+                })}
+              </div>
             </section>
           )}
           {view !== 'channels' ? undefined : (

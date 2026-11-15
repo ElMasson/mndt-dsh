@@ -3,18 +3,19 @@
  * (mockChat) with a filled channel, so the feed can be compared with mndt-web by anyone. Every
  * datum here is simulated; captures taken from it say so (« données simulées »).
  *
- * Build: `pnpm exec vite build --config packages/client/ui-mndt/rehearsal/vite.config.ts`, then serve
+ * It lives under tests/ so the client typecheck and the lint keep it current. Build:
+ * `pnpm exec vite build --config packages/client/ui-mndt/rehearsal/vite.config.ts`, then serve
  * `rehearsal/dist` statically.
  */
 import { createRoot } from 'react-dom/client'
-import '../../ui-brand-mndt/src/styles/brand-font.css'
-import { CollabPage } from '../src/client/CollabPage.tsx'
-import { createMockChat } from '../src/client/mockChat.ts'
-import { chatFrench } from '../src/client/chatLocales.ts'
-import { translate } from '../src/client/locales.ts'
-import { CSS } from '../src/client/styles.ts'
-import { TEAM_CSS } from '../src/client/teamStyles.ts'
-import type { MndtFace, PageStateRow } from '../src/client/face.ts'
+import '../../../ui-brand-mndt/src/styles/brand-font.css'
+import { CollabPage } from '../../src/client/CollabPage.tsx'
+import { createMockChat } from '../../src/client/mockChat.ts'
+import { chatFrench } from '../../src/client/chatLocales.ts'
+import { translate } from '../../src/client/locales.ts'
+import { CSS } from '../../src/client/styles.ts'
+import { TEAM_CSS } from '../../src/client/teamStyles.ts'
+import type { MndtFace, PageStateRow } from '../../src/client/face.ts'
 
 const you = 'stephane@datanalysis.re'
 const t0 = Date.parse('2026-11-14T09:12:00.000Z')
@@ -43,7 +44,7 @@ const page: PageStateRow = {
   approvals: [{ id: 'apr_1', kind: 'send-email', title: 'Envoyer la relance de la facture FA2610-031 à la comptabilité de Sodiac', requestedBy: 'assistant', requestedAt: at(4) }],
   memories: [
     { id: 'mem_1', scope: 'team', kind: 'fact', text: 'Sodiac paie à 60 jours fin de mois ; relancer la comptabilité, pas l\'acheteur.', createdBy: you },
-    { id: 'mem_2', scope: 'private', kind: 'preference', text: 'Les relances partent depuis contact@, jamais depuis duke@.', createdBy: you },
+    { id: 'mem_2', scope: 'user', kind: 'preference', text: 'Les relances partent depuis contact@, jamais depuis duke@.', createdBy: you },
   ],
 }
 const api = new Proxy({}, {
