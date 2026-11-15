@@ -275,6 +275,8 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   private readonly workspaceGrants = new Map<string, AclWriteGrant>()
   private readonly tempCapabilities = new Map<string, AclTempCapability>()
+  /** Landlock with a read allow-list: each session's private temp directory (removed on provider dispose). */
+  private readonly landlockTemps = new Map<string, string>()
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -308,6 +310,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     // provision's exact-ACE skip).
     ctx.effect(() => () => {
       this.revokeAclGrants()
+      this.removeLandlockTemps()
     })
   }
 
@@ -337,7 +340,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     const selected = this.selectRunner(policy.mode)
     const runnerArgv = this.runnerArgv(selected.runner, policy)
     return Promise.resolve<ConfinedArgv>({
-      argv: [...runnerArgv, '--', ...argv],
+      argv: [...runnerArgv, '--', ...this.privateTempPrefix(selected.runner, policy), ...argv],
       enforcement: selected.enforcement,
       denialSignatures: DENIAL_SIGNATURES[selected.runner],
       runnerFailureRules: RUNNER_FAILURE_RULES[selected.runner],
@@ -348,11 +351,46 @@ export class LocalSandboxProvider extends SandboxProvider {
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
       case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
-      case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
+      case 'landlock': {
+        const roots = readRoots() ?? null
+        const temp = roots !== null && policy.mode === 'workspace-write' ? this.landlockPrivateTemp(policy.sessionId) : undefined
+        return [this.landlockLauncher(), ...landlockProfileArgs(policy, roots, temp)]
+      }
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
       default: return assertNever(runner)
     }
+  }
+
+  /**
+   * Under Landlock with a read allow-list, a workspace-write run writes its
+   * temporary files in its session's private directory, not in the shared
+   * `/tmp` (which it can no longer open): `env` sets TMPDIR, TMP and TEMP
+   * before the command. Nothing for the other runners or without a list.
+   */
+  private privateTempPrefix(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
+    if (runner !== 'landlock' || policy.mode !== 'workspace-write' || readRoots() === undefined) return []
+    const dir = this.landlockPrivateTemp(policy.sessionId)
+    return ['/usr/bin/env', `TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`]
+  }
+
+  /**
+   * The private temp directory of one session under Landlock with a read
+   * allow-list: random (mkdtemp, mode 0700), created on the session's first
+   * confined run, removed at provider dispose. Calls without a session (the
+   * workflow engine's scripts) share one directory of their own, never a
+   * session's. A fresh provider always draws new paths.
+   * @param sessionId - the calling session, if any.
+   * @returns the directory.
+   */
+  private landlockPrivateTemp(sessionId: SessionId | undefined): string {
+    const key = sessionId ?? ''
+    let dir = this.landlockTemps.get(key)
+    if (dir === undefined) {
+      dir = mkdtempSync(join(tmpdir(), 'dsh-run-'))
+      this.landlockTemps.set(key, dir)
+    }
+    return dir
   }
 
   /**
@@ -486,6 +524,19 @@ export class LocalSandboxProvider extends SandboxProvider {
       this.ctx.logger.warn(`sandbox-local: windows-acl grant cleanup completed with ${failures.length} failure(s)`)
       for (const error of failures) this.ctx.logger.warn(error)
     }
+  }
+
+  /** Remove the Landlock private temp directories; failures are reported, not thrown (as for the ACL grants). */
+  private removeLandlockTemps(): void {
+    for (const dir of this.landlockTemps.values()) {
+      try {
+        this.removeTempDir(dir)
+      } catch (error) {
+        this.ctx.logger.warn(`sandbox-local: could not remove the private temp directory ${dir}`)
+        this.ctx.logger.warn(error)
+      }
+    }
+    this.landlockTemps.clear()
   }
 
   /** Remove one provider-owned private temp directory (injectable for cleanup tests). */

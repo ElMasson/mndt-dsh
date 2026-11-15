@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -506,5 +506,52 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     })
     const confined = await sandbox.confine(['true'], RO)
     expect(confined.argv.slice(0, 2)).toEqual([process.execPath, builtEntry])
+  })
+})
+
+describe('a private temp directory per session under Landlock with a read allow-list', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  /** The TMPDIR the confined argv sets, after the separator. */
+  function tempOf(argv: readonly string[]): string {
+    const after = argv.slice(argv.indexOf('--') + 1)
+    expect(after.slice(0, 1)).toEqual(['/usr/bin/env'])
+    const dir = after[1]?.replace(/^TMPDIR=/, '') ?? ''
+    expect(after.slice(1, 4)).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`])
+    return dir
+  }
+
+  it('grants each session its own directory, never the shared /tmp, and removes them all on dispose', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    const ctx = new Context()
+    await ctx.plugin(LocalSandboxProvider, {})
+    const sandbox = ctx.sandbox as LocalSandboxProvider
+    sandbox.internals = { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() }
+    const a = await sandbox.confine(['sh', '-c', 'true'], { ...WW, sessionId: 'session-a' as never })
+    const a2 = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    const b = await sandbox.confine(['true'], { ...WW, sessionId: 'session-b' as never })
+    const agentless = await sandbox.confine(['true'], WW)
+    const [dirA, dirB, dirNone] = [tempOf(a.argv), tempOf(b.argv), tempOf(agentless.argv)]
+    expect(tempOf(a2.argv)).toBe(dirA)
+    expect(new Set([dirA, dirB, dirNone]).size).toBe(3)
+    for (const dir of [dirA, dirB, dirNone]) expect(statSync(dir).mode & 0o777).toBe(0o700)
+    // The grant names the session's private directory, never /tmp nor another session's.
+    const grants = a.argv.slice(1, a.argv.indexOf('--'))
+    expect(grants).toContain(dirA)
+    expect(grants).not.toContain('/tmp')
+    expect(grants).not.toContain(dirB)
+    expect(a.argv.slice(-3)).toEqual(['sh', '-c', 'true'])
+    // read-only writes nothing: no temp, no prefix.
+    const ro = await sandbox.confine(['true'], { ...RO, sessionId: 'session-a' as never })
+    expect(ro.argv.slice(ro.argv.indexOf('--') + 1)).toEqual(['true'])
+    await ctx.fiber.dispose()
+    for (const dir of [dirA, dirB, dirNone]) expect(existsSync(dir)).toBe(false)
+  })
+
+  it('changes nothing without an allow-list: the shared /tmp, no prefix', async () => {
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    expect(confined.argv.slice(confined.argv.indexOf('--') + 1)).toEqual(['true'])
+    expect(confined.argv).toContain('/tmp')
   })
 })

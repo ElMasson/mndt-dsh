@@ -104,3 +104,32 @@ describe.skipIf(!landlockUsable)('sandbox-local: real Landlock confinement throu
     expect(readFileSync(join(scratch, 'scratch.txt'), 'utf8')).toBe('tmp-ok')
   })
 })
+
+describe.skipIf(!landlockUsable)('sandbox-local: a read allow-list gives each session its own temp directory (real Landlock)', () => {
+  const previous = process.env.DSH_SANDBOX_READ_ROOTS
+  afterEach(() => {
+    if (previous === undefined) delete process.env.DSH_SANDBOX_READ_ROOTS
+    else process.env.DSH_SANDBOX_READ_ROOTS = previous
+  })
+
+  it('writes in TMPDIR, cannot list /tmp, and cannot read another session\'s temp file', async () => {
+    process.env.DSH_SANDBOX_READ_ROOTS = '/usr:/lib:/lib64:/bin:/sbin:/etc:/dev/null:/dev/urandom'
+    const workdir = await tempDir(homedir())
+    const sandbox = await provider()
+    const policy = (sessionId: string): SandboxPolicy => ({ mode: 'workspace-write', workspaceRoot: workdir, sessionId: sessionId as never })
+    const wrote = await runConfined(sandbox, 'echo canary-a > "$TMPDIR/note" && cat "$TMPDIR/note" && printf "%s" "$TMPDIR"', policy('session-a'))
+    expect(wrote.result.status, wrote.result.stderr).toBe(0)
+    const dirA = wrote.result.stdout.trim().split('\n').at(-1) ?? ''
+    expect(wrote.result.stdout).toContain('canary-a')
+    expect(dirA.startsWith(tmpdir())).toBe(true)
+    // The shared /tmp is not readable: neither listed nor written.
+    const shared = await runConfined(sandbox, 'ls /tmp; echo x > /tmp/dsh-shared-probe', policy('session-a'))
+    expect(shared.result.status).not.toBe(0)
+    expect(existsSync('/tmp/dsh-shared-probe')).toBe(false)
+    // Another session reads nothing of the first one's temp directory.
+    const other = await runConfined(sandbox, `cat "${dirA}/note"`, policy('session-b'))
+    expect(other.result.status).not.toBe(0)
+    expect(other.result.stdout).not.toContain('canary-a')
+    expect(readFileSync(join(dirA, 'note'), 'utf8')).toBe('canary-a\n')
+  })
+})

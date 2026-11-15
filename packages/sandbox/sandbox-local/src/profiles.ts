@@ -86,12 +86,29 @@ export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[]
 /**
  * Build the Landlock launcher grants for one file-effect policy.
  * @param policy - file-effect policy to express as Landlock allow-list grants.
+ * @param roots - the read allow-list, or `null` for none (reads `/`, writes the shared `/tmp`).
+ * @param privateTemp - with a read allow-list under workspace-write, the run's
+ *   own temp directory, granted instead of `/tmp`; required in that case.
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
-export function landlockProfileArgs(policy: SandboxPolicy, roots: readonly string[] | null = readRoots() ?? null): string[] {
+export function landlockProfileArgs(
+  policy: SandboxPolicy,
+  roots: readonly string[] | null = readRoots() ?? null,
+  privateTemp?: string,
+): string[] {
   const readWrite = ['/dev/null']
   if (policy.mode === 'workspace-write') {
-    readWrite.push('/tmp', policy.workspaceRoot)
+    if (roots === null) {
+      readWrite.push('/tmp', policy.workspaceRoot)
+    } else {
+      // Under a read allow-list the shared /tmp is never granted: what one
+      // confined run leaves there would be readable by the next one, whoever
+      // started it. The run gets its own directory (TMPDIR) instead.
+      if (privateTemp === undefined) {
+        throw new SandboxUnavailableError(policy.mode, `${READ_ROOTS_ENV} is set and no private temp directory was provided`)
+      }
+      readWrite.push(privateTemp, policy.workspaceRoot)
+    }
   }
   return landlockGrantArgs({ readOnly: roots === null ? ['/'] : [...roots], readWrite })
 }

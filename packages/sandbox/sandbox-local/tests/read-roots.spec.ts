@@ -14,13 +14,21 @@ describe('the read allow-list (DSH_SANDBOX_READ_ROOTS)', () => {
     expect(bwrapProfileArgs(WW, null)[0]).toBe('--ro-bind')
   })
 
-  it('gives Landlock exactly the listed roots to read, writes unchanged, and drops a root missing on this host', () => {
+  it('gives Landlock exactly the listed roots to read, the private temp instead of /tmp, and drops a root missing on this host', () => {
     const present = mkdtempSync(join(tmpdir(), 'root-'))
     const roots = readRoots({ [READ_ROOTS_ENV]: `/usr:${present}/:/no/such/dir` })
     expect(roots).toEqual(['/usr', present])
-    expect(landlockProfileArgs(WW, roots ?? null)).toEqual(['--ro', '/usr', '--ro', present, '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws'])
-    // / is never among the readable roots once an allow-list is set.
-    expect(landlockProfileArgs(WW, roots ?? null)).not.toContain('/')
+    expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).toEqual(['--ro', '/usr', '--ro', present, '--rw', '/dev/null', '--rw', '/tmp/dsh-run-a', '--rw', '/ws'])
+    // / is never among the readable roots once an allow-list is set, nor the shared /tmp.
+    expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).not.toContain('/')
+    expect(landlockProfileArgs(WW, roots ?? null, '/tmp/dsh-run-a')).not.toContain('/tmp')
+  })
+
+  it('never grants the shared /tmp under an allow-list: without a private temp, workspace-write is refused', () => {
+    expect(() => landlockProfileArgs(WW, ['/usr'])).toThrow(SandboxUnavailableError)
+    expect(() => landlockProfileArgs(WW, ['/usr'])).toThrow(/no private temp directory/)
+    // read-only writes nothing but /dev/null: no temp at all.
+    expect(landlockProfileArgs({ mode: 'read-only', workspaceRoot: '/ws' }, ['/usr'])).toEqual(['--ro', '/usr', '--rw', '/dev/null'])
   })
 
   it('fails closed on a value that could reopen /, or that names nothing present', () => {
