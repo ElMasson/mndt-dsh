@@ -81,12 +81,11 @@ describe('the team frame, as mndt-web draws it', () => {
     expect(screen.getByTitle('Mises à jour en direct')).toBeTruthy()
   })
 
-  it('keeps the spaces selector inert: all spaces, until they are served', () => {
-    render(<TeamShell {...props()} />)
-    for (const select of screen.getAllByRole('combobox')) {
-      expect((select as HTMLSelectElement).disabled).toBe(true)
-      expect((select as HTMLSelectElement).value).toBe('all')
-    }
+  it('shows nothing without a function: no spaces selector, no chevron on the organisation', () => {
+    render(<TeamShell {...props({ org: { name: 'DATANALYSIS', env: 'Préproduction' } })} />)
+    const header = screen.getByTestId('app-header')
+    expect(within(header).queryByRole('combobox')).toBeNull()
+    expect(screen.getByTestId('org').querySelector('svg')).toBeNull()
   })
 
   it('on a phone, Menu opens the whole navigation, and following a link closes it', () => {
@@ -291,7 +290,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Mémoire', 'Documents', 'Membres'])
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
     expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
     expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
     // Members by the part before @, the address kept as title.
@@ -489,5 +488,68 @@ describe('À traiter is what the person has to decide', () => {
     render(<CollabPage api={face(state({ memories }))} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Mémoire' }))
     expect(screen.getByTestId('team-memory-card').textContent).toContain('Note')
+  })
+})
+
+describe('the channel panel, by pills', () => {
+  const at = '2026-11-15T09:00:00.000Z'
+  const you = 'stephane@datanalysis.re'
+  const agent = (id: string, handle: string) => ({ id, handle, name: handle, provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at })
+
+  /** @param canWrite - whether the reader holds workflows.write. @param mounted - the workbench's connectors. */
+  async function open(canWrite = true, mounted = [
+    { module: 'm', server: 'office365', enabled: true },
+    { module: 'm', server: 'qonto', enabled: true },
+    { module: 'm', server: 'dolibarr', enabled: false },
+  ]): Promise<HTMLElement> {
+    const chat = createMockChat({
+      you,
+      agents: [agent('agt_1', 'assistant'), agent('agt_2', 'analyste')],
+      channels: [{ id: 'chn_1', name: 'test', title: 'test', kind: 'team', members: [you], agents: ['agt_1'], connectors: ['qonto'], createdBy: you, createdAt: at }],
+      mounted,
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite }))} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: '# test' }))
+    return screen.findByTestId('context-panel')
+  }
+
+  it('one click puts an agent in the channel, another takes it out', async () => {
+    const panel = await open()
+    const pills = within(panel).getByTestId('agent-pills')
+    expect(within(pills).getByRole('button', { name: '@assistant' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(pills).getByRole('button', { name: '@analyste' }))
+    await waitFor(() => { expect(within(pills).getByRole('button', { name: '@analyste' }).getAttribute('aria-pressed')).toBe('true') })
+    fireEvent.click(within(pills).getByRole('button', { name: '@assistant' }))
+    await waitFor(() => { expect(within(pills).getByRole('button', { name: '@assistant' }).getAttribute('aria-pressed')).toBe('false') })
+    // No list to open, no « Ajouter » to press: the pills are the whole gesture.
+    expect(within(panel).queryByRole('combobox')).toBeNull()
+  })
+
+  it('sets the channel\'s connectors by pills; one that is not mounted is greyed and says so', async () => {
+    const panel = await open()
+    const pills = await within(panel).findByTestId('connector-pills')
+    const dolibarr = within(pills).getByRole('button', { name: /dolibarr/u }) as HTMLButtonElement
+    expect(dolibarr.disabled).toBe(true)
+    expect(dolibarr.textContent).toContain('non branché')
+    fireEvent.click(within(pills).getByRole('button', { name: 'office365' }))
+    await waitFor(() => { expect(within(pills).getByRole('button', { name: 'office365' }).getAttribute('aria-pressed')).toBe('true') })
+    fireEvent.click(within(pills).getByRole('button', { name: 'qonto' }))
+    await waitFor(() => { expect(within(pills).getByRole('button', { name: 'qonto' }).getAttribute('aria-pressed')).toBe('false') })
+  })
+
+  it('a reader without the right sees the pills, inert, and why', async () => {
+    const panel = await open(false)
+    for (const pill of within(within(panel).getByTestId('agent-pills')).getAllByRole('button')) expect((pill as HTMLButtonElement).disabled).toBe(true)
+    expect(within(panel).getAllByText('Votre rôle ne permet pas de modifier ce canal.').length).toBeGreaterThan(0)
+  })
+
+  it('a connector the channel holds but that is no longer mounted can still be taken out', async () => {
+    const panel = await open(true, [])
+    const qonto = await within(panel).findByRole('button', { name: /qonto/u })
+    expect(qonto.textContent).toContain('non branché')
+    expect((qonto as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(qonto)
+    await waitFor(() => { expect(within(panel).queryByRole('button', { name: /qonto/u })).toBeNull() })
+    expect(within(panel).getByText('Aucun connecteur n\'est branché sur cet espace.')).toBeTruthy()
   })
 })

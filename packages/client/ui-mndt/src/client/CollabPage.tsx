@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
-import type { ChatAgent, ChatChannel, ChatFace } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
@@ -236,6 +236,45 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       return reasonOf(failure, tc)
     }
   }, [chat, chatId, tc])
+
+  /** @param next - the channel as the Host returned it. */
+  const replaceChannel = (next: ChatChannel): void => {
+    setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
+  }
+
+  // One click puts an agent in the open channel or takes it out (the team frame's pills).
+  const toggleChatAgent = useCallback(async (agentId: string, inChannel: boolean): Promise<string | undefined> => {
+    if (chat === undefined || chatId === undefined) return undefined
+    try {
+      if (inChannel) replaceChannel(await chat.addAgents(chatId, [agentId]))
+      else if (chat.removeAgents !== undefined) replaceChannel(await chat.removeAgents(chatId, [agentId]))
+      return undefined
+    } catch (failure) {
+      return reasonOf(failure, tc)
+    }
+  }, [chat, chatId, tc])
+
+  const setChannelConnectors = useCallback(async (servers: readonly string[]): Promise<string | undefined> => {
+    if (chat?.setConnectors === undefined || chatId === undefined) return undefined
+    try {
+      replaceChannel(await chat.setConnectors(chatId, servers))
+      return undefined
+    } catch (failure) {
+      return reasonOf(failure, tc)
+    }
+  }, [chat, chatId, tc])
+
+  // The connectors mounted on the workbench, read once for the team frame's pills.
+  const [mounted, setMounted] = useState<readonly MountedConnector[] | undefined>(undefined)
+  const [mountedError, setMountedError] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (team === undefined || chat?.mounted === undefined) return undefined
+    let live = true
+    chat.mounted()
+      .then((rows) => { if (live) setMounted(rows) })
+      .catch((failure: unknown) => { if (live) setMountedError(reasonOf(failure, tc)) })
+    return () => { live = false }
+  }, [team, chat, tc])
 
   const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
     const outcome = await api.decide(id, decision, reason)
@@ -1051,7 +1090,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   channel={current}
                   agents={chatAgents}
                   t={tc}
-                  onAdd={addChatAgent}
+                  onToggleAgent={toggleChatAgent}
+                  onConnectors={setChannelConnectors}
+                  mounted={mounted}
+                  mountedError={mountedError}
+                  canManage={state.canWrite}
                   names={team.names}
                   documents={documents}
                   onMemory={() => { setContextOpen(false); setView('memory') }}

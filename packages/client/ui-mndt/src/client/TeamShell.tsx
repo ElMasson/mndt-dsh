@@ -3,8 +3,9 @@
  * a full-width top bar, one navigation column (a bottom bar and a sheet on a phone), and the page
  * beside them. Only the frame lives here; what each entry opens is the page's business.
  *
- * Nothing is invented: the spaces selector says « Tous les espaces de travail » and does nothing
- * until spaces are served; the organisation shows only where its name is known; the steering
+ * Nothing is shown without a function (Stéphane, 15/11): no spaces selector and no chevron on the
+ * organisation until spaces and a second organisation exist, a deliberate departure from
+ * mndt-web; the organisation shows only where its name is known; the steering
  * entries (Missions, Mandats, Preuves) are greyed with « bientôt » until their screens exist.
  */
 import { useState } from 'react'
@@ -59,21 +60,6 @@ export function TeamShell(props: TeamShellProps): ReactNode {
       ? props.you.slice(0, props.you.indexOf('@'))
       : props.you)
   const freshness = props.live ? t('shell.live') : t('shell.paused')
-  const spaces = (
-    <label className="mw-spaces">
-      <span className="mw-sr">{t('shell.space')}</span>
-      {/* Spaces are not served yet: the only choice is all of them. */}
-      <select
-        className="mw-select"
-        disabled
-        value="all"
-        onChange={() => undefined}
-        title={t('shell.spaces-soon')}
-      >
-        <option value="all">{t('shell.all-spaces')}</option>
-      </select>
-    </label>
-  )
   const follow = (act: () => void) => () => {
     act()
     setMenu(false)
@@ -111,10 +97,8 @@ export function TeamShell(props: TeamShellProps): ReactNode {
               {props.org.env === undefined ? undefined : (
                 <span className="mw-env">{props.org.env}</span>
               )}
-              <Icon name="ChevronsUpDown" className="mw-slate" />
             </span>
           )}
-          <span className="mw-md-only">{spaces}</span>
           <div className="mw-header-end">
             <span
               className="mw-live"
@@ -144,7 +128,6 @@ export function TeamShell(props: TeamShellProps): ReactNode {
             </span>
           </div>
         </div>
-        <div className="mw-header-spaces">{spaces}</div>
       </header>
       <div className="mw-body">
         <nav

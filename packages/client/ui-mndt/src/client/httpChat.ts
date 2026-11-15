@@ -6,6 +6,7 @@
 import { ChatRefusal } from './chat.ts'
 import { readWithin } from './deadline.ts'
 import type {
+  MountedConnector,
   ChannelCreate,
   ChatAgent,
   ChatCard,
@@ -95,5 +96,17 @@ export function createHttpChat(
           { add: agentIds },
         )
       ).channel,
+    removeAgents: async (channelId, agentIds) =>
+      (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/agents`, { remove: agentIds })).channel,
+    setConnectors: async (channelId, servers) =>
+      (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/connectors`, { connectors: servers })).channel,
+    mounted: async () => {
+      const body = await get<{ connectors?: unknown }>('/connectors')
+      // A row of another shape is dropped: the page never offers what it cannot read.
+      return (Array.isArray(body.connectors) ? body.connectors : []).filter((row): row is MountedConnector => {
+        const c = row as Partial<MountedConnector> | null
+        return c !== null && typeof c === 'object' && typeof c.server === 'string' && typeof c.module === 'string' && typeof c.enabled === 'boolean'
+      })
+    },
   }
 }
