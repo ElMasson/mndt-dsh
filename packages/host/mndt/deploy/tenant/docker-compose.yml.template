@@ -69,6 +69,11 @@ services:
       - __DATA__/model.env
     environment:
       DSH_HOME: /state/home
+      # What an agent's commands may read: the system and the image, never /state
+      # (secrets, roles, other channels, sessions), /run (the shell's launch token,
+      # the gateway secret) or /root. They write in their channel's folder and /tmp
+      # only. Fails closed (sandbox-local): an unusable list refuses the command.
+      DSH_SANDBOX_READ_ROOTS: "/usr:/lib:/lib64:/bin:/sbin:/etc:/app:/opt/mndt-tools:/proc:/sys:/dev"
       # The organisation the team screen names, and its environment when declared.
       DSH_MNDT_ORG_SLUG: __SLUG__
       DSH_MNDT_ORG_NAME: "__ORG_NAME__"
