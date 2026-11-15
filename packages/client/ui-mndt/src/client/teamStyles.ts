@@ -380,10 +380,12 @@ export const TEAM_CSS = `
   color: var(--mw-charcoal); font-size: 13px; line-height: 18px; cursor: pointer;
   transition: background-color 160ms var(--mw-ease), color 160ms var(--mw-ease);
 }
-.mw-app .mw-pill:hover:not(:disabled) { background: var(--mw-surface); }
+.mw-app .mw-pill:hover:not([aria-disabled="true"]) { background: var(--mw-surface); }
 .mw-app .mw-pill[aria-pressed="true"] { border-color: var(--mw-charcoal); background: var(--mw-charcoal); color: #FFFFFF; }
-.mw-app .mw-pill:disabled { cursor: default; opacity: 0.55; }
-.mw-app .mw-pill[aria-pressed="true"]:disabled { opacity: 0.8; }
+.mw-app .mw-pill[aria-disabled="true"] { cursor: default; opacity: 0.55; }
+.mw-app .mw-pill[aria-disabled="true"]:hover { background: var(--mw-card); }
+.mw-app .mw-pill[aria-pressed="true"][aria-disabled="true"] { opacity: 0.8; background: var(--mw-charcoal); }
+@media (max-width: 767px) { .mw-app .mw-pill { min-height: 36px; padding: 6px 12px; } }
 .mw-pill-note { font-size: 11px; opacity: 0.8; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }

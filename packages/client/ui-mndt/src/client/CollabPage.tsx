@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
+import { ChatRefusal } from './chat.ts'
 import type { ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
@@ -171,12 +172,32 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // The first read of the channels decides the arrival: the person's own lane, where the team's
   // conversations with its agents start, rather than the legacy feed. Later reads change nothing.
   const arrived = useRef(false)
+  // The connectors mounted on the workbench, read with the channels for the team frame's pills.
+  // `absent`: the route is not served here, and nothing is marked « non branché » for that.
+  const [mounted, setMounted] = useState<readonly MountedConnector[] | 'absent' | undefined>(undefined)
+  const [mountedError, setMountedError] = useState<string | undefined>(undefined)
+  const loadMounted = useCallback(async () => {
+    if (team === undefined || chat?.mounted === undefined) return
+    try {
+      setMounted(await chat.mounted())
+      setMountedError(undefined)
+    } catch (failure) {
+      if (failure instanceof ChatRefusal && failure.status === 404) setMounted('absent')
+      else setMountedError(reasonOf(failure, tc))
+    }
+  }, [team, chat, tc])
+
+  // When the page last changed a channel: a read that left before it brings back an older state.
+  const lastWrite = useRef(0)
   const loadChat = useCallback(async () => {
     if (chat === undefined) return
     void loadCards()
+    void loadMounted()
+    const started = Date.now()
     try {
       const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
-      setChatChannels(channels)
+      // A read that left before the page's last change would undo what is shown of it.
+      if (started >= lastWrite.current) setChatChannels(channels)
       setChatAgents(agents)
       setChatError(undefined)
       if (!arrived.current) {
@@ -190,7 +211,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
-  }, [chat, tc, loadCards])
+  }, [chat, tc, loadCards, loadMounted])
 
   useEffect(() => {
     void loadChat()
@@ -239,6 +260,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
 
   /** @param next - the channel as the Host returned it. */
   const replaceChannel = (next: ChatChannel): void => {
+    lastWrite.current = Date.now()
     setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
   }
 
@@ -254,27 +276,31 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     }
   }, [chat, chatId, tc])
 
-  const setChannelConnectors = useCallback(async (servers: readonly string[]): Promise<string | undefined> => {
+  /**
+   * One click adds a connector to the open channel or takes it out. The API sets the whole list and
+   * has no concurrency check, so the list is built from the channel read again just before: a page
+   * not yet refreshed never gives back a connector someone else took out. A list holding a connector
+   * that is no longer mounted is refused whole by the API: the page says which one, in words.
+   */
+  const toggleChannelConnector = useCallback(async (server: string, inChannel: boolean): Promise<string | undefined> => {
     if (chat?.setConnectors === undefined || chatId === undefined) return undefined
     try {
-      replaceChannel(await chat.setConnectors(chatId, servers))
+      const fresh = (await chat.channels()).find(c => c.id === chatId)
+      if (fresh === undefined) return tc('channelGone')
+      replaceChannel(fresh)
+      const next = inChannel
+        ? [...new Set([...fresh.connectors, server])]
+        : fresh.connectors.filter(s => s !== server)
+      const served = mounted === undefined || mounted === 'absent' ? undefined : mounted
+      const on = new Set(served === undefined ? next : served.filter(m => m.enabled).map(m => m.server))
+      const stale = next.filter(s => !on.has(s))
+      if (stale.length > 0) return tc('connRemoveFirst', { names: stale.join(', ') })
+      replaceChannel(await chat.setConnectors(chatId, next))
       return undefined
     } catch (failure) {
       return reasonOf(failure, tc)
     }
-  }, [chat, chatId, tc])
-
-  // The connectors mounted on the workbench, read once for the team frame's pills.
-  const [mounted, setMounted] = useState<readonly MountedConnector[] | undefined>(undefined)
-  const [mountedError, setMountedError] = useState<string | undefined>(undefined)
-  useEffect(() => {
-    if (team === undefined || chat?.mounted === undefined) return undefined
-    let live = true
-    chat.mounted()
-      .then((rows) => { if (live) setMounted(rows) })
-      .catch((failure: unknown) => { if (live) setMountedError(reasonOf(failure, tc)) })
-    return () => { live = false }
-  }, [team, chat, tc])
+  }, [chat, chatId, tc, mounted])
 
   const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
     const outcome = await api.decide(id, decision, reason)
@@ -1087,11 +1113,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   </div>
                 )}
                 <TeamContext
+                  // One card per channel: a refusal met on a channel is not shown on the next one.
+                  key={current.id}
                   channel={current}
                   agents={chatAgents}
                   t={tc}
                   onToggleAgent={toggleChatAgent}
-                  onConnectors={setChannelConnectors}
+                  canRemoveAgents={chat.removeAgents !== undefined}
+                  onToggleConnector={toggleChannelConnector}
                   mounted={mounted}
                   mountedError={mountedError}
                   canManage={state.canWrite}

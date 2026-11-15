@@ -142,6 +142,14 @@ export const chatEn = {
   chipsReadOnly: 'Your role does not allow changing this channel.',
   agentsNoneDeclared: 'No agent is declared yet.',
   agentsOfChannel: 'Agents of this channel',
+  pillAddAgent: 'Add @{handle} to the channel',
+  pillRemoveAgent: 'Take @{handle} out of the channel',
+  pillAddConnector: 'Add {server} to the channel',
+  pillRemoveConnector: 'Take {server} out of the channel',
+  connRemoveFirst: 'Take out first {names}, no longer mounted.',
+  connNotServed: 'The list of mounted connectors is not served here: the channel\'s connectors cannot be changed from this page.',
+  channelGone: 'This channel can no longer be read.',
+  connNotMounted: 'This connector is not mounted: {names}.',
 } as const
 
 /** One copy key. */
@@ -284,6 +292,14 @@ export const chatFr: Record<ChatKey, string> = {
   chipsReadOnly: 'Votre rôle ne permet pas de modifier ce canal.',
   agentsNoneDeclared: 'Aucun agent n\'est encore déclaré.',
   agentsOfChannel: 'Agents de ce canal',
+  pillAddAgent: 'Ajouter @{handle} au canal',
+  pillRemoveAgent: 'Retirer @{handle} du canal',
+  pillAddConnector: 'Ajouter {server} au canal',
+  pillRemoveConnector: 'Retirer {server} du canal',
+  connRemoveFirst: 'Retirez d\'abord {names}, qui n\'est plus branché.',
+  connNotServed: 'La liste des connecteurs branchés n\'est pas servie ici : les connecteurs du canal ne se changent pas depuis cette page.',
+  channelGone: 'Ce canal n\'est plus lisible.',
+  connNotMounted: 'Ce connecteur n\'est pas branché : {names}.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

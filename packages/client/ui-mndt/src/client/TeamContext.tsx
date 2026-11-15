@@ -3,7 +3,7 @@
  * of sections, CANAL, MANDATS, AGENTS, MÉMOIRE, DOCUMENTS, MEMBRES. Only what the workspace serves
  * is said; a section whose route does not exist yet says so (« Bientôt »), it shows nothing made up.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatChannel, MountedConnector } from './chat.ts'
 import { euros } from './ChannelView.tsx'
@@ -38,10 +38,12 @@ export interface TeamContextProps {
   readonly onMemory: () => void
   /** Put an agent in the channel or take it out; resolves to the Host's reason when refused. */
   readonly onToggleAgent?: ((agentId: string, inChannel: boolean) => Promise<string | undefined>) | undefined
-  /** Set the channel's connectors (the whole list); resolves to the Host's reason when refused. */
-  readonly onConnectors?: ((servers: readonly string[]) => Promise<string | undefined>) | undefined
-  /** The connectors mounted on the workbench; undefined while unread or not served. */
-  readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether an agent can be taken out of the channel here (the face offers it). */
+  readonly canRemoveAgents?: boolean | undefined
+  /** Add a connector to the channel or take it out; resolves to the Host's reason when refused. */
+  readonly onToggleConnector?: ((server: string, inChannel: boolean) => Promise<string | undefined>) | undefined
+  /** The connectors mounted on the workbench; undefined while unread, `absent` where not served. */
+  readonly mounted?: readonly MountedConnector[] | 'absent' | undefined
   /** Why the mounted connectors could not be read, if they could not. */
   readonly mountedError?: string | undefined
   /** Whether the reader may change the channel's agents and connectors (workflows.write). */
@@ -59,27 +61,34 @@ export function TeamContext(props: TeamContextProps): ReactNode {
   // Every declared agent, as a pill: in the channel or not, one click puts it in or takes it out.
   const declared = props.agents.filter(a => a.retiredAt === undefined || channel.agents.includes(a.id))
   const canManage = props.canManage === true
-  const [busy, setBusy] = useState<string | undefined>(undefined)
+  // One change at a time: a ref, so a second click in the same frame cannot start another.
+  const busy = useRef(false)
+  const [pending, setPending] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
-  const toggleAgent = async (agentId: string): Promise<void> => {
-    if (busy !== undefined || props.onToggleAgent === undefined) return
-    setBusy(`agent:${agentId}`)
-    setError(await props.onToggleAgent(agentId, !channel.agents.includes(agentId)))
-    setBusy(undefined)
-  }
   const [connectorError, setConnectorError] = useState<string | undefined>(undefined)
-  const toggleConnector = async (server: string): Promise<void> => {
-    if (busy !== undefined || props.onConnectors === undefined) return
-    const next = channel.connectors.includes(server)
-      ? channel.connectors.filter(s => s !== server)
-      : [...channel.connectors, server]
-    setBusy(`connector:${server}`)
-    setConnectorError(await props.onConnectors(next))
-    setBusy(undefined)
+  const run = async (key: string, work: () => Promise<string | undefined>, say: (reason: string | undefined) => void): Promise<void> => {
+    if (busy.current) return
+    busy.current = true
+    setPending(key)
+    say(await work())
+    busy.current = false
+    setPending(undefined)
   }
+  const toggleAgent = (agentId: string): void => {
+    if (props.onToggleAgent === undefined) return
+    const on = !channel.agents.includes(agentId)
+    void run(`agent:${agentId}`, () => props.onToggleAgent?.(agentId, on) ?? Promise.resolve(undefined), setError)
+  }
+  const toggleConnector = (server: string): void => {
+    if (props.onToggleConnector === undefined) return
+    const on = !channel.connectors.includes(server)
+    void run(`connector:${server}`, () => props.onToggleConnector?.(server, on) ?? Promise.resolve(undefined), setConnectorError)
+  }
+  const served = props.mounted === undefined || props.mounted === 'absent' ? undefined : props.mounted
   // The pills: what is mounted, and what the channel holds that is no longer mounted.
-  const servers = [...new Set([...(props.mounted ?? []).map(m => m.server), ...channel.connectors])].sort()
-  const enabled = new Set((props.mounted ?? []).filter(m => m.enabled).map(m => m.server))
+  const servers = [...new Set([...(served ?? []).map(m => m.server), ...channel.connectors])].sort()
+  const enabled = new Set((served ?? []).filter(m => m.enabled).map(m => m.server))
+  const connectorsWritable = canManage && served !== undefined && props.onToggleConnector !== undefined
   return (
     <div className="mw-ctx" data-testid="context-panel">
       <Section title={t('ctxChannel')}>
@@ -93,14 +102,17 @@ export function TeamContext(props: TeamContextProps): ReactNode {
           <div className="mw-pills" role="group" aria-label={t('agentsOfChannel')} data-testid="agent-pills">
             {declared.map((a) => {
               const on = channel.agents.includes(a.id)
+              // Taking an agent out needs the face to offer it; otherwise its pill stays as it is.
+              const inert = !canManage || (on && props.canRemoveAgents !== true)
               return (
                 <button
                   key={a.id}
                   type="button"
                   className="mw-pill"
                   aria-pressed={on}
-                  disabled={!canManage || busy !== undefined}
-                  onClick={() => { void toggleAgent(a.id) }}
+                  aria-disabled={inert || pending !== undefined}
+                  aria-label={on ? t('pillRemoveAgent', { handle: a.handle }) : t('pillAddAgent', { handle: a.handle })}
+                  onClick={() => { if (!inert) toggleAgent(a.id) }}
                 >
                   @{a.handle}
                 </button>
@@ -127,26 +139,30 @@ export function TeamContext(props: TeamContextProps): ReactNode {
       <Section title={t('ctxConnectors')}>
         {props.mountedError !== undefined ? <p className="mw-ctx-muted" role="alert">{t('connUnreadable', { reason: props.mountedError })}</p> : undefined}
         {props.mounted === undefined && props.mountedError === undefined ? <p className="mw-ctx-muted">{t('docLoading')}</p> : undefined}
-        {props.mounted !== undefined && servers.length === 0 ? <p className="mw-ctx-muted">{t('connNone')}</p> : undefined}
+        {props.mounted === 'absent' ? <p className="mw-ctx-muted" data-testid="connectors-not-served">{t('connNotServed')}</p> : undefined}
+        {served !== undefined && servers.length === 0 ? <p className="mw-ctx-muted">{t('connNone')}</p> : undefined}
         {servers.length === 0 ? undefined : (
           <div className="mw-pills" role="group" aria-label={t('ctxConnectors')} data-testid="connector-pills">
             {servers.map((server) => {
               const on = channel.connectors.includes(server)
-              const off = !enabled.has(server)
+              const off = served !== undefined && !enabled.has(server)
+              // A connector that is not mounted cannot be added; one the channel still holds can be taken out.
+              const inert = !connectorsWritable || (off && !on)
+              const action = on ? t('pillRemoveConnector', { server }) : t('pillAddConnector', { server })
               return (
                 <button
                   key={server}
                   type="button"
                   className="mw-pill"
                   aria-pressed={on}
+                  aria-disabled={inert || pending !== undefined}
+                  aria-label={off ? `${action}, ${t('connOff')}` : action}
                   data-off={off ? 'true' : undefined}
-                  // A connector that is not mounted cannot be added; one the channel still holds can be taken out.
-                  disabled={!canManage || busy !== undefined || (off && !on)}
                   title={off ? t('connOff') : undefined}
-                  onClick={() => { void toggleConnector(server) }}
+                  onClick={() => { if (!inert) toggleConnector(server) }}
                 >
                   {server}
-                  {off ? <span className="mw-pill-note">{t('connOff')}</span> : undefined}
+                  {off ? <span className="mw-pill-note" aria-hidden="true">{t('connOff')}</span> : undefined}
                 </button>
               )
             })}
