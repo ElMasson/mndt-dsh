@@ -431,6 +431,12 @@ describe('channels, mentions and agent turns', () => {
     const plain = await b.api({ method: 'POST', path: '/approvals', ...asOwner,
       body: JSON.stringify({ kind: 'send-email', title: 'Hors tour', payload: {}, requestedByAgent: { id: 'agt_forged', handle: 'forged' } }) })
     expect((plain.body as { approval: object }).approval).not.toHaveProperty('requestedByAgent')
+    // A run that is not the running turn (a forged or stale x-mndt-run) files nothing in the thread.
+    const wrongRun = await b.api({ method: 'POST', path: '/approvals', ...asOwner, headers: { 'x-mndt-run': 'trn_not_this_one' },
+      body: JSON.stringify({ kind: 'send-email', title: 'Autre tour', payload: {} }) })
+    const stray = (wrongRun.body as { approval: Record<string, unknown> }).approval
+    expect(stray).not.toHaveProperty('requestedByAgent')
+    expect(stray).not.toHaveProperty('channelId')
     release()
     await b.turns.settled()
   })

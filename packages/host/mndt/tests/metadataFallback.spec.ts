@@ -24,12 +24,11 @@ function bench() {
 }
 
 describe('one spelling of a person: plain ASCII everywhere', { timeout: 30_000 }, () => {
-  it('refuses a role file whose subject is not plain ASCII, with the row', async () => {
+  it('sets aside a row whose subject is not plain ASCII, with the row, and serves the others', async () => {
     const path = join(mkdtempSync(join(tmpdir(), 'grants-')), 'grants.json')
     writeFileSync(path, JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: kelvin, role: 'viewer' }] }))
     const table = await fileGrants(path).grants()
-    expect(table.ok).toBe(false)
-    expect(!table.ok && table.reason).toContain('row 2: the subject is not a plain ASCII e-mail')
+    expect(table).toEqual({ ok: true, grants: [{ subject: owner, role: 'owner' }], skipped: [{ row: 2, reason: 'the subject is not a plain ASCII e-mail' }] })
   })
 
   it('refuses a channel member who is not plain ASCII, at creation and when added', async () => {
@@ -115,10 +114,63 @@ describe('the counts of /metrics on a team instance', () => {
     expect(ofAdmin.missions.done).toBe(0)
     expect(ofAdmin.briefs).toBe(0)
     expect(ofAdmin.automationsEnabled).toBe(0)
+    // The owner's run left events: their time is not a member's to see.
+    expect((ofOwner as unknown as { lastEventAt: string | null }).lastEventAt).not.toBeNull()
+    expect((ofAdmin as unknown as { lastEventAt: string | null }).lastEventAt).toBeNull()
+  })
+
+  it('counts only the mandates and the pending cards the reader may read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metrics-'))
+    const operator = 'operateur@datanalysis.re'
+    writeFileSync(join(dir, 'grants.json'), JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: viewer, role: 'admin' }, { subject: operator, role: 'operator' }] }))
+    const store = new MemoryStore()
+    const state = await store.load()
+    await store.save({ ...state, mandates: [{
+      id: 'mnd_private', delegant: owner, delegataire: viewer, purpose: 'p', connectors: [],
+      missionKinds: ['briefing'], dailyCap: 1, expiresOn: '2099-01-01', state: 'active', createdAt: '2026-11-01T00:00:00Z',
+    }] } as typeof state)
+    const api = createMndtApi({
+      service: new WorkbenchService({ store }),
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'secret' },
+      grants: fileGrants(join(dir, 'grants.json')),
+    })
+    const as = (who: string) => ({ 'x-forwarded-email': who, 'x-mndt-gateway': 'secret' })
+    // A private channel of the owner, and a card asked in it.
+    const channel = await api({ method: 'POST', path: '/channels', headers: as(owner), body: JSON.stringify({ name: 'direction', private: true }) })
+    const channelId = (channel.body as { id: string }).id
+    await api({ method: 'POST', path: '/approvals', headers: as(owner), body: JSON.stringify({ kind: 'publish', title: 'Carte', channelId }) })
+    type Metrics = { activeMandates: number; approvalsPending: number; lastEventAt: string | null }
+    const of = async (who: string) => (await api({ method: 'GET', path: '/metrics', headers: as(who) })).body as Metrics
+    expect((await of(owner)).activeMandates).toBe(1)
+    expect((await of(viewer)).activeMandates).toBe(1) // a party, and an admin
+    expect((await of(operator)).activeMandates).toBe(0)
+    expect((await of(owner)).approvalsPending).toBe(1)
+    expect((await of(operator)).approvalsPending).toBe(0)
+    expect((await of(operator)).lastEventAt).toBeNull()
   })
 })
 
 describe('part 2: names and parties', () => {
+  it('retires, on load, a mandate without its parties or to oneself once lower-cased, and never crashes', async () => {
+    const store = new MemoryStore()
+    const state = await store.load()
+    const base = { purpose: 'p', connectors: [], missionKinds: ['briefing'], dailyCap: 1, expiresOn: '2099-01-01', state: 'active', createdAt: '2026-11-01T00:00:00Z' }
+    await store.save({ ...state, mandates: [
+      { ...base, id: 'mnd_self', delegant: 'Duke@Datanalysis.re', delegataire: 'duke@datanalysis.re' },
+      { ...base, id: 'mnd_half', delegant: 'duke@datanalysis.re' },
+      { ...base, id: 'mnd_ok', delegant: 'duke@datanalysis.re', delegataire: 'smarion@datanalysis.re' },
+    ] } as unknown as typeof state)
+    const mandates = await new WorkbenchService({ store }).mandates()
+    expect(mandates.map(mandate => [mandate.id, mandate.state])).toEqual([['mnd_self', 'retired'], ['mnd_half', 'retired'], ['mnd_ok', 'active']])
+  })
+
+  it('refuses a draft to oneself written with other capitals', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    await expect(service.createMandate({ delegant: 'Duke@Datanalysis.re', delegataire: 'duke@datanalysis.re', purpose: 'p',
+      connectors: ['office365'], missionKinds: ['briefing'], dailyCap: 1, expiresOn: '2099-01-01' } as never)).rejects.toThrow('cannot delegate to themselves')
+  })
+
   it('a taken channel name is refused in neutral words: no « exists » about a channel one is not in', async () => {
     const { api, as } = bench()
     await api({ method: 'POST', path: '/channels', ...as('tok-owner'), body: JSON.stringify({ name: 'direction' }) })
@@ -161,6 +213,16 @@ describe('a person without a role on a team instance', () => {
       expect(answer.status, route).toBe(403)
     }
     expect((await api({ method: 'POST', path: '/channels', headers: as(stranger), body: JSON.stringify({ title: 'X' }) })).status).toBe(403)
+    // Only /me and /org exactly: no spelling of them opens anything else, and HEAD is refused as GET is.
+    for (const route of ['/ME', '//me', '/me/../channels', '/channels/']) {
+      expect((await api({ method: 'GET', path: route, headers: as(stranger) })).status, route).toBe(403)
+    }
+    // A final / is the same route: it serves exactly what /me and /org serve, nothing more.
+    const me = (await api({ method: 'GET', path: '/me', headers: as(stranger) })).body
+    expect((await api({ method: 'GET', path: '/me/', headers: as(stranger) })).body).toEqual(me)
+    for (const route of ['/channels', '/state', '/metrics']) {
+      expect((await api({ method: 'HEAD', path: route, headers: as(stranger) })).status, `HEAD ${route}`).toBe(403)
+    }
     writeFileSync(path, JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: stranger, role: 'viewer' }] }))
     expect((await api({ method: 'GET', path: '/channels', headers: as(stranger) })).status).toBe(200)
   })

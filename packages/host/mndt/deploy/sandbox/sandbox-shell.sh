@@ -30,6 +30,10 @@ else
     cp -r "$seed/." "$home/home/profiles/web/"
     echo "profil web copie pour $identity"
   fi
+  # Not declared a solo workstation (DSH_MNDT_SOLO_WORKSTATION): these
+  # per-person shells sit on the shared mndt-front_front network, and the flag
+  # would give their missions the engine's whole composition instead of the team
+  # mission policy. Consequence: their workstation Remote stays closed (#75).
   docker run -d --name "$name" \
     --network mndt-front_front \
     --restart unless-stopped \
@@ -41,7 +45,6 @@ else
     --cpus 1 \
     -e DSH_HOME=/state/home \
     -e DSH_MNDT_IDENTITY="$identity" \
-    -e DSH_MNDT_SOLO_WORKSTATION=1 \
     -e DSH_MNDT_WEB_TOKEN_FILE=/state/web-token \
     -e PUBLIC_URL=https://mndt.duke-analytics.com/ \
     -e TRUSTED_HOST=mndt.duke-analytics.com \

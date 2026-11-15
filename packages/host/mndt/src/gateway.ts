@@ -176,7 +176,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
       ? authorityGrants({ baseUrl, token })
       : grantsFile !== undefined && grantsFile !== ''
-        ? fileGrants(grantsFile)
+        ? fileGrants(grantsFile, (message) => { ctx.logger.warn(message) })
         : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleAutomations(ctx)

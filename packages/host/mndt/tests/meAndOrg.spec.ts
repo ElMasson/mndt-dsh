@@ -31,6 +31,15 @@ const get = async (api: ReturnType<typeof bench>, token: string, path: string) =
 }
 
 describe('who the person is, for the team screen', () => {
+  it('/me tells the owner, and only who may change the roles, which rows of the role file are set aside', async () => {
+    const api = bench([{ subject: owner, role: 'owner' }, { subject: viewer, role: 'viewer' }, { subject: 'x@datanalysis.re', role: 'boss' }])
+    const skipped = [{ row: 3, reason: 'a subject (e-mail) and a role among owner, admin, operator, viewer are required' }]
+    expect((await get(api, 'tok-owner', '/me')).body.grantsSkipped).toEqual(skipped)
+    expect((await get(api, 'tok-viewer', '/me')).body.grantsSkipped).toBeUndefined()
+    // The others are still served: one bad row cuts nobody off.
+    expect((await get(api, 'tok-viewer', '/people')).status).toBe(200)
+  })
+
   it('/me gives the e-mail, the role and the name the role file declares', async () => {
     const api = bench()
     expect((await get(api, 'tok-owner', '/me')).body).toEqual({ you: owner, name: 'Stéphane Masson', role: 'owner', shell: true })
@@ -51,11 +60,14 @@ describe('who the person is, for the team screen', () => {
     expect((await get(api, 'tok-stranger', '/people')).status).toBe(403)
   })
 
-  it('refuses a role file whose name is not a short text, and a name never grants anything', async () => {
-    const api = bench([{ subject: owner, role: 'owner', name: 42 }])
-    expect((await get(api, 'tok-owner', '/people')).status).toBe(503)
+  it('sets aside a row whose name is not a short text, and a name never grants anything', async () => {
+    // The owner's own row is invalid: set aside, the owner has no role (403), never a 503 for everyone.
+    const api = bench([{ subject: owner, role: 'owner', name: 42 }, { subject: viewer, role: 'viewer' }])
+    expect((await get(api, 'tok-owner', '/people')).status).toBe(403)
+    expect((await get(api, 'tok-viewer', '/people')).status).toBe(200)
     const named = bench([{ subject: owner, role: 'owner' }, { subject: stranger, name: 'Without a role' }])
-    expect((await get(named, 'tok-owner', '/people')).status).toBe(503)
+    expect((await get(named, 'tok-owner', '/people')).status).toBe(200)
+    expect((await get(named, 'tok-stranger', '/people')).status).toBe(403)
   })
 })
 

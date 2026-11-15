@@ -162,11 +162,16 @@ export class WorkbenchService {
       // Older state files predate mandates; they read as no mandates, never as a crash.
       // Its parties read as the lower-case e-mail the proxy proves, as channel
       // members do: a mandate written with capitals before #60 keeps working.
-      const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map(mandate => ({
-        ...mandate,
-        delegant: mandate.delegant.trim().toLowerCase(),
-        delegataire: mandate.delegataire.trim().toLowerCase(),
-      }))
+      // A row without its parties, or one whose parties are the same person once
+      // lower-cased (A@x and a@x, which the draft check now refuses), is kept for
+      // the record but retired: it authorises nothing, and a load never crashes on it.
+      const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map((mandate) => {
+        const party = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
+        const delegant = party(mandate.delegant)
+        const delegataire = party(mandate.delegataire)
+        const inert = delegant === '' || delegataire === '' || delegant === delegataire
+        return { ...mandate, delegant, delegataire, ...(inert ? { state: 'retired' as const } : {}) }
+      })
       // One spelling of a person: members written with capitals before identities were normalised
       // read as the lower-case e-mail the proxy proves, so nobody loses a channel.
       const channels = loaded.channels?.map(channel => ({
@@ -611,8 +616,8 @@ export class WorkbenchService {
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
     const mandate: Mandate = {
       id: this.#id('mnd'),
-      delegant: draft.delegant.trim(),
-      delegataire: draft.delegataire.trim(),
+      delegant: draft.delegant.trim().toLowerCase(),
+      delegataire: draft.delegataire.trim().toLowerCase(),
       purpose: draft.purpose.trim(),
       connectors: [...draft.connectors],
       missionKinds: [...draft.missionKinds],

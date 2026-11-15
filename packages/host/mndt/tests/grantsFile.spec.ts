@@ -25,19 +25,44 @@ describe('the tenant role file', () => {
     expect(await source.grants()).toEqual({ ok: true, grants: [{ subject: owner, role: 'owner' }, { subject: member, role: 'operator' }] })
   })
 
-  it('refuses the whole table, with its reason, rather than read part of it', async () => {
+  it('refuses a file it cannot read, with its reason, after reading it twice', async () => {
     const missing = await fileGrants('/nonexistent/grants.json').grants()
     expect(missing).toEqual({ ok: false, reason: 'the role file /nonexistent/grants.json is missing' })
     const broken = roleFile([])
     writeFileSync(broken, '{ grants: ')
     expect((await fileGrants(broken).grants()).ok).toBe(false)
-    const unknownRole = await fileGrants(roleFile([{ subject: owner, role: 'owner' }, { subject: member, role: 'boss' }])).grants()
-    expect(!unknownRole.ok && unknownRole.reason.includes('row 2')).toBe(true)
-    const noSubject = await fileGrants(roleFile([{ role: 'admin' }])).grants()
-    expect(noSubject.ok).toBe(false)
     writeFileSync(broken, '{"other": []}')
     const noList = await fileGrants(broken).grants()
     expect(!noList.ok && noList.reason.includes('no "grants" list')).toBe(true)
+  })
+
+  it('reads a file caught in the middle of a rewrite on its second read', async () => {
+    const path = roleFile([])
+    writeFileSync(path, '{ "grants": [ { "subject": "duke@datan')
+    setTimeout(() => { writeFileSync(path, JSON.stringify({ grants: [{ subject: owner, role: 'owner' }] })) }, 10)
+    expect(await fileGrants(path).grants()).toEqual({ ok: true, grants: [{ subject: owner, role: 'owner' }] })
+  })
+
+  it('sets an invalid row aside, says which and why once, and serves the others', async () => {
+    const warned: string[] = []
+    const path = roleFile([{ subject: owner, role: 'owner' }, { subject: member, role: 'boss' }, { role: 'admin' },
+      { subject: 'du\u212Ae@datanalysis.re', role: 'admin' }, { subject: 'x@datanalysis.re', role: 'viewer', name: 'a\u2028b' },
+      { subject: 'jadmin@datanalysis.re', role: 'admin' }])
+    const source = fileGrants(path, (message) => { warned.push(message) })
+    const table = await source.grants()
+    expect(table).toEqual({
+      ok: true,
+      grants: [{ subject: owner, role: 'owner' }, { subject: 'jadmin@datanalysis.re', role: 'admin' }],
+      skipped: [
+        { row: 2, reason: 'a subject (e-mail) and a role among owner, admin, operator, viewer are required' },
+        { row: 3, reason: 'a subject (e-mail) and a role among owner, admin, operator, viewer are required' },
+        { row: 4, reason: 'the subject is not a plain ASCII e-mail' },
+        { row: 5, reason: 'a name is one line of 80 characters at most, without control characters' },
+      ],
+    })
+    await source.grants()
+    expect(warned).toHaveLength(4) // once per change of the file, not per request
+    expect(warned[0]).toContain('row 2, is set aside and grants nothing')
   })
 
   it('gives the team its rights through the API, and a change applies without a restart', async () => {

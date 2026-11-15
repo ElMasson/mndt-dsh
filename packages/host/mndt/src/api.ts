@@ -20,6 +20,7 @@ import type {
 import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
+import { isPlainAscii } from './core/address.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -444,7 +445,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // a second owner of the role file does not get it. Solo: the person at the
         // workstation has it.
         const shell = !teamInstance || request.headers?.['x-mndt-shell'] === '1'
-        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell })
+        // The rows of the role file set aside (#75): told to whoever may change the
+        // roles (owners and admins, rights.write), and to the tenant's owner as the
+        // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
+        const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
+          && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
+          ? table.skipped
+          : undefined
+        return respond(200, {
+          you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell,
+          ...(skipped === undefined ? {} : { grantsSkipped: skipped }),
+        })
       }
 
       if (request.method === 'GET' && path === '/org') {
@@ -496,7 +507,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           automationsEnabled = items.filter(item => item.enabled).length
         }
         const todayDate = today()
-        const activeMandates = snapshot.mandates.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        // The mandates and the last event the reader may read, as /mandates and
+        // /events filter them: a count or a timestamp of what they cannot see tells
+        // the activity of private channels and of the owner's missions (#75 review).
+        let mandatesSeen = snapshot.mandates
+        if (reader !== undefined) {
+          const table = await grants.grants()
+          const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
+          mandatesSeen = mandatesSeen.filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+        }
+        const activeMandates = mandatesSeen.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        const lastEvent = reader === undefined
+          ? snapshot.events.at(-1)
+          : snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
         return respond(200, {
           up: 1,
           uptimeSeconds: Math.round(process.uptime()),
@@ -506,7 +529,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           oldestApprovalHours: ages.length === 0 ? 0 : Math.round(Math.max(...ages)),
           activeMandates,
           automationsEnabled,
-          lastEventAt: snapshot.events.at(-1)?.at ?? null,
+          lastEventAt: lastEvent?.at ?? null,
         })
       }
       if (request.method === 'GET' && path === '/state') {
@@ -1183,6 +1206,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(503, { error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
+        if (typeof input.subject === 'string' && input.subject.trim() !== '' && !isPlainAscii(input.subject)) {
+          return respond(400, { error: 'subject must be a plain ASCII e-mail' })
+        }
         const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }
