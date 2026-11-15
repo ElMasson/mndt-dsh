@@ -21,8 +21,9 @@ const GROUP_MS = 5 * 60 * 1000
 
 /** @param email - an address. @param names - the team's names. @returns the name, else the part before @. */
 export function shownName(email: string, names: Readonly<Record<string, string>> | undefined): string {
-  const named = names?.[email.toLowerCase()]
-  if (named !== undefined) return named
+  // Only the team's own entries: an address such as « constructor@… » never reads a prototype member.
+  const key = email.toLowerCase()
+  if (names !== undefined && Object.hasOwn(names, key)) return names[key] ?? email
   const at = email.indexOf('@')
   return at > 0 ? email.slice(0, at) : email
 }
@@ -140,7 +141,7 @@ export function WebCard(props: {
         <p className="mw-card-title">{card.title}</p>
         <StatusBadge state={card.state} t={t} />
       </div>
-      <p className="mw-card-meta">{t('webAskedBy', { name: card.requestedBy })} · {when(card.requestedAt)}</p>
+      <p className="mw-card-meta">{t('webAskedBy', { name: shownName(card.requestedBy, props.names) })} · {when(card.requestedAt)}</p>
       {state !== 'pending' ? (
         <div className="mw-decided" data-testid="chat-card-decision">
           <p>
@@ -199,27 +200,28 @@ export function WebMessage(props: {
   const waiting = props.cards.filter(card => (card.state ?? 'pending') === 'pending').length
   return (
     <article className="mw-message" data-author={m.author.kind} data-testid="chat-message" data-id={m.id}>
+      {/* Deleting one's own message stays possible on a joined row, which has no header. */}
+      {props.onRemove === undefined || m.deletedAt !== undefined ? undefined : confirming ? (
+        <span className="mw-message-actions">
+          <button
+            type="button"
+            className="mw-text-button"
+            data-tone="danger"
+            onClick={() => { void props.onRemove?.().then((refused) => { setError(refused); setConfirming(false) }) }}
+          >
+            {t('confirmDelete')}
+          </button>
+          <button type="button" className="mw-text-button" onClick={() => { setConfirming(false) }}>{t('cancel')}</button>
+        </span>
+      ) : (
+        <button type="button" className="mw-text-button mw-message-actions" onClick={() => { setConfirming(true) }}>{t('delete')}</button>
+      )}
       {!props.header ? undefined : (
         <div className="mw-message-head">
           <Icon name={m.author.kind === 'agent' ? 'Bot' : m.author.kind === 'human' ? 'User' : 'ShieldCheck'} className="mw-slate" />
           <span className="mw-message-name">{name}</span>
           {m.author.kind === 'agent' ? <span className="mw-chip mw-chip-strong">{t('webAgent')}</span> : undefined}
           <span className="mw-message-time">{clock(m.createdAt)}</span>
-          {props.onRemove === undefined || m.deletedAt !== undefined ? undefined : confirming ? (
-            <span className="mw-message-actions">
-              <button
-                type="button"
-                className="mw-text-button"
-                data-tone="danger"
-                onClick={() => { void props.onRemove?.().then((refused) => { setError(refused); setConfirming(false) }) }}
-              >
-                {t('confirmDelete')}
-              </button>
-              <button type="button" className="mw-text-button" onClick={() => { setConfirming(false) }}>{t('cancel')}</button>
-            </span>
-          ) : (
-            <button type="button" className="mw-text-button mw-message-actions" onClick={() => { setConfirming(true) }}>{t('delete')}</button>
-          )}
         </div>
       )}
       {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}

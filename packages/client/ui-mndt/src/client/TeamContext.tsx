@@ -9,6 +9,7 @@ import type { ChatAgent, ChatChannel } from './chat.ts'
 import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
+import { shownName } from './TeamFeed.tsx'
 
 /** @param props - its title and content. @returns one section of the card. */
 function Section(props: { readonly title: string; readonly children: ReactNode }): ReactNode {
@@ -102,7 +103,7 @@ export function TeamContext(props: TeamContextProps): ReactNode {
           {channel.members.map(email => (
             <li key={email} className="mw-ctx-member" title={email}>
               <Icon name="User" className="mw-ctx-icon" />
-              <span className="mw-ctx-strong">{props.names?.[email.toLowerCase()] ?? nameOf(email)}</span>
+              <span className="mw-ctx-strong">{shownName(email, props.names)}</span>
             </li>
           ))}
         </ul>

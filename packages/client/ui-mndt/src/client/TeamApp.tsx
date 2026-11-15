@@ -107,7 +107,8 @@ export async function namesOf(fetcher: Fetcher = (input, init) => fetch(input, i
     const response = await read(fetcher, '/people')
     if (!response.ok) return {}
     const body = await response.json() as { people?: unknown }
-    const names: Record<string, string> = {}
+    // No prototype: an address is only ever a key of the team's own names.
+    const names = Object.create(null) as Record<string, string>
     for (const row of Array.isArray(body.people) ? body.people as Partial<Person>[] : []) {
       if (typeof row.email === 'string' && typeof row.name === 'string' && row.name.trim() !== '') names[row.email.toLowerCase()] = row.name
     }

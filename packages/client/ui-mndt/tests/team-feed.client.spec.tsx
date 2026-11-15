@@ -188,3 +188,36 @@ describe('a card in the feed', () => {
     expect(screen.queryByRole('button')).toBeNull()
   })
 })
+
+describe('the feed, after review', () => {
+  it('a joined row, without its header, can still be deleted by its author', () => {
+    const onRemove = vi.fn(async () => undefined)
+    render(
+      <WebMessage
+        message={message()}
+        header={false}
+        agents={agents}
+        cards={[]}
+        canDecide
+        onDecide={vi.fn()}
+        onRemove={onRemove}
+        t={chatFrench}
+      />,
+    )
+    expect(screen.getByTestId('chat-message').querySelector('.mw-message-head')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Supprimer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer la suppression' }))
+    expect(onRemove).toHaveBeenCalledOnce()
+  })
+
+  it('names who asked a card as it names who decided it', () => {
+    render(<WebCard card={card({ requestedBy: 'smarion@datanalysis.re' })} canDecide={false} onDecide={vi.fn()} names={{ 'smarion@datanalysis.re': 'Sophie Marion' }} t={chatFrench} />)
+    expect(screen.getByText(/^Demandée par Sophie Marion · /u)).toBeTruthy()
+  })
+
+  it('never reads a name from the prototype of the names', () => {
+    expect(shownName('constructor@datanalysis.re', {})).toBe('constructor')
+    // A plain object holds « constructor » on its prototype: it must not come out as a name.
+    expect(shownName('constructor', {})).toBe('constructor')
+  })
+})
