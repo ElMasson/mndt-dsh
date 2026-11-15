@@ -47,13 +47,30 @@ def refuse(reason: str) -> int:
     return 1
 
 
+# What JavaScript's String.prototype.trim removes (WhiteSpace and LineTerminator):
+# Python's str.strip differs on U+FEFF (JS removes it) and U+0085 (JS keeps it).
+JS_TRIM = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
+def js_trim(value: str) -> str:
+    """@param value - a text. @returns it trimmed as the API trims it (JavaScript trim)."""
+    return value.strip(JS_TRIM)
+
+
+def has_lone_surrogate(value: str) -> bool:
+    """@param value - a text from JSON. @returns whether it holds a lone surrogate, which no file can encode."""
+    return any(0xD800 <= ord(c) <= 0xDFFF for c in value)
+
+
 def shown_name(value: object) -> bool:
     """As the API's isShownName (src/grants.ts): trimmed, 1 to 80 UTF-16 units,
     no control character nor line/paragraph separator (U+2028, U+2029).
     @param value - a row's name. @returns whether it can be shown as it is."""
     if not isinstance(value, str):
         return False
-    shown = value.strip()
+    if has_lone_surrogate(value):
+        return False
+    shown = js_trim(value)
     return (
         shown != ""
         and len(shown.encode("utf-16-le")) // 2 <= 80
@@ -66,7 +83,7 @@ def main(argv: list[str]) -> int:
     owner = ""
     if "--owner" in args:
         at = args.index("--owner")
-        owner = args[at + 1].strip() if at + 1 < len(args) else ""
+        owner = js_trim(args[at + 1]) if at + 1 < len(args) else ""
         del args[at : at + 2]
     if len(args) != 3 or owner == "":
         print(
@@ -75,7 +92,9 @@ def main(argv: list[str]) -> int:
         )
         return 2
     grants_path, output, domains_arg = args
-    unprivileged = os.environ.get("MNDT_EMAILS_UNPRIVILEGED") == "1"
+    # The test switch never applies to root: a forgotten MNDT_EMAILS_UNPRIVILEGED
+    # in a root shell would leave the list root:root, unreadable by the proxy.
+    unprivileged = os.geteuid() != 0 and os.environ.get("MNDT_EMAILS_UNPRIVILEGED") == "1"
     if os.geteuid() != 0 and not unprivileged:
         return refuse(
             "run as root: the list must belong to the proxy (65532), or the proxy cannot read it and stops at its next start"
@@ -96,26 +115,30 @@ def main(argv: list[str]) -> int:
     for index, row in enumerate(rows, start=1):
         subject = row.get("subject") if isinstance(row, dict) else None
         role = row.get("role") if isinstance(row, dict) else None
-        if not isinstance(subject, str) or subject.strip() == "" or role not in ROLES:
+        if isinstance(subject, str) and has_lone_surrogate(subject):
+            return refuse(f"{grants_path}, row {index}: the subject is not valid text")
+        if not isinstance(subject, str) or js_trim(subject) == "" or role not in ROLES:
             return refuse(
                 f"{grants_path}, row {index}: a subject (e-mail) and a role among owner, admin, operator, viewer are required"
             )
         # Plain ASCII before lower-casing: lower() folds a few Unicode characters
         # onto ASCII ones (the Kelvin sign onto k), as the API refuses (#75).
-        if not PRINTABLE.match(subject.strip()):
+        if not PRINTABLE.match(js_trim(subject)):
             return refuse(f"{grants_path}, row {index}: the subject is not a plain ASCII e-mail")
         if "name" in row and not shown_name(row["name"]):
             return refuse(
                 f"{grants_path}, row {index}: a name is one line of 80 characters at most, without control characters"
             )
-        address = subject.strip().lower()
+        address = js_trim(subject).lower()
         if not ADDRESS.match(address):
             return refuse(f"{grants_path}, row {index}: {address} is not an e-mail address")
         if address.rsplit("@", 1)[1] not in domains:
             return refuse(
                 f"{grants_path}, row {index}: {address} is outside {','.join(sorted(domains))}; "
-                "pass --email-domains with EVERY domain of the team, datanalysis.re included "
-                "(until then the proxy keeps its previous configuration)"
+                f"pass --email-domains with EVERY domain of the team, {','.join(sorted(domains))} included, "
+                f"and {address.rsplit('@', 1)[1]} if it belongs to the team. Until a run succeeds the proxy "
+                "keeps its previous configuration: if that one still names email_domains, the whole "
+                "domain can still sign in"
             )
         if address not in admitted:
             admitted.append(address)
@@ -125,11 +148,24 @@ def main(argv: list[str]) -> int:
     fd, temporary = tempfile.mkstemp(dir=folder, prefix=".authenticated_emails.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            # oauth2-proxy reads one address per line; this line matches no address.
+            handle.write("# generated from grants.json by render-authenticated-emails.py: never edit by hand\n")
             handle.write("".join(f"{address}\n" for address in admitted))
         os.chmod(temporary, 0o640)
         if not unprivileged:
             os.chown(temporary, PROXY_UID, PROXY_UID)
         os.replace(temporary, output)
+        if not unprivileged:
+            # Proved, not assumed: a file system that ignores chown would leave a list
+            # the proxy cannot read at its next start.
+            st = os.stat(output)
+            if st.st_uid != PROXY_UID or st.st_gid != PROXY_UID or (st.st_mode & 0o777) != 0o640:
+                print(
+                    f"refused: {output} is {st.st_uid}:{st.st_gid} {oct(st.st_mode & 0o777)}, not {PROXY_UID}:{PROXY_UID} 0o640; "
+                    "the proxy could not read it at its next start: fix it before any restart",
+                    file=sys.stderr,
+                )
+                return 1
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

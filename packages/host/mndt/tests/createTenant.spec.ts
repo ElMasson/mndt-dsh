@@ -6,6 +6,9 @@ import { join } from 'node:path'
 import { load } from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
+/** The first line of every sign-in list written: it matches no address. */
+const LIST_HEADER = '# generated from grants.json by render-authenticated-emails.py: never edit by hand\n'
+
 const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
 
 /** @returns a root holding the Entra configuration the script reads. */
@@ -34,7 +37,7 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     // Who may sign in: the role table's addresses only, never a whole domain.
     expect(oauth).toContain('authenticated_emails_file = "/etc/mndt-front/authenticated_emails"')
     expect(oauth).not.toMatch(/^email_domains/m)
-    expect(readFileSync(join(root, 'etc/mndt/datanalysis/authenticated_emails'), 'utf8')).toBe('duke@datanalysis.re\n')
+    expect(readFileSync(join(root, 'etc/mndt/datanalysis/authenticated_emails'), 'utf8')).toBe(`${LIST_HEADER}duke@datanalysis.re\n`)
     expect(compose).toContain('Host(`equipe.datanalysis.re`)')
     expect(compose).toContain('DSH_MNDT_IDENTITY: duke@datanalysis.re')
     expect(compose).toContain('/data/mndt/datanalysis/live:/state')

@@ -100,24 +100,40 @@ check "the proxy is still running" yes "$(running)"
 bob=$(sign_in bob@datanalysis.re "$work/bob2")
 alice_new=$(sign_in alice@datanalysis.re "$work/alice2")
 alice_old=$(with_cookie "$work/alice")
-[ "$bob" = 200 ] && [ "$alice_new" = 403 ] && note "renamed list applied without a restart: bob $bob, a new sign-in of alice $alice_new" \
-  || note "renamed list NOT applied without a restart: bob $bob, a new sign-in of alice $alice_new (a restart of the proxy is needed after each change)"
-note "alice's cookie issued under the old list, after her removal: $alice_old (200 = served until the cookie expires, 8 h at most; 403 = rechecked)"
+check "the renamed list admits bob without a restart" 200 "$bob"
+check "the renamed list refuses a new sign-in of alice" 403 "$alice_new"
+check "alice's cookie, issued before her removal, is rechecked" 403 "$alice_old"
 docker logs $P-proxy 2>&1 | grep -i "authenticated\|reload\|watch" | tail -3 | sed 's/^/    log: /'
 
 echo "== 3. the list made unreadable while the proxy runs"
 printf 'alice@datanalysis.re\n' > "$work/conf/.authenticated_emails.new"; chmod 600 "$work/conf/.authenticated_emails.new"
 mv -f "$work/conf/.authenticated_emails.new" "$work/conf/authenticated_emails"
 sleep 5
-note "after an unreadable list (mode 600, another owner than the proxy's 65532): running $(running), alice $(sign_in alice@datanalysis.re "$work/alice3"), bob $(sign_in bob@datanalysis.re "$work/bob3")"
+check "an unreadable list while running: the proxy keeps running" yes "$(running)"
+check "an unreadable list while running: the last good list stays (bob)" 200 "$(sign_in bob@datanalysis.re "$work/bob3")"
+check "an unreadable list while running: the last good list stays (alice refused)" 403 "$(sign_in alice@datanalysis.re "$work/alice3")"
 docker logs $P-proxy 2>&1 | tail -3 | sed 's/^/    log: /'
 
 echo "== 4. the list unreadable, then missing, at start"
 start_proxy; started=$?
-note "start with an unreadable list: $( [ $started = 0 ] && echo "serves (alice $(sign_in alice@datanalysis.re "$work/alice4"))" || echo "does not start: $(docker logs $P-proxy 2>&1 | tail -1)")"
+check "an unreadable list at start: the proxy does not start" 1 "$started"
+note "$(docker logs $P-proxy 2>&1 | tail -1)"
 rm -f "$work/conf/authenticated_emails"
 start_proxy; started=$?
-note "start with a missing list: $( [ $started = 0 ] && echo "serves (alice $(sign_in alice@datanalysis.re "$work/alice5"))" || echo "does not start: $(docker logs $P-proxy 2>&1 | tail -1)")"
+check "a missing list at start: the proxy does not start" 1 "$started"
+
+echo "== 5. the list as the product writes it: render-authenticated-emails.py as root"
+# A test switch left in the environment must not apply to root: the list must
+# still be 65532:65532 640, its header line harmless, and the proxy start on it.
+printf '{ "grants": [ { "subject": "alice@datanalysis.re", "role": "owner" } ] }\n' > "$work/conf/grants.json"
+chmod 644 "$work/conf/grants.json"; chmod 777 "$work/conf"
+rendered=$(docker run --rm -e MNDT_EMAILS_UNPRIVILEGED=1 -v "$work/conf:/c" -v "$here/../tenant:/s:ro" node:22-bookworm \
+  sh -c 'python3 /s/render-authenticated-emails.py /c/grants.json /c/authenticated_emails datanalysis.re --owner alice@datanalysis.re && stat -c "%u:%g %a" /c/authenticated_emails' 2>&1)
+check "rendered as root, with the test switch set: owner and mode" "65532:65532 640" "$(echo "$rendered" | tail -1)"
+start_proxy; started=$?
+check "the proxy starts on the rendered list (header line included)" 0 "$started"
+check "alice, from the rendered list, signs in" 200 "$(sign_in alice@datanalysis.re "$work/alice6")"
+check "bob is refused by the rendered list" 403 "$(sign_in bob@datanalysis.re "$work/bob6")"
 
 echo "emails-list exit $failures"
 exit $failures

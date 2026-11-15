@@ -71,6 +71,26 @@ fi
 root=${MNDT_ROOT:-}
 here=$(cd "$(dirname "$0")" && pwd)
 app="/opt/mndt/$slug"; conf="/etc/mndt/$slug"; data="/data/mndt/$slug/live"
+# Root, checked before anything is written: the secrets and the sign-in list
+# must belong to the proxy (65532), or it stops at its next start. Only a test
+# root (MNDT_ROOT) may be rendered unprivileged. A test switch left in a root
+# shell never applies (render-authenticated-emails.py ignores it for root too).
+unset MNDT_EMAILS_UNPRIVILEGED
+if [ -z "$root" ] && [ "$(id -u)" != 0 ]; then
+  echo "refused: run create-tenant.sh as root; nothing was written" >&2; exit 1
+fi
+
+# The options of the previous run, said when they differ, before writing: a rerun
+# without --org-name, --env or --image would otherwise apply the defaults in silence.
+options_file="$root$app/.create-tenant.options"
+options_now=$(printf 'owner=%s\nemail-domains=%s\nentra-tenant=%s\nclient-id=%s\ntraefik-network=%s\ntrusted-proxy=%s\nimage=%s\norg-name=%s\nenv=%s\n' \
+  "$owner" "$email_domains" "$entra_tenant" "${client_id:-(from $client_conf)}" "$traefik_network" "$trusted_proxy" "$image" "$org_name" "$env_name")
+if [ -f "$options_file" ]; then
+  while IFS='=' read -r name before; do
+    now=$(printf '%s\n' "$options_now" | sed -n "s/^$name=//p")
+    [ "$now" = "$before" ] || echo "  option --$name differs from the previous run: was « $before », now « $now »"
+  done < "$options_file"
+fi
 
 # Secrets first: nothing is rendered for a tenant that could not sign in.
 if [ -z "$client_id" ]; then
@@ -123,8 +143,10 @@ render() {
       -e "s|__CLIENT_ID__|$client_id|g" \
       -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
 }
-# The tenant's role table: the owner first; the team is added by hand, and a
-# change applies on the next request. Kept when it exists.
+# The tenant's role table: the owner first; the team is added by hand. A change
+# applies to the API on the next request; to the sign-in list only once
+# tenant/render-authenticated-emails.py is run again (as root, reloaded hot by
+# the proxy), the command printed at the end. Kept when it exists.
 mkdir -p "$root$data"
 if [ ! -f "$root$data/grants.json" ]; then
   ( umask 077 && printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json" )
@@ -217,12 +239,17 @@ fi
 # fingerprint of BOTH in the compose makes `up -d` recreate it when either
 # changed (as the gateway's code, #53).
 proxy_conf=$(cat "$root$conf/oauth2.cfg" "$root$conf/authenticated_emails" | sha256sum | cut -c1-16)
-render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/docker-compose.yml"
+render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/.docker-compose.yml.new" \
+  && mv -f "$root$app/.docker-compose.yml.new" "$root$app/docker-compose.yml" \
+  || { rm -f "$root$app/.docker-compose.yml.new"; echo "refused: the compose could not be written; the previous one stays" >&2; exit 1; }
+printf '%s\n' "$options_now" > "$options_file"
 
 echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for the addresses of grants.json within $email_domains)"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"
 echo "  fill in $data/model.env before the first agent turn"
 echo "  then, once the stack runs: tenant/seed-team.sh $slug --owner $owner"
+echo "  after each change of grants.json, as root (the proxy reloads the list without a restart):"
+echo "    python3 $here/tenant/render-authenticated-emails.py $data/grants.json $conf/authenticated_emails $email_domains --owner $owner"
 if [ "$docker" = 1 ]; then
   cd "$root$app"
   docker compose up -d
