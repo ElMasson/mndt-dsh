@@ -120,7 +120,7 @@ health() {
   done
   return 1
 }
-workbench_log() { echo "--- last lines of home/web.log"; tail -15 "$data/home/web.log" 2>/dev/null; }
+workbench_log() { echo "--- last lines of the shell log (/run/mndt-launch/web.log)"; docker exec $project-workbench tail -15 /run/mndt-launch/web.log 2>/dev/null; }
 
 step "1. tenant, keys, routes, roles (root $root)"
 printf 'secret' > "$root/root/entra_client_secret"
@@ -152,6 +152,19 @@ for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
   echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
 done
+step "1 bis. nothing of an operator's machine in the image"
+# .git (its config may carry a credential), environment files but the examples,
+# npm credentials, and key-shaped strings: in the image's /app and /etc, skipping
+# only what the build generates (lib/, node_modules); the hand-written gateway
+# and connectors are searched.
+KEYS='(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17})'
+image_secrets=$(docker run --rm -e KEYS="$KEYS" --entrypoint sh "$image" -c '
+  find /app /etc -name .git -prune -print 2>/dev/null | head -3
+  find /app /etc \( -name "*.env" -o -name ".env" -o -name ".env.*" \) -not -name "*.example" -not -path "*/node_modules/*" 2>/dev/null | head -3
+  find /app /etc /root -name .npmrc -not -path "*/node_modules/*" -exec grep -l "_authToken" {} + 2>/dev/null | head -3
+  grep -rIlE "$KEYS" /app /etc --exclude-dir=node_modules --exclude-dir=lib --exclude-dir=.pnpm 2>/dev/null | head -3' 2>&1)
+if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environment file, no npm credential, no key-shaped string in /app and /etc"; imaged=0
+else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -189,6 +202,13 @@ cp "$deploy/connectors/mcp-check.mjs" "$data/tools/mcp-check.mjs"
 MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deploy/tenant/check-connectors.sh" datanalysis; connectors=$?
 echo "check-connectors.sh exit $connectors"
 
+# /opt/mndt-tools, the connector code the workbench mounts from the tenant: code
+# only, never a secret (the connectors' secrets live in /state/connectors, /state/mcp-auth).
+tools_secrets=$(docker exec -e KEYS="$KEYS" $project-workbench sh -c '
+  find /opt/mndt-tools \( -name "*.env" -o -name ".env" -o -name ".npmrc" \) -not -name "*.example" 2>/dev/null | head -3
+  grep -rIlE "$KEYS" /opt/mndt-tools --exclude-dir=node_modules 2>/dev/null | head -3' 2>&1)
+if [ -z "$tools_secrets" ]; then echo "OK  tools-clean    no environment file and no key-shaped string in /opt/mndt-tools"
+else echo "KO  tools-clean    found in /opt/mndt-tools:"; echo "$tools_secrets" | sed 's/^/      /'; imaged=1; fi
 step "4 ter. the attack of the security report, from the workbench"
 attack; attacked=$?
 echo "attack exit $attacked (0 = every path refused)"
@@ -201,4 +221,4 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ]
