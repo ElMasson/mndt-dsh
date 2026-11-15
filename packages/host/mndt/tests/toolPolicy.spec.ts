@@ -215,8 +215,10 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     type Seen = { root?: Announced; child?: Announced; childBash?: string | undefined; guardsAtCreate?: number }
     const seen: Seen = {}
     const ctx = {
-      ...host,
-      get: (name: string) => (name === 'workflowEngine'
+      on: host.on,
+      // As in production: this plugin does not inject `tools`, so reading it throws.
+      get tools(): never { throw new Error('cannot get property "tools" without inject') },
+      get: (name: string) => (name === 'tools' ? host.tools : name === 'workflowEngine'
         ? {
           start: () => {
             // The workflow child: the agent that actually calls the model.
@@ -229,6 +231,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
         }
         : undefined),
       agents: {
+        get: host.agents.get,
         create: async (options: { sessionId: string }) => {
           seen.guardsAtCreate = guards.size
           const root = agentOf(createdAs ?? options.sessionId)

@@ -73,7 +73,20 @@ interface WorkflowEngineLike {
 async function createUnderPolicy<T extends { agent: { session: { header: { id: string } } } }>(
   ctx: Context, policy: ToolPolicy | undefined, sessionId: string, create: () => Promise<T>,
 ): Promise<{ created: T; unscope: () => void }> {
-  const unscope = policy === undefined ? () => undefined : scopeToolPolicy(ctx as unknown as PolicyHostLike, sessionId, policy)
+  let unscope = (): void => undefined
+  if (policy !== undefined) {
+    // This plugin does not inject `tools` (its apply timing stays as it is):
+    // the registry is read at run time, like the workflow engine. Without it,
+    // a policy cannot be enforced, so the run does not start.
+    const tools = ctx.get('tools') as PolicyHostLike['tools'] | undefined
+    if (tools === undefined) throw new Error('mndt: this host does not mount the tools registry, so a run cannot be held to its tool policy')
+    const host: PolicyHostLike = {
+      agents: ctx.agents as unknown as PolicyHostLike['agents'],
+      tools,
+      on: (event, listener) => ctx.on(event as never, listener as never),
+    }
+    unscope = scopeToolPolicy(host, sessionId, policy)
+  }
   try {
     const created = await create()
     // The lineage is keyed by this id: another one would leave the run unguarded.
