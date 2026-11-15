@@ -104,9 +104,11 @@ export function automationRefusal(item: Automation, team: boolean, owners: Reado
     // A system automation runs as shipped, or once an owner saved it (it is then
     // theirs). An admin could change its prompt before #63: a prompt that is not
     // the code's runs only after an owner read it and saved it.
+    // Every field that steers the run is compared, the schedule aside: the prompt,
+    // the kind (the mission's framing) and the mandate it would run under.
     const shipped = defaultAutomations().find(candidate => candidate.id === item.id)
-    if (shipped === undefined || shipped.prompt !== item.prompt) {
-      return 'disabled: its prompt is not the one shipped; on a team instance an owner reads it, saves it, then enables it'
+    if (shipped === undefined || shipped.prompt !== item.prompt || shipped.kind !== item.kind || item.mandateId !== undefined) {
+      return 'disabled: it is not as shipped (prompt, kind or mandate); on a team instance an owner reads it, saves it, then enables it'
     }
   } else if (!owners.has(author)) {
     return `disabled: created by ${item.createdBy}; on a team instance an owner opens it, checks its prompt and saves it to take it over, then enables it`
