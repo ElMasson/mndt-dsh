@@ -313,6 +313,24 @@ describe('the platform chains', () => {
   })
 })
 
+describe('with a read allow-list (DSH_SANDBOX_READ_ROOTS)', () => {
+  it('chooses Landlock over a usable bwrap, and confines with the listed roots only', async () => {
+    const before = process.env.DSH_SANDBOX_READ_ROOTS
+    process.env.DSH_SANDBOX_READ_ROOTS = '/usr:/etc'
+    try {
+      // bwrap would pass its probe: it is still never chosen, it cannot honour the list.
+      const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => true, landlockLauncher: fakeLauncher() })
+      const confined = await sandbox.confine(['true'], { mode: 'workspace-write', workspaceRoot: '/ws' })
+      expect(confined.argv[0]).toMatch(/landlock-run$/)
+      expect(confined.argv).toContain('/usr')
+      expect(confined.argv.slice(0, confined.argv.indexOf('--'))).not.toContain('/')
+    } finally {
+      if (before === undefined) delete process.env.DSH_SANDBOX_READ_ROOTS
+      else process.env.DSH_SANDBOX_READ_ROOTS = before
+    }
+  })
+})
+
 describe('the default landlock probe (launcher CLI contract)', () => {
   it('parses a fully-enforced probe report as full enforcement', async () => {
     const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => false, landlockLauncher: fakeLauncher() })

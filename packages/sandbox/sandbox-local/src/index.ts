@@ -39,7 +39,7 @@ import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnfor
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+import { bwrapProfileArgs, landlockProfileArgs, readRoots, seatbeltProfileArgs } from './profiles.ts'
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
@@ -67,8 +67,8 @@ export interface Config {
 
 /** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
 function defaultProbeBwrap(timeoutMs: number): boolean {
-  // The probe only asks whether bwrap runs at all; a read allow-list is refused when it confines.
-  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }, undefined), '--', 'true'], {
+  // The probe only asks whether bwrap runs at all (`null`: no allow-list).
+  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }, null), '--', 'true'], {
     timeout: timeoutMs,
     stdio: 'ignore',
   })
@@ -531,6 +531,9 @@ export class LocalSandboxProvider extends SandboxProvider {
     // AppContainer-ACL boundaries.
     switch (runner) {
       case 'bwrap': {
+        // A read allow-list is set: bwrap cannot honour it, so the chain moves on
+        // to Landlock rather than choosing a runner that refuses every command.
+        if (readRoots() !== undefined) return 'unusable'
         const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
         return probe() ? 'full' : 'unusable'
       }

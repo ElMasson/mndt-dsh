@@ -43,9 +43,10 @@ export function readRoots(env: Readonly<Record<string, string | undefined>> = pr
  * @param policy - file-effect policy to express as bwrap mounts.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[] | undefined = readRoots()): string[] {
+export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[] | null = readRoots() ?? null): string[] {
   // bwrap here binds all of / read-only: it cannot honour a read allow-list, so it refuses.
-  if (roots !== undefined) {
+  // `null` says « no allow-list » explicitly: an `undefined` would take the default.
+  if (roots !== null) {
     throw new SandboxUnavailableError(policy.mode, `${READ_ROOTS_ENV} is set and the bwrap runner does not apply a read allow-list; use Landlock`)
   }
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
@@ -61,12 +62,12 @@ export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[]
  * @param policy - file-effect policy to express as Landlock allow-list grants.
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
-export function landlockProfileArgs(policy: SandboxPolicy, roots: readonly string[] | undefined = readRoots()): string[] {
+export function landlockProfileArgs(policy: SandboxPolicy, roots: readonly string[] | null = readRoots() ?? null): string[] {
   const readWrite = ['/dev/null']
   if (policy.mode === 'workspace-write') {
     readWrite.push('/tmp', policy.workspaceRoot)
   }
-  return landlockGrantArgs({ readOnly: roots === undefined ? ['/'] : [...roots], readWrite })
+  return landlockGrantArgs({ readOnly: roots === null ? ['/'] : [...roots], readWrite })
 }
 
 /** Quote one path as an SBPL string literal. */
