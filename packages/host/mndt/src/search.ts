@@ -21,6 +21,7 @@ function matches(value: string, needle: string): boolean {
  * @param canAdmin - whether the caller holds the administration right.
  * @param query - the raw search text.
  * @param canReadApproval - whether the caller may read one card (visibility.ts).
+ * @param canReadMission - whether the caller may read one mission or brief (visibility.ts).
  * @returns the newest matching rows, forty at most.
  */
 export function searchState(
@@ -29,12 +30,13 @@ export function searchState(
   canAdmin: boolean,
   query: string,
   canReadApproval: (approval: Approval) => boolean,
+  canReadMission: (item: { readonly visibility?: 'team' | 'private'; readonly createdBy: string }) => boolean,
 ): readonly SearchHitRow[] {
   const needle = query.trim().toLowerCase()
   if (needle === '') return []
   const hits: SearchHitRow[] = []
   for (const mission of snapshot.missions) {
-    if (mission.visibility !== 'team' && mission.createdBy !== identity) continue
+    if (!canReadMission(mission)) continue
     if (!matches(mission.prompt, needle) && !matches(mission.id, needle)) continue
     hits.push({
       id: mission.id, kind: 'mission', label: mission.prompt.slice(0, 90), at: mission.createdAt,
@@ -42,7 +44,7 @@ export function searchState(
     })
   }
   for (const brief of snapshot.briefs) {
-    if ((brief.visibility ?? 'team') !== 'team' && brief.createdBy !== identity) continue
+    if (!canReadMission(brief)) continue
     const heading = brief.markdown.split('\n').map(line => line.replace(/^#+\s*/, '').trim()).find(line => line !== '') ?? brief.id
     if (!matches(brief.markdown, needle) && !matches(brief.id, needle) && !matches(heading, needle)) continue
     hits.push({ id: brief.id, kind: 'brief', label: heading.slice(0, 90), at: brief.createdAt, detail: 'brief' })

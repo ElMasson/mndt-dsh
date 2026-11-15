@@ -17,11 +17,19 @@ import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
+import { channelPolicy, scopeToolPolicy } from './tool-policy.ts'
+import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
   /** Extra framing per mission kind, prepended to the caller's instruction. */
   readonly frame?: (mission: Mission) => string
+  /**
+   * The allow-list of the mission's agent. A team instance passes one (people
+   * other than the owner start missions there); omitted, the mission keeps the
+   * engine's whole composition, as on a solo workstation.
+   */
+  readonly tools?: ToolPolicy
 }
 
 /** Default framing: the product's voice and its evidence discipline. */
@@ -50,6 +58,92 @@ interface WorkflowEngineLike {
   start(input: { script: string; meta: { name: string; description: string }; parent: unknown }): {
     readonly id: string
     readonly result: Promise<unknown>
+    /** Awaits the script and its children's quiescence; idempotent. */
+    dispose?(): Promise<void>
+  }
+}
+
+/**
+ * End a run: each release runs on its own, and the run's tool policy is lifted
+ * only once every release succeeded. A child or an agent that could not be
+ * released keeps its guard (a run that cannot end cleanly fails closed); the
+ * first failure is rethrown.
+ * @param ctx - the host context, for the log.
+ * @param releases - what to release, in order.
+ * @param unscope - lifts the run's policy.
+ */
+async function endRun(ctx: Context, releases: readonly (() => unknown)[], unscope: () => void): Promise<void> {
+  const failures: unknown[] = []
+  for (const release of releases) {
+    try {
+      await release()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (failures.length === 0) {
+    unscope()
+    return
+  }
+  const reason = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
+  ctx.logger.warn(`mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
+  throw failures[0]
+}
+
+/**
+ * The policy follows a run's children through the live agents of this process.
+ * A child started by an external provider (another CLI, another process) would
+ * not be one of them: its tool calls would escape the guard. A run under a
+ * policy therefore requires the workflow engine's child provider to run in
+ * process, and refuses to start otherwise, an unreadable setting included.
+ * @param ctx - the host context.
+ * @param engine - the workflow engine.
+ */
+function assertInProcessChildren(ctx: Context, engine: WorkflowEngineLike): void {
+  const configured = (engine as { config?: { provider?: unknown } }).config?.provider
+  const subagents = ctx.get('subagents') as { getProvider(name: string): { start?: unknown } | undefined } | undefined
+  const provider = typeof configured === 'string' ? subagents?.getProvider(configured) : undefined
+  if (provider === undefined || typeof provider.start === 'function') {
+    throw new Error(`mndt: the workflow's child provider (${String(configured)}) is not an in-process one, so a run cannot be held to its tool policy`)
+  }
+}
+
+/**
+ * Create the agent of a run with its policy already scoped to its session
+ * lineage (see tool-policy.ts), so no step of it, nor of any child, runs first.
+ * @param ctx - the host context.
+ * @param policy - the allow-list, or undefined for the engine's whole composition.
+ * @param sessionId - the session the agent is created with.
+ * @param create - creates the agent.
+ * @returns the agent and the disposer of its policy, to call when the run ends.
+ */
+async function createUnderPolicy<T extends { agent: { session: { header: { id: string } } } }>(
+  ctx: Context, policy: ToolPolicy | undefined, sessionId: string, create: () => Promise<T>,
+): Promise<{ created: T; unscope: () => void }> {
+  let unscope = (): void => undefined
+  if (policy !== undefined) {
+    // This plugin does not inject `tools` (its apply timing stays as it is):
+    // the registry is read at run time, like the workflow engine. Without it,
+    // a policy cannot be enforced, so the run does not start.
+    const tools = ctx.get('tools') as PolicyHostLike['tools'] | undefined
+    if (tools === undefined) throw new Error('mndt: this host does not mount the tools registry, so a run cannot be held to its tool policy')
+    const host: PolicyHostLike = {
+      agents: ctx.agents as unknown as PolicyHostLike['agents'],
+      tools,
+      on: (event, listener) => ctx.on(event as never, listener as never),
+    }
+    unscope = scopeToolPolicy(host, sessionId, policy)
+  }
+  try {
+    const created = await create()
+    // The lineage is keyed by this id: another one would leave the run unguarded.
+    if (policy !== undefined && created.agent.session.header.id !== sessionId) {
+      throw new Error(`mndt: the agent was created as ${created.agent.session.header.id}, not ${sessionId}: its tool policy would not apply`)
+    }
+    return { created, unscope }
+  } catch (error) {
+    unscope()
+    throw error
   }
 }
 
@@ -86,11 +180,12 @@ export class DshMissionRunner {
     }
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
     const selection = model === undefined ? undefined : model.currentSelection()
-    const created = await this.#ctx.agents.create({
+    if (this.#options.tools !== undefined) assertInProcessChildren(this.#ctx, engine)
+    const { created, unscope } = await createUnderPolicy(this.#ctx, this.#options.tools, mission.id, () => this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,
       ...(selection === undefined ? {} : { agentOptions: { provider: selection.provider, model: selection.model } }),
-    })
+    }))
     await publishActor(mission.createdBy, mission.id)
     const childSessionId = created.agent.session.header.id
     const failures: string[] = []
@@ -121,9 +216,10 @@ export class DshMissionRunner {
         failures.push(reason.kind === 'error' ? `the agent turn failed: ${reason.error.message}` : `the agent turn ended ${reason.kind}`)
       }
     })
+    let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
       const prompt = (this.#options.frame ?? defaultFrame)(mission)
-      const run = engine.start({
+      run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },
         parent: created.agent,
@@ -141,36 +237,19 @@ export class DshMissionRunner {
         : settledTokensOf(settled)
       return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
     } finally {
-      stopAgentEnd()
-      stopTurnEnd()
-      await clearActor()
-      await created.dispose()
+      // The policy is lifted last, and only once the workflow's children and
+      // the agent are gone (endRun).
+      const ending = run
+      await endRun(this.#ctx, [() => ending?.dispose?.(), stopAgentEnd, stopTurnEnd, clearActor, () => created.dispose()], unscope)
     }
   }
 }
 
-/** @param name - a tool name. @returns the MCP server it comes from, if it is an MCP tool. */
-export function mcpServerOf(name: string): string | undefined {
-  if (!name.startsWith('mcp__')) return undefined
-  const end = name.indexOf('__', 'mcp__'.length)
-  return end < 0 ? undefined : name.slice('mcp__'.length, end)
-}
-
-/** The servers every turn may reach: asking for a card is never an action. */
-export const ALWAYS_SERVERS: readonly string[] = ['approvals']
-
-/** The scoped tools face the turn setup uses, structurally. */
-interface ScopedToolsLike {
-  schemas(): readonly { readonly name: string }[]
-  restrict(filter: { readonly deny: readonly string[] }): () => void
-  guard(guard: (execution: { readonly name: string }) => string | undefined): () => void
-}
-
 /**
  * Run one agent turn on DSH: the agent's own model, its channel's folder as
- * the working directory, and only the MCP servers its channel allows. The
- * servers outside are hidden (restrict) and refused at execution (guard), so a
- * server mounted after the turn started is refused too.
+ * the working directory, and only what its channel's allow-list names (the
+ * channel's MCP servers and the approvals, see tool-policy.ts): everything else
+ * is hidden and refused at execution, including the engine's own tools.
  */
 export class DshTurnRunner implements TurnEngine {
   readonly #ctx: Context
@@ -193,23 +272,15 @@ export class DshTurnRunner implements TurnEngine {
     const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
-    const allowed = new Set([...input.servers, ...ALWAYS_SERVERS])
-    const created = await this.#ctx.agents.create({
+    // Deny by default: the channel's servers and the approvals, nothing else.
+    const policy = channelPolicy(input.servers)
+    assertInProcessChildren(this.#ctx, engine)
+    const { created, unscope } = await createUnderPolicy(this.#ctx, policy, input.turnId, () => this.#ctx.agents.create({
       sessionId: input.turnId as never,
       meta: { cwd: input.cwd },
       // The agent's own model, never the workstation default.
       agentOptions: { provider: input.agent.provider, model: input.agent.model },
-      setup: (agentCtx: unknown) => {
-        const tools = (agentCtx as { tools: ScopedToolsLike }).tools
-        const outside = tools.schemas().map(tool => tool.name)
-          .filter((name) => { const server = mcpServerOf(name); return server !== undefined && !allowed.has(server) })
-        if (outside.length > 0) tools.restrict({ deny: outside })
-        tools.guard((execution) => {
-          const server = mcpServerOf(execution.name)
-          return server === undefined || allowed.has(server) ? undefined : `the MCP server ${server} is not allowed in this channel`
-        })
-      },
-    })
+    }))
     await publishActor(input.actor, input.turnId)
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
@@ -234,8 +305,9 @@ export class DshTurnRunner implements TurnEngine {
     // A deleted message or an agent leaving the channel stops the turn at once.
     const abort = (): void => { void created.dispose() }
     input.signal.addEventListener('abort', abort, { once: true })
+    let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
-      const run = engine.start({
+      run = engine.start({
         script: `return await agent(${JSON.stringify(input.prompt)})`,
         meta: { name: 'mndt-turn', description: `@${input.agent.handle} in #${input.channel.name}` },
         parent: created.agent,
@@ -248,10 +320,11 @@ export class DshTurnRunner implements TurnEngine {
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
       return { text, sessionId, ...(tokens === undefined ? {} : { tokens }) }
     } finally {
+      // The policy is lifted last, and only once the workflow's children and
+      // the agent are gone (endRun).
       input.signal.removeEventListener('abort', abort)
-      stopEvents()
-      await clearActor()
-      await created.dispose()
+      const ending = run
+      await endRun(this.#ctx, [() => ending?.dispose?.(), stopEvents, clearActor, () => created.dispose()], unscope)
     }
   }
 }

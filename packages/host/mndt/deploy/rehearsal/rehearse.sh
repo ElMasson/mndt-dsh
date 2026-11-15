@@ -46,7 +46,7 @@ cleanup() {
   echo "rehearsal root: $root"
 }
 trap cleanup EXIT
-owner=duke@datanalysis.re; viewer=smarion@datanalysis.re
+owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
 # The API answers before dsh web prints its launch URL (it waits for every plugin):
@@ -134,7 +134,8 @@ VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
 VLLM_QWEN_MODEL=fake-qwen
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
-printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" } ] }\n' $owner $viewer > "$data/grants.json"
+# An admin who is not the owner: missions and automations stay closed to them.
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
     -e "s#image: mndt-workbench:local#image: $image#" \
     -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
@@ -145,6 +146,12 @@ signed_override
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 
+# A mission runs on the workstation's default model (deepseek on Scaleway in
+# production): here it is the fake model too, or a mission could not reach it.
+for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
+  sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
+  echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
+done
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -154,6 +161,14 @@ step "3. seed-team.sh, the production script (Compose calls through compose-shim
 # The workbench writes its profile files as root; on the server seed-team.sh runs
 # as root too. Here it runs as this user, so hand the profile files over first.
 docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || exit 1
+# A second MCP server, mounted for the tool probe and never allowed in the
+# rehearsal's channel: the turn must neither see nor run it (seed-team.sh
+# restarts the workbench right after, which starts it).
+mkdir -p "$data/tools"
+cp "$deploy/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs"
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO: the facts server was not mounted"
 shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?

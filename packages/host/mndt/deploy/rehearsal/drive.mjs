@@ -11,12 +11,17 @@ const { chromium } = await import(playwrightModule)
 const BASE = 'http://127.0.0.1:18080'
 const OWNER = 'duke@datanalysis.re'
 const SECOND = 'smarion@datanalysis.re'
+const ADMIN = 'jadmin@datanalysis.re'
 const results = []
 const check = (step, ok, note) => { results.push({ step, ok }); console.log(`${ok ? 'OK ' : 'KO '} ${step.padEnd(14)} ${note}`) }
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const started = (service) => docker('inspect', '-f', '{{.State.StartedAt}} restarts={{.RestartCount}}', `${project}-${service}`)
-const logs = (service) => execFileSync('docker', ['logs', `${project}-${service}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+// What happened since this drive started: an update rehearsal keeps the fake
+// model and the state of the version before it, whose calls and missions are not
+// this version's to judge.
+const DRIVE_START = new Date().toISOString()
+const logs = (service) => execFileSync('docker', ['logs', '--since', DRIVE_START, `${project}-${service}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
 const gatewayBefore = started('gateway')
 const browser = await chromium.launch()
@@ -52,8 +57,9 @@ check('no-modal', !/Preview Notice|Get started/.test(text), 'neither « Preview 
 check('french', lang.startsWith('fr'), `document lang « ${lang} » with an English browser`)
 check('shell-ws', sockets.some(s => s.frames > 0), `${sockets.length} WebSocket(s): ${sockets.map(s => `${new URL(s.url).pathname} frames=${s.frames}${s.closed ? ' closed' : ''}`).join(', ') || 'none'}`)
 
-const api = async (method, path, body, context = owner) => {
-  const answer = await context.request.fetch(`${BASE}/mndt-api${path}`, { method, ...(body === undefined ? {} : { data: body }) })
+// A mission answers once it has run (several model calls): it gets three minutes.
+const api = async (method, path, body, context = owner, timeout = 30000) => {
+  const answer = await context.request.fetch(`${BASE}/mndt-api${path}`, { method, timeout, ...(body === undefined ? {} : { data: body }) })
   return { status: answer.status(), body: await answer.json().catch(() => ({})) }
 }
 const agents = (await api('GET', '/agents')).body.agents ?? []
@@ -75,13 +81,99 @@ if (qwen !== undefined && channel !== undefined) {
   const reply = messages.find(m => m.replyTo === asked.id)
   check('agent-turn', turn?.status === 'done' && reply !== undefined, `status ${turn?.status}, eur ${turn?.eur}, tokens ${JSON.stringify(turn?.tokens)}, session ${turn?.sessionId}, reason ${turn?.reason ?? '-'}, reply « ${(reply?.text ?? '').slice(0, 80)} »`)
 }
+// The allow-lists. A channel turn of @qwen (no connector): the approvals
+// server's open tools and nothing else, though workbench_facts is mounted. A
+// mission of the owner on a team instance: every MCP tool, never the engine's.
+// A tool more or a tool less fails.
+const APPROVALS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
+const EXPECTED = { '-': APPROVALS, tour: APPROVALS, mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts'].sort() }
+const witness = () => docker('exec', `${project}-workbench`, 'sh', '-c', 'find /state /tmp -name policy-witness.txt 2>/dev/null | head -3')
+
+/** @param text - a message asking for the probe. @returns the turn of that message, once settled. */
+async function probeTurn(text) {
+  const asked = (await api('POST', `/channels/${channel.id}/messages`, { text })).body.message
+  let turn
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const messages = (await api('GET', `/channels/${channel.id}/messages`)).body.messages ?? []
+    turn = messages.find(m => m.id === asked.id)?.turns?.[0]
+    if (turn !== undefined && !['queued', 'running'].includes(turn.status)) break
+    await sleep(2000)
+  }
+  return turn
+}
+
+/** @param log - the fake LLM's log. @param tag - the probe. @returns each probed tool's result, by tool name. */
+const resultsOf = (log, tag) => new Map([...log.matchAll(new RegExp(`TOOL-RESULT ${tag} (\\S+): ([^\\n]*)`, 'g'))].map(m => [m[1], m[2]]))
+const REFUSED = /not open to the agents of the team|not allowed in this channel|unknown tool|not found|UNKNOWN_TOOL/i
+
+if (qwen !== undefined && channel !== undefined) {
+  // (b, c) the channel turn calls the shell, the facts server, the approvals.
+  const turn = await probeTurn('@qwen sonde-outils-tour')
+  const tour = resultsOf(logs('fakellm'), 'tour')
+  check('probe-turn', turn?.status === 'done' && tour.size === 3, `status ${turn?.status}, reason ${turn?.reason ?? '-'}, ${tour.size} tool result(s)`)
+  check('turn-no-bash', REFUSED.test(tour.get('bash') ?? '') && witness() === '', `bash « ${tour.get('bash') ?? 'no result'} », witness « ${witness() || 'absent'} »`)
+  check('turn-no-facts', REFUSED.test(tour.get('mcp__workbench_facts__workbench_facts') ?? ''), `facts « ${tour.get('mcp__workbench_facts__workbench_facts') ?? 'no result'} »`)
+  const cards = ((await api('GET', '/approvals')).body.approvals ?? []).filter(card => card.title === 'Carte de répétition')
+  check('turn-card', cards.some(card => card.channelId === channel.id) && !REFUSED.test(tour.get('mcp__approvals__request_approval') ?? ''),
+    `${cards.length} card(s), in this channel: ${cards.filter(card => card.channelId === channel.id).length}, tool « ${(tour.get('mcp__approvals__request_approval') ?? 'no result').slice(0, 80)} »`)
+}
+
+// (d) a mission of the owner: MCP tools only; a member cannot start one.
+const mission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-mission' }, owner, 180000)
+  .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
+const run = resultsOf(logs('fakellm'), 'mission')
+check('mission-run', mission.status === 201 && run.size === 3, `${mission.status} ${mission.body.status ?? mission.body.error ?? ''}, ${run.size} tool result(s)`)
+check('mission-no-bash', REFUSED.test(run.get('bash') ?? '') && witness() === '', `bash « ${run.get('bash') ?? 'no result'} », witness « ${witness() || 'absent'} »`)
+check('mission-facts', /Faits de repetition/.test(run.get('mcp__workbench_facts__workbench_facts') ?? ''), `facts « ${run.get('mcp__workbench_facts__workbench_facts') ?? 'no result'} »`)
+
+// (a) every call of every run offered exactly its allow-list.
 const llm = logs('fakellm')
 check('llm-called', /fake-llm call \d+/.test(llm), `${(llm.match(/fake-llm call \d+:[^\n]*/g) ?? []).slice(-1).join('') || 'no call'}`)
+const offeredLines = [...llm.matchAll(/fake-llm tools \d+ (\S+): (\[[^\n]*\])/g)].map(match => ({ tag: match[1], tools: JSON.parse(match[2]) }))
+const unexpected = offeredLines.filter(line => JSON.stringify(line.tools) !== JSON.stringify(EXPECTED[line.tag] ?? []))
+// The exact lines, for the record: what each call was offered, what each probed tool answered.
+for (const line of llm.match(/fake-llm tools \d+ [^\n]*|TOOL-RESULT [^\n]*/g) ?? []) console.log(`    ${line}`)
+check('turn-tools', offeredLines.some(line => line.tag === 'tour') && offeredLines.some(line => line.tag === 'mission') && unexpected.length === 0,
+  unexpected.length === 0 ? `${offeredLines.length} calls, each offered exactly its allow-list` : `${unexpected[0].tag} offered ${JSON.stringify(unexpected[0].tools)}`)
 
 const viewer = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': SECOND } })
 const viewerTeam = await (await viewer.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const refused = await api('POST', '/channels', { title: 'Interdit' }, viewer)
 check('viewer-403', refused.status === 403, `${refused.status}: ${refused.body.error}`)
+const memberMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-membre' }, viewer)
+check('member-no-mission', memberMission.status === 404, `POST /missions by ${SECOND}: ${memberMission.status}`)
+// An admin who is not the owner: neither a mission nor an automation run.
+const adminContext = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': ADMIN } })
+await (await adminContext.newPage()).goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const adminRun = await api('POST', '/automations/auto_briefing/run', {}, adminContext)
+const adminMission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-admin' }, adminContext)
+check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404, `POST /automations/auto_briefing/run ${adminRun.status}, POST /missions ${adminMission.status} by ${ADMIN} (admin, not owner)`)
+// The scheduler's first pass on a team instance: auto_briefing, enabled by the
+// deployment and by no owner, is switched off with its reason; it ran nothing.
+const registry = (await api('GET', '/automations')).body.items ?? []
+const briefingItem = registry.find(item => item.id === 'auto_briefing')
+const missionsBefore = ((await api('GET', '/missions')).body.missions ?? []).filter(mission => mission.kind === 'briefing' && mission.createdAt >= DRIVE_START).length
+check('scheduler-first-pass', briefingItem?.enabled === false && /owner/.test(briefingItem?.lastOutcome ?? '') && missionsBefore === 0,
+  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} », briefing missions before any run: ${missionsBefore}`)
+// A briefing the owner runs is theirs and private: neither a member nor the admin reads it.
+const briefing = await api('POST', '/automations/auto_briefing/run', {}, owner, 180000)
+  .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
+const readsOf = async context => ({
+  missions: ((await api('GET', '/missions', undefined, context)).body.missions ?? []).length,
+  briefs: ((await api('GET', '/briefs', undefined, context)).body.briefs ?? []).length,
+})
+const ownerReads = await readsOf(owner)
+const viewerReads = await readsOf(viewer)
+const adminReads = await readsOf(adminContext)
+check('briefing-private', briefing.status === 200 && ownerReads.missions > 0 && viewerReads.missions + viewerReads.briefs + adminReads.missions + adminReads.briefs === 0,
+  `run ${briefing.status} ${briefing.body.error ?? ''}; owner reads ${ownerReads.missions} mission(s) ${ownerReads.briefs} brief(s); ${SECOND} ${JSON.stringify(viewerReads)}; ${ADMIN} ${JSON.stringify(adminReads)}`)
+// The admin reads the journal, finds the owner's brief there, and tries to approve it.
+const ownerBriefs = (await api('GET', '/briefs')).body.briefs ?? []
+const journal = await api('GET', '/journal', undefined, adminContext)
+const leakedIds = ownerBriefs.filter(brief => JSON.stringify(journal.body.entries ?? []).includes(brief.missionId ?? brief.id)).length
+const approve = ownerBriefs[0] === undefined ? { status: 0 } : await api('POST', `/briefs/${ownerBriefs[0].id}/approve`, {}, adminContext)
+check('admin-no-owner-brief', ownerBriefs.length > 0 && leakedIds === 0 && approve.status === 404,
+  `journal ${journal.status}: ${leakedIds} of the owner's ${ownerBriefs.length} brief(s) named; approve by ${ADMIN}: ${approve.status}`)
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
 const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })
