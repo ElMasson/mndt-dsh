@@ -355,6 +355,29 @@ export const TEAM_CSS = `
 .mw-tile-text { margin: 0; font-size: 14px; line-height: 20px; color: var(--mw-slate); }
 @media (min-width: 640px) { .mw-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
+/* DOCUMENTS in the context card, as mndt-web draws it (ChannelDocuments). */
+.mw-docs { display: flex; flex-direction: column; gap: 8px; }
+.mw-docs-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.mw-doc { display: flex; flex-direction: column; gap: 4px; }
+.mw-doc-row { display: flex; align-items: flex-start; gap: 8px; }
+.mw-doc-row .mw-ctx-icon { margin-top: 2px; }
+.mw-doc-main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.mw-doc-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--mw-charcoal); font-weight: 500; text-decoration: none;
+}
+.mw-doc-name:hover { text-decoration: underline; }
+.mw-doc-facts { font-size: 12px; line-height: 16px; color: var(--mw-slate); }
+.mw-app .mw-doc-retire { padding: 4px 10px; font-size: 12px; }
+.mw-doc-retiring { display: flex; flex-direction: column; gap: 4px; padding-left: 24px; }
+.mw-doc-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.mw-doc-input { width: 100%; padding: 8px 12px; border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-card); font: inherit; font-size: 14px; }
+.mw-doc-buttons { display: flex; gap: 8px; }
+.mw-deposit { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px dashed var(--mw-line); border-radius: 12px; }
+.mw-deposit-title { font-size: 13px; font-weight: 500; }
+.mw-deposit-file { display: block; width: 100%; font-size: 12px; }
+.mw-app .mw-deposit-send { align-self: flex-start; }
+
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }
 @media (min-width: 768px) {

@@ -10,6 +10,8 @@ import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
 import { shownName } from './TeamFeed.tsx'
+import { TeamDocuments } from './TeamDocuments.tsx'
+import type { DocumentsFace } from './documents.ts'
 
 /** @param props - its title and content. @returns one section of the card. */
 function Section(props: { readonly title: string; readonly children: ReactNode }): ReactNode {
@@ -38,6 +40,8 @@ export interface TeamContextProps {
   readonly onAdd?: ((agentId: string) => Promise<string | undefined>) | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
+  /** The documents route; without it the section says « Bientôt ». */
+  readonly documents?: DocumentsFace | undefined
 }
 
 /** @param props - the channel and its agents. @returns the context card's sections. */
@@ -96,7 +100,9 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         </p>
       </Section>
       <Section title={t('ctxDocuments')}>
-        <p className="mw-ctx-muted">{t('ctxDocumentsSoon')}</p>
+        {props.documents === undefined
+          ? <p className="mw-ctx-muted">{t('ctxDocumentsSoon')}</p>
+          : <TeamDocuments face={props.documents} channelId={channel.id} names={props.names} t={t} />}
       </Section>
       <Section title={t('members')}>
         <ul className="mw-ctx-members">

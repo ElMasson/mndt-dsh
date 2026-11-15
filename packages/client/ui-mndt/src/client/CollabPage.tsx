@@ -20,6 +20,7 @@ import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
 import { FaceRefusal } from './httpFace.ts'
+import type { DocumentsFace } from './documents.ts'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
@@ -56,6 +57,8 @@ export interface CollabPageProps {
    * standalone team page. Without it the page keeps its own channel rail, inside the DSH shell.
    */
   readonly team?: TeamFrame | undefined
+  /** A channel's documents (the team frame); absent, the section says « Bientôt ». */
+  readonly documents?: DocumentsFace | undefined
 }
 
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
@@ -94,7 +97,7 @@ export interface TeamFrame {
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
 type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'settings'
 
-export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team }: CollabPageProps) {
+export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team, documents }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
@@ -1050,6 +1053,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                   onAdd={addChatAgent}
                   names={team.names}
+                  documents={documents}
                   onMemory={() => { setContextOpen(false); setView('memory') }}
                 />
               </aside>
