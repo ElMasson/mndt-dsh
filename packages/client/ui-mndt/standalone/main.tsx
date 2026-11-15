@@ -9,6 +9,7 @@ import '../../ui-brand-mndt/src/styles/brand-font.css'
 import { TeamApp } from '../src/client/TeamApp.tsx'
 import { createHttpFace } from '../src/client/httpFace.ts'
 import { createHttpChat } from '../src/client/httpChat.ts'
+import { createHttpDocuments } from '../src/client/documents.ts'
 import { CSS } from '../src/client/styles.ts'
 import { TEAM_CSS } from '../src/client/teamStyles.ts'
 
@@ -21,7 +22,7 @@ const root = document.getElementById('root')
 if (root !== null) {
   createRoot(root).render(
     <StrictMode>
-      <TeamApp api={createHttpFace()} chat={createHttpChat()} />
+      <TeamApp api={createHttpFace()} chat={createHttpChat()} documents={createHttpDocuments()} />
     </StrictMode>,
   )
 }
