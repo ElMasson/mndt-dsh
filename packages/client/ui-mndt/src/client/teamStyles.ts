@@ -342,6 +342,19 @@ export const TEAM_CSS = `
 .mw-memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--mw-slate); }
 @media (min-width: 1024px) { .mw-memory-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
+/* Agents and Réglages, as mndt-web draws them (AgentScreens, SettingsScreen): tiles in two columns. */
+.mw-tiles { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.mw-tile {
+  display: flex; flex-direction: column; gap: 4px; height: 100%; padding: 16px;
+  border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
+  color: var(--mw-charcoal); text-align: left; text-decoration: none;
+}
+.mw-app .mw-tile-link { width: 100%; font: inherit; cursor: pointer; transition: background-color 160ms var(--mw-ease); }
+.mw-app .mw-tile-link:hover { background: var(--mw-surface); }
+.mw-tile-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 500; line-height: 20px; }
+.mw-tile-text { margin: 0; font-size: 14px; line-height: 20px; color: var(--mw-slate); }
+@media (min-width: 640px) { .mw-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }
 @media (min-width: 768px) {

@@ -243,7 +243,14 @@ export function WebMessage(props: {
         </p>
       )}
       {props.cards.map(card => (
-        <WebCard key={card.id} card={card} canDecide={props.canDecide} onDecide={props.onDecide} names={props.names} t={t} />
+        <WebCard
+          key={card.id}
+          card={card}
+          canDecide={card.canDecide ?? props.canDecide}
+          onDecide={props.onDecide}
+          names={props.names}
+          t={t}
+        />
       ))}
     </article>
   )

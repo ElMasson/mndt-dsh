@@ -60,5 +60,5 @@ style.textContent = CSS + TEAM_CSS
 document.head.append(style)
 createRoot(document.getElementById('root') as HTMLElement).render(
   <CollabPage api={api} chat={chat} t={translate} tc={chatFrench}
-    team={{ name: 'Stéphane Masson', advancedHref: '/dsh/', org: { name: 'DATANALYSIS', env: 'Préproduction' }, names: { [you]: 'Stéphane Masson', 'smarion@datanalysis.re': 'Sophie Marion' } }} />,
+    team={{ name: 'Stéphane Masson', owner: true, advancedHref: '/dsh/', org: { name: 'DATANALYSIS', env: 'Préproduction' }, names: { [you]: 'Stéphane Masson', 'smarion@datanalysis.re': 'Sophie Marion' } }} />,
 )

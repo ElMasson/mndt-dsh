@@ -38,6 +38,8 @@ export interface ThreadCard extends ApprovalRow {
   readonly decidedBy?: string
   readonly decidedAt?: string
   readonly reason?: string
+  /** Whether the reader may decide it, as the API says for them. */
+  readonly canDecide?: boolean
 }
 
 /**
