@@ -15,6 +15,7 @@ import type { ChatFace } from './chat.ts'
 import { chatFrench } from './chatLocales.ts'
 import { translate } from './locales.ts'
 import { readWithin } from './deadline.ts'
+import type { DocumentsFace } from './documents.ts'
 
 /** Where the owner finds the full DSH interface. */
 export const ADVANCED_HREF = '/dsh/'
@@ -134,6 +135,7 @@ export function frameOf(identity: Identity, org?: Org, names: Readonly<Record<st
   return {
     name: me?.name,
     advancedHref: me?.role === 'owner' ? ADVANCED_HREF : undefined,
+    owner: me?.role === 'owner',
     org: org === undefined ? undefined : { name: org.name, env: envLabel(org.env) },
     names,
   }
@@ -152,6 +154,8 @@ export function TeamApp(props: {
   readonly chat: ChatFace
   readonly identity?: Promise<Identity>
   readonly fetcher?: Fetcher
+  /** A channel's documents; the page detects whether the route is served. */
+  readonly documents?: DocumentsFace
 }): ReactNode {
   const [reads, setReads] = useState<Reads | undefined>(undefined)
   const { identity: asked, fetcher } = props
@@ -180,6 +184,13 @@ export function TeamApp(props: {
     )
   }
   return (
-    <CollabPage api={props.api} chat={props.chat} t={translate} tc={chatFrench} team={frameOf(reads.identity, reads.org, reads.names)} />
+    <CollabPage
+      api={props.api}
+      chat={props.chat}
+      documents={props.documents}
+      t={translate}
+      tc={chatFrench}
+      team={frameOf(reads.identity, reads.org, reads.names)}
+    />
   )
 }

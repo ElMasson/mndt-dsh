@@ -19,6 +19,8 @@ import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
+import { FaceRefusal } from './httpFace.ts'
+import type { DocumentsFace } from './documents.ts'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
@@ -55,6 +57,8 @@ export interface CollabPageProps {
    * standalone team page. Without it the page keeps its own channel rail, inside the DSH shell.
    */
   readonly team?: TeamFrame | undefined
+  /** A channel's documents (the team frame); absent, the section says « Bientôt ». */
+  readonly documents?: DocumentsFace | undefined
 }
 
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
@@ -71,6 +75,11 @@ const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
   preference: 'shell.memory-kind-preference',
 }
 
+/** @param kind - a note's kind as served. @returns its label; an unknown kind is a « Note ». */
+function kindOf(kind: string): MndtKey {
+  return Object.hasOwn(MEMORY_KINDS, kind) ? MEMORY_KINDS[kind] ?? 'shell.memory-kind-other' : 'shell.memory-kind-other'
+}
+
 /** What the team frame knows beyond the page state. */
 export interface TeamFrame {
   /** The organisation, where its name is served. */
@@ -81,12 +90,14 @@ export interface TeamFrame {
   readonly advancedHref?: string | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
+  /** Whether the person owns the team: missions and automations are theirs alone (#63). */
+  readonly owner?: boolean | undefined
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
 type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'settings'
 
-export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team }: CollabPageProps) {
+export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team, documents }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
@@ -247,9 +258,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setAutomations(await api.automations())
       setAutomationError(undefined)
     } catch (failure) {
-      setAutomationError(failure instanceof Error ? failure.message : String(failure))
+      // In a team, automations are the owner's alone: the API answers 404 to anyone else.
+      setAutomationError(failure instanceof FaceRefusal && failure.status === 404
+        ? t('shell.owner-only')
+        : failure instanceof Error ? failure.message : String(failure))
     }
-  }, [api])
+  }, [api, t])
 
   useEffect(() => {
     if (view === 'automations' && automations === undefined) void loadAutomations()
@@ -577,10 +591,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       </TeamShell>
     )
   }
-  // The cards waiting on a decision: those the thread reads, else those of the page state.
+  // « À traiter » is what this person has to decide: the pending cards the API marks theirs
+  // (`canDecide`, the filter `mine=1` applies too). Cards they may only read stay in the feed.
+  // Without the channels, the page state's cards count only for whoever decides.
   const pendingCards: readonly ThreadCard[] = chatCards === undefined
-    ? state?.approvals ?? []
-    : chatCards.filter(card => card.state === undefined || card.state === 'pending')
+    ? (state?.canAdmin === true ? state.approvals : [])
+    : chatCards.filter(card => (card.state === undefined || card.state === 'pending') && (card.canDecide ?? state?.canAdmin === true))
 
   if (state === undefined) {
     return frame(
@@ -1037,6 +1053,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                   onAdd={addChatAgent}
                   names={team.names}
+                  documents={documents}
                   onMemory={() => { setContextOpen(false); setView('memory') }}
                 />
               </aside>
@@ -1393,7 +1410,13 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                               {where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
                             </button>
                           )}
-                          <WebCard card={card} canDecide={state.canAdmin === true} onDecide={decideCard} names={team.names} t={tc} />
+                          <WebCard
+                            card={card}
+                            canDecide={card.canDecide ?? state.canAdmin === true}
+                            onDecide={decideCard}
+                            names={team.names}
+                            t={tc}
+                          />
                         </div>
                       )
                     })}
@@ -1417,7 +1440,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                         <article key={memory.id} className="mw-memory-card" data-testid="team-memory-card">
                           <p className="mw-memory-text">{memory.text}</p>
                           <p className="mw-memory-meta">
-                            <span className="mw-chip">{t(MEMORY_KINDS[memory.kind] ?? 'shell.memory-kind-other')}</span>
+                            <span className="mw-chip">{t(kindOf(memory.kind))}</span>
                             {t('shell.memory-kept-by', { name: shownName(memory.createdBy, team.names) })}
                           </p>
                         </article>
@@ -1449,13 +1472,15 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           {view !== 'agents' ? undefined : (
             <section className="mw-screen" data-testid="team-agents">
               <h1 className="mw-title">{t('shell.agents')}</h1>
-              {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? <p className="mw-empty">{t('shell.agents-none')}</p> : (
-                <ul className="mw-cards">
+              {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? (
+                <div className="mw-empty-state"><p>{t('shell.agents-none')}</p></div>
+              ) : (
+                <ul className="mw-tiles">
                   {chatAgents.filter(a => a.retiredAt === undefined).map(agent => (
-                    <li key={agent.id} className="mw-card" data-testid="team-agent">
-                      <p className="mw-card-text"><b>{agent.name}</b> <span className="mw-card-meta">@{agent.handle}</span></p>
-                      <p className="mw-card-meta">{tc('agentModel', { provider: agent.provider, model: agent.model })}</p>
-                      <p className="mw-card-meta">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</p>
+                    <li key={agent.id} className="mw-tile" data-testid="team-agent">
+                      <p className="mw-tile-title"><Icon name="Bot" className="mw-slate" />{agent.name}</p>
+                      <p className="mw-tile-text">@{agent.handle} · {agent.model}</p>
+                      <p className="mw-tile-text">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</p>
                     </li>
                   ))}
                 </ul>
@@ -1465,26 +1490,47 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           {view !== 'settings' ? undefined : (
             <section className="mw-screen" data-testid="team-settings">
               <h1 className="mw-title">{t('shell.settings')}</h1>
-              <div className="mw-card">
-                <h2 className="mw-card-title">{t('shell.views')}</h2>
-                <div className="mw-actions">
-                  <button type="button" className="mw-button" onClick={() => { setView('activity') }}>{t('ui.activite')}</button>
-                  <button type="button" className="mw-button" onClick={() => { setView('automations') }}>{t('ui.automatisations')}</button>
-                  {state.canAdmin !== true ? undefined : (
-                    <button type="button" className="mw-button" onClick={() => { setView('admin') }}>{t('ui.administration')}</button>
-                  )}
-                  <button type="button" className="mw-button" onClick={() => { setChannelId('team'); setView('channel') }}>{t('shell.legacy-feed')}</button>
-                </div>
-              </div>
-              {team.advancedHref === undefined ? undefined : (
-                <div className="mw-card">
-                  <h2 className="mw-card-title">{t('shell.advanced')}</h2>
-                  <p className="mw-card-meta">{t('shell.advanced-hint')}</p>
-                  <div className="mw-actions">
-                    <a className="mw-button" data-testid="advanced-mode" href={team.advancedHref}>{t('shell.advanced')}</a>
-                  </div>
-                </div>
-              )}
+              <ul className="mw-tiles">
+                <li>
+                  <button type="button" className="mw-tile mw-tile-link" onClick={() => { setView('activity') }}>
+                    <span className="mw-tile-title"><Icon name="Activity" className="mw-slate" />{t('ui.activite')}</span>
+                    <span className="mw-tile-text">{t('shell.settings-activity')}</span>
+                  </button>
+                </li>
+                {state.canAdmin !== true ? undefined : (
+                  <li>
+                    <button type="button" className="mw-tile mw-tile-link" onClick={() => { setView('admin') }}>
+                      <span className="mw-tile-title"><Icon name="UserCog" className="mw-slate" />{t('ui.administration')}</span>
+                      <span className="mw-tile-text">{t('shell.settings-admin')}</span>
+                    </button>
+                  </li>
+                )}
+                {/* Missions and automations are the owner's in a team (#63): nobody else is offered them. */}
+                {team.owner !== true ? undefined : (
+                  <>
+                    <li>
+                      <button type="button" className="mw-tile mw-tile-link" onClick={() => { setView('automations') }}>
+                        <span className="mw-tile-title"><Icon name="Clock" className="mw-slate" />{t('ui.automatisations')}</span>
+                        <span className="mw-tile-text">{t('shell.settings-automations')}</span>
+                      </button>
+                    </li>
+                    <li>
+                      <button type="button" className="mw-tile mw-tile-link" onClick={() => { setChannelId('team'); setView('channel') }}>
+                        <span className="mw-tile-title"><Icon name="Boxes" className="mw-slate" />{t('shell.legacy-feed')}</span>
+                        <span className="mw-tile-text">{t('shell.settings-legacy')}</span>
+                      </button>
+                    </li>
+                  </>
+                )}
+                {team.advancedHref === undefined ? undefined : (
+                  <li>
+                    <a className="mw-tile mw-tile-link" data-testid="advanced-mode" href={team.advancedHref}>
+                      <span className="mw-tile-title"><Icon name="Settings2" className="mw-slate" />{t('shell.advanced')}</span>
+                      <span className="mw-tile-text">{t('shell.advanced-hint')}</span>
+                    </a>
+                  </li>
+                )}
+              </ul>
             </section>
           )}
         </>

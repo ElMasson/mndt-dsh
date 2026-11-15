@@ -212,8 +212,10 @@ export const TEAM_CSS = `
   padding: 16px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
 }
 .mw-aside[data-open] {
-  display: block; position: absolute; inset: 0; z-index: 40; width: auto; max-height: none;
-  border: 0; border-radius: 0;
+  /* As mndt-web opens it on a phone (fixed inset-0): over the whole screen, composer and bars included. */
+  display: block; position: fixed; inset: 0; z-index: 50; width: auto; max-height: none; overflow-y: auto;
+  /* flex-start would size a fixed box to its content: stretched, it covers the screen. */
+  align-self: stretch; border: 0; border-radius: 0;
 }
 .mw-aside-close { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .mw-ctx { display: flex; flex-direction: column; gap: 16px; font-size: 14px; line-height: 20px; }
@@ -239,7 +241,7 @@ export const TEAM_CSS = `
 }
 @media (min-width: 1024px) {
   .mw-aside { display: block; }
-  .mw-aside[data-open] { position: static; width: 320px; max-height: calc(100% - 24px); border: 1px solid var(--mw-line); border-radius: 16px; }
+  .mw-aside[data-open] { position: static; z-index: auto; align-self: flex-start; width: 320px; max-height: calc(100% - 24px); border: 1px solid var(--mw-line); border-radius: 16px; }
   .mw-aside-close { display: none; }
   .mw-app .mw-context-open { display: none; }
 }
@@ -341,6 +343,42 @@ export const TEAM_CSS = `
 .mw-memory-text { margin: 0; font-weight: 500; white-space: pre-wrap; }
 .mw-memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--mw-slate); }
 @media (min-width: 1024px) { .mw-memory-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Agents and Réglages, as mndt-web draws them (AgentScreens, SettingsScreen): tiles in two columns. */
+.mw-tiles { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.mw-tile {
+  display: flex; flex-direction: column; gap: 4px; height: 100%; padding: 16px;
+  border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
+  color: var(--mw-charcoal); text-align: left; text-decoration: none;
+}
+.mw-app .mw-tile-link { width: 100%; font: inherit; cursor: pointer; transition: background-color 160ms var(--mw-ease); }
+.mw-app .mw-tile-link:hover { background: var(--mw-surface); }
+.mw-tile-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 500; line-height: 20px; }
+.mw-tile-text { margin: 0; font-size: 14px; line-height: 20px; color: var(--mw-slate); }
+@media (min-width: 640px) { .mw-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* DOCUMENTS in the context card, as mndt-web draws it (ChannelDocuments). */
+.mw-docs { display: flex; flex-direction: column; gap: 8px; }
+.mw-docs-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.mw-doc { display: flex; flex-direction: column; gap: 4px; }
+.mw-doc-row { display: flex; align-items: flex-start; gap: 8px; }
+.mw-doc-row .mw-ctx-icon { margin-top: 2px; }
+.mw-doc-main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.mw-doc-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--mw-charcoal); font-weight: 500; text-decoration: none;
+}
+.mw-doc-name:hover { text-decoration: underline; }
+.mw-doc-facts { font-size: 12px; line-height: 16px; color: var(--mw-slate); }
+.mw-app .mw-doc-retire { padding: 4px 10px; font-size: 12px; }
+.mw-doc-retiring { display: flex; flex-direction: column; gap: 4px; padding-left: 24px; }
+.mw-doc-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.mw-doc-input { width: 100%; padding: 8px 12px; border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-card); font: inherit; font-size: 14px; }
+.mw-doc-buttons { display: flex; gap: 8px; }
+.mw-deposit { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px dashed var(--mw-line); border-radius: 12px; }
+.mw-deposit-title { font-size: 13px; font-weight: 500; }
+.mw-deposit-file { display: block; width: 100%; font-size: 12px; }
+.mw-app .mw-deposit-send { align-self: flex-start; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }

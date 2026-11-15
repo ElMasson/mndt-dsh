@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client'
 import '../../../ui-brand-mndt/src/styles/brand-font.css'
 import { CollabPage } from '../../src/client/CollabPage.tsx'
 import { createMockChat } from '../../src/client/mockChat.ts'
+import { createMockDocuments } from '../doubles/documents.ts'
 import { chatFrench } from '../../src/client/chatLocales.ts'
 import { translate } from '../../src/client/locales.ts'
 import { CSS } from '../../src/client/styles.ts'
@@ -55,10 +56,17 @@ const api = new Proxy({}, {
           : async () => { throw new Error('harnais') },
 }) as MndtFace
 
+const documents = createMockDocuments({
+  chn_1: {
+    canDeposit: true,
+    documents: [{ id: 'doc_1', name: 'Relevé Sodiac octobre 2026.pdf', size: 248_312, type: 'application/pdf', pages: 3, uploadedBy: 'smarion@datanalysis.re', uploadedAt: at(-30), canRetire: false }],
+  },
+}, you)
+
 const style = document.createElement('style')
 style.textContent = CSS + TEAM_CSS
 document.head.append(style)
 createRoot(document.getElementById('root') as HTMLElement).render(
-  <CollabPage api={api} chat={chat} t={translate} tc={chatFrench}
-    team={{ name: 'Stéphane Masson', advancedHref: '/dsh/', org: { name: 'DATANALYSIS', env: 'Préproduction' }, names: { [you]: 'Stéphane Masson', 'smarion@datanalysis.re': 'Sophie Marion' } }} />,
+  <CollabPage api={api} chat={chat} documents={documents} t={translate} tc={chatFrench}
+    team={{ name: 'Stéphane Masson', owner: true, advancedHref: '/dsh/', org: { name: 'DATANALYSIS', env: 'Préproduction' }, names: { [you]: 'Stéphane Masson', 'smarion@datanalysis.re': 'Sophie Marion' } }} />,
 )

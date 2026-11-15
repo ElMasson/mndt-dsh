@@ -8,6 +8,7 @@ import type { MndtFace, PageStateRow } from '../src/client/face.ts'
 import { translate } from '../src/client/locales.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
+import { FaceRefusal } from '../src/client/httpFace.ts'
 import { TEAM_CSS } from '../src/client/teamStyles.ts'
 import { TeamApp, envLabel, frameOf, namesOf, orgOf, whoAmI } from '../src/client/TeamApp.tsx'
 
@@ -105,6 +106,10 @@ describe('the team frame, as mndt-web draws it', () => {
     expect(TEAM_CSS).toContain('height: 56px')
     expect(TEAM_CSS).toContain('width: 224px')
     expect(TEAM_CSS).toContain('@media (min-width: 768px)')
+    // The channel's context opens over the whole phone screen, as mndt-web's (fixed inset-0).
+    expect(TEAM_CSS).toMatch(/\.mw-aside\[data-open\] \{[^}]*position: fixed; inset: 0;/u)
+    // Stretched: a fixed box aligned flex-start would only be as tall as its content.
+    expect(TEAM_CSS).toMatch(/\.mw-aside\[data-open\] \{[^}]*align-self: stretch;/u)
   })
 })
 
@@ -366,5 +371,86 @@ describe('À traiter and Mémoire, as mndt-web draws them', () => {
     render(<CollabPage api={face(state({ approvals: [] }))} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'À traiter' }))
     expect(screen.getByTestId('team-pending').querySelector('.mw-empty-state')?.textContent).toBe('Rien ne requiert votre attention pour le moment.')
+  })
+})
+
+describe('Agents and Réglages, as mndt-web draws them', () => {
+  it('Agents shows a tile per agent: its name, handle and model, and what it spent', async () => {
+    const at = '2026-11-14T09:00:00.000Z'
+    const chat = createMockChat({
+      you: 'stephane@datanalysis.re',
+      agents: [{ id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash', connectors: [], eurPerMonth: 5, eurThisMonth: 0.25, createdBy: 'x', createdAt: at }],
+      channels: [],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const nav = await screen.findByTestId('side-nav')
+    await waitFor(() => { expect(within(nav).getByRole('button', { name: 'Assistant' })).toBeTruthy() })
+    fireEvent.click(within(nav).getByRole('button', { name: 'Agents' }))
+    const tile = screen.getByTestId('team-agent')
+    expect(tile.textContent).toContain('Assistant')
+    expect(tile.textContent).toContain('@assistant · deepseek-v4.1-flash')
+    expect(tile.textContent).toMatch(/0,25\s€ ce mois-ci, sur 5,00\s€/u)
+  })
+
+  it('Réglages offers missions, automations and the advanced mode to the owner only', async () => {
+    const { unmount } = render(<CollabPage api={face(state())} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
+    const member = screen.getByTestId('team-settings').textContent ?? ''
+    expect(member).toContain('Activité')
+    expect(member).not.toContain('Automatisations')
+    expect(member).not.toContain('Fil de l\'équipe')
+    expect(screen.queryByTestId('advanced-mode')).toBeNull()
+    unmount()
+    render(<CollabPage api={face(state())} team={{ owner: true, advancedHref: '/dsh/' }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
+    const owner = screen.getByTestId('team-settings').textContent ?? ''
+    expect(owner).toContain('Automatisations')
+    expect(owner).toContain('Fil de l\'équipe')
+    expect(screen.getByTestId('advanced-mode').getAttribute('href')).toBe('/dsh/')
+  })
+
+  it('a 404 on the automations says they are the owner\'s, not a raw error', async () => {
+    const page = state()
+    const refusal = new Proxy({}, {
+      get: (_t, key) => key === 'state' ? async () => page
+        : key === 'members' || key === 'search' ? async () => []
+          : key === 'automations' ? async () => { throw new FaceRefusal('not found', 404) }
+            : async () => { throw new Error('non utilise') },
+    }) as MndtFace
+    render(<CollabPage api={refusal} team={{ owner: true }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
+    fireEvent.click(screen.getByRole('button', { name: /Automatisations/u }))
+    expect(await screen.findByText('Réservé au propriétaire de l\'espace.')).toBeTruthy()
+  })
+})
+
+describe('À traiter is what the person has to decide', () => {
+  const at = '2026-11-14T09:00:00.000Z'
+  const you = 'lecteur@datanalysis.re'
+
+  it('counts only the pending cards the API marks theirs; readable ones stay in the feed', async () => {
+    const chat = createMockChat({
+      you,
+      agents: [],
+      channels: [{ id: 'chn_1', name: 'test', title: 'test', kind: 'team', members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }],
+      cards: [
+        { id: 'apr_mine', kind: 'spend', title: 'À moi de décider', requestedBy: 'assistant', requestedAt: at, channelId: 'chn_1', messageId: 'm', state: 'pending', canDecide: true },
+        { id: 'apr_read', kind: 'spend', title: 'Seulement lisible', requestedBy: 'assistant', requestedAt: at, channelId: 'chn_1', messageId: 'm', state: 'pending', canDecide: false },
+      ],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canAdmin: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    const nav = await screen.findByTestId('side-nav')
+    await waitFor(() => { expect(within(nav).getByLabelText('1 en attente')).toBeTruthy() })
+    fireEvent.click(within(nav).getByRole('button', { name: /À traiter/u }))
+    const queue = screen.getByTestId('team-pending')
+    expect(queue.textContent).toContain('À moi de décider')
+    expect(queue.textContent).not.toContain('Seulement lisible')
+  })
+
+  it('a note of a kind the screen does not know is a « Note », never an object member', async () => {
+    const memories = [{ id: 'm', scope: 'team', kind: 'constructor', text: 'x', createdBy: 'a@b.c' }]
+    render(<CollabPage api={face(state({ memories }))} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Mémoire' }))
+    expect(screen.getByTestId('team-memory-card').textContent).toContain('Note')
   })
 })
