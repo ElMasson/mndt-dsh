@@ -106,6 +106,10 @@ describe('the team frame, as mndt-web draws it', () => {
     expect(TEAM_CSS).toContain('height: 56px')
     expect(TEAM_CSS).toContain('width: 224px')
     expect(TEAM_CSS).toContain('@media (min-width: 768px)')
+    // The channel's context opens over the whole phone screen, as mndt-web's (fixed inset-0).
+    expect(TEAM_CSS).toMatch(/\.mw-aside\[data-open\] \{[^}]*position: fixed; inset: 0;/u)
+    // Stretched: a fixed box aligned flex-start would only be as tall as its content.
+    expect(TEAM_CSS).toMatch(/\.mw-aside\[data-open\] \{[^}]*align-self: stretch;/u)
   })
 })
 
