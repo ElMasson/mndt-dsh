@@ -341,6 +341,9 @@ export const en = {
   'shell.settings-automations': 'The workspace\'s scheduled tasks.',
   'shell.settings-legacy': 'Missions and briefs, the owner\'s.',
   'shell.owner-only': 'Reserved to the owner of the workspace.',
+  'shell.skipped-one': '1 row of the role file is ignored: row {row}, {reason}',
+  'shell.skipped-many': '{count} rows of the role file are ignored:',
+  'shell.skipped-row': 'row {row}, {reason}',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -686,6 +689,9 @@ export const fr: Record<MndtKey, string> = {
   'shell.settings-automations': 'Les tâches planifiées de l\'espace.',
   'shell.settings-legacy': 'Missions et briefs, réservés au propriétaire.',
   'shell.owner-only': 'Réservé au propriétaire de l\'espace.',
+  'shell.skipped-one': '1 ligne du fichier des rôles est ignorée : ligne {row}, {reason}',
+  'shell.skipped-many': '{count} lignes du fichier des rôles sont ignorées :',
+  'shell.skipped-row': 'ligne {row}, {reason}',
 }
 
 /** Substitution values for a message. */

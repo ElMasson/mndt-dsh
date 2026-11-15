@@ -13,6 +13,7 @@ import type { ChatFace } from '../src/client/chat.ts'
 import { FaceRefusal } from '../src/client/httpFace.ts'
 import { TEAM_CSS } from '../src/client/teamStyles.ts'
 import { TeamApp, envLabel, frameOf, namesOf, orgOf, whoAmI } from '../src/client/TeamApp.tsx'
+import { skippedOf } from '../src/client/skipped.tsx'
 
 afterEach(() => { cleanup() })
 
@@ -207,8 +208,8 @@ describe('the standalone page, before the frame', () => {
   })
 
   it('refuses someone the API knows but who holds no role in the team', async () => {
-    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re' }))).toEqual({ kind: 'refused' })
-    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re', role: '' }))).toEqual({ kind: 'refused' })
+    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re' }))).toMatchObject({ kind: 'refused' })
+    expect(await whoAmI(async () => answer(200, { you: 'x@datanalysis.re', role: '' }))).toMatchObject({ kind: 'refused' })
   })
 
   it('reads the organisation, and shows none where it is not declared or not read', async () => {
@@ -594,5 +595,43 @@ describe('the channel panel, by pills', () => {
   it('says when no connector is mounted at all', async () => {
     const panel = await open(double([], []))
     expect(await within(panel).findByText('Aucun connecteur n\'est branché sur cet espace.')).toBeTruthy()
+describe('rows of the role file set aside (#75)', () => {
+  it('reads only well-formed rows; anything else gives none', () => {
+    expect(skippedOf({ you: 'a', grantsSkipped: [{ row: 4, reason: 'unknown role « boss »' }] })).toEqual([{ row: 4, reason: 'unknown role « boss »' }])
+    for (const grantsSkipped of [undefined, null, {}, 'x', [null], [{ row: 0, reason: 'x' }], [{ row: '4', reason: 'x' }], [{ row: 4, reason: '' }], [{ row: 4 }]]) {
+      expect(skippedOf({ you: 'a', grantsSkipped })).toEqual([])
+    }
+    expect(skippedOf({ you: 'a', grantsSkipped: [{ row: 2, reason: 'x'.repeat(500) }] })[0]?.reason.length).toBe(200)
+  })
+
+  it('Réglages says the set-aside row to whom /me tells it', async () => {
+    render(<CollabPage api={face(state())} team={{ grantsSkipped: [{ row: 4, reason: 'unknown role' }] }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
+    expect(within(screen.getByTestId('team-settings')).getByTestId('grants-skipped').textContent)
+      .toBe('1 ligne du fichier des rôles est ignorée : ligne 4, unknown role')
+  })
+
+  it('nothing is shown when no row is set aside', async () => {
+    render(<CollabPage api={face(state())} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
+    expect(screen.queryByTestId('grants-skipped')).toBeNull()
+  })
+
+  it('an owner whose own row is set aside is refused, told which row, and offered the shell to repair it', async () => {
+    const answer = (body: unknown): Response => ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+    const me = { you: 'duke@datanalysis.re', shell: true, grantsSkipped: [{ row: 1, reason: 'a subject (e-mail) and a role are required' }] }
+    const identity = await whoAmI(async () => answer(me))
+    expect(identity).toEqual({ kind: 'refused', me })
+    render(<TeamApp api={face(state())} chat={undefined as never} identity={Promise.resolve(identity)} />)
+    const denied = await screen.findByTestId('team-denied')
+    expect(within(denied).getByTestId('grants-skipped').textContent).toContain('ligne 1')
+    expect(within(denied).getByRole('link', { name: 'Mode avancé' }).getAttribute('href')).toBe('/dsh/')
+  })
+
+  it('someone refused without the shell is offered no way into it', async () => {
+    render(<TeamApp api={face(state())} chat={undefined as never} identity={Promise.resolve({ kind: 'refused', me: { you: 'x', shell: false } } as const)} />)
+    const denied = await screen.findByTestId('team-denied')
+    expect(within(denied).queryByRole('link', { name: 'Mode avancé' })).toBeNull()
+    expect(within(denied).queryByTestId('grants-skipped')).toBeNull()
   })
 })

@@ -15,6 +15,7 @@ import type { ChatFace } from './chat.ts'
 import { chatFrench } from './chatLocales.ts'
 import { translate } from './locales.ts'
 import { readWithin } from './deadline.ts'
+import { SkippedRows, skippedOf } from './skipped.tsx'
 import type { DocumentsFace } from './documents.ts'
 
 /** Where the owner finds the full DSH interface. */
@@ -27,12 +28,14 @@ export interface Me {
   readonly role?: string
   /** Whether the gateway gives this person the DSH shell, under /dsh/. */
   readonly shell?: boolean
+  /** Rows of the role file set aside (#75), told to owners and admins: read through `skippedOf`. */
+  readonly grantsSkipped?: unknown
 }
 
 /** What `/me` answered: the person, a refusal, or a workspace that could not be read. */
 export type Identity =
   | { readonly kind: 'known'; readonly me: Me }
-  | { readonly kind: 'refused' }
+  | { readonly kind: 'refused'; readonly me?: Me }
   | { readonly kind: 'unread' }
 
 /** The fetch the page uses; tests pass their own. */
@@ -74,7 +77,9 @@ export async function whoAmI(fetcher: Fetcher = (input, init) => fetch(input, in
     if (!response.ok) return { kind: 'unread' }
     const body = await response.json() as Partial<Me>
     if (typeof body.you !== 'string') return { kind: 'unread' }
-    if (typeof body.role !== 'string' || body.role === '') return { kind: 'refused' }
+    // Known but without a role: refused, keeping what /me says (the owner whose own row of the role
+    // file is set aside still has the shell, and is told which row).
+    if (typeof body.role !== 'string' || body.role === '') return { kind: 'refused', me: body as Me }
     return { kind: 'known', me: body as Me }
   } catch {
     // The workspace does not answer: the page opens anyway and says so (« L'espace ne répond pas »).
@@ -140,6 +145,7 @@ export function frameOf(identity: Identity, org?: Org, names: Readonly<Record<st
     // owner of the grants who is not the gateway's would see the tile, then a 404. Absent = no.
     advancedHref: me?.shell === true ? ADVANCED_HREF : undefined,
     owner: me?.role === 'owner',
+    grantsSkipped: skippedOf(me),
     org: org === undefined ? undefined : { name: org.name, env: envLabel(org.env) },
     names,
   }
@@ -183,6 +189,9 @@ export function TeamApp(props: {
     return (
       <div className="mw-denied" role="alert" data-testid="team-denied">
         <p>{translate('shell.denied')}</p>
+        <SkippedRows rows={skippedOf(reads.identity.me)} />
+        {/* The owner whose own row is set aside is not locked out: the shell is where they repair it. */}
+        {reads.identity.me?.shell === true ? <a href={ADVANCED_HREF}>{translate('shell.advanced')}</a> : undefined}
         <a href="/oauth2/sign_out">{translate('shell.sign-out')}</a>
       </div>
     )

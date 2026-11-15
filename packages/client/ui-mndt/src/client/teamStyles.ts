@@ -396,6 +396,13 @@ export const TEAM_CSS = `
 .mw-app .mw-pill[aria-pressed="true"][aria-disabled="true"] { opacity: 0.8; background: var(--mw-charcoal); }
 @media (max-width: 767px) { .mw-app .mw-pill { min-height: 36px; padding: 6px 12px; } }
 .mw-pill-note { font-size: 11px; opacity: 0.8; }
+.mw-skipped {
+  padding: 8px 12px; border: 1px solid rgba(138, 75, 0, 0.4); border-radius: 12px;
+  background: #FDF3E2; color: var(--mw-warning, #8A4B00); font-size: 13px; line-height: 18px; text-align: left;
+}
+.mw-skipped p { margin: 0; }
+.mw-app-inline { padding: 0 16px; }
+.mw-skipped ul { margin: 4px 0 0; padding-left: 18px; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }

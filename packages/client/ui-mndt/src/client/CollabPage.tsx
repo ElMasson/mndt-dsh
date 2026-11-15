@@ -22,6 +22,8 @@ import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
 import { FaceRefusal } from './httpFace.ts'
 import type { DocumentsFace } from './documents.ts'
+import { SkippedRows } from './skipped.tsx'
+import type { SkippedRow } from './skipped.tsx'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
@@ -93,6 +95,8 @@ export interface TeamFrame {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** Whether the person owns the team: missions and automations are theirs alone (#63). */
   readonly owner?: boolean | undefined
+  /** Rows of the role file set aside (#75), told to owners and admins. */
+  readonly grantsSkipped?: readonly SkippedRow[] | undefined
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
@@ -1233,6 +1237,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <span className="mndt-pill" data-tone="id">{adminMembers?.length ?? 0} {t('ui.personnes')}</span>
           </div>
         </header>
+        {team === undefined ? undefined : <div className="mw-app-inline"><SkippedRows rows={team.grantsSkipped ?? []} /></div>}
         {adminError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{adminError}</span></div>}
         {adminNotice === undefined ? undefined : <p className="mndt-empty">{adminNotice}</p>}
         <div className="mndt-feed">
@@ -1565,6 +1570,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           {view !== 'settings' ? undefined : (
             <section className="mw-screen" data-testid="team-settings">
               <h1 className="mw-title">{t('shell.settings')}</h1>
+              <SkippedRows rows={team.grantsSkipped ?? []} />
               <ul className="mw-tiles">
                 <li>
                   <button type="button" className="mw-tile mw-tile-link" onClick={() => { setView('activity') }}>
