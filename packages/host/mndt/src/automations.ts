@@ -23,6 +23,11 @@ export interface Automation {
   /** Test clock: run every N minutes instead of at a fixed hour. */
   readonly everyMinutes?: number
   readonly enabled: boolean
+  /**
+   * Who last enabled it, written by the server (never read from a request). On
+   * a team instance an automation runs only when the owner enabled it.
+   */
+  readonly enabledBy?: string
   readonly createdBy: string
   readonly mandateId?: string
   readonly lastFiredDate?: string
@@ -139,6 +144,7 @@ export function normalise(candidate: unknown): Automation | undefined {
     ...(everyMinutes === undefined ? {} : { everyMinutes }),
     enabled,
     createdBy: typeof input.createdBy === 'string' && input.createdBy.trim() !== '' ? input.createdBy.trim() : 'scheduler',
+    ...(typeof input.enabledBy === 'string' && input.enabledBy.trim() !== '' ? { enabledBy: input.enabledBy.trim() } : {}),
     ...(typeof input.mandateId === 'string' && input.mandateId.trim() !== '' ? { mandateId: input.mandateId.trim() } : {}),
     ...(typeof input.lastFiredDate === 'string' ? { lastFiredDate: input.lastFiredDate } : {}),
     ...(typeof input.lastFiredAt === 'string' ? { lastFiredAt: input.lastFiredAt } : {}),
@@ -199,12 +205,15 @@ export async function runAutomation(
   service: WorkbenchService,
   runner: { run(mission: Mission): Promise<MissionResult> },
   item: Automation,
+  owner?: string,
 ): Promise<{ readonly missionId: string; readonly outcome: string }> {
+  // On a team instance (`owner` given) the run is the owner's and stays private:
+  // it reads every mounted connector, so its text is never served to the team.
   const mission = await service.createMission({
     kind: item.kind,
     prompt: item.prompt,
-    createdBy: item.createdBy,
-    visibility: 'team',
+    createdBy: owner ?? item.createdBy,
+    visibility: owner === undefined ? 'team' : 'private',
     ...(item.mandateId === undefined ? {} : { mandateId: item.mandateId }),
   })
   const started = await service.startMission(mission.id, 'scheduled')

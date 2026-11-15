@@ -25,6 +25,8 @@ import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { authorityGrants, fileGrants, localGrants } from './grants.ts'
 import { DshMissionRunner, DshTurnRunner } from './runner.ts'
+import { TEAM_MISSION_POLICY } from './tool-policy.ts'
+import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
 import { readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
@@ -64,6 +66,37 @@ function readGatewaySecret(path: string | undefined): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * @param proxyUserHeader - the header the proxy proves the person with, if any.
+ * @param env - the environment.
+ * @returns whether missions may use the engine's whole composition: only on a
+ * host explicitly declared solo, and never behind the sign-on proxy.
+ */
+export function soloWorkstation(proxyUserHeader: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (proxyUserHeader !== undefined && proxyUserHeader !== '') return false
+  return env.DSH_MNDT_SOLO_WORKSTATION === '1'
+}
+
+/**
+ * @param item - an automation.
+ * @param team - whether this is a team instance.
+ * @param owner - the owner of the team instance, if the role table names one.
+ * @returns whether the scheduler may run it: on a team instance only the
+ * system's automations and the owner's, and only once the owner enabled them
+ * (`enabledBy`, written by the server). Before that, they do not run.
+ */
+export function automationMayRun(item: Automation, team: boolean, owner: string | undefined): boolean {
+  if (!team) return true
+  if (owner === undefined) return false
+  return (item.createdBy === 'scheduler' || item.createdBy.toLowerCase() === owner) && item.enabledBy?.toLowerCase() === owner
+}
+
+/** @param grants - the role table. @returns the owner it names, if exactly one. */
+export function ownerOf(grants: readonly { readonly subject: string; readonly role: string }[]): string | undefined {
+  const owners = grants.filter(grant => grant.role === 'owner')
+  return owners.length === 1 ? owners[0]?.subject : undefined
 }
 
 /**
@@ -128,7 +161,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // The composition may pin the bind address; otherwise the deployment names it
     // through the environment, which is what a container needs.
     const host = config.host ?? process.env.DSH_MNDT_HOST
-    const runner = new DshMissionRunner(ctx)
+    const runner = this.missionRunner(ctx)
     // Agent turns of mentions: the price grid is the adapters lane's
     // deploy/llm/prices.json, copied beside the state (or MNDT_PRICES_FILE);
     // a model without a price, or priced null, is refused, never free.
@@ -225,11 +258,11 @@ export class WorkbenchGateway extends TypertRemoteService {
       const current = await readAutomations(this.automationsPath, legacyAt)
       await writeAutomations(this.automationsPath, current.map(patch))
     }
-    const fire = (item: Automation): void => {
+    const fire = (item: Automation, owner: string | undefined): void => {
       running.add(item.id)
       void (async () => {
         try {
-          const outcome = await runAutomation(this.service, new DshMissionRunner(ctx), item)
+          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item, owner)
           const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
           const patch: Partial<Automation> = {
             lastMissionId: outcome.missionId,
@@ -259,10 +292,31 @@ export class WorkbenchGateway extends TypertRemoteService {
             }
           }
           const now = new Date()
+          const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
+          const table = team ? await this.grants.grants() : undefined
+          const owner = table?.ok === true ? ownerOf(table.grants) : undefined
+          if (team && owner === undefined) {
+            // Without a readable owner nothing runs, and nothing is switched off either.
+            ctx.logger.warn('mndt: automations skipped: the role table names no single owner, or cannot be read')
+            return
+          }
+          if (team) {
+            // On a team instance an automation runs once the owner enabled it. One
+            // enabled otherwise (the deployment default auto_briefing included) is
+            // switched off, said in the registry, so the page shows what runs.
+            const stray = items.filter(item => item.enabled && !automationMayRun(item, true, owner))
+            if (stray.length > 0) {
+              await persist(candidate => (stray.some(item => item.id === candidate.id)
+                ? { ...candidate, enabled: false, lastOutcome: 'disabled: on a team instance only the owner enables an automation' }
+                : candidate))
+              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} disabled: on a team instance only the owner enables an automation`)
+              items = await readAutomations(this.automationsPath, legacyAt)
+            }
+          }
           for (const item of dueAutomations(items, now)) {
             if (running.has(item.id)) continue
             await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
-            fire(item)
+            fire(item, team ? owner : undefined)
           }
         } catch (error) {
           ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
@@ -308,6 +362,17 @@ export class WorkbenchGateway extends TypertRemoteService {
    * and the Remote is closed. A workstation of one person keeps it.
    * @returns the refusal, as the Remote's JSON answer, or undefined when open.
    */
+  /**
+   * @param ctx - the host context.
+   * @returns the mission runner. Its agent gets the team's allow-list (MCP tools
+   * only, never the engine's shell, files, web or subagents) unless this host
+   * is declared a solo workstation (DSH_MNDT_SOLO_WORKSTATION=1, refused on a
+   * team instance): a missing or mistyped setting never opens the whole engine.
+   */
+  private missionRunner(ctx: Context): DshMissionRunner {
+    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader) ? {} : { tools: TEAM_MISSION_POLICY })
+  }
+
   private closedToTeam(): string | undefined {
     return teamRemoteRefusal(this.proxyUserHeader)
   }
@@ -361,7 +426,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
     try {
-      const result = await new DshMissionRunner(this.ctx).run(mission)
+      const result = await this.missionRunner(this.ctx).run(mission)
       const finished = await this.service.completeMission(mission.id, result)
       return JSON.stringify({ ok: true, value: finished })
     } catch (error) {
@@ -385,7 +450,8 @@ export class WorkbenchGateway extends TypertRemoteService {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
       const canAdmin = table.ok && can(table.grants, this.identity, 'rights.write').allowed
-      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true) } })
+      return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true,
+        item => canReadMission({ identity: this.identity, channels: new Set(), decider: canAdmin }, item)) } })
     } catch (error) {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
@@ -429,7 +495,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
     }
     try {
-      const result = await new DshMissionRunner(this.ctx).run(mission)
+      const result = await this.missionRunner(this.ctx).run(mission)
       return JSON.stringify({ ok: true, value: await this.service.completeMission(mission.id, result) })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
