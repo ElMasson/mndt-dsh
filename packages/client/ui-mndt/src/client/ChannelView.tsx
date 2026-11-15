@@ -40,6 +40,10 @@ export interface ThreadCard extends ApprovalRow {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them. */
   readonly canDecide?: boolean
+  /** The mission that asked for it, when one did. */
+  readonly missionId?: string
+  /** The agent whose turn asked for it, when one did. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string; readonly name?: string }
 }
 
 /**

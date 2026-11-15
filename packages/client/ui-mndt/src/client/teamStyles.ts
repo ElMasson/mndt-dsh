@@ -333,6 +333,7 @@ export const TEAM_CSS = `
 .mw-queue { display: flex; flex-direction: column; gap: 12px; max-width: 768px; }
 .mw-queue-item { display: flex; flex-direction: column; gap: 4px; }
 .mw-app .mw-queue-where { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--mw-slate); font-size: 12px; text-decoration: underline; cursor: pointer; }
+.mw-queue-from { align-self: flex-start; font-size: 12px; color: var(--mw-slate); }
 .mw-intro { margin: 0; font-size: 14px; color: var(--mw-slate); }
 .mw-memory-columns { display: grid; gap: 16px; }
 .mw-memory-column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

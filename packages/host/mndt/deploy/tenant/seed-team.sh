@@ -37,14 +37,30 @@ compose=(docker compose -f "$app/docker-compose.yml")
 mkdir -p "$app/gateway"
 cp "$here/../connectors/render-connectors.py" "$here/../connectors/catalog.json" "$here/../patchfile.py" "$app/gateway/"
 
-if [ -z "$ceiling" ] && [ ! -f "$data/connectors/approvals.json" ]; then
-  # The approvals connector, from the versioned catalog, at this tenant's paths.
+if [ -z "$ceiling" ]; then
+  # The approvals connector, from the versioned catalog, at this tenant's paths:
+  # written again on every run, because a descriptor an earlier version wrote
+  # lacks what the catalog now requires (the gateway secret since #56, without
+  # which every card is refused with 401 after an update). The workbench is
+  # restarted only when the descriptor changed.
+  descriptor="$data/connectors/approvals.json"
+  # The descriptor AND the patch it renders: a first run that rewrote the
+  # descriptor but whose render failed (an unreadable patch, as on 13/11) is
+  # rerun once the patch is fixed; the render then changes the patch, and the
+  # workbench is restarted even though the descriptor is unchanged.
+  rendered="$data/home/profiles/web/cordis.patch.yml"
+  fingerprint() { for f in "$descriptor" "$rendered"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
+  before=$(fingerprint)
   MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
     CONNECTOR_CATALOG="$app/gateway/catalog.json" \
     bash "$here/../mount-connector.sh" approvals --preset --no-restart  # its mode is not executable in git
-  # A restart, not up -d: the container's configuration did not change, so up -d
-  # would leave it running without the connector it must now load.
-  "${compose[@]}" restart workbench
+  if [ "$(fingerprint)" != "$before" ]; then
+    # A restart, not up -d: the container's configuration did not change, so up -d
+    # would leave it running without the connector it must now load.
+    "${compose[@]}" restart workbench
+  else
+    echo "approvals: descriptor up to date"
+  fi
 fi
 
 # Always wait for the API before the seed, not only after a restart of ours:

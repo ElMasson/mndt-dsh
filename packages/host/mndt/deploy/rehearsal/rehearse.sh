@@ -120,7 +120,7 @@ health() {
   done
   return 1
 }
-workbench_log() { echo "--- last lines of home/web.log"; tail -15 "$data/home/web.log" 2>/dev/null; }
+workbench_log() { echo "--- last lines of the shell log (/run/mndt-launch/web.log)"; docker exec $project-workbench tail -15 /run/mndt-launch/web.log 2>/dev/null; }
 
 step "1. tenant, keys, routes, roles (root $root)"
 printf 'secret' > "$root/root/entra_client_secret"
@@ -152,6 +152,32 @@ for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
   echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
 done
+step "1 bis. nothing of an operator's machine in the image"
+# One scan, run where the files are: .git (its config may carry a credential),
+# environment files but the examples, npm credentials, key-shaped strings, and
+# NAME_KEY/TOKEN/SECRET/PASSWORD=value lines in data files (.env*, .envrc, *.bak,
+# *.txt, *.conf, *.cfg, *.ini, *secret*, *credential*). Only the build's output
+# (lib/, node_modules) is skipped: the hand-written gateway and connectors are searched.
+SCAN='set -f
+roots="$*"
+skip="-path */node_modules -o -path */lib -o -path */.pnpm"
+KEYS="(^|[^A-Za-z0-9_-])(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-(ant-|proj-)?[A-Za-z0-9_-]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17})"
+find $roots \( $skip \) -prune -o -name .git -print 2>/dev/null | head -3
+find $roots \( $skip \) -prune -o -type f \( -name "*.env" -o -name ".env" -o -name ".env.*" -o -name ".envrc" \) -not -name "*.example" -print 2>/dev/null | head -3
+find $roots /root \( $skip \) -prune -o -name .npmrc -print 2>/dev/null | xargs -r grep -l "_authToken" 2>/dev/null | head -3
+grep -rIlE "$KEYS" $roots --exclude-dir=node_modules --exclude-dir=lib --exclude-dir=.pnpm 2>/dev/null | head -3
+find $roots \( $skip \) -prune -o -type f \( -name "*.env*" -o -name ".envrc" -o -name "*.bak" -o -name "*.txt" -o -name "*.conf" -o -name "*.cfg" -o -name "*.ini" -o -iname "*secret*" -o -iname "*credential*" \) -not -name "*.example" -print 2>/dev/null \
+  | xargs -r grep -lE "^[[:space:]]*(export[[:space:]]+)?[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASS)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[^[:space:]\$]+" 2>/dev/null | head -3'
+imaged=0
+image_secrets=$(docker run --rm --entrypoint sh "$image" -c "$SCAN" scan /app /etc 2>&1)
+if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environment file, no npm credential, no key nor KEY=value in /app and /etc"
+else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
+# The negative witness: what an operator's clone could bring, planted on purpose in a
+# throwaway container of the image, must be found, or the scan proves nothing.
+witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
+caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/witness/.env' -e '/app/witness/notes.txt' -e '/app/witness/readme.md')
+if [ "$caught" -ge 4 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line and sk-ant- key are all found"
+else echo "KO  scan-witness   the scan missed a planted secret ($caught of 4 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -189,6 +215,11 @@ cp "$deploy/connectors/mcp-check.mjs" "$data/tools/mcp-check.mjs"
 MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deploy/tenant/check-connectors.sh" datanalysis; connectors=$?
 echo "check-connectors.sh exit $connectors"
 
+# /opt/mndt-tools, the connector code the workbench mounts from the tenant: code
+# only, never a secret (the connectors' secrets live in /state/connectors, /state/mcp-auth).
+tools_secrets=$(docker exec $project-workbench sh -c "$SCAN" scan /opt/mndt-tools 2>&1)
+if [ -z "$tools_secrets" ]; then echo "OK  tools-clean    no environment file, key nor KEY=value line in /opt/mndt-tools"
+else echo "KO  tools-clean    found in /opt/mndt-tools:"; echo "$tools_secrets" | sed 's/^/      /'; imaged=1; fi
 step "4 ter. the attack of the security report, from the workbench"
 attack; attacked=$?
 echo "attack exit $attacked (0 = every path refused)"
@@ -201,4 +232,4 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ]

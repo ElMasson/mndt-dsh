@@ -86,7 +86,7 @@ export interface TeamFrame {
   readonly org?: { readonly name: string; readonly env?: string | undefined } | undefined
   /** The person's name, where it is served. */
   readonly name?: string | undefined
-  /** Where the full DSH interface is (« Mode avancé »), for the owner only. */
+  /** Where the full DSH interface is (« Mode avancé »), for whom the gateway gives the shell (`/me.shell`). */
   readonly advancedHref?: string | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
@@ -1405,10 +1405,13 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                       const where = chatChannels?.find(c => c.id === card.channelId)
                       return (
                         <div key={card.id} className="mw-queue-item">
-                          {where === undefined ? undefined : (
+                          {where !== undefined ? (
                             <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
                               {where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
                             </button>
+                          ) : card.missionId === undefined ? undefined : (
+                            // A mission's card belongs to no channel: said, not a link (missions have no screen yet).
+                            <span className="mw-queue-from" data-testid="queue-from-mission">{tc('webFromMission')}</span>
                           )}
                           <WebCard
                             card={card}

@@ -104,6 +104,10 @@ export interface ChatCard {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them (pending cards only). */
   readonly canDecide?: boolean
+  /** The mission that asked for it, when one did (such a card belongs to no channel). */
+  readonly missionId?: string
+  /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string; readonly name?: string }
 }
 
 /** A page of changes: every message created or changed since an instant, and the next instant. */
