@@ -80,23 +80,33 @@ export function soloWorkstation(proxyUserHeader: string | undefined, env: NodeJS
 }
 
 /**
- * @param item - an automation.
- * @param team - whether this is a team instance.
- * @param owner - the owner of the team instance, if the role table names one.
- * @returns whether the scheduler may run it: on a team instance only the
- * system's automations and the owner's, and only once the owner enabled them
- * (`enabledBy`, written by the server). Before that, they do not run.
+ * The owners of a team instance: every subject the role table names owner.
+ * The API and the scheduler read the same rule (any owner).
+ * @param grants - the role table.
+ * @returns the owners, lowercase.
  */
-export function automationMayRun(item: Automation, team: boolean, owner: string | undefined): boolean {
-  if (!team) return true
-  if (owner === undefined) return false
-  return (item.createdBy === 'scheduler' || item.createdBy.toLowerCase() === owner) && item.enabledBy?.toLowerCase() === owner
+export function ownersOf(grants: readonly { readonly subject: string; readonly role: string }[]): ReadonlySet<string> {
+  return new Set(grants.filter(grant => grant.role === 'owner').map(grant => grant.subject.toLowerCase()))
 }
 
-/** @param grants - the role table. @returns the owner it names, if exactly one. */
-export function ownerOf(grants: readonly { readonly subject: string; readonly role: string }[]): string | undefined {
-  const owners = grants.filter(grant => grant.role === 'owner')
-  return owners.length === 1 ? owners[0]?.subject : undefined
+/**
+ * @param item - an automation.
+ * @param team - whether this is a team instance.
+ * @param owners - the owners of the team instance.
+ * @returns why the scheduler may not run it, or undefined when it may: on a team
+ * instance, only the system's automations and an owner's, once an owner enabled
+ * them (`enabledBy`, written by the server). The reason says what to do.
+ */
+export function automationRefusal(item: Automation, team: boolean, owners: ReadonlySet<string>): string | undefined {
+  if (!team) return undefined
+  const author = item.createdBy.toLowerCase()
+  if (item.createdBy !== 'scheduler' && !owners.has(author)) {
+    return `disabled: created by ${item.createdBy}; on a team instance an owner opens it, checks its prompt and saves it to take it over, then enables it`
+  }
+  if (item.enabledBy === undefined || !owners.has(item.enabledBy.toLowerCase())) {
+    return 'disabled: on a team instance an owner checks its prompt and enables it'
+  }
+  return undefined
 }
 
 /**
@@ -294,29 +304,31 @@ export class WorkbenchGateway extends TypertRemoteService {
           const now = new Date()
           const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
           const table = team ? await this.grants.grants() : undefined
-          const owner = table?.ok === true ? ownerOf(table.grants) : undefined
-          if (team && owner === undefined) {
+          const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
+          if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            ctx.logger.warn('mndt: automations skipped: the role table names no single owner, or cannot be read')
+            ctx.logger.warn('mndt: automations skipped: the role table names no owner, or cannot be read')
             return
           }
           if (team) {
-            // On a team instance an automation runs once the owner enabled it. One
+            // On a team instance an automation runs once an owner enabled it. One
             // enabled otherwise (the deployment default auto_briefing included) is
-            // switched off, said in the registry, so the page shows what runs.
-            const stray = items.filter(item => item.enabled && !automationMayRun(item, true, owner))
+            // switched off with its reason, so the page shows what runs and why not.
+            const stray = items.filter(item => item.enabled && automationRefusal(item, true, owners) !== undefined)
             if (stray.length > 0) {
-              await persist(candidate => (stray.some(item => item.id === candidate.id)
-                ? { ...candidate, enabled: false, lastOutcome: 'disabled: on a team instance only the owner enables an automation' }
-                : candidate))
-              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} disabled: on a team instance only the owner enables an automation`)
+              await persist((candidate) => {
+                const reason = stray.some(item => item.id === candidate.id) ? automationRefusal(candidate, true, owners) : undefined
+                return reason === undefined ? candidate : { ...candidate, enabled: false, lastOutcome: reason }
+              })
+              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
               items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
           for (const item of dueAutomations(items, now)) {
             if (running.has(item.id)) continue
             await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
-            fire(item, team ? owner : undefined)
+            // The run is the owner's who enabled it (team), private.
+            fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
           }
         } catch (error) {
           ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)

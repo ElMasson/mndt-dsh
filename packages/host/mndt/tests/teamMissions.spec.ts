@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { fileGrants } from '../src/grants.ts'
-import { automationMayRun, ownerOf } from '../src/gateway.ts'
+import { automationRefusal, ownersOf } from '../src/gateway.ts'
 import type { Automation } from '../src/automations.ts'
 
 const owner = 'duke@datanalysis.re'
@@ -14,7 +14,7 @@ const operator = 'jdoe@datanalysis.re'
 const SECRET = 'gateway-secret-for-tests'
 
 /** @returns a team API whose runner counts the missions it ran. */
-function teamApi(): { api: ReturnType<typeof createMndtApi>; ran: string[]; service: WorkbenchService } {
+function teamApi(): { api: ReturnType<typeof createMndtApi>; ran: string[]; service: WorkbenchService; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'grants-'))
   const path = join(dir, 'grants.json')
   writeFileSync(path, JSON.stringify({ grants: [
@@ -30,7 +30,7 @@ function teamApi(): { api: ReturnType<typeof createMndtApi>; ran: string[]; serv
     automationsPath: join(dir, 'automations.json'),
     schedulePath: join(dir, 'briefing-schedule.json'),
   })
-  return { api, ran, service }
+  return { api, ran, service, dir }
 }
 
 const as = (who: string) => ({ 'x-forwarded-email': who, 'x-mndt-gateway': SECRET })
@@ -71,22 +71,42 @@ describe('missions on a team instance', () => {
     expect(ran).toEqual([owner])
   })
 
-  it('the scheduler runs, on a team instance, only what the owner enabled, system automations included', () => {
+  it('the scheduler runs, on a team instance, only what an owner enabled, and says what to do otherwise', () => {
     const item = (createdBy: string, enabledBy?: string): Automation => ({
       id: 'a', name: 'n', kind: 'custom', prompt: 'p', at: '07:00', enabled: true, createdBy, ...(enabledBy === undefined ? {} : { enabledBy }),
     })
-    expect(ownerOf([{ subject: owner, role: 'owner' }, { subject: admin, role: 'admin' }])).toBe(owner)
-    expect(ownerOf([{ subject: owner, role: 'owner' }, { subject: admin, role: 'owner' }])).toBeUndefined()
-    // The deployment default, enabled by nobody: it does not run.
-    expect(automationMayRun(item('scheduler'), true, owner)).toBe(false)
-    expect(automationMayRun(item('scheduler', owner), true, owner)).toBe(true)
-    expect(automationMayRun(item(owner, owner), true, owner)).toBe(true)
-    expect(automationMayRun(item('Duke@Datanalysis.re', 'Duke@Datanalysis.re'), true, owner)).toBe(true)
-    // A member's, even enabled by the owner; one enabled by a member.
-    expect(automationMayRun(item(admin, owner), true, owner)).toBe(false)
-    expect(automationMayRun(item('scheduler', admin), true, owner)).toBe(false)
-    expect(automationMayRun(item('scheduler', owner), true, undefined)).toBe(false)
-    expect(automationMayRun(item(admin), false, undefined)).toBe(true)
+    const one = ownersOf([{ subject: owner, role: 'owner' }, { subject: admin, role: 'admin' }])
+    expect([...one]).toEqual([owner])
+    // Two owners: the same rule as the API, any of them.
+    const two = ownersOf([{ subject: owner, role: 'owner' }, { subject: 'Second@Datanalysis.re', role: 'owner' }])
+    expect(automationRefusal(item('scheduler', 'second@datanalysis.re'), true, two)).toBeUndefined()
+    // The deployment default, enabled by nobody: it does not run, and the reason says how to.
+    expect(automationRefusal(item('scheduler'), true, one)).toMatch(/an owner checks its prompt and enables it/)
+    expect(automationRefusal(item('scheduler', owner), true, one)).toBeUndefined()
+    expect(automationRefusal(item(owner, owner), true, one)).toBeUndefined()
+    expect(automationRefusal(item('Duke@Datanalysis.re', 'Duke@Datanalysis.re'), true, one)).toBeUndefined()
+    // A member's, even enabled by the owner: the owner takes it over by saving it.
+    expect(automationRefusal(item(admin, owner), true, one)).toMatch(new RegExp(`created by ${admin}.*saves it to take it over`))
+    expect(automationRefusal(item('scheduler', admin), true, one)).toBeDefined()
+    expect(automationRefusal(item('scheduler', owner), true, new Set())).toBeDefined()
+    expect(automationRefusal(item(admin), false, new Set())).toBeUndefined()
+  })
+
+  it('gives an automation to the owner who saves it, and keeps the registry and the hour from the rest', async () => {
+    const { api, dir } = teamApi()
+    // An automation an admin created before this rule.
+    writeFileSync(join(dir, 'automations.json'), JSON.stringify({ items: [
+      { id: 'auto_admin', name: 'A', kind: 'custom', prompt: 'lis tout', at: '09:00', enabled: true, createdBy: admin },
+    ] }))
+    const saved = await api({ method: 'POST', path: '/automations', headers: as(owner),
+      body: JSON.stringify({ id: 'auto_admin', name: 'A', kind: 'custom', prompt: 'relu', at: '09:00', enabled: true }) })
+    const automation = (saved.body as { automation: Automation }).automation
+    expect(automation.createdBy).toBe(owner)
+    expect(automation.enabledBy).toBe(owner)
+    for (const route of ['/automations', '/schedule']) {
+      expect((await api({ method: 'GET', path: route, headers: as(admin) })).status, route).toBe(404)
+      expect((await api({ method: 'GET', path: route, headers: as(owner) })).status, route).not.toBe(404)
+    }
   })
 
   it('records who enabled an automation itself, never what a request claims', async () => {
@@ -116,6 +136,15 @@ describe('missions on a team instance', () => {
     }
     const ownerMissions = await api({ method: 'GET', path: '/missions', headers: as(owner) })
     expect((ownerMissions.body as { missions: unknown[] }).missions).toHaveLength(2)
+  })
+
+  it('says in /me who has the shell: the one the gateway names, not every owner of the role file', async () => {
+    const { api } = teamApi()
+    const me = async (headers: Record<string, string>) => (await api({ method: 'GET', path: '/me', headers })).body as { shell: boolean; role?: string }
+    expect((await me({ ...as(owner), 'x-mndt-shell': '1' })).shell).toBe(true)
+    // An owner the gateway does not name (a second owner) has no shell.
+    expect(await me(as(owner))).toMatchObject({ role: 'owner', shell: false })
+    expect((await me(as(admin))).shell).toBe(false)
   })
 
   it('stay open on a solo workstation, an admin included', async () => {

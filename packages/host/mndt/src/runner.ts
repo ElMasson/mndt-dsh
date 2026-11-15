@@ -64,6 +64,33 @@ interface WorkflowEngineLike {
 }
 
 /**
+ * End a run: each release runs on its own, and the run's tool policy is lifted
+ * only once every release succeeded. A child or an agent that could not be
+ * released keeps its guard (a run that cannot end cleanly fails closed); the
+ * first failure is rethrown.
+ * @param ctx - the host context, for the log.
+ * @param releases - what to release, in order.
+ * @param unscope - lifts the run's policy.
+ */
+async function endRun(ctx: Context, releases: readonly (() => unknown)[], unscope: () => void): Promise<void> {
+  const failures: unknown[] = []
+  for (const release of releases) {
+    try {
+      await release()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (failures.length === 0) {
+    unscope()
+    return
+  }
+  const reason = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
+  ctx.logger.warn(`mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
+  throw failures[0]
+}
+
+/**
  * The policy follows a run's children through the live agents of this process.
  * A child started by an external provider (another CLI, another process) would
  * not be one of them: its tool calls would escape the guard. A run under a
@@ -210,17 +237,10 @@ export class DshMissionRunner {
         : settledTokensOf(settled)
       return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
     } finally {
-      // The policy is lifted last, once the workflow's children and the agent
-      // are gone, and even when one of their disposals throws.
-      try {
-        await run?.dispose?.()
-        stopAgentEnd()
-        stopTurnEnd()
-        await clearActor()
-        await created.dispose()
-      } finally {
-        unscope()
-      }
+      // The policy is lifted last, and only once the workflow's children and
+      // the agent are gone (endRun).
+      const ending = run
+      await endRun(this.#ctx, [() => ending?.dispose?.(), stopAgentEnd, stopTurnEnd, clearActor, () => created.dispose()], unscope)
     }
   }
 }
@@ -300,17 +320,11 @@ export class DshTurnRunner implements TurnEngine {
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
       return { text, sessionId, ...(tokens === undefined ? {} : { tokens }) }
     } finally {
-      // The policy is lifted last, once the workflow's children and the agent
-      // are gone, and even when one of their disposals throws.
-      try {
-        input.signal.removeEventListener('abort', abort)
-        await run?.dispose?.()
-        stopEvents()
-        await clearActor()
-        await created.dispose()
-      } finally {
-        unscope()
-      }
+      // The policy is lifted last, and only once the workflow's children and
+      // the agent are gone (endRun).
+      input.signal.removeEventListener('abort', abort)
+      const ending = run
+      await endRun(this.#ctx, [() => ending?.dispose?.(), stopEvents, clearActor, () => created.dispose()], unscope)
     }
   }
 }

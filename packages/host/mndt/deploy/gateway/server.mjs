@@ -382,8 +382,12 @@ function serve(req, res) {
     // card belongs to: a browser that sends it could file a card in the thread
     // of another channel's turn.
     delete req.headers['x-mndt-run']
+    // Whether this person gets the DSH shell (the page shows « Mode avancé » to
+    // them alone): said by this gateway only, which alone knows OWNER.
+    delete req.headers['x-mndt-shell']
+    const shell = isOwner(firstHeader(req.headers['x-forwarded-email'])) ? { 'x-mndt-shell': '1' } : {}
     // Only this gateway vouches for the identity header: the API believes it on this secret alone.
-    forward(req, res, API, `${rest}${url.search}`, undefined, GATEWAY_SECRET === '' ? {} : { [GATEWAY_SECRET_HEADER]: GATEWAY_SECRET })
+    forward(req, res, API, `${rest}${url.search}`, undefined, GATEWAY_SECRET === '' ? {} : { [GATEWAY_SECRET_HEADER]: GATEWAY_SECRET, ...shell })
     return
   }
   // The team page, for everyone the proxy admitted: its index at /, its hashed files under
