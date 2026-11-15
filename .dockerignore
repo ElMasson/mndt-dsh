@@ -11,4 +11,9 @@
 **/*.env
 !**/*.env.example
 **/.npmrc
+# Private keys and certificates with their key.
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
 **/node_modules

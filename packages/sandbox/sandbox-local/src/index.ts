@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   LAUNCHER_BIN,
@@ -39,7 +40,10 @@ import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnfor
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+import { bwrapProfileArgs, landlockProfileArgs, readRoots, seatbeltProfileArgs } from './profiles.ts'
+
+/** A session's private temp directory unused for this long is removed (12 h). */
+export const PRIVATE_TEMP_IDLE_MS = 12 * 60 * 60 * 1000
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
@@ -67,7 +71,8 @@ export interface Config {
 
 /** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
 function defaultProbeBwrap(timeoutMs: number): boolean {
-  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], {
+  // The probe only asks whether bwrap runs at all (`null`: no allow-list).
+  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }, null), '--', 'true'], {
     timeout: timeoutMs,
     stdio: 'ignore',
   })
@@ -136,6 +141,8 @@ export interface SandboxInternals {
   probeWindowsAcl?: () => boolean
   /** Replaces the private-temp-directory removal at provider dispose (a throwing fake exercises the cleanup-failure path). */
   rmTempDir?: (path: string) => void
+  /** The clock of the private temp directories' idle pruning (ms). */
+  now?: () => number
 }
 
 /** The chain's verdict: which runner confines, and how completely it enforces. */
@@ -274,6 +281,8 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   private readonly workspaceGrants = new Map<string, AclWriteGrant>()
   private readonly tempCapabilities = new Map<string, AclTempCapability>()
+  /** Landlock with a read allow-list: each session's private temp directory (removed on provider dispose). */
+  private readonly landlockTemps = new Map<string, { dir: string; lastUsed: number }>()
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -307,6 +316,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     // provision's exact-ACE skip).
     ctx.effect(() => () => {
       this.revokeAclGrants()
+      this.removeLandlockTemps()
     })
   }
 
@@ -347,10 +357,60 @@ export class LocalSandboxProvider extends SandboxProvider {
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
       case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
-      case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
+      case 'landlock': {
+        const roots = readRoots() ?? null
+        const temp = roots !== null && policy.mode === 'workspace-write' ? this.landlockPrivateTemp(policy.sessionId) : undefined
+        return [this.landlockLauncher(), ...landlockProfileArgs(policy, roots, temp)]
+      }
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
       default: return assertNever(runner)
+    }
+  }
+
+  /**
+   * The private temp directory of one session under Landlock with a read
+   * allow-list: random (mkdtemp, mode 0700), created on the session's first
+   * confined run, removed when idle (PRIVATE_TEMP_IDLE_MS) or at provider
+   * dispose. A call without a session (a workflow engine's script) gets a
+   * directory of its own for that call alone, never shared with another call
+   * nor with a session (confine() does not see the end of the call: the
+   * directory goes with the idle pruning). A fresh provider draws new paths.
+   * @param sessionId - the calling session, if any.
+   * @returns the directory.
+   */
+  private landlockPrivateTemp(sessionId: SessionId | undefined): string {
+    const key = sessionId ?? `call:${randomUUID()}`
+    const now = (this.internals.now ?? Date.now)()
+    const known = this.landlockTemps.get(key)
+    if (known !== undefined) {
+      known.lastUsed = now
+      return known.dir
+    }
+    // A channel's turn is a session of its own: without this, one directory
+    // per turn would stay until the server stops.
+    this.pruneLandlockTemps(now)
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-run-'))
+    this.landlockTemps.set(key, { dir, lastUsed: now })
+    return dir
+  }
+
+  /**
+   * Remove the private temp directories no confined run has used for
+   * {@link PRIVATE_TEMP_IDLE_MS}. A session that comes back after that gets a
+   * fresh, empty directory: temporary files, not a store.
+   * @param now - the current time, in ms.
+   */
+  private pruneLandlockTemps(now: number): void {
+    for (const [key, entry] of this.landlockTemps) {
+      if (now - entry.lastUsed < PRIVATE_TEMP_IDLE_MS) continue
+      try {
+        this.removeTempDir(entry.dir)
+        this.landlockTemps.delete(key)
+      } catch (error) {
+        this.ctx.logger.warn(`sandbox-local: could not remove the idle private temp directory ${entry.dir}`)
+        this.ctx.logger.warn(error)
+      }
     }
   }
 
@@ -487,6 +547,19 @@ export class LocalSandboxProvider extends SandboxProvider {
     }
   }
 
+  /** Remove the Landlock private temp directories; failures are reported, not thrown (as for the ACL grants). */
+  private removeLandlockTemps(): void {
+    for (const { dir } of this.landlockTemps.values()) {
+      try {
+        this.removeTempDir(dir)
+      } catch (error) {
+        this.ctx.logger.warn(`sandbox-local: could not remove the private temp directory ${dir}`)
+        this.ctx.logger.warn(error)
+      }
+    }
+    this.landlockTemps.clear()
+  }
+
   /** Remove one provider-owned private temp directory (injectable for cleanup tests). */
   private removeTempDir(dir: string): void {
     const remove = this.internals.rmTempDir ?? ((path: string) => { rmSync(path, { recursive: true, force: true }) })
@@ -530,6 +603,9 @@ export class LocalSandboxProvider extends SandboxProvider {
     // AppContainer-ACL boundaries.
     switch (runner) {
       case 'bwrap': {
+        // A read allow-list is set: bwrap cannot honour it, so the chain moves on
+        // to Landlock rather than choosing a runner that refuses every command.
+        if (readRoots() !== undefined) return 'unusable'
         const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
         return probe() ? 'full' : 'unusable'
       }
