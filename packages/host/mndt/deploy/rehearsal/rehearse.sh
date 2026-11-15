@@ -214,25 +214,31 @@ node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"
 # The model.env canary is in the workbench's environment (env_file): the probe
-# must not reach it. The others where the instance keeps its secrets, plus two
-# where reading is allowed (the probe must see those, or it proves nothing).
+# must not reach it. The others where the instance keeps its secrets (the tools
+# folder, mounted from inside /state, and another session's spill in /tmp
+# included), plus one where reading is allowed (the probe must see it, or it
+# proves nothing).
 printf '{ "CANARY_SECRET_tokens": { "user": "nobody@datanalysis.re" } }\n' > "$data/tokens.json"
 printf 'CANARY_SECRET_connector_env=1\n' > "$data/connectors/probe-canary.env"
-printf '// CANARY_SEARCHED_tools\n' > "$data/tools/canary-searched.mjs"
-docker exec -u 0 $project-workbench sh -c 'mkdir -p /state/channels/chn_other/files /state/home/sessions/--state-channels-chn_other-files-- /state/channels/chn_probe/files /tmp/probe-tools \
+printf 'CANARY_SECRET_tools_data\n' > "$data/tools/canary-facts.md"
+docker exec -u 0 $project-workbench sh -c 'mkdir -p /state/channels/chn_other/files /state/home/sessions/--state-channels-chn_other-files-- /state/channels/chn_probe/files /tmp/probe-tools /tmp/dsh-subprocess-other \
   && echo CANARY_SECRET_other_channel > /state/channels/chn_other/files/note.txt \
   && echo CANARY_SECRET_transcript > /state/home/sessions/--state-channels-chn_other-files--/turn.jsonl \
-  && echo CANARY_SECRET_dev_shm > /dev/shm/canary && echo CANARY_SEARCHED_tmp > /tmp/searched.txt'
+  && echo CANARY_SECRET_spill > /tmp/dsh-subprocess-other/stdout \
+  && echo CANARY_SECRET_dev_shm > /dev/shm/canary && echo "# CANARY_SEARCHED_etc" > /etc/mndt-probe-searched.conf'
 docker cp "$here/probe.sh" $project-workbench:/state/channels/chn_probe/files/probe.sh >/dev/null
 docker cp "$here/sandbox-probe.mjs" $project-workbench:/tmp/probe-tools/sandbox-probe.mjs >/dev/null
 planted=$(docker exec $project-workbench sh -c 'tr "\0" "\n" < /proc/1/environ | grep -c CANARY_SECRET_MODEL_ENV; grep -c . /run/mndt-launch/web-token')
 probe_out=$(docker exec $project-workbench node /tmp/probe-tools/sandbox-probe.mjs /state/channels/chn_probe/files probe.sh 2>&1)
-echo "$probe_out" | grep -E '^(RUNNER|READ|LEAK|SEEN|CROSS|DONE|WITNESS|SANDBOX-REFUSED)' | sed 's/^/    /'
+echo "$probe_out" | grep -E '^(RUNNER|READ|LEAK|SEEN|CROSS|OPEN|DONE|TIMEOUT|TRUNCATED|WITNESS|SANDBOX-REFUSED)' | sed 's/^/    /'
 live=0
 [ "$(echo "$planted" | head -1)" -ge 1 ] && [ "$(echo "$planted" | tail -1)" -ge 1 ] || { echo "KO  live-planted   the model.env canary is not in the workbench's environment, or no launch token: the probe would prove nothing"; live=1; }
-leaks=$(echo "$probe_out" | grep -cE '^(LEAK|CROSS)')
-if [ "$leaks" = 0 ]; then echo "OK  live-no-leak   on the running workbench: no LEAK, no CROSS (environment, /proc, /state, /run, /dev/shm, /root)"; else echo "KO  live-no-leak   $leaks LEAK/CROSS line(s)"; live=1; fi
-if echo "$probe_out" | grep -q 'SEARCHED_tools' && echo "$probe_out" | grep -q 'SEARCHED_tmp'; then echo "OK  live-searched  the probe read /opt/mndt-tools and /tmp"; else echo "KO  live-searched  the probe did not read the allowed places"; live=1; fi
+leaks=$(echo "$probe_out" | grep -cE '^(LEAK|CROSS|OPEN|TIMEOUT|TRUNCATED)')
+if [ "$leaks" = 0 ]; then echo "OK  live-no-leak   on the running workbench: no LEAK, no CROSS, no cut walk (environment, /proc, /state, /opt/mndt-tools, /run, /tmp, /dev/shm, /root)"; else echo "KO  live-no-leak   $leaks LEAK/CROSS/OPEN/TIMEOUT/TRUNCATED line(s)"; live=1; fi
+if echo "$probe_out" | grep -q '^SEEN file .*SEARCHED_etc'; then echo "OK  live-searched  the probe read /etc, where reading is allowed"; else echo "KO  live-searched  the probe did not read the allowed place"; live=1; fi
 if echo "$probe_out" | grep -q '^DONE6' && echo "$probe_out" | grep -q '^WITNESS own-channel-file' && echo "$probe_out" | grep -q '^RUNNER .*landlock'; then echo "OK  live-witness   Landlock, every step done, the agent still writes in its channel"; else echo "KO  live-witness   $(echo "$probe_out" | grep -E '^(RUNNER|SANDBOX-REFUSED)' | head -1)"; live=1; fi
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
+step "7. the sandbox proof: the same probe with and without the allow-list, three sessions"
+bash "$here/sandbox-proof.sh" "$image" | grep -E '^(OK|KO|LIMIT|NOTE|sandbox-proof) ' ; proved=${PIPESTATUS[0]}
+
+[ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
