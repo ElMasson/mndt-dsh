@@ -711,6 +711,8 @@ acceptée par le `json` de Python), atteignait le serveur sans filtre.
 ### Contrôle
 
 `MNDT_PUBLIC_HOST=equipe.datanalysis.re MNDT_SMOKE_CONNECTORS="approvals office365 qonto dolibarr swing" MNDT_SMOKE_LLM_ROUTES=1 smoke.sh`
+
+Depuis #78, sur le tenant d'equipe, le jeton du shell et son journal ne sont plus sous `/data/mndt/<slug>/live` mais dans le volume `launch` du workbench (`/run/mndt-launch`) ; `smoke.sh` l'y lit (`MNDT_WORKBENCH_CONTAINER=mndt-<slug>-workbench-1`). Sur l'hote, ce volume est `/var/lib/docker/volumes/mndt-<slug>_launch/_data/`. La mise a jour d'une instance d'equipe et ses controles sont decrits dans le guide `mise_en_route_instance_equipe.md` (§13.0, §13.1, §14), hors depot.
 vérifie en plus : chaque connecteur avec `allow` passe par le proxy, le proxy
 déployé refuse `dolibarr_raw_api`, les deux routes sont déclarées et aucune clé
 n'est écrite dans la composition.

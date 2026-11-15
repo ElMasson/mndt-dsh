@@ -153,18 +153,31 @@ for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
 done
 step "1 bis. nothing of an operator's machine in the image"
-# .git (its config may carry a credential), environment files but the examples,
-# npm credentials, and key-shaped strings: in the image's /app and /etc, skipping
-# only what the build generates (lib/, node_modules); the hand-written gateway
-# and connectors are searched.
-KEYS='(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17})'
-image_secrets=$(docker run --rm -e KEYS="$KEYS" --entrypoint sh "$image" -c '
-  find /app /etc -name .git -prune -print 2>/dev/null | head -3
-  find /app /etc \( -name "*.env" -o -name ".env" -o -name ".env.*" \) -not -name "*.example" -not -path "*/node_modules/*" 2>/dev/null | head -3
-  find /app /etc /root -name .npmrc -not -path "*/node_modules/*" -exec grep -l "_authToken" {} + 2>/dev/null | head -3
-  grep -rIlE "$KEYS" /app /etc --exclude-dir=node_modules --exclude-dir=lib --exclude-dir=.pnpm 2>/dev/null | head -3' 2>&1)
-if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environment file, no npm credential, no key-shaped string in /app and /etc"; imaged=0
+# One scan, run where the files are: .git (its config may carry a credential),
+# environment files but the examples, npm credentials, key-shaped strings, and
+# NAME_KEY/TOKEN/SECRET/PASSWORD=value lines in data files (.env*, .envrc, *.bak,
+# *.txt, *.conf, *.cfg, *.ini, *secret*, *credential*). Only the build's output
+# (lib/, node_modules) is skipped: the hand-written gateway and connectors are searched.
+SCAN='set -f
+roots="$*"
+skip="-path */node_modules -o -path */lib -o -path */.pnpm"
+KEYS="(^|[^A-Za-z0-9_-])(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-(ant-|proj-)?[A-Za-z0-9_-]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17})"
+find $roots \( $skip \) -prune -o -name .git -print 2>/dev/null | head -3
+find $roots \( $skip \) -prune -o -type f \( -name "*.env" -o -name ".env" -o -name ".env.*" -o -name ".envrc" \) -not -name "*.example" -print 2>/dev/null | head -3
+find $roots /root \( $skip \) -prune -o -name .npmrc -print 2>/dev/null | xargs -r grep -l "_authToken" 2>/dev/null | head -3
+grep -rIlE "$KEYS" $roots --exclude-dir=node_modules --exclude-dir=lib --exclude-dir=.pnpm 2>/dev/null | head -3
+find $roots \( $skip \) -prune -o -type f \( -name "*.env*" -o -name ".envrc" -o -name "*.bak" -o -name "*.txt" -o -name "*.conf" -o -name "*.cfg" -o -name "*.ini" -o -iname "*secret*" -o -iname "*credential*" \) -not -name "*.example" -print 2>/dev/null \
+  | xargs -r grep -lE "^[[:space:]]*(export[[:space:]]+)?[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASS)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[^[:space:]\$]+" 2>/dev/null | head -3'
+imaged=0
+image_secrets=$(docker run --rm --entrypoint sh "$image" -c "$SCAN" scan /app /etc 2>&1)
+if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environment file, no npm credential, no key nor KEY=value in /app and /etc"
 else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
+# The negative witness: what an operator's clone could bring, planted on purpose in a
+# throwaway container of the image, must be found, or the scan proves nothing.
+witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
+caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/witness/.env' -e '/app/witness/notes.txt' -e '/app/witness/readme.md')
+if [ "$caught" -ge 4 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line and sk-ant- key are all found"
+else echo "KO  scan-witness   the scan missed a planted secret ($caught of 4 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -204,10 +217,8 @@ echo "check-connectors.sh exit $connectors"
 
 # /opt/mndt-tools, the connector code the workbench mounts from the tenant: code
 # only, never a secret (the connectors' secrets live in /state/connectors, /state/mcp-auth).
-tools_secrets=$(docker exec -e KEYS="$KEYS" $project-workbench sh -c '
-  find /opt/mndt-tools \( -name "*.env" -o -name ".env" -o -name ".npmrc" \) -not -name "*.example" 2>/dev/null | head -3
-  grep -rIlE "$KEYS" /opt/mndt-tools --exclude-dir=node_modules 2>/dev/null | head -3' 2>&1)
-if [ -z "$tools_secrets" ]; then echo "OK  tools-clean    no environment file and no key-shaped string in /opt/mndt-tools"
+tools_secrets=$(docker exec $project-workbench sh -c "$SCAN" scan /opt/mndt-tools 2>&1)
+if [ -z "$tools_secrets" ]; then echo "OK  tools-clean    no environment file, key nor KEY=value line in /opt/mndt-tools"
 else echo "KO  tools-clean    found in /opt/mndt-tools:"; echo "$tools_secrets" | sed 's/^/      /'; imaged=1; fi
 step "4 ter. the attack of the security report, from the workbench"
 attack; attacked=$?

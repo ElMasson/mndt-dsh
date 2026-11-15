@@ -44,7 +44,12 @@ if [ -z "$ceiling" ]; then
   # which every card is refused with 401 after an update). The workbench is
   # restarted only when the descriptor changed.
   descriptor="$data/connectors/approvals.json"
-  fingerprint() { if [ -f "$descriptor" ]; then sha256sum < "$descriptor"; else echo absent; fi; }
+  # The descriptor AND the patch it renders: a first run that rewrote the
+  # descriptor but whose render failed (an unreadable patch, as on 13/11) is
+  # rerun once the patch is fixed; the render then changes the patch, and the
+  # workbench is restarted even though the descriptor is unchanged.
+  rendered="$data/home/profiles/web/cordis.patch.yml"
+  fingerprint() { for f in "$descriptor" "$rendered"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
   before=$(fingerprint)
   MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
     CONNECTOR_CATALOG="$app/gateway/catalog.json" \
