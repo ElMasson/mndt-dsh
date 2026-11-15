@@ -12,7 +12,7 @@ import type { GrantSource, SkippedGrant } from './policy.ts'
 import { isPlainAscii } from './identity.ts'
 
 /** Ask the team authority for its grant table. */
-export function authorityGrants(options: { baseUrl: string; token: string }): GrantSource {
+export function authorityGrants(options: { baseUrl: string; token: string }, warn: (message: string) => void = () => {}): GrantSource {
   return {
     async grants() {
       try {
@@ -24,16 +24,20 @@ export function authorityGrants(options: { baseUrl: string; token: string }): Gr
         const rows = (body as { grants?: unknown }).grants
         if (!Array.isArray(rows)) return { ok: false, reason: 'authority answered without a grant table' }
         const grants: Grant[] = []
-        for (const row of rows) {
-          const subject = (row as { subject?: unknown }).subject
-          const role = asRole((row as { role?: unknown }).role)
-          // Plain ASCII before lower-casing, as everywhere else (#75): the authority's
-          // rows meet the same rule as the role file's.
-          if (typeof subject !== 'string' || !isPlainAscii(subject) || role === undefined) continue
+        const skipped: SkippedGrant[] = []
+        for (const [index, row] of rows.entries()) {
+          // The same rule as the role file's (#75): an invalid row is set aside, said, and grants nothing.
+          const reason = rowRefusal(row)
+          if (reason !== undefined) {
+            skipped.push({ row: index + 1, reason })
+            continue
+          }
+          const { subject, role } = row as { subject: string; role: unknown }
           const scope = (row as { scope?: unknown }).scope
-          grants.push({ subject: subject.trim().toLowerCase(), role, ...(typeof scope === 'string' ? { scope } : {}) })
+          grants.push({ subject: subject.trim().toLowerCase(), role: asRole(role) as Grant['role'], ...(typeof scope === 'string' ? { scope } : {}) })
         }
-        return { ok: true, grants }
+        if (skipped.length > 0) logSkipped('the team authority', skipped, warn)
+        return skipped.length > 0 ? { ok: true, grants, skipped } : { ok: true, grants }
       } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) }
       }
@@ -77,12 +81,14 @@ async function readRows(path: string): Promise<RowsRead> {
     const code = (error as { code?: unknown }).code
     return { ok: false, reason: code === 'ENOENT' ? `the role file ${path} is missing` : `cannot read the role file ${path}: ${String(error)}` }
   }
-  let rows: unknown
+  let parsed: unknown
   try {
-    rows = (JSON.parse(text) as { grants?: unknown }).grants
+    parsed = JSON.parse(text)
   } catch (error) {
     return { ok: false, reason: `the role file ${path} is not JSON: ${error instanceof Error ? error.message : String(error)}` }
   }
+  // JSON, but not an object (null, a list, a number): said as such, never « not JSON ».
+  const rows = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as { grants?: unknown }).grants : undefined
   return Array.isArray(rows) ? { ok: true, rows } : { ok: false, reason: `the role file ${path} has no "grants" list` }
 }
 
@@ -108,11 +114,11 @@ const reported = new Map<string, string>()
  * @param path - the role file. @param skipped - its rows set aside.
  * @param warn - where to say it (the plugin's logger).
  */
-function logSkipped(path: string, skipped: readonly SkippedGrant[], warn: (message: string) => void): void {
+function logSkipped(source: string, skipped: readonly SkippedGrant[], warn: (message: string) => void): void {
   const key = JSON.stringify(skipped)
-  if (reported.get(path) === key) return
-  reported.set(path, key)
-  for (const { row, reason } of skipped) warn(`mndt: the role file ${path}, row ${row}, is set aside and grants nothing: ${reason}`)
+  if (reported.get(source) === key) return
+  reported.set(source, key)
+  for (const { row, reason } of skipped) warn(`mndt: ${source}, row ${row}, is set aside and grants nothing: ${reason}`)
 }
 
 /**
@@ -169,7 +175,7 @@ export function fileGrants(path: string, warn: (message: string) => void = () =>
         const { subject, role } = row as { subject: string; role: unknown }
         grants.push({ subject: subject.trim().toLowerCase(), role: asRole(role) as Grant['role'] })
       }
-      if (skipped.length > 0) logSkipped(path, skipped, warn)
+      if (skipped.length > 0) logSkipped(`the role file ${path}`, skipped, warn)
       return skipped.length > 0 ? { ok: true, grants, skipped } : { ok: true, grants }
     },
   }

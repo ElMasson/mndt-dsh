@@ -164,7 +164,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
     this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
     this.automationsPath = join(dirname(this.statePath), 'automations.json')
-    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath) })
+    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath), warn: (message) => { ctx.logger.warn(message) } })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
     this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
@@ -174,7 +174,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // tenant's own role file, else the local owner alone (solo mode).
     const grantsFile = process.env.DSH_MNDT_GRANTS_FILE
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
-      ? authorityGrants({ baseUrl, token })
+      ? authorityGrants({ baseUrl, token }, (message) => { ctx.logger.warn(message) })
       : grantsFile !== undefined && grantsFile !== ''
         ? fileGrants(grantsFile, (message) => { ctx.logger.warn(message) })
         : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)

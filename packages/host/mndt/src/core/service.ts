@@ -130,6 +130,8 @@ export interface ServiceOptions {
   readonly store: WorkbenchStore
   readonly now?: () => Date
   readonly nextId?: (prefix: string) => string
+  /** Where the service says what it changed on its own at load (a mandate retired). */
+  readonly warn?: (message: string) => void
 }
 
 /** The service. */
@@ -169,8 +171,12 @@ export class WorkbenchService {
         const party = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
         const delegant = party(mandate.delegant)
         const delegataire = party(mandate.delegataire)
-        const inert = delegant === '' || delegataire === '' || delegant === delegataire
-        return { ...mandate, delegant, delegataire, ...(inert ? { state: 'retired' as const } : {}) }
+        const why = delegant === '' || delegataire === '' ? 'a party is missing' : delegant === delegataire ? 'its two parties are the same person' : undefined
+        if (why !== undefined && mandate.state !== 'retired') {
+          // Said once per load, with what it was: the next write keeps only « retired ».
+          this.#options.warn?.(`mndt: mandate ${String(mandate.id)} retired on load (${why}); it was ${String(mandate.state)}, ${delegant || '?'} to ${delegataire || '?'}`)
+        }
+        return { ...mandate, delegant, delegataire, ...(why === undefined ? {} : { state: 'retired' as const }) }
       })
       // One spelling of a person: members written with capitals before identities were normalised
       // read as the lower-case e-mail the proxy proves, so nobody loses a channel.

@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
-import { fileGrants } from '../src/grants.ts'
+import { authorityGrants, fileGrants } from '../src/grants.ts'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 
 const owner = 'duke@datanalysis.re'
 const member = 'smarion@datanalysis.re'
@@ -34,6 +36,33 @@ describe('the tenant role file', () => {
     writeFileSync(broken, '{"other": []}')
     const noList = await fileGrants(broken).grants()
     expect(!noList.ok && noList.reason.includes('no "grants" list')).toBe(true)
+  })
+
+  it('says « no grants list », not « not JSON », for a file that is JSON but not an object', async () => {
+    for (const text of ['null', '[]', '42']) {
+      const path = roleFile([])
+      writeFileSync(path, text)
+      const table = await fileGrants(path).grants()
+      expect(!table.ok && table.reason, text).toContain('has no "grants" list')
+    }
+  })
+
+  it('treats the authority\'s rows as the role file\'s: an invalid row set aside, said once', async () => {
+    const warned: string[] = []
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: 'du\u212Ae@datanalysis.re', role: 'admin' }] }))
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    const { port } = server.address() as AddressInfo
+    try {
+      const source = authorityGrants({ baseUrl: `http://127.0.0.1:${port}`, token: 't' }, (message) => { warned.push(message) })
+      expect(await source.grants()).toEqual({ ok: true, grants: [{ subject: owner, role: 'owner' }], skipped: [{ row: 2, reason: 'the subject is not a plain ASCII e-mail' }] })
+      await source.grants()
+      expect(warned).toEqual(['mndt: the team authority, row 2, is set aside and grants nothing: the subject is not a plain ASCII e-mail'])
+    } finally {
+      server.close()
+    }
   })
 
   it('reads a file caught in the middle of a rewrite on its second read', async () => {

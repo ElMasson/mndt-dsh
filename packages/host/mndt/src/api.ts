@@ -27,7 +27,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -448,6 +448,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // The rows of the role file set aside (#75): told to whoever may change the
         // roles (owners and admins, rights.write), and to the tenant's owner as the
         // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
+        // A role file that cannot be read refuses everyone (503): its reason is told
+        // to the tenant's owner as the gateway knows it, who can fix it (#75 review).
+        const grantsError = !table.ok && teamInstance && shell ? table.reason : undefined
         const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
           && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
           ? table.skipped
@@ -455,6 +458,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, {
           you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell,
           ...(skipped === undefined ? {} : { grantsSkipped: skipped }),
+          ...(grantsError === undefined ? {} : { grantsError }),
         })
       }
 
@@ -514,7 +518,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (reader !== undefined) {
           const table = await grants.grants()
           const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
-          mandatesSeen = mandatesSeen.filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+          mandatesSeen = mandatesSeen.filter(mandate => canReadMandate(identity, canAdmin, mandate))
         }
         const activeMandates = mandatesSeen.filter(mandate => mandateState(mandate, todayDate) === 'active').length
         const lastEvent = reader === undefined
@@ -554,7 +558,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
           mandates: snapshot.mandates
-            .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+            .filter(mandate => canReadMandate(identity, canAdmin, mandate))
             .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
         }
         return respond(200, { page })
@@ -564,7 +568,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const mandates = (await service.mandates())
-          .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+          .filter(mandate => canReadMandate(identity, canAdmin, mandate))
           .map(mandate => ({ ...mandate, state: mandateState(mandate, today()) }))
         return respond(200, { mandates })
       }

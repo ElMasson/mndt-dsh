@@ -31,6 +31,22 @@ const get = async (api: ReturnType<typeof bench>, token: string, path: string) =
 }
 
 describe('who the person is, for the team screen', () => {
+  it('/me tells the gateway\'s owner why the role file cannot be read, and nobody else', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grants-'))
+    const file = join(dir, 'grants.json')
+    writeFileSync(file, '{ broken')
+    const api = createMndtApi({
+      service: new WorkbenchService({ store: new MemoryStore() }),
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'secret' },
+      grants: fileGrants(file),
+    })
+    const me = async (headers: Record<string, string>) => (await api({ method: 'GET', path: '/me', headers: { 'x-forwarded-email': owner, 'x-mndt-gateway': 'secret', ...headers } })).body as Record<string, unknown>
+    expect(String((await me({ 'x-mndt-shell': '1' })).grantsError)).toContain('is not JSON')
+    expect((await me({})).grantsError).toBeUndefined()
+    expect((await api({ method: 'GET', path: '/channels', headers: { 'x-forwarded-email': owner, 'x-mndt-gateway': 'secret' } })).status).toBe(503)
+  })
+
   it('/me tells the owner, and only who may change the roles, which rows of the role file are set aside', async () => {
     const api = bench([{ subject: owner, role: 'owner' }, { subject: viewer, role: 'viewer' }, { subject: 'x@datanalysis.re', role: 'boss' }])
     const skipped = [{ row: 3, reason: 'a subject (e-mail) and a role among owner, admin, operator, viewer are required' }]

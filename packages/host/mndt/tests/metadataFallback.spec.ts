@@ -161,8 +161,14 @@ describe('part 2: names and parties', () => {
       { ...base, id: 'mnd_half', delegant: 'duke@datanalysis.re' },
       { ...base, id: 'mnd_ok', delegant: 'duke@datanalysis.re', delegataire: 'smarion@datanalysis.re' },
     ] } as unknown as typeof state)
-    const mandates = await new WorkbenchService({ store }).mandates()
+    const warned: string[] = []
+    const mandates = await new WorkbenchService({ store, warn: (message) => { warned.push(message) } }).mandates()
     expect(mandates.map(mandate => [mandate.id, mandate.state])).toEqual([['mnd_self', 'retired'], ['mnd_half', 'retired'], ['mnd_ok', 'active']])
+    // One line per mandate retired, with its reason and what it was: the next write keeps only « retired ».
+    expect(warned).toEqual([
+      'mndt: mandate mnd_self retired on load (its two parties are the same person); it was active, duke@datanalysis.re to duke@datanalysis.re',
+      'mndt: mandate mnd_half retired on load (a party is missing); it was active, duke@datanalysis.re to ?',
+    ])
   })
 
   it('refuses a draft to oneself written with other capitals', async () => {
