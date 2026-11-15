@@ -140,3 +140,28 @@ describe('part 2: names and parties', () => {
     expect(mandate?.delegataire).toBe('smarion@datanalysis.re')
   })
 })
+
+describe('a person without a role on a team instance', () => {
+  it('is served who they are and nothing else, until a role is given; the change applies on the next request', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'norole-'))
+    const path = join(dir, 'grants.json')
+    writeFileSync(path, JSON.stringify({ grants: [{ subject: owner, role: 'owner' }] }))
+    const api = createMndtApi({
+      service: new WorkbenchService({ store: new MemoryStore() }),
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'secret' },
+      grants: fileGrants(path),
+    })
+    const as = (who: string) => ({ 'x-forwarded-email': who, 'x-mndt-gateway': 'secret' })
+    const stranger = 'nobody@datanalysis.re'
+    expect((await api({ method: 'GET', path: '/me', headers: as(stranger) })).status).toBe(200)
+    expect((await api({ method: 'GET', path: '/org', headers: as(stranger) })).status).toBe(200)
+    for (const route of ['/channels', '/agents', '/approvals', '/missions', '/briefs', '/memory', '/people', '/state', '/metrics', '/events', '/search']) {
+      const answer = await api({ method: 'GET', path: route, headers: as(stranger), query: { q: 'x' } })
+      expect(answer.status, route).toBe(403)
+    }
+    expect((await api({ method: 'POST', path: '/channels', headers: as(stranger), body: JSON.stringify({ title: 'X' }) })).status).toBe(403)
+    writeFileSync(path, JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: stranger, role: 'viewer' }] }))
+    expect((await api({ method: 'GET', path: '/channels', headers: as(stranger) })).status).toBe(200)
+  })
+})

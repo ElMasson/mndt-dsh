@@ -424,6 +424,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     const identity = identityOf(request, options.identity)
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
 
+    // On a team instance a person the role table does not name is served nothing
+    // but who they are (/me, /org: the page says so): proven by the sign-on, not
+    // part of the team. A role taken off grants.json applies on the next request.
+    if (teamInstance && path !== '/me' && path !== '/org') {
+      const table = await grants.grants()
+      if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+      if (roleOf(table.grants, identity) === undefined) return respond(403, { error: 'no role on this team: ask its owner' })
+    }
+
     try {
       if (request.method === 'GET' && path === '/me') {
         // Who the person is for the screen: their e-mail, their role and the name the role file gives them.
@@ -761,7 +770,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
-          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId }),
+          // The turn's agent, from the running turn itself: never what a request says.
+          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId, requestedByAgent: thread.agent }),
         })
         return respond(201, { approval })
       }

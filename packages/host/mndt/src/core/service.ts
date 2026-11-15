@@ -77,6 +77,8 @@ export interface ApprovalRequest {
   readonly channelId?: string
   readonly messageId?: string
   readonly requestedBy: string
+  /** The agent whose turn asked it: set by the server from the running turn, never from a request. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
 }
 
 /** What creating an agent needs. */
@@ -445,6 +447,9 @@ export class WorkbenchService {
       ...(request.missionId === undefined ? {} : { missionId: request.missionId }),
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
+      ...(request.requestedByAgent === undefined
+        ? {}
+        : { requestedByAgent: { id: request.requestedByAgent.id, handle: request.requestedByAgent.handle } }),
     }
     return this.#write(state => ({
       state: { ...state, approvals: [approval, ...state.approvals] },
