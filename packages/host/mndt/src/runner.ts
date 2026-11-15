@@ -17,8 +17,8 @@ import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
-import { applyToolPolicy, channelPolicy } from './tool-policy.ts'
-import type { ScopedToolsLike, ToolPolicy } from './tool-policy.ts'
+import { channelPolicy, scopeToolPolicy } from './tool-policy.ts'
+import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -61,6 +61,32 @@ interface WorkflowEngineLike {
   }
 }
 
+/**
+ * Create the agent of a run with its policy already scoped to its session
+ * lineage (see tool-policy.ts), so no step of it, nor of any child, runs first.
+ * @param ctx - the host context.
+ * @param policy - the allow-list, or undefined for the engine's whole composition.
+ * @param sessionId - the session the agent is created with.
+ * @param create - creates the agent.
+ * @returns the agent and the disposer of its policy, to call when the run ends.
+ */
+async function createUnderPolicy<T extends { agent: { session: { header: { id: string } } } }>(
+  ctx: Context, policy: ToolPolicy | undefined, sessionId: string, create: () => Promise<T>,
+): Promise<{ created: T; unscope: () => void }> {
+  const unscope = policy === undefined ? () => undefined : scopeToolPolicy(ctx as unknown as PolicyHostLike, sessionId, policy)
+  try {
+    const created = await create()
+    // The lineage is keyed by this id: another one would leave the run unguarded.
+    if (policy !== undefined && created.agent.session.header.id !== sessionId) {
+      throw new Error(`mndt: the agent was created as ${created.agent.session.header.id}, not ${sessionId}: its tool policy would not apply`)
+    }
+    return { created, unscope }
+  } catch (error) {
+    unscope()
+    throw error
+  }
+}
+
 /** The runner. */
 export class DshMissionRunner {
   readonly #ctx: Context
@@ -94,15 +120,11 @@ export class DshMissionRunner {
     }
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
     const selection = model === undefined ? undefined : model.currentSelection()
-    const policy = this.#options.tools
-    const created = await this.#ctx.agents.create({
+    const { created, unscope } = await createUnderPolicy(this.#ctx, this.#options.tools, mission.id, () => this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,
       ...(selection === undefined ? {} : { agentOptions: { provider: selection.provider, model: selection.model } }),
-      ...(policy === undefined ? {} : {
-        setup: (agentCtx: unknown) => { applyToolPolicy((agentCtx as { tools: ScopedToolsLike }).tools, policy) },
-      }),
-    })
+    }))
     await publishActor(mission.createdBy, mission.id)
     const childSessionId = created.agent.session.header.id
     const failures: string[] = []
@@ -157,6 +179,7 @@ export class DshMissionRunner {
       stopTurnEnd()
       await clearActor()
       await created.dispose()
+      unscope()
     }
   }
 }
@@ -188,16 +211,14 @@ export class DshTurnRunner implements TurnEngine {
     const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
-    const created = await this.#ctx.agents.create({
+    // Deny by default: the channel's servers and the approvals, nothing else.
+    const policy = channelPolicy(input.servers)
+    const { created, unscope } = await createUnderPolicy(this.#ctx, policy, input.turnId, () => this.#ctx.agents.create({
       sessionId: input.turnId as never,
       meta: { cwd: input.cwd },
       // The agent's own model, never the workstation default.
       agentOptions: { provider: input.agent.provider, model: input.agent.model },
-      // Deny by default: the channel's servers and the approvals, nothing else.
-      setup: (agentCtx: unknown) => {
-        applyToolPolicy((agentCtx as { tools: ScopedToolsLike }).tools, channelPolicy(input.servers))
-      },
-    })
+    }))
     await publishActor(input.actor, input.turnId)
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
@@ -240,6 +261,7 @@ export class DshTurnRunner implements TurnEngine {
       stopEvents()
       await clearActor()
       await created.dispose()
+      unscope()
     }
   }
 }

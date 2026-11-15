@@ -4,10 +4,12 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DshMissionRunner, DshTurnRunner } from '../src/runner.ts'
+import { soloWorkstation } from '../src/gateway.ts'
 import {
-  ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, applyToolPolicy, channelPolicy, toolRefusal,
+  ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, channelPolicy, hideOutsidePolicy, isServerName, mcpServerOf,
+  scopeToolPolicy, toolRefusal,
 } from '../src/tool-policy.ts'
-import type { ScopedToolsLike } from '../src/tool-policy.ts'
+import type { LineageAgentLike, ScopedToolsLike } from '../src/tool-policy.ts'
 import type { Mission } from '../src/core/index.ts'
 import type { TurnInput } from '../src/turns.ts'
 
@@ -42,10 +44,6 @@ function fakeTools(names: readonly string[]): FakeTools {
   return face
 }
 
-/** @returns why the recorded guards refuse a call, if any does. */
-const refusedBy = (face: FakeTools, name: string): string | undefined =>
-  face.guards.map(guard => guard({ name })).find(reason => reason !== undefined)
-
 describe('the allow-list of the agents of the team', () => {
   it('names no tool outside MCP, and only the approvals server for everyone', () => {
     expect(ALLOWED_TOOLS).toEqual([])
@@ -73,22 +71,87 @@ describe('the allow-list of the agents of the team', () => {
     for (const name of ENGINE_DEFAULTS) expect(toolRefusal(name, TEAM_MISSION_POLICY), name).toBeDefined()
   })
 
-  it('hides all but the allowed tools and refuses the rest at execution, a tool mounted later included', () => {
+  it('reads a server only from a well-formed name, and never allows a badly named one', () => {
+    expect(mcpServerOf('mcp__approvals__request_approval')).toBe('approvals')
+    expect(mcpServerOf('mcp__workbench_facts__read')).toBe('workbench_facts')
+    expect(isServerName('approvals__x')).toBe(false)
+    expect(isServerName('approvals_')).toBe(false)
+    // mcp__approvals___x splits at the first `__`: server approvals, tool _x.
+    expect(mcpServerOf('mcp__approvals___x')).toBe('approvals')
+    expect(channelPolicy(['approvals__x', 'qonto_']).servers).toEqual(new Set(['approvals']))
+  })
+
+  it('hides from one agent all but the allowed tools', () => {
     const face = fakeTools([...ENGINE_DEFAULTS, ...MCP])
-    const visible = applyToolPolicy(face, channelPolicy(['qonto']))
+    const visible = hideOutsidePolicy(face, channelPolicy(['qonto']), undefined)
     expect(visible).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
     expect(face.allow).toEqual(visible)
     expect(face.deny).toBeUndefined()
-    for (const name of ENGINE_DEFAULTS) expect(refusedBy(face, name), name).toBeDefined()
-    expect(refusedBy(face, 'mcp__dolibarr__get_invoices')).toBeDefined()
-    // Mounted after the turn started: refused unless the policy names it.
-    expect(refusedBy(face, 'shell_exec')).toBeDefined()
-    expect(refusedBy(face, 'mcp__qonto__get_statement')).toBeUndefined()
-    expect(refusedBy(face, 'mcp__approvals__request_approval')).toBeUndefined()
   })
 })
 
-describe('the runners apply it on the agent they create', () => {
+/** A host context that records its guards and lets a test announce agents. */
+function fakeHost(): {
+  host: { tools: { guard: (guard: (execution: { name: string; agent?: LineageAgentLike }) => string | undefined) => () => void }; on: (event: 'agent/created', listener: (payload: { agent: LineageAgentLike }) => void) => () => void }
+  guards: Set<(execution: { name: string; agent?: LineageAgentLike }) => string | undefined>
+  announce: (agent: LineageAgentLike) => void
+  refused: (name: string, agent?: LineageAgentLike) => string | undefined
+} {
+  const guards = new Set<(execution: { name: string; agent?: LineageAgentLike }) => string | undefined>()
+  const listeners = new Set<(payload: { agent: LineageAgentLike }) => void>()
+  return {
+    host: {
+      tools: { guard: (guard) => { guards.add(guard); return () => { guards.delete(guard) } } },
+      // Only agent/created is announced; the runner's other listeners hear nothing.
+      on: (event, listener) => {
+        if (event !== 'agent/created') return () => undefined
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    },
+    guards,
+    announce: (agent) => { for (const listener of listeners) listener({ agent }) },
+    refused: (name, agent) => [...guards]
+      .map(guard => guard({ name, ...(agent === undefined ? {} : { agent }) }))
+      .find(reason => reason !== undefined),
+  }
+}
+
+/** @returns an agent of the given session, with its own recorded tools face. */
+const agentOf = (id: string, parentSession?: string): LineageAgentLike & { ctx: { tools: FakeTools } } => ({
+  session: { header: { id, ...(parentSession === undefined ? {} : { parentSession }) } },
+  ctx: { tools: fakeTools([...ENGINE_DEFAULTS, ...MCP]) },
+})
+
+describe('the policy follows the session lineage of a run, not the agent it is set on', () => {
+  it('refuses and hides for the root, its child and the child\'s child; never for another session', () => {
+    const { host, announce, refused, guards } = fakeHost()
+    const stop = scopeToolPolicy(host, 'trn_1', channelPolicy(['qonto']))
+    const root = agentOf('trn_1')
+    const child = agentOf('child_1', 'trn_1')
+    const grandchild = agentOf('child_2', 'child_1')
+    for (const agent of [root, child, grandchild]) {
+      announce(agent)
+      expect(agent.ctx.tools.allow, agent.session.header.id).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
+      expect(refused('bash', agent), agent.session.header.id).toBeDefined()
+      expect(refused('mcp__dolibarr__get_invoices', agent)).toBeDefined()
+      expect(refused('mcp__qonto__list_transactions', agent)).toBeUndefined()
+    }
+    // A child refused before it was announced is refused all the same.
+    expect(refused('bash', agentOf('child_3', 'trn_1'))).toBeDefined()
+    // Another person's run, and a call with no agent: untouched.
+    const other = agentOf('trn_2')
+    announce(other)
+    expect(other.ctx.tools.allow).toBeUndefined()
+    expect(refused('bash', other)).toBeUndefined()
+    expect(refused('bash')).toBeUndefined()
+    stop()
+    expect(guards.size).toBe(0)
+    expect(refused('bash', root)).toBeUndefined()
+  })
+})
+
+describe('the runners scope it before the agent exists, and lift it after', () => {
   let dir: string
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'mndt-tool-policy-'))
@@ -99,53 +162,84 @@ describe('the runners apply it on the agent they create', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  /** @returns a host context whose agents receive the recorded tools face. */
-  function fakeCtx(face: FakeTools): { ctx: Context; setups: number[] } {
-    const setups: number[] = []
+  /**
+   * @param createdAs - the session id the fake engine gives the agent (its requested id when omitted).
+   * @returns a host whose run creates an agent and a workflow child, and records what each saw.
+   */
+  function fakeCtx(createdAs?: string) {
+    const { host, announce, refused, guards } = fakeHost()
+    type Announced = ReturnType<typeof agentOf>
+    type Seen = { root?: Announced; child?: Announced; childBash?: string | undefined; guardsAtCreate?: number }
+    const seen: Seen = {}
     const ctx = {
+      ...host,
       get: (name: string) => (name === 'workflowEngine'
-        ? { start: () => ({ id: 'run-1', result: Promise.resolve('Réponse.') }) }
+        ? {
+          start: () => {
+            // The workflow child: the agent that actually calls the model.
+            const child = agentOf('child_1', seen.root!.session.header.id)
+            announce(child)
+            seen.child = child
+            seen.childBash = refused('bash', child)
+            return { id: 'run-1', result: Promise.resolve('Réponse.') }
+          },
+        }
         : undefined),
-      on: () => () => undefined,
       agents: {
-        create: async (options: { setup?: (agentCtx: unknown) => void }) => {
-          if (options.setup !== undefined) {
-            setups.push(1)
-            options.setup({ tools: face })
-          }
-          return { agent: { session: { header: { id: 'session-1' } } }, dispose: async () => undefined }
+        create: async (options: { sessionId: string }) => {
+          seen.guardsAtCreate = guards.size
+          const root = agentOf(createdAs ?? options.sessionId)
+          announce(root)
+          seen.root = root
+          return { agent: root, dispose: async () => undefined }
         },
       },
     }
-    return { ctx: ctx as unknown as Context, setups }
+    // `on` also serves the runner's own session/event listener.
+    return { ctx: ctx as unknown as Context, seen, guards }
   }
 
-  it('a channel turn: its servers and the approvals, nothing else', async () => {
-    const face = fakeTools([...ENGINE_DEFAULTS, ...MCP])
-    const { ctx } = fakeCtx(face)
-    const input = {
-      turnId: 'trn_1', actor: 'smarion@datanalysis.re', prompt: 'Bonjour', cwd: join(dir, 'files'),
-      servers: ['qonto'], signal: new AbortController().signal,
-      agent: { handle: 'assistant', provider: 'p', model: 'm' },
-      channel: { id: 'ch_1', name: 'compta' },
-    } as unknown as TurnInput
-    const output = await new DshTurnRunner(ctx).run(input)
+  const turn = (): TurnInput => ({
+    turnId: 'trn_1', actor: 'smarion@datanalysis.re', prompt: 'Bonjour', cwd: join(dir, 'files'),
+    servers: ['qonto'], signal: new AbortController().signal,
+    agent: { handle: 'assistant', provider: 'p', model: 'm' },
+    channel: { id: 'ch_1', name: 'compta' },
+  } as unknown as TurnInput)
+
+  it('a channel turn: the root and the workflow child get its servers and the approvals, nothing else', async () => {
+    const { ctx, seen, guards } = fakeCtx()
+    const output = await new DshTurnRunner(ctx).run(turn())
     expect(output.text).toBe('Réponse.')
-    expect(face.allow).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
-    expect(refusedBy(face, 'bash')).toBeDefined()
+    expect(seen.guardsAtCreate).toBe(1)
+    expect(seen.root?.ctx.tools.allow).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
+    expect(seen.child?.ctx.tools.allow).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
+    expect(seen.childBash).toBeDefined()
+    expect(guards.size).toBe(0)
   })
 
-  it('a team mission: MCP tools only; a solo mission keeps the whole composition', async () => {
-    const mission = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
-    const team = fakeTools([...ENGINE_DEFAULTS, ...MCP])
-    await new DshMissionRunner(fakeCtx(team).ctx, { tools: TEAM_MISSION_POLICY }).run(mission)
-    expect(team.allow).toEqual(MCP)
-    expect(refusedBy(team, 'bash')).toBeDefined()
+  it('fails closed when the agent is not created under the session its policy is keyed by', async () => {
+    const { ctx, guards } = fakeCtx('another_session')
+    await expect(new DshTurnRunner(ctx).run(turn())).rejects.toThrow(/tool policy would not apply/)
+    expect(guards.size).toBe(0)
+  })
 
-    const solo = fakeTools([...ENGINE_DEFAULTS, ...MCP])
-    const soloCtx = fakeCtx(solo)
-    await new DshMissionRunner(soloCtx.ctx).run(mission)
-    expect(soloCtx.setups).toEqual([])
-    expect(solo.allow).toBeUndefined()
+  it('a team mission: MCP tools only, child included; a declared solo mission keeps the whole composition', async () => {
+    const mission = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const team = fakeCtx()
+    await new DshMissionRunner(team.ctx, { tools: TEAM_MISSION_POLICY }).run(mission)
+    expect(team.seen.child?.ctx.tools.allow).toEqual(MCP)
+    expect(team.seen.childBash).toBeDefined()
+
+    const solo = fakeCtx()
+    await new DshMissionRunner(solo.ctx).run(mission)
+    expect(solo.seen.guardsAtCreate).toBe(0)
+    expect(solo.seen.child?.ctx.tools.allow).toBeUndefined()
+  })
+
+  it('the whole composition only on a host declared solo, never behind the sign-on proxy', () => {
+    expect(soloWorkstation(undefined, {})).toBe(false)
+    expect(soloWorkstation(undefined, { DSH_MNDT_SOLO_WORKSTATION: 'true' })).toBe(false)
+    expect(soloWorkstation(undefined, { DSH_MNDT_SOLO_WORKSTATION: '1' })).toBe(true)
+    expect(soloWorkstation('x-forwarded-email', { DSH_MNDT_SOLO_WORKSTATION: '1' })).toBe(false)
   })
 })

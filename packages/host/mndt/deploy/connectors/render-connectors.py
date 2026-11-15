@@ -115,8 +115,11 @@ def load_descriptors():
         with open(os.path.join(DESCRIPTORS, name), encoding='utf-8') as handle:
             data = json.load(handle)
         server = data.get('serverName') or os.path.splitext(name)[0]
-        if not SERVER_NAME.match(server):
-            raise ValueError(f'{name}: serverName {server!r} is not a lowercase identifier')
+        # Tool names read mcp__<server>__<tool>: a server named with `__`, or ending
+        # with `_`, would make the split ambiguous, so the allow-list could read a
+        # tool of `approvals__x` as one of `approvals`.
+        if not SERVER_NAME.match(server) or '__' in server or server.endswith('_'):
+            raise ValueError(f'{name}: serverName {server!r} is not a lowercase identifier without `__` nor a final `_`')
         if not data.get('command'):
             continue
         rows.append({

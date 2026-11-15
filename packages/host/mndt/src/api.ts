@@ -197,6 +197,22 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
 
+  /** A team instance: people other than the owner reach this API through the sign-on proxy. */
+  const teamInstance = options.identity.proxyUserHeader !== undefined && options.identity.proxyUserHeader !== ''
+
+  /**
+   * Starting a mission on a team instance is the owner's alone (Missions is off
+   * for members, shown « bientôt »); the rest of the team reads it as absent.
+   * @param identity - the caller.
+   * @returns the refusal, or undefined when they may start one.
+   */
+  const missionsClosed = async (identity: string): Promise<MndtApiResponse | undefined> => {
+    if (!teamInstance) return undefined
+    const table = await grants.grants()
+    const owner = table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner')
+    return owner ? undefined : respond(404, { error: 'not found' })
+  }
+
   /**
    * What one person may read, resolved once per request (see visibility.ts).
    * @param identity - the reader.
@@ -583,6 +599,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
 
       if (request.method === 'POST' && path === '/missions') {
+        const closed = await missionsClosed(identity)
+        if (closed !== undefined) return closed
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
@@ -625,6 +643,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       if (request.method === 'POST' && path.startsWith('/missions/') && path.endsWith('/retry')) {
         const id = path.slice('/missions/'.length, -'/retry'.length)
+        const closed = await missionsClosed(identity)
+        if (closed !== undefined) return closed
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const original = await service.getMission(id)

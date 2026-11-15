@@ -68,6 +68,17 @@ function readGatewaySecret(path: string | undefined): string | undefined {
 }
 
 /**
+ * @param proxyUserHeader - the header the proxy proves the person with, if any.
+ * @param env - the environment.
+ * @returns whether missions may use the engine's whole composition: only on a
+ * host explicitly declared solo, and never behind the sign-on proxy.
+ */
+export function soloWorkstation(proxyUserHeader: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (proxyUserHeader !== undefined && proxyUserHeader !== '') return false
+  return env.DSH_MNDT_SOLO_WORKSTATION === '1'
+}
+
+/**
  * Whether the workstation Remote is closed: it is on a team workbench, where
  * several people reach the same shell behind single sign-on (a proxy user
  * header is configured) and the product API serves each under their own identity.
@@ -311,11 +322,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   /**
    * @param ctx - the host context.
-   * @returns the mission runner: on a team instance, its agent gets the team's
-   * allow-list (MCP tools only), never the engine's shell, files, web or subagents.
+   * @returns the mission runner. Its agent gets the team's allow-list (MCP tools
+   * only, never the engine's shell, files, web or subagents) unless this host
+   * is declared a solo workstation (DSH_MNDT_SOLO_WORKSTATION=1, refused on a
+   * team instance): a missing or mistyped setting never opens the whole engine.
    */
   private missionRunner(ctx: Context): DshMissionRunner {
-    return new DshMissionRunner(ctx, this.proxyUserHeader === undefined || this.proxyUserHeader === '' ? {} : { tools: TEAM_MISSION_POLICY })
+    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader) ? {} : { tools: TEAM_MISSION_POLICY })
   }
 
   private closedToTeam(): string | undefined {
