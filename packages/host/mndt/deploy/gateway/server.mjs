@@ -36,6 +36,20 @@ const GATEWAY_COOKIE = 'mndt-session'
 // The secret that makes the identity header believable to the API: a file
 // outside /state, mounted read-only here and in the workbench. Read once.
 const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
+// The tenant's owner (DSH_MNDT_IDENTITY): the only person who gets the DSH shell,
+// under /dsh/. Everyone else gets the team page and the product API, nothing more.
+const OWNER = (process.env.OWNER ?? '').trim().toLowerCase()
+const SHELL_PREFIX = '/dsh'
+
+/**
+ * @param value - the e-mail header the proxy signed.
+ * @returns whether it names the tenant's owner: printable ASCII only (toLowerCase folds a few
+ * Unicode characters onto ASCII ones, such as the Kelvin sign onto k), then compared lower-cased.
+ */
+function isOwner(value) {
+  const email = value.trim()
+  return OWNER !== '' && /^[\x21-\x7e]+$/.test(email) && email.toLowerCase() === OWNER
+}
 // The sign-on proxy's key (oauth2-proxy `signature_key`, a file outside /state).
 // The gateway serves only requests the proxy signed (GAP-Signature): a request
 // from anywhere else (a container of the tenant's network, an agent's command)
@@ -372,8 +386,33 @@ function serve(req, res) {
     forward(req, res, API, `${rest}${url.search}`, undefined, GATEWAY_SECRET === '' ? {} : { [GATEWAY_SECRET_HEADER]: GATEWAY_SECRET })
     return
   }
+  // The team page, for everyone the proxy admitted: its index at /, its hashed files under
+  // /team-assets/. The API serves them (/team/…) without identity: they hold no data.
+  if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/') {
+    forward(req, res, API, '/team/index.html')
+    return
+  }
+  if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/team-assets/')) {
+    forward(req, res, API, `/team${url.pathname}`)
+    return
+  }
   const cookies = cookiesOf(req.headers.cookie)
   const email = firstHeader(req.headers['x-forwarded-email'])
+  // The shell is the owner's alone. Anyone else: not found, without a hint, and the launch
+  // token is never exchanged for them.
+  if (!isOwner(email)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('not found')
+    return
+  }
+  if (url.pathname === SHELL_PREFIX) {
+    res.writeHead(302, { location: `${SHELL_PREFIX}/`, 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
+  // The owner's DSH under /dsh/: its relative assets resolve there, the prefix is removed for
+  // the shell; its absolute calls (/api/…, the WebSocket) reach the shell as they are.
+  const shellPath = url.pathname.startsWith(`${SHELL_PREFIX}/`) ? url.pathname.slice(SHELL_PREFIX.length) : url.pathname
   const token = launchToken()
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
@@ -382,7 +421,7 @@ function serve(req, res) {
   // local checks, which carry no identity.
   const perPerson = email !== '' && SHELLS_URL !== ''
   if (session !== undefined && (email === '' || session.email === email)) {
-    forward(req, res, session.base ?? WORKBENCH, `${url.pathname}${url.search}`, session.cookie)
+    forward(req, res, session.base ?? WORKBENCH, `${shellPath}${url.search}`, session.cookie)
     return
   }
   if (perPerson) {
@@ -441,7 +480,7 @@ function serve(req, res) {
     res.end()
     return
   }
-  forward(req, res, WORKBENCH, `${url.pathname}${url.search}`)
+  forward(req, res, WORKBENCH, `${shellPath}${url.search}`)
 }
 
 server.on('upgrade', (req, socket, head) => {
@@ -456,6 +495,12 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy()
     return
   }
+  // The shell's WebSocket (remote.mux) is the owner's alone: anyone else, not found.
+  if (!isOwner(firstHeader(req.headers['x-forwarded-email']))) {
+    socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n')
+    return
+  }
+  const shellPath = url.pathname.startsWith(`${SHELL_PREFIX}/`) ? url.pathname.slice(SHELL_PREFIX.length) : url.pathname
   const cookies = cookiesOf(req.headers.cookie)
   const existing = cookies.get(GATEWAY_COOKIE)
   const session = existing === undefined ? undefined : liveSession(existing)
@@ -470,7 +515,7 @@ server.on('upgrade', (req, socket, head) => {
     hostname: parts.host,
     port: parts.port,
     method: req.method,
-    path: `${url.pathname}${url.search}`,
+    path: `${shellPath}${url.search}`,
     headers,
   })
   // A WebSocket lives long and ends abruptly (closed tab, sleeping laptop,

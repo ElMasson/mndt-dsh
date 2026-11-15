@@ -31,6 +31,15 @@ describe('the identity header is believed only from the gateway', () => {
     expect(identityOf({ headers: { 'x-forwarded-email': owner, 'x-mndt-gateway': SECRET } }, { proxyUserHeader: 'x-forwarded-email' })).toBeUndefined()
   })
 
+  it('believes only a printable ASCII e-mail: Unicode that lower-cases onto ASCII proves nothing', () => {
+    const options = { proxyUserHeader: 'x-forwarded-email', gatewaySecret: SECRET }
+    // U+212A KELVIN SIGN lower-cases to k: "du\u212Ae@" would otherwise read as duke@.
+    expect('du\u212Ae@datanalysis.re'.toLowerCase()).toBe('duke@datanalysis.re')
+    expect(identityOf({ headers: { 'x-forwarded-email': 'du\u212Ae@datanalysis.re', 'x-mndt-gateway': SECRET } }, options)).toBeUndefined()
+    expect(identityOf({ headers: { 'x-forwarded-email': 'duké@datanalysis.re', 'x-mndt-gateway': SECRET } }, options)).toBeUndefined()
+    expect(identityOf({ headers: { 'x-forwarded-email': 'Duke@Datanalysis.re', 'x-mndt-gateway': SECRET } }, options)).toBe('duke@datanalysis.re')
+  })
+
   it('closes the provisioned-token path on a team workbench: tokens live in /state, which an agent reads', () => {
     const tokens = { 'tok-owner': { user: owner } }
     expect(identityOf({ authorization: 'Bearer tok-owner' }, { tokens })).toBe(owner)
@@ -71,7 +80,7 @@ describe('the gateway vouches for its own requests only', () => {
     const child: ChildProcess = spawn(process.execPath, [join(deploy, 'gateway', 'server.mjs')], {
       env: {
         ...process.env, PORT: String(port), API: api, WORKBENCH: workbench, TOKEN_FILE: '/nonexistent',
-        GATEWAY_SECRET_FILE: secretFile, PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(),
+        GATEWAY_SECRET_FILE: secretFile, PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: owner,
       },
       stdio: 'ignore',
     })
