@@ -199,6 +199,9 @@ if [ "$old_state" = installed ]; then
     http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
   old_seen=$(curl -s -m 20 -H "x-forwarded-email: $viewer" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
   echo "old briefing run by the owner: $old_run; briefs the viewer reads on the old version: $old_seen"
+  # The starting point this rehearsal needs: an old shared brief the team reads
+  # (the update must stop serving it). Without it, the update proves nothing.
+  if [ "$old_run" = 200 ] && [ "$old_seen" -ge 1 ]; then broke=1; else broke=0; echo "KO: no old shared brief to hide, the update below would prove nothing"; fi
 else
 step "A2. the old seed-team.sh: its block lands after the [] (expected to break)"
 own
