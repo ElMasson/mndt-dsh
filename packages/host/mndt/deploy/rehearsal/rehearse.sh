@@ -145,6 +145,12 @@ signed_override
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 
+# A mission runs on the workstation's default model (deepseek on Scaleway in
+# production): here it is the fake model too, or a mission could not reach it.
+for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
+  sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
+  echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
+done
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
