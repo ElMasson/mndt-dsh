@@ -1001,6 +1001,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   you={state.you}
                   onSettled={settled}
                   t={tc}
+                  names={team.names}
+                  onPending={() => { setView('pending') }}
                   look="mndt-web"
                 />
               </section>
