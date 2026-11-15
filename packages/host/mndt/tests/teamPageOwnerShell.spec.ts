@@ -48,6 +48,17 @@ describe('the API serves the team page', () => {
     expect(script.file?.contentType).toBe('text/javascript; charset=utf-8')
   })
 
+  it('answers a HEAD of the page as its GET, and a configured folder with a trailing slash is the same folder', async () => {
+    expect((await api()({ method: 'HEAD', path: '/team/index.html' })).status).toBe(200)
+    const configured = process.env.DSH_MNDT_TEAM_DIR ?? ''
+    process.env.DSH_MNDT_TEAM_DIR = `${configured}/`
+    try {
+      expect((await api()({ method: 'GET', path: '/team/team-assets/app-1a2b.js' })).status).toBe(200)
+    } finally {
+      process.env.DSH_MNDT_TEAM_DIR = configured
+    }
+  })
+
   it('gives nothing outside the page folder, nothing hidden, nothing of an unknown type', async () => {
     for (const path of [
       '/team/../../grants.json', '/team/%2e%2e/%2e%2e/state.json', '/team/..%2f..%2fstate.json', '/team/%2fetc%2fpasswd.json',
@@ -131,6 +142,23 @@ describe('the gateway: the team page for everyone, the shell for the owner alone
     expect(await upgrade(base, '/api/remote.mux', viewer)).toBe('HTTP/1.1 404 Not Found')
     // A launch-token URL is the team page for a member: no token is ever exchanged for them.
     expect((await proxyFetch(base, '/?token=x', { headers: { 'x-forwarded-email': viewer } })).status).toBe(200)
+    expect(shell.seen).toHaveLength(0)
+  })
+
+  it('never takes an e-mail that is not plain ASCII for the owner', async () => {
+    const api = await recorder()
+    const shell = await recorder()
+    const port = 20000 + Math.floor(Math.random() * 20000)
+    // An owner configured with a non-ASCII letter: nobody, the same spelling included, is the owner.
+    const child: ChildProcess = spawn(process.execPath, [join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')], {
+      env: { ...process.env, PORT: String(port), API: api.url, WORKBENCH: shell.url, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: 'duké@datanalysis.re' },
+      stdio: 'ignore',
+    })
+    cleanup.push(() => { child.kill() })
+    const base = `http://127.0.0.1:${port}`
+    for (let attempt = 0; attempt < 100 && !(await fetch(`${base}/`).then(() => true, () => false)); attempt += 1) await sleep(50)
+    shell.seen.length = 0
+    expect((await proxyFetch(base, '/dsh/', { headers: { 'x-forwarded-email': 'duké@datanalysis.re' } })).status).toBe(404)
     expect(shell.seen).toHaveLength(0)
   })
 

@@ -40,6 +40,16 @@ const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
 // under /dsh/. Everyone else gets the team page and the product API, nothing more.
 const OWNER = (process.env.OWNER ?? '').trim().toLowerCase()
 const SHELL_PREFIX = '/dsh'
+
+/**
+ * @param value - the e-mail header the proxy signed.
+ * @returns whether it names the tenant's owner: printable ASCII only (toLowerCase folds a few
+ * Unicode characters onto ASCII ones, such as the Kelvin sign onto k), then compared lower-cased.
+ */
+function isOwner(value) {
+  const email = value.trim()
+  return OWNER !== '' && /^[\x21-\x7e]+$/.test(email) && email.toLowerCase() === OWNER
+}
 // The sign-on proxy's key (oauth2-proxy `signature_key`, a file outside /state).
 // The gateway serves only requests the proxy signed (GAP-Signature): a request
 // from anywhere else (a container of the tenant's network, an agent's command)
@@ -390,7 +400,7 @@ function serve(req, res) {
   const email = firstHeader(req.headers['x-forwarded-email'])
   // The shell is the owner's alone. Anyone else: not found, without a hint, and the launch
   // token is never exchanged for them.
-  if (OWNER === '' || email.trim().toLowerCase() !== OWNER) {
+  if (!isOwner(email)) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('not found')
     return
@@ -486,7 +496,7 @@ server.on('upgrade', (req, socket, head) => {
     return
   }
   // The shell's WebSocket (remote.mux) is the owner's alone: anyone else, not found.
-  if (OWNER === '' || firstHeader(req.headers['x-forwarded-email']).trim().toLowerCase() !== OWNER) {
+  if (!isOwner(firstHeader(req.headers['x-forwarded-email']))) {
     socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n')
     return
   }

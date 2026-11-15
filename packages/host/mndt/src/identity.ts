@@ -66,6 +66,10 @@ export function identityOf(
   if (!fromGateway(request.headers?.[GATEWAY_SECRET_HEADER], options.gatewaySecret)) return undefined
   const raw = request.headers?.[header.toLowerCase()]
   if (raw === undefined) return undefined
+  // An e-mail proven by the proxy is printable ASCII only: toLowerCase() folds a few Unicode
+  // characters onto ASCII ones (the Kelvin sign becomes k), which could make another person's
+  // spelling match. Anything else proves nothing.
+  if (!/^[\x21-\x7e]+$/.test(raw.trim())) return undefined
   const identity = raw.trim().toLowerCase()
   return identity === '' ? undefined : identity
 }
