@@ -92,7 +92,7 @@ describe('the allow-list of the agents of the team', () => {
 
 /** A host context that records its guards and lets a test announce agents. */
 function fakeHost(): {
-  host: { tools: { guard: (guard: (execution: { name: string; agent?: LineageAgentLike }) => string | undefined) => () => void }; on: (event: 'agent/created', listener: (payload: { agent: LineageAgentLike }) => void) => () => void }
+  host: { agents: { get: (id: never) => LineageAgentLike | undefined }; tools: { guard: (guard: (execution: { name: string; agent?: LineageAgentLike }) => string | undefined) => () => void }; on: (event: 'agent/created', listener: (payload: { agent: LineageAgentLike }) => void) => () => void }
   guards: Set<(execution: { name: string; agent?: LineageAgentLike }) => string | undefined>
   announce: (agent: LineageAgentLike) => void
   refused: (name: string, agent?: LineageAgentLike) => string | undefined
@@ -101,6 +101,7 @@ function fakeHost(): {
   const listeners = new Set<(payload: { agent: LineageAgentLike }) => void>()
   return {
     host: {
+      agents: { get: (id: never) => live.get(id) },
       tools: { guard: (guard) => { guards.add(guard); return () => { guards.delete(guard) } } },
       // Only agent/created is announced; the runner's other listeners hear nothing.
       on: (event, listener) => {
@@ -117,11 +118,18 @@ function fakeHost(): {
   }
 }
 
-/** @returns an agent of the given session, with its own recorded tools face. */
-const agentOf = (id: string, parentSession?: string): LineageAgentLike & { ctx: { tools: FakeTools } } => ({
-  session: { header: { id, ...(parentSession === undefined ? {} : { parentSession }) } },
-  ctx: { tools: fakeTools([...ENGINE_DEFAULTS, ...MCP]) },
-})
+/** The live agents, as the engine's registry holds them. */
+const live = new Map<string, LineageAgentLike>()
+
+/** @returns a live agent of the given session, with its own recorded tools face. */
+const agentOf = (id: string, parentSession?: string): LineageAgentLike & { ctx: { tools: FakeTools } } => {
+  const agent = {
+    session: { header: { id, ...(parentSession === undefined ? {} : { parentSession }) } },
+    ctx: { tools: fakeTools([...ENGINE_DEFAULTS, ...MCP]) },
+  }
+  live.set(id, agent)
+  return agent
+}
 
 describe('the policy follows the session lineage of a run, not the agent it is set on', () => {
   it('refuses and hides for the root, its child and the child\'s child; never for another session', () => {
@@ -148,6 +156,41 @@ describe('the policy follows the session lineage of a run, not the agent it is s
     stop()
     expect(guards.size).toBe(0)
     expect(refused('bash', root)).toBeUndefined()
+  })
+
+  it('refuses a grandchild whose parent was never announced nor ran a tool', () => {
+    const { host, refused } = fakeHost()
+    scopeToolPolicy(host, 'trn_race', channelPolicy(['qonto']))
+    agentOf('trn_race')
+    agentOf('race_child', 'trn_race')
+    const grandchild = agentOf('race_grandchild', 'race_child')
+    expect(refused('bash', grandchild)).toBeDefined()
+    expect(refused('mcp__qonto__list_transactions', grandchild)).toBeUndefined()
+  })
+
+  it('bounds two runs at once each to its own servers, and leaves nothing behind either', () => {
+    const { host, refused, guards } = fakeHost()
+    const stopQonto = scopeToolPolicy(host, 'trn_q', channelPolicy(['qonto']))
+    const stopDolibarr = scopeToolPolicy(host, 'trn_d', channelPolicy(['dolibarr']))
+    const q = agentOf('child_q', 'trn_q')
+    const d = agentOf('child_d', 'trn_d')
+    agentOf('trn_q')
+    agentOf('trn_d')
+    expect(refused('mcp__qonto__list_transactions', q)).toBeUndefined()
+    expect(refused('mcp__dolibarr__get_invoices', q)).toMatch(/dolibarr is not allowed/)
+    expect(refused('mcp__dolibarr__get_invoices', d)).toBeUndefined()
+    expect(refused('mcp__qonto__list_transactions', d)).toMatch(/qonto is not allowed/)
+    stopQonto()
+    // The other run keeps its bound; the finished one leaves no guard.
+    expect(refused('mcp__qonto__list_transactions', d)).toMatch(/qonto is not allowed/)
+    expect(refused('mcp__dolibarr__get_invoices', q)).toBeUndefined()
+    stopDolibarr()
+    expect(guards.size).toBe(0)
+    // A later run with the same session id starts from its own policy alone.
+    const stopNext = scopeToolPolicy(host, 'trn_q', channelPolicy(['dolibarr']))
+    expect(refused('mcp__dolibarr__get_invoices', q)).toBeUndefined()
+    expect(refused('mcp__qonto__list_transactions', q)).toMatch(/qonto is not allowed/)
+    stopNext()
   })
 })
 

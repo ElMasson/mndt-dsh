@@ -111,6 +111,8 @@ export interface LineageAgentLike {
 
 /** The host context face the policy uses, structurally. */
 export interface PolicyHostLike {
+  /** The live agents, to walk a session's ancestry up to its root. */
+  readonly agents: { get(id: never): LineageAgentLike | undefined }
   readonly tools: {
     guard(guard: (execution: { readonly name: string; readonly agent?: LineageAgentLike | undefined }) => string | undefined): () => void
   }
@@ -127,13 +129,27 @@ export interface PolicyHostLike {
  */
 export function scopeToolPolicy(host: PolicyHostLike, rootSessionId: string, policy: ToolPolicy): () => void {
   const lineage = new Set([rootSessionId])
+  // A descendant may call a tool before it, or its parent, was announced: the
+  // whole ancestry is walked through the live agents, so a grandchild whose
+  // parent never ran a tool is still recognised. Every agent met on a path that
+  // reaches the root joins the lineage. An agent outside every lineage (the
+  // owner's own shell, another run) is untouched: this guard is the run's only.
   const inLineage = (agent: LineageAgentLike | undefined): boolean => {
-    if (agent === undefined) return false
-    const header = agent.session.header
-    if (lineage.has(header.id)) return true
-    if (header.parentSession !== undefined && lineage.has(header.parentSession)) {
-      lineage.add(header.id)
-      return true
+    const path: string[] = []
+    let header = agent?.session.header
+    for (let depth = 0; header !== undefined && depth < 64; depth += 1) {
+      if (lineage.has(header.id)) {
+        for (const id of path) lineage.add(id)
+        return true
+      }
+      path.push(header.id)
+      const parent = header.parentSession
+      if (parent === undefined) return false
+      if (lineage.has(parent)) {
+        for (const id of path) lineage.add(id)
+        return true
+      }
+      header = host.agents.get(parent as never)?.session.header
     }
     return false
   }

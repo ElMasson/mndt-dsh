@@ -154,6 +154,14 @@ step "3. seed-team.sh, the production script (Compose calls through compose-shim
 # The workbench writes its profile files as root; on the server seed-team.sh runs
 # as root too. Here it runs as this user, so hand the profile files over first.
 docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || exit 1
+# A second MCP server, mounted for the tool probe and never allowed in the
+# rehearsal's channel: the turn must neither see nor run it (seed-team.sh
+# restarts the workbench right after, which starts it).
+mkdir -p "$data/tools"
+cp "$deploy/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs"
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO: the facts server was not mounted"
 shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
