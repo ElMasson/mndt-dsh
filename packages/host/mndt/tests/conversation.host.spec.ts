@@ -415,12 +415,28 @@ describe('channels, mentions and agent turns', () => {
         kind: 'send-email',
         title: 'Relance',
         payload: {},
+        // A request cannot name the agent: the server reads it from the running turn.
+        requestedByAgent: { id: 'agt_forged', handle: 'forged' },
       }),
     })
-    expect((card.body as { approval: object }).approval).toMatchObject({
+    const approval = (card.body as { approval: { requestedBy: string; requestedByAgent?: { id: string; handle: string } } }).approval
+    expect(approval).toMatchObject({
       channelId: general,
       messageId: asked.id,
     })
+    // The person who mentioned the agent stays the requester; the turn's agent is served beside them.
+    expect(approval.requestedBy).toBe(owner)
+    expect(approval.requestedByAgent).toEqual({ id: assistant, handle: 'assistant' })
+    // A card asked outside any turn names no agent.
+    const plain = await b.api({ method: 'POST', path: '/approvals', ...asOwner,
+      body: JSON.stringify({ kind: 'send-email', title: 'Hors tour', payload: {}, requestedByAgent: { id: 'agt_forged', handle: 'forged' } }) })
+    expect((plain.body as { approval: object }).approval).not.toHaveProperty('requestedByAgent')
+    // A run that is not the running turn (a forged or stale x-mndt-run) files nothing in the thread.
+    const wrongRun = await b.api({ method: 'POST', path: '/approvals', ...asOwner, headers: { 'x-mndt-run': 'trn_not_this_one' },
+      body: JSON.stringify({ kind: 'send-email', title: 'Autre tour', payload: {} }) })
+    const stray = (wrongRun.body as { approval: Record<string, unknown> }).approval
+    expect(stray).not.toHaveProperty('requestedByAgent')
+    expect(stray).not.toHaveProperty('channelId')
     release()
     await b.turns.settled()
   })

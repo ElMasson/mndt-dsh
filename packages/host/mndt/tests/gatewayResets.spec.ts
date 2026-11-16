@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { gapSignature, proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
+import { freePort } from './support/freePort.ts'
 
 const SHELL_OWNER = 'duke@datanalysis.re'
 
@@ -49,7 +50,7 @@ async function workbench(upgrade: Upgrade): Promise<string> {
 
 /** @returns the gateway's port and process, once it listens. */
 async function gateway(target: string): Promise<{ port: number; child: ChildProcess }> {
-  const port = 20000 + Math.floor(Math.random() * 20000)
+  const port = await freePort()
   const child = spawn(process.execPath, [gatewayScript], {
     env: { ...process.env, PORT: String(port), API: target, WORKBENCH: target, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: SHELL_OWNER },
     stdio: 'ignore',

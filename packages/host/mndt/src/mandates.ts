@@ -68,7 +68,8 @@ export function mandateState(mandate: Mandate, today: string): MandateState {
 export function draftRefusal(draft: MandateDraft, today: string): string | undefined {
   if (draft.delegant.trim() === '') return 'a mandate needs a delegant'
   if (draft.delegataire.trim() === '') return 'a mandate needs a delegataire'
-  if (draft.delegant.trim() === draft.delegataire.trim()) return 'a person cannot delegate to themselves'
+  // One person whatever the capitals: A@x and a@x are the same proven e-mail (#75 review).
+  if (draft.delegant.trim().toLowerCase() === draft.delegataire.trim().toLowerCase()) return 'a person cannot delegate to themselves'
   if (draft.purpose.trim() === '') return 'a mandate needs a purpose'
   if (!isDate(draft.expiresOn)) return 'the expiry must be a date, for example 2026-11-30'
   if (draft.expiresOn < today) return 'the expiry is already past'

@@ -73,10 +73,11 @@ describe('one spelling of a person, whatever case Entra uses', () => {
 })
 
 describe('the role file names', () => {
-  it('refuses a name with a control character or a line break, and keeps __proto__ a plain key', async () => {
+  it('sets aside a row whose name has a control character or a line break, and keeps __proto__ a plain key', async () => {
     for (const name of ['Line\nbreak', 'Bell\u0007', 'Sep x']) {
       const api = bench(undefined, [{ subject: 'stephane.masson@datanalysis.re', role: 'owner', name }])
-      expect((await api({ method: 'GET', path: '/people', headers: as('stephane.masson@datanalysis.re') })).status, JSON.stringify(name)).toBe(503)
+      // The row is set aside (#75): its person holds no role, nobody else is cut off.
+      expect((await api({ method: 'GET', path: '/people', headers: as('stephane.masson@datanalysis.re') })).status, JSON.stringify(name)).toBe(403)
     }
     const api = bench(undefined, [{ subject: 'stephane.masson@datanalysis.re', role: 'owner' }, { subject: '__proto__', role: 'viewer', name: 'Polluter' }])
     const people = await api({ method: 'GET', path: '/people', headers: as('stephane.masson@datanalysis.re') })

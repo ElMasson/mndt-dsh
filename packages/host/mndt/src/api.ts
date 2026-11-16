@@ -20,13 +20,14 @@ import type {
 import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
+import { isPlainAscii } from './core/address.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -282,7 +283,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     } catch (error) {
       const reason = messageOf(error)
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
-      if (/taken|exists/.test(reason)) return respond(409, { error: reason })
+      if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason })
     }
   }
@@ -424,6 +425,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     const identity = identityOf(request, options.identity)
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
 
+    // On a team instance a person the role table does not name is served nothing
+    // but who they are (/me, /org: the page says so): proven by the sign-on, not
+    // part of the team. A role taken off grants.json applies on the next request.
+    if (teamInstance && path !== '/me' && path !== '/org') {
+      const table = await grants.grants()
+      if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+      if (roleOf(table.grants, identity) === undefined) return respond(403, { error: 'no role on this team: ask its owner' })
+    }
+
     try {
       if (request.method === 'GET' && path === '/me') {
         // Who the person is for the screen: their e-mail, their role and the name the role file gives them.
@@ -435,7 +445,21 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // a second owner of the role file does not get it. Solo: the person at the
         // workstation has it.
         const shell = !teamInstance || request.headers?.['x-mndt-shell'] === '1'
-        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell })
+        // The rows of the role file set aside (#75): told to whoever may change the
+        // roles (owners and admins, rights.write), and to the tenant's owner as the
+        // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
+        // A role file that cannot be read refuses everyone (503): its reason is told
+        // to the tenant's owner as the gateway knows it, who can fix it (#75 review).
+        const grantsError = !table.ok && teamInstance && shell ? table.reason : undefined
+        const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
+          && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
+          ? table.skipped
+          : undefined
+        return respond(200, {
+          you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell,
+          ...(skipped === undefined ? {} : { grantsSkipped: skipped }),
+          ...(grantsError === undefined ? {} : { grantsError }),
+        })
       }
 
       if (request.method === 'GET' && path === '/org') {
@@ -471,28 +495,45 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/metrics') {
         const snapshot = await service.snapshot()
         const now = Date.now()
-        const count = (status: MissionStatus): number => snapshot.missions.filter(mission => mission.status === status).length
-        const pending = snapshot.approvals.filter(approval => approval.state === 'pending')
+        // On a team instance the counts are of what the reader may read: a count of
+        // the owner's private missions or of cards they cannot see says too much.
+        const reader = teamInstance ? await readerOf(identity) : undefined
+        const missions = reader === undefined ? snapshot.missions : snapshot.missions.filter(mission => canReadMission(reader, mission))
+        const briefs = reader === undefined ? snapshot.briefs : snapshot.briefs.filter(brief => canReadMission(reader, brief))
+        const count = (status: MissionStatus): number => missions.filter(mission => mission.status === status).length
+        const pending = snapshot.approvals.filter(approval => approval.state === 'pending' && (reader === undefined || canReadApproval(reader, approval)))
         const ages = pending
           .map(approval => (now - Date.parse(approval.requestedAt)) / 3_600_000)
           .filter(hours => Number.isFinite(hours))
         let automationsEnabled = 0
-        if (options.automationsPath !== undefined) {
+        if (options.automationsPath !== undefined && (reader === undefined || reader.missionRole === 'owner')) {
           const items = await readAutomations(options.automationsPath).catch(() => [])
           automationsEnabled = items.filter(item => item.enabled).length
         }
         const todayDate = today()
-        const activeMandates = snapshot.mandates.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        // The mandates and the last event the reader may read, as /mandates and
+        // /events filter them: a count or a timestamp of what they cannot see tells
+        // the activity of private channels and of the owner's missions (#75 review).
+        let mandatesSeen = snapshot.mandates
+        if (reader !== undefined) {
+          const table = await grants.grants()
+          const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
+          mandatesSeen = mandatesSeen.filter(mandate => canReadMandate(identity, canAdmin, mandate))
+        }
+        const activeMandates = mandatesSeen.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        const lastEvent = reader === undefined
+          ? snapshot.events.at(-1)
+          : snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
         return respond(200, {
           up: 1,
           uptimeSeconds: Math.round(process.uptime()),
           missions: { queued: count('queued'), running: count('running'), done: count('done'), failed: count('failed') },
-          briefs: snapshot.briefs.length,
+          briefs: briefs.length,
           approvalsPending: pending.length,
           oldestApprovalHours: ages.length === 0 ? 0 : Math.round(Math.max(...ages)),
           activeMandates,
           automationsEnabled,
-          lastEventAt: snapshot.events.at(-1)?.at ?? null,
+          lastEventAt: lastEvent?.at ?? null,
         })
       }
       if (request.method === 'GET' && path === '/state') {
@@ -517,7 +558,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
           mandates: snapshot.mandates
-            .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+            .filter(mandate => canReadMandate(identity, canAdmin, mandate))
             .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
         }
         return respond(200, { page })
@@ -527,7 +568,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const mandates = (await service.mandates())
-          .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+          .filter(mandate => canReadMandate(identity, canAdmin, mandate))
           .map(mandate => ({ ...mandate, state: mandateState(mandate, today()) }))
         return respond(200, { mandates })
       }
@@ -756,7 +797,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
-          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId }),
+          // The turn's agent, from the running turn itself: never what a request says.
+          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId, requestedByAgent: thread.agent }),
         })
         return respond(201, { approval })
       }
@@ -798,7 +840,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.split('/')[2] ?? ''
         const notes = await service.recall({ limit: 500 })
         const note = notes.find(candidate => candidate.id === id)
-        if (note === undefined) return respond(404, { error: `no memory ${id}` })
+        // A note the caller may not read is absent to them: holding sharing.write
+        // lets a person share what they read, never publish another's private note.
+        if (note === undefined || (note.scope !== 'team' && note.createdBy !== identity)) return respond(404, { error: `no memory ${id}` })
         if (note.createdBy !== identity) {
           const denied = await authorise(identity, 'sharing.write')
           if (denied !== undefined) return denied
@@ -1166,6 +1210,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(503, { error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
+        if (typeof input.subject === 'string' && input.subject.trim() !== '' && !isPlainAscii(input.subject)) {
+          return respond(400, { error: 'subject must be a plain ASCII e-mail' })
+        }
         const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }

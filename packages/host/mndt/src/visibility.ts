@@ -128,3 +128,16 @@ export function canReadEvent(
       return false
   }
 }
+
+/**
+ * A mandate: its two parties, and those who administer rights.
+ * @param identity - the reader's e-mail (lower-case). @param canAdmin - whether they hold `rights.write`.
+ * @param mandate - its parties. @returns whether the reader may see it.
+ */
+export function canReadMandate(
+  identity: string,
+  canAdmin: boolean,
+  mandate: { readonly delegant: string; readonly delegataire: string },
+): boolean {
+  return canAdmin || mandate.delegataire === identity || mandate.delegant === identity
+}
