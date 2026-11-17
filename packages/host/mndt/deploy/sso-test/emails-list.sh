@@ -127,6 +127,14 @@ echo "== 5. the list as the product writes it: render-authenticated-emails.py as
 # still be 65532:65532 640, its header line harmless, and the proxy start on it.
 printf '{ "grants": [ { "subject": "alice@datanalysis.re", "role": "owner" } ] }\n' > "$work/conf/grants.json"
 chmod 644 "$work/conf/grants.json"; chmod 777 "$work/conf"
+# A chown that cannot take effect (root without CAP_CHOWN): refused, and the last
+# good list stays in place, untouched, readable by the proxy.
+printf '# previous\nalice@datanalysis.re\n' > "$work/conf/authenticated_emails"; chmod 644 "$work/conf/authenticated_emails"
+denied=$(docker run --rm --cap-drop CHOWN -v "$work/conf:/c" -v "$here/../tenant:/s:ro" node:22-bookworm \
+  sh -c 'python3 /s/render-authenticated-emails.py /c/grants.json /c/authenticated_emails datanalysis.re --owner alice@datanalysis.re; echo "exit $?"' 2>&1)
+check "a chown without effect is refused" "exit 1" "$(echo "$denied" | tail -1)"
+check "the previous list stays, untouched" "# previous" "$(head -1 "$work/conf/authenticated_emails")"
+check "no temporary list is left" 0 "$(ls -a "$work/conf" | grep -c '^\.authenticated_emails\.')"
 rendered=$(docker run --rm -e MNDT_EMAILS_UNPRIVILEGED=1 -v "$work/conf:/c" -v "$here/../tenant:/s:ro" node:22-bookworm \
   sh -c 'python3 /s/render-authenticated-emails.py /c/grants.json /c/authenticated_emails datanalysis.re --owner alice@datanalysis.re && stat -c "%u:%g %a" /c/authenticated_emails' 2>&1)
 check "rendered as root, with the test switch set: owner and mode" "65532:65532 640" "$(echo "$rendered" | tail -1)"

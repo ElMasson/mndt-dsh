@@ -151,21 +151,24 @@ def main(argv: list[str]) -> int:
             # oauth2-proxy reads one address per line; this line matches no address.
             handle.write("# generated from grants.json by render-authenticated-emails.py: never edit by hand\n")
             handle.write("".join(f"{address}\n" for address in admitted))
-        os.chmod(temporary, 0o640)
-        if not unprivileged:
-            os.chown(temporary, PROXY_UID, PROXY_UID)
+        # Owner and mode set and PROVED on the temporary file, before it replaces
+        # the last good list: a chown refused or without effect (a file system
+        # that ignores it) leaves the previous list in place, never one the proxy
+        # cannot read at its next start.
+        try:
+            os.chmod(temporary, 0o640)
+            if not unprivileged:
+                os.chown(temporary, PROXY_UID, PROXY_UID)
+        except OSError as error:
+            return refuse(f"cannot give {output} to the proxy ({PROXY_UID}): {error}")
+        expected = os.geteuid() if unprivileged else PROXY_UID
+        st = os.stat(temporary)
+        if st.st_uid != expected or st.st_gid != (os.getegid() if unprivileged else PROXY_UID) or (st.st_mode & 0o777) != 0o640:
+            return refuse(
+                f"the new list would be {st.st_uid}:{st.st_gid} {oct(st.st_mode & 0o777)}, not {expected}:{expected} 0o640; "
+                "the proxy could not read it at its next start"
+            )
         os.replace(temporary, output)
-        if not unprivileged:
-            # Proved, not assumed: a file system that ignores chown would leave a list
-            # the proxy cannot read at its next start.
-            st = os.stat(output)
-            if st.st_uid != PROXY_UID or st.st_gid != PROXY_UID or (st.st_mode & 0o777) != 0o640:
-                print(
-                    f"refused: {output} is {st.st_uid}:{st.st_gid} {oct(st.st_mode & 0o777)}, not {PROXY_UID}:{PROXY_UID} 0o640; "
-                    "the proxy could not read it at its next start: fix it before any restart",
-                    file=sys.stderr,
-                )
-                return 1
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
