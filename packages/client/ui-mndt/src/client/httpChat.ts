@@ -100,6 +100,8 @@ export function createHttpChat(
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/agents`, { remove: agentIds })).channel,
     setConnectors: async (channelId, servers) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/connectors`, { connectors: servers })).channel,
+    createAgent: async input => (await post<{ agent: ChatAgent }>('/agents', input)).agent,
+    updateAgent: async (agentId, patch) => (await post<{ agent: ChatAgent }>(`/agents/${id(agentId)}`, patch)).agent,
     mounted: async () => {
       const body = await get<{ connectors?: unknown }>('/connectors')
       // A row of another shape is dropped: the page never offers what it cannot read.
