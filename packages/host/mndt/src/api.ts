@@ -395,8 +395,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const denied = await authorise(identity, 'workflows.write')
       if (denied !== undefined) return denied
       if (parts[2] === 'connectors') {
+        // `{ add, remove }` (preferred: applied on the server's current list, in one
+        // write, so two pages never undo each other) or `{ connectors }` (the whole
+        // list). Only what is ADDED must be mounted: a connector already on the
+        // channel and since unmounted never blocks a change.
+        if (Array.isArray(input.add) || Array.isArray(input.remove)) {
+          const add = strings(input.add)
+          const missing = await unmounted(add.filter(server => !(channel.connectors ?? []).includes(server)))
+          if (missing !== undefined) return missing
+          const updated = await service.updateChannel(channel.id, { addConnectors: add, removeConnectors: strings(input.remove) }, identity)
+          return respond(200, { channel: updated })
+        }
         const connectors = strings(input.connectors)
-        const missing = await unmounted(connectors)
+        const missing = await unmounted(connectors.filter(server => !(channel.connectors ?? []).includes(server)))
         if (missing !== undefined) return missing
         return respond(200, { channel: await service.updateChannel(channel.id, { connectors }, identity) })
       }

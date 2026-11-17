@@ -115,12 +115,7 @@ export function canReadEvent(
       const mandate = state.mandates.find(
         candidate => candidate.id === event.subject,
       )
-      return (
-        mandate !== undefined &&
-        (reader.decider ||
-          mandate.delegant === reader.identity ||
-          mandate.delegataire === reader.identity)
-      )
+      return mandate !== undefined && canReadMandate(reader.identity, reader.decider, mandate)
     }
     case 'agent':
       return true

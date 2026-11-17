@@ -169,6 +169,10 @@ describe('part 2: names and parties', () => {
       'mndt: mandate mnd_self retired on load (its two parties are the same person); it was active, duke@datanalysis.re to duke@datanalysis.re',
       'mndt: mandate mnd_half retired on load (a party is missing); it was active, duke@datanalysis.re to ?',
     ])
+    // Recorded once: the next start says nothing more.
+    const again: string[] = []
+    await new WorkbenchService({ store, warn: (message) => { again.push(message) } }).mandates()
+    expect(again).toEqual([])
   })
 
   it('refuses a draft to oneself written with other capitals', async () => {

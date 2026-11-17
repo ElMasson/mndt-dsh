@@ -201,4 +201,7 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]
+step "8. the role file row by row (#75), through the gateway"
+bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
+
+[ "$granted" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ]

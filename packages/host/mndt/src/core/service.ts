@@ -167,6 +167,7 @@ export class WorkbenchService {
       // A row without its parties, or one whose parties are the same person once
       // lower-cased (A@x and a@x, which the draft check now refuses), is kept for
       // the record but retired: it authorises nothing, and a load never crashes on it.
+      let retiredOnLoad = 0
       const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map((mandate) => {
         const party = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
         const delegant = party(mandate.delegant)
@@ -175,6 +176,7 @@ export class WorkbenchService {
         if (why !== undefined && mandate.state !== 'retired') {
           // Said once per load, with what it was: the next write keeps only « retired ».
           this.#options.warn?.(`mndt: mandate ${String(mandate.id)} retired on load (${why}); it was ${String(mandate.state)}, ${delegant || '?'} to ${delegataire || '?'}`)
+          retiredOnLoad += 1
         }
         return { ...mandate, delegant, delegataire, ...(why === undefined ? {} : { state: 'retired' as const }) }
       })
@@ -186,6 +188,8 @@ export class WorkbenchService {
       }))
       this.#state = { ...loaded, mandates, ...(channels === undefined ? {} : { channels }) }
       this.#loaded = true
+      // Recorded once: a mandate retired on load is said at this start only, not at every start.
+      if (retiredOnLoad > 0) await this.#options.store.save(this.#state)
     }
     return this.#state
   }
@@ -902,11 +906,15 @@ export class WorkbenchService {
       readonly addAgents?: readonly string[]
       readonly removeAgents?: readonly string[]
       readonly connectors?: readonly string[]
+      /** Connectors added and removed against the CURRENT list, in one atomic write. */
+      readonly addConnectors?: readonly string[]
+      readonly removeConnectors?: readonly string[]
     },
     actor: string,
   ): Promise<Channel> {
-    if (change.connectors !== undefined) {
-      const refusal = serversRefusal(change.connectors)
+    for (const servers of [change.connectors, change.addConnectors, change.removeConnectors]) {
+      if (servers === undefined) continue
+      const refusal = serversRefusal(servers)
       if (refusal !== undefined) return Promise.reject(new Error(refusal))
     }
     return this.#write((state) => {
@@ -923,15 +931,30 @@ export class WorkbenchService {
       const members = [...new Set([...channel.members, ...plainMembers(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
+      // The connectors, applied on the list as it is NOW (inside the write chain):
+      // two people toggling one connector each never undo each other.
+      const before = [...(channel.connectors ?? [])].sort()
+      const touched = change.connectors !== undefined || change.addConnectors !== undefined || change.removeConnectors !== undefined
+      const removedConnectors = change.removeConnectors ?? []
+      const connectors = change.connectors !== undefined
+        ? [...new Set(change.connectors)].sort()
+        : [...new Set([...before, ...(change.addConnectors ?? [])])].filter(server => !removedConnectors.includes(server)).sort()
       const next: Channel = {
         ...channel,
         members,
         agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
-        ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
+        ...(touched ? { connectors } : {}),
       }
+      // A change of connectors grants or withdraws access to data: journalled as
+      // such, with who, what was added and removed, and when.
+      const gained = touched ? connectors.filter(server => !before.includes(server)) : []
+      const lost = touched ? before.filter(server => !connectors.includes(server)) : []
+      const event = gained.length > 0 || lost.length > 0
+        ? { at: this.#at(), actor, action: 'channel.connectors', subject: id, detail: [...gained.map(s => `+${s}`), ...lost.map(s => `-${s}`)].join(' ') }
+        : { at: this.#at(), actor, action: 'channel.updated', subject: id }
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
-        event: { at: this.#at(), actor, action: 'channel.updated', subject: id },
+        event,
         value: next,
       }
     })

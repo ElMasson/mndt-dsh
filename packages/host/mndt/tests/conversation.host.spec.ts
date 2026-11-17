@@ -47,6 +47,8 @@ const noMissions: MissionRunner = {
 
 /** An API with a real service in memory, a fake engine and three people. */
 function bench(prices: PriceGrid = PRICES) {
+  // The connectors mounted on the host; a test may unmount one.
+  const mounted = new Set(['office365', 'qonto', 'dolibarr', 'swing'])
   const service = new WorkbenchService({ store: new MemoryStore() })
   const engine = new FakeEngine()
   const turns = new TurnScheduler({
@@ -77,7 +79,7 @@ function bench(prices: PriceGrid = PRICES) {
       }),
     },
     connectors: async () =>
-      ['office365', 'qonto', 'dolibarr', 'swing'].map(server => ({
+      [...mounted].map(server => ({
         module: `mcp-${server}`,
         server,
         enabled: true,
@@ -95,7 +97,7 @@ function bench(prices: PriceGrid = PRICES) {
       ...who,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-  return { api, service, engine, turns, call }
+  return { api, service, engine, turns, call, mounted }
 }
 
 type Bench = ReturnType<typeof bench>
@@ -541,5 +543,52 @@ describe('channels, mentions and agent turns', () => {
   it('names the MCP server of a tool', () => {
     expect(mcpServerOf('mcp__qonto__list_transactions')).toBe('qonto')
     expect(mcpServerOf('read_file')).toBeUndefined()
+  })
+})
+
+describe('the connectors of a channel, added and removed one at a time', () => {
+  it('applies two concurrent toggles on the server\'s current list: neither undoes the other', async () => {
+    const b = bench()
+    const id = await channel(b, 'finance', [], ['office365'])
+    const [first, second] = await Promise.all([
+      b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['qonto'] }),
+      b.call('POST', `/channels/${id}/connectors`, asAdmin, { remove: ['office365'] }),
+    ])
+    expect([first.status, second.status]).toEqual([200, 200])
+    const listed = await b.call('GET', '/channels', asOwner)
+    const finance = (listed.body as { channels: { id: string; connectors?: string[] }[] }).channels.find(c => c.id === id)
+    expect(finance?.connectors).toEqual(['qonto'])
+  })
+
+  it('never lets a connector already on the channel, since unmounted, block a change', async () => {
+    const b = bench()
+    // swing is on the channel, then unmounted from the host.
+    const id = await channel(b, 'projets', [], ['swing'])
+    b.mounted.delete('swing')
+    expect((await b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['qonto'] })).status).toBe(200)
+    expect((await b.call('POST', `/channels/${id}/connectors`, asOwner, { connectors: ['swing', 'office365'] })).status).toBe(200)
+    // What is ADDED must be mounted.
+    const refused = await b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['gmail'] })
+    expect(refused.status).toBe(400)
+    expect((refused.body as { error: string }).error).toContain('connector not mounted: gmail')
+  })
+
+  it('journals each change of connectors, with who, what and when, for the channel\'s members only', async () => {
+    const b = bench()
+    const id = await channel(b, 'compta', [], ['office365'])
+    await b.call('POST', `/channels/${id}/connectors`, asAdmin, { add: ['qonto'], remove: ['office365'] })
+    const events = (await b.call('GET', '/events', asOwner)).body as { events: { action: string; actor: string; subject: string; detail?: string; at: string }[] }
+    const change = events.events.find(event => event.action === 'channel.connectors')
+    expect(change).toMatchObject({ actor: admin, subject: id, detail: '+qonto -office365' })
+    expect(change?.at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    const seenByViewer = (await b.call('GET', '/events', asViewer)).body as { events: { action: string }[] }
+    expect(seenByViewer.events.some(event => event.action === 'channel.connectors')).toBe(false)
+  })
+
+  it('asks workflows.write: a viewer changes nothing', async () => {
+    const b = bench()
+    const id = await channel(b, 'lecture', [], [], [admin, viewer])
+    const denied = await b.call('POST', `/channels/${id}/connectors`, asViewer, { add: ['qonto'] })
+    expect(denied.status).toBe(403)
   })
 })
