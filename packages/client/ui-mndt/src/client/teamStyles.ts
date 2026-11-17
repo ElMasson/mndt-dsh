@@ -269,6 +269,15 @@ export const TEAM_CSS = `
 .mw-agent-text tr:last-child td { border-bottom: 0; }
 .mw-agent-text th { background: var(--mw-surface); font-weight: 500; }
 .mw-agent-text code { padding: 1px 4px; border-radius: 4px; background: var(--mw-surface); font-size: 12.5px; }
+/* A fenced block: its lines as written, in a frame; long lines scroll inside it, never the page. */
+.mw-agent-text pre.md-code {
+  margin: 0; max-width: 100%; overflow-x: auto; padding: 8px 12px;
+  border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-surface);
+}
+.mw-agent-text pre.md-code code {
+  padding: 0; background: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; line-height: 18px; white-space: pre;
+}
 .mw-message-removed { margin: 0; font-size: 14px; font-style: italic; color: var(--mw-slate); }
 .mw-chip { padding: 2px 6px; border: 1px solid var(--mw-line); border-radius: 10px; font-size: 12px; line-height: 16px; }
 .mw-chip-strong { font-weight: 500; }
