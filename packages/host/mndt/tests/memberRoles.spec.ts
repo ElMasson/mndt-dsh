@@ -125,6 +125,35 @@ describe('who may change whose role (members routes)', () => {
     })
     const answer = await api({ method: 'POST', path: '/members/grant', authorization: `Bearer ${owner}`, body: JSON.stringify({ subject: viewer, role: 'admin' }) })
     expect(answer.status).toBe(503)
+    expect((answer.body as { code: string }).code).toBe('no-authority')
+    // The page knows it beforehand: roles come from the file, not editable here.
+    const state = await api({ method: 'GET', path: '/state', authorization: `Bearer ${owner}` })
+    expect((state.body as { page: { rolesFrom: string } }).page.rolesFrom).toBe('file')
+  })
+
+  it('says where roles come from, and why a role change cannot be read', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const api = createMndtApi({
+      service, runner: noMissions, identity: { tokens: { [owner]: { user: owner } } },
+      grants: { grants: async () => ({ ok: false, reason: 'authority answered 500' }) },
+      authority: { baseUrl: 'http://authority.test', token: 'deployment-token' },
+    })
+    const unreadable = await api({ method: 'POST', path: '/members/grant', authorization: `Bearer ${owner}`, body: JSON.stringify({ subject: viewer, role: 'viewer' }) })
+    expect(unreadable.status).toBe(503)
+    expect((unreadable.body as { code: string }).code).toBe('grants-unreadable')
+    const withAuthority = createMndtApi({
+      service, runner: noMissions, identity: { tokens: { [owner]: { user: owner } } },
+      grants: { grants: async () => ({ ok: true, grants: TABLE }) },
+      authority: { baseUrl: 'http://authority.test', token: 'deployment-token' },
+    })
+    const page = await withAuthority({ method: 'GET', path: '/state', authorization: `Bearer ${owner}` })
+    expect((page.body as { page: { rolesFrom: string } }).page.rolesFrom).toBe('authority')
+    const solo = createMndtApi({
+      service, runner: noMissions, identity: { tokens: { [owner]: { user: owner } } },
+      grants: { grants: async () => ({ ok: true, grants: TABLE }) }, rolesFrom: 'local',
+    })
+    const local = await solo({ method: 'GET', path: '/state', authorization: `Bearer ${owner}` })
+    expect((local.body as { page: { rolesFrom: string } }).page.rolesFrom).toBe('local')
   })
 
   it('two owners removing each other at once: one is applied, the team keeps an owner', async () => {

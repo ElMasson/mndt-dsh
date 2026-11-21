@@ -88,6 +88,8 @@ export interface MndtApiOptions {
     /** How long a role change waits for the authority (AUTHORITY_TIMEOUT_MS by default). */
     readonly timeoutMs?: number
   }
+  /** Where the roles come from when there is no authority (« file » by default). */
+  readonly rolesFrom?: 'file' | 'local'
   /** The briefing schedule file, editable from the page. */
   readonly schedulePath?: string
   /** The automation registry, editable from the page. */
@@ -200,7 +202,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     capability: 'workflows.write' | 'rights.write' | 'rights.read' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
-    if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+    if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
     const decision = can(table.grants, identity, capability)
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
@@ -526,6 +528,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           canWrite: decision.allowed,
           ...(role === undefined ? {} : { role }),
           canAdmin,
+          rolesFrom: options.authority !== undefined ? 'authority' : (options.rolesFrom ?? 'file'),
           canShare,
           missions: snapshot.missions.filter(mission => canReadMission(reader, mission)).slice(0, 30),
           briefs: snapshot.briefs.filter(brief => canReadMission(reader, brief)).slice(0, 30),
@@ -1179,7 +1182,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const authority = options.authority
         if (authority === undefined) {
-          return respond(503, { error: 'this deployment has no team authority to write to' })
+          return respond(503, { code: 'no-authority', error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
         const raw = typeof input.subject === 'string' ? input.subject : ''
@@ -1206,7 +1209,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           // The authority is called with this deployment's token, not the caller's:
           // who may change whose role is decided here, on the current table.
           const table = await grants.grants()
-          if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+          if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
           const before = roleOf(table.grants, subject)
           const refusal = roleChangeRefusal(table.grants, identity, subject, next)
           if (refusal !== undefined) {
