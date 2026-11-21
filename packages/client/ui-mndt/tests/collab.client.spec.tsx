@@ -448,17 +448,18 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
   }
   const group = (name: string): HTMLElement => screen.getByRole('group', { name })
 
-  it('an admin offers no Owner, and has no button on their own line nor on the owner\'s', async () => {
-    await admin('admin')
+  it('an admin gives only the roles strictly below theirs, and touches no admin nor owner line', async () => {
+    await admin('admin', 'autre@datanalysis.re')
     expect(screen.queryByRole('group', { name: 'rôle de duke@datanalysis.re' })).toBeNull()
+    // Another admin: same rank, untouched (the core refuses it too).
     expect(screen.queryByRole('group', { name: 'rôle de chef@datanalysis.re' })).toBeNull()
     expect(screen.getAllByTestId('member-role-fixed').map(e => e.textContent)).toEqual(['Owner', 'Admin'])
-    expect(within(group('rôle de smarion@datanalysis.re')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin'])
-    expect(within(group('rôle à accorder')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin'])
+    expect(within(group('rôle de smarion@datanalysis.re')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur'])
+    expect(within(group('rôle à accorder')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur'])
   })
 
   it('a promotion to admin is asked first, naming the person and the role; « Annuler » sends nothing', async () => {
-    await admin('admin')
+    await admin('owner', 'duke@datanalysis.re')
     fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Admin' }))
     expect(screen.getByTestId('role-confirm').textContent).toContain('Faire de smarion@datanalysis.re un Admin ?')
     fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Annuler' }))
@@ -480,7 +481,7 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
   })
 
   it('admin to a new person is asked first too', async () => {
-    await admin('admin')
+    await admin('owner', 'duke@datanalysis.re')
     fireEvent.change(screen.getByLabelText('adresse de la personne à accorder'), { target: { value: 'nouveau@datanalysis.re' } })
     fireEvent.click(within(group('rôle à accorder')).getByRole('button', { name: 'Admin' }))
     fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
@@ -493,5 +494,17 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     await admin('owner', 'duke@datanalysis.re')
     expect(screen.queryByRole('group', { name: 'rôle de duke@datanalysis.re' })).toBeNull()
     expect(within(group('rôle de chef@datanalysis.re')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin', 'Owner'])
+  })
+
+  it('roles kept in the role file: a 503 is said, and no role button nor grant form stays offered', async () => {
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'roles come from grants.json', status: 503 }) as never)
+    await admin('owner', 'duke@datanalysis.re')
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect((await screen.findByTestId('roles-from-file')).textContent).toBe('Les rôles de cet espace se gèrent dans le fichier des rôles, par l\'owner.')
+    expect(screen.queryByRole('group', { name: /^rôle de /u })).toBeNull()
+    expect(screen.queryByLabelText('adresse de la personne à accorder')).toBeNull()
+    const people = document.querySelector('[data-kind="members"]')
+    expect(people instanceof HTMLElement && within(people).queryByRole('button', { name: 'Retirer' })).toBeNull()
+    expect(screen.queryByText('roles come from grants.json')).toBeNull()
   })
 })

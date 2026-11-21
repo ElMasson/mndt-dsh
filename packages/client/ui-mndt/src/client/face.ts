@@ -142,6 +142,8 @@ export interface OutcomeRow<T> {
   readonly ok: boolean
   readonly value?: T
   readonly error?: string
+  /** The HTTP status of a refusal, when the Host answered one. */
+  readonly status?: number
 }
 
 /** One mounted connector, as the page reads it. */

@@ -84,7 +84,7 @@ async function outcomeOf<T>(work: () => Promise<T>): Promise<OutcomeRow<T>> {
   try {
     return { ok: true, value: await work() }
   } catch (error) {
-    return { ok: false, error: messageOf(error) }
+    return { ok: false, error: messageOf(error), ...(error instanceof FaceRefusal ? { status: error.status } : {}) }
   }
 }
 
