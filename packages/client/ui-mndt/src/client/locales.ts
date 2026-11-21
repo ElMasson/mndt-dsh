@@ -349,6 +349,7 @@ export const en = {
   'ui.confirmer-le-role': 'Confirm the role',
   'ui.confirmer-promotion': 'Make {name} {role}?',
   'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
+  'ui.roles-par-fichier': 'The roles of this workspace are managed in the role file, by the owner.',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -702,6 +703,7 @@ export const fr: Record<MndtKey, string> = {
   'ui.confirmer-le-role': 'Confirmer le rôle',
   'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
   'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
+  'ui.roles-par-fichier': 'Les rôles de cet espace se gèrent dans le fichier des rôles, par l\'owner.',
 }
 
 /** Substitution values for a message. */

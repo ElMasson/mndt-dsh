@@ -476,14 +476,24 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [confirming, setConfirming] = useState<RoleChange | undefined>(undefined)
   const RANK: Readonly<Record<MemberRole, number>> = { viewer: 0, operator: 1, admin: 2, owner: 3 }
   const readerRole = MEMBER_ROLES.find(r => r === state?.role)
-  // Only the roles this person may give: never owner but by an owner, never above their own role.
-  // A reader whose role is not served gives at most « Opérateur ».
-  const grantable = MEMBER_ROLES.filter(role => readerRole === undefined
-    ? RANK[role] <= RANK.operator
-    : RANK[role] <= RANK[readerRole] && (role !== 'owner' || readerRole === 'owner'))
+  // The owner gives every role; anyone else only the roles strictly below their own (the core
+  // aligns: an admin never changes another admin). A reader whose role is not served: Lecteur only.
+  const below = (role: MemberRole): boolean => readerRole === 'owner' || RANK[role] < RANK[readerRole ?? 'operator']
+  const grantable = MEMBER_ROLES.filter(below)
   /** @param subject - a person of the table. @param role - their role. @returns whether this reader may change their line. */
-  const canTouch = (subject: string, role: string): boolean =>
-    subject !== state?.you && (role !== 'owner' || readerRole === 'owner')
+  const canTouch = (subject: string, role: string): boolean => {
+    const theirs = MEMBER_ROLES.find(r => r === role)
+    return subject !== state?.you && theirs !== undefined && below(theirs)
+  }
+  // On the team instance the roles come from the role file, kept by the owner: `/state` says so
+  // (`rolesFrom: "file"`), or a grant or a revoke is refused with 503 `no-authority`; the page then
+  // stops offering them. Any other 503 (a role file that cannot be read) stays an error, with its
+  // reason: the owner must see a broken file.
+  const [refusedForFile, setRefusedForFile] = useState(false)
+  const rolesFromFile = state?.rolesFrom === 'file' || refusedForFile
+  /** @param result - a refused grant or revoke. @returns whether it says the roles live in the file. */
+  const noAuthority = (result: { readonly status?: number; readonly code?: string; readonly error?: string }): boolean =>
+    result.status === 503 && (result.code === undefined ? (result.error ?? '').startsWith('no team authority') : result.code === 'no-authority')
   /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
   const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
     to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
@@ -511,7 +521,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.grantMember(subject, role)
-      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
       else {
         setAdminNotice(`${subject} : ${role}`)
         setAdminMembers(await api.members())
@@ -531,7 +542,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminNotice(undefined)
     try {
       const result = await api.grantMember(subject, grantRole)
-      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
       else {
         setAdminNotice(`${subject} : ${grantRole}`)
         setGrantEmail('')
@@ -550,7 +562,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.revokeMember(subject)
-      if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
       else {
         setAdminNotice(`${subject} : acces retire`)
         setAdminMembers(await api.members())
@@ -1361,7 +1374,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
                   <span className="mndt-tag">{member.subject}</span>
-                  {canTouch(member.subject, member.role) ? (
+                  {canTouch(member.subject, member.role) && !rolesFromFile ? (
                     <>
                       <Segmented
                         label={t('ui.role-de-personne', { name: member.subject })}
@@ -1416,33 +1429,37 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 </div>
               )}
             </div>
-            <div className="mndt-post-actions">
-              <input
-                className="mndt-input"
-                aria-label={t('ui.adresse-de-la-personne-a-accorder')}
-                placeholder={t('ui.prenom-datanalysis-re')}
-                value={grantEmail}
-                onChange={(event) => { setGrantEmail(event.target.value) }}
-              />
-              <Segmented
-                label={t('ui.role-a-accorder')}
-                value={grantRole}
-                options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
-                onChange={setGrantRole}
-              />
-              <button
-                type="button"
-                className="mndt-button"
-                disabled={grantEmail.trim() === '' || adminBusy === 'grant' || confirming !== undefined || !grantable.includes(grantRole)}
-                onClick={() => {
-                  // Admin or owner to a new person: asked first, naming them. An empty subject marks the typed one.
-                  if (asksFirst(undefined, grantRole)) setConfirming({ subject: '', to: grantRole })
-                  else void grantTypedMember()
-                }}
-              >
-                {t('ui.accorder')}
-              </button>
-            </div>
+            {rolesFromFile ? (
+              <p className="mndt-empty" role="note" data-testid="roles-from-file">{t('ui.roles-par-fichier')}</p>
+            ) : (
+              <div className="mndt-post-actions">
+                <input
+                  className="mndt-input"
+                  aria-label={t('ui.adresse-de-la-personne-a-accorder')}
+                  placeholder={t('ui.prenom-datanalysis-re')}
+                  value={grantEmail}
+                  onChange={(event) => { setGrantEmail(event.target.value) }}
+                />
+                <Segmented
+                  label={t('ui.role-a-accorder')}
+                  value={grantRole}
+                  options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                  onChange={setGrantRole}
+                />
+                <button
+                  type="button"
+                  className="mndt-button"
+                  disabled={grantEmail.trim() === '' || adminBusy === 'grant' || confirming !== undefined || !grantable.includes(grantRole)}
+                  onClick={() => {
+                    // Admin or owner to a new person: asked first, naming them. An empty subject marks the typed one.
+                    if (asksFirst(undefined, grantRole)) setConfirming({ subject: '', to: grantRole })
+                    else void grantTypedMember()
+                  }}
+                >
+                  {t('ui.accorder')}
+                </button>
+              </div>
+            )}
           </article>
 
           <article className="mndt-post-card" data-kind="mandates">
