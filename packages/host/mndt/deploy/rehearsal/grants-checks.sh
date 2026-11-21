@@ -11,13 +11,28 @@ ko=0
 saved=$(mktemp); cp "$data/grants.json" "$saved"
 state_saved=$(mktemp); cp "$data/state.json" "$state_saved"
 # The role file and the state are put back as they were, whatever happens.
-trap 'cp "$saved" "$data/grants.json"; cp "$state_saved" "$data/state.json"; rm -f "$saved" "$state_saved"' EXIT
+# The state is put back with the workbench stopped, for the same reason as in 7.
+restore() {
+  cp "$saved" "$data/grants.json"
+  docker stop $project-workbench >/dev/null
+  cp "$state_saved" "$data/state.json"
+  docker start $project-workbench >/dev/null
+  for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/health")" = 200 ] && break; sleep 2; done
+  rm -f "$saved" "$state_saved"
+}
+trap restore EXIT
 check() { if [ "$2" = 1 ]; then echo "OK  $1  $3"; else echo "KO  $1  $3"; ko=$((ko + 1)); fi; }
 # GET as a person; extra headers as forged by a browser. Prints "<status> <body>".
 get() { local who=$1 path=$2; shift 2; curl -s -w '\n%{http_code}' -H "x-forwarded-email: $who" "$@" "$base$path" | { body=$(cat); echo "$(echo "$body" | tail -1) $(echo "$body" | sed '$d' | tr -d '\n')"; }; }
 status() { get "$@" | cut -d' ' -f1; }
 grants() { printf '%s\n' "$1" > "$data/grants.json"; }
-set_aside_lines() { docker logs $project-workbench 2>&1 | grep -c "is set aside and grants nothing" ; }
+# What the workbench said: dsh writes to its web log (DSH_MNDT_WEB_LOG on a team
+# tenant, /state/web.log otherwise), not to the container's output.
+workbench_log() {
+  docker exec $project-workbench sh -c 'cat "${DSH_MNDT_WEB_LOG:-/state/web.log}" 2>/dev/null'
+  docker logs $project-workbench 2>&1
+}
+set_aside_lines() { workbench_log | grep -c "is set aside and grants nothing" ; }
 
 base_rows="{ \"subject\": \"$owner\", \"role\": \"owner\" }, { \"subject\": \"$viewer\", \"role\": \"viewer\" }"
 
@@ -69,6 +84,9 @@ check metrics-reader "$(echo "$m_owner" | grep -q '^200 ' && echo "$m_viewer" | 
   "approvalsPending owner $pending_owner / viewer $pending_viewer, lastEventAt owner $last_owner / viewer $last_viewer"
 
 # 7. A mandate to oneself in other capitals, loaded at start: retired, no crash.
+# The workbench is stopped first: running, it keeps the state in memory and may
+# write it back over an edit made beside it.
+docker stop $project-workbench >/dev/null
 python3 - "$data/state.json" "$owner" <<'PY'
 import json, sys
 path, owner = sys.argv[1], sys.argv[2]
@@ -78,10 +96,10 @@ state.setdefault("mandates", []).insert(0, {"id": "mnd_rehearsal_self", "delegan
   "state": "active", "createdAt": "2026-11-15T00:00:00Z"})
 json.dump(state, open(path, "w", encoding="utf-8"))
 PY
-docker restart $project-workbench >/dev/null
+docker start $project-workbench >/dev/null
 for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/health")" = 200 ] && break; sleep 2; done
 mandates=$(get $owner /mandates)
-check mandate-self-retired "$(echo "$mandates" | grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"retired"' && docker logs $project-workbench 2>&1 | grep -q 'mnd_rehearsal_self retired on load' && echo 1)" \
+check mandate-self-retired "$(echo "$mandates" | grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"retired"' && workbench_log | grep -q 'mnd_rehearsal_self retired on load' && echo 1)" \
   "$(echo "$mandates" | grep -o '"id":"mnd_rehearsal_self"[^}]*"state":"[a-z]*"' | grep -o '"state":"[a-z]*"' | head -1), said in the log"
 
 echo "grants-checks exit $ko"
