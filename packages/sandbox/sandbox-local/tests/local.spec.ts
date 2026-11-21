@@ -585,6 +585,16 @@ describe('a private temp directory per session under Landlock with a read allow-
     expect(existsSync(back)).toBe(true)
   })
 
+  it('keeps at most 32 directories of calls without a session, the oldest removed first', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const dirs: string[] = []
+    for (let call = 0; call < 40; call++) dirs.push(tempOf((await sandbox.confine(['true'], WW)).argv))
+    expect(dirs.filter(dir => existsSync(dir))).toHaveLength(32)
+    expect(existsSync(dirs[0] ?? '')).toBe(false)
+    expect(existsSync(dirs[39] ?? '')).toBe(true)
+  })
+
   it('changes nothing without an allow-list: the shared /tmp, no prefix', async () => {
     const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
     const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })

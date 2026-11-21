@@ -267,10 +267,15 @@ bash "$here/sandbox-proof.sh" "$image" | grep -E '^(OK|KO|LIMIT|NOTE|sandbox-pro
 old_image=${REHEARSAL_COUNTER_IMAGE:-mndt-workbench:jump73a}
 if docker image inspect "$old_image" >/dev/null 2>&1; then
   bash "$here/sandbox-proof.sh" "$old_image" > "$root/counter-proof.txt" 2>&1; countered=$?
-  if [ "$countered" != 0 ]; then echo "OK  counter-proof  on $old_image the same proof fails (exit $countered, $(grep -c '^KO' "$root/counter-proof.txt") KO)"
-  else echo "KO  counter-proof  on $old_image the same proof passes: it proves nothing"; proved=1; fi
+  # Named failures, not just a non-zero exit (docker or an incompatible image
+  # would give one too): the leak with the list, and a turn reading another
+  # session's temp, must be the reasons.
+  named=$(grep -cE '^KO  (no-leak|sessions) ' "$root/counter-proof.txt")
+  if [ "$countered" != 0 ] && [ "$named" = 2 ]; then echo "OK  counter-proof  on $old_image the same proof fails for the right reasons: $(grep -E '^KO  (no-leak|sessions) ' "$root/counter-proof.txt" | cut -c5-60 | tr '\n' ';')"
+  else echo "KO  counter-proof  on $old_image: exit $countered, $named of the 2 expected KO (no-leak, sessions): it proves nothing"; proved=1; fi
 else
-  echo "KO  counter-proof  no image $old_image to run the counter-proof on (REHEARSAL_COUNTER_IMAGE)"; proved=1
+  # The reference image is local only (built for the first jump): its absence is a failure, never a pass.
+  echo "KO  counter-proof  the reference image $old_image is absent (REHEARSAL_COUNTER_IMAGE): no counter-proof"; proved=1
 fi
 
 [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]

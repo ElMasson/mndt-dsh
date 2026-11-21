@@ -42,6 +42,9 @@ import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkil
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { bwrapProfileArgs, landlockProfileArgs, readRoots, seatbeltProfileArgs } from './profiles.ts'
 
+/** At most this many private temp directories of calls without a session are kept, the oldest removed first. */
+export const MAX_CALL_TEMPS = 32
+
 /** A session's private temp directory unused for this long is removed (12 h). */
 export const PRIVATE_TEMP_IDLE_MS = 12 * 60 * 60 * 1000
 
@@ -390,9 +393,29 @@ export class LocalSandboxProvider extends SandboxProvider {
     // A channel's turn is a session of its own: without this, one directory
     // per turn would stay until the server stops.
     this.pruneLandlockTemps(now)
+    if (sessionId === undefined) this.capCallTemps()
     const dir = mkdtempSync(join(tmpdir(), 'dsh-run-'))
     this.landlockTemps.set(key, { dir, lastUsed: now })
     return dir
+  }
+
+  /**
+   * At most {@link MAX_CALL_TEMPS} directories of calls without a session: a
+   * workflow script in a loop would otherwise fill /tmp until the idle pruning.
+   * The oldest go first (Map order is creation order); a call that old has, in
+   * practice, long finished.
+   */
+  private capCallTemps(): void {
+    const calls = [...this.landlockTemps].filter(([key]) => key.startsWith('call:'))
+    for (const [key, entry] of calls.slice(0, Math.max(0, calls.length - MAX_CALL_TEMPS + 1))) {
+      try {
+        this.removeTempDir(entry.dir)
+        this.landlockTemps.delete(key)
+      } catch (error) {
+        this.ctx.logger.warn(`sandbox-local: could not remove the private temp directory ${entry.dir}`)
+        this.ctx.logger.warn(error)
+      }
+    }
   }
 
   /**

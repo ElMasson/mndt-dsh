@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -39,7 +39,22 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
+// In the rehearsal (inside the image) a skip would prove nothing: DSH_REQUIRE_LANDLOCK=1
+// turns it into a failure.
+const required = process.env.DSH_REQUIRE_LANDLOCK === '1'
+describe.runIf(required && !(landlockUsable && filters))('bash-sandbox: the read allow-list is required here', () => {
+  it('has a Landlock kernel and a launcher that filters the environment', () => {
+    expect({ landlockUsable, filters, probe: probe.stdout?.trim() })
+      .toEqual({ landlockUsable: true, filters: true, probe: expect.any(String) })
+  })
+})
+
 describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list through the real executor', () => {
+  it('runs the launcher of this build: an unknown flag refused, the environment flags accepted', () => {
+    expect(spawnSync(launcherPath(), ['--bogus', '--', 'true'], { encoding: 'utf8' }).status).toBe(125)
+    expect(spawnSync(launcherPath(), ['--ro', '/', '--keep-env', 'PATH', '--keep-env-prefix', 'LC_', '--set-env', 'A=1', '--', 'true']).status).toBe(0)
+  })
+
   it('keeps sessions and workflow calls apart, and a caller-added credential out of the command', async () => {
     process.env.DSH_SANDBOX_READ_ROOTS = '/usr:/lib:/lib64:/bin:/sbin:/etc:/dev/null:/dev/urandom'
     const workspace = await mkdtemp(join(homedir(), 'dsh-allowlist-e2e-'))
@@ -52,6 +67,8 @@ describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list 
     await ctx.plugin(LocalSubprocessRuntime)
     await ctx.plugin(SandboxBashExecutor, { cwd: workspace, timeoutMs: 30_000 })
     const bash = ctx.shell as SandboxBashExecutor
+    // The private directories that exist before this provider made any: not counted.
+    const before = new Set(readdirSync(tmpdir()).filter(name => name.startsWith('dsh-run-')))
     const run = async (command: string, sessionId?: string, env?: Record<string, string>) => {
       const request: ShellExecRequest = {
         command,
@@ -62,12 +79,16 @@ describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list 
     }
 
     // A caller-added credential (spec.env) under an ordinary name, and the environment as a whole.
-    const turnA = await run('echo "cred=${X_CRED:-absent}"; env | cut -d= -f1 | sort | tr "\\n" " "; echo; echo canary-a > "$TMPDIR/note"; printf "dir=%s" "$TMPDIR"',
-      'turn-channel-a', { X_CRED: 'CANARY_SECRET_spec_env', NO_COLOR: '1' })
+    const turnA = await run('echo "cred=${X_CRED:-absent} preload=${LD_PRELOAD:-absent} bashenv=${BASH_ENV:-absent} nodepath=${NODE_PATH:-absent}"; env | cut -d= -f1 | sort | tr "\\n" " "; echo; echo canary-a > "$TMPDIR/note"; printf "dir=%s" "$TMPDIR"',
+      'turn-channel-a', { X_CRED: 'CANARY_SECRET_spec_env', LD_PRELOAD: '/tmp/evil.so', BASH_ENV: '/tmp/evil.sh', NODE_PATH: '/tmp/evil', NO_COLOR: '1' })
     expect(turnA.exitCode, turnA.stderr.text).toBe(0)
-    expect(turnA.stdout.text).toContain('cred=absent')
+    expect(turnA.stdout.text).toContain('cred=absent preload=absent bashenv=absent nodepath=absent')
     expect(turnA.stdout.text).not.toContain('CANARY_SECRET_spec_env')
     const names = turnA.stdout.text.split('\n')[1]?.trim().split(' ') ?? []
+    // Printed for the rehearsal: the names a confined command really sees.
+    console.log(`ENV-NAMES ${names.join(' ')}`)
+    // A kept prefix (DSH_) must never bring a credential-shaped name.
+    for (const name of names) expect(name, name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD/i)
     for (const name of names) expect(['GIT_PAGER', 'HOME', 'NODE_VERSION', 'NODE_OPTIONS', 'NO_COLOR', 'PAGER', 'PATH', 'PWD', 'SHLVL', '_', 'TEMP', 'TERM', 'TMP', 'TMPDIR', 'LANG', 'LANGUAGE', 'TZ', 'USER', 'LOGNAME', 'SHELL'].includes(name) || /^(LC_|DSH_)/.test(name), name).toBe(true)
     const dirA = /dir=(\S+)/.exec(turnA.stdout.text)?.[1] ?? ''
     expect(existsSync(join(dirA, 'note'))).toBe(true)
@@ -83,5 +104,10 @@ describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list 
     const first = await run('printf "dir=%s" "$TMPDIR"')
     const second = await run('printf "dir=%s" "$TMPDIR"')
     expect(/dir=(\S+)/.exec(first.stdout.text)?.[1]).not.toBe(/dir=(\S+)/.exec(second.stdout.text)?.[1])
+    // Calls without a session in a loop: their directories stay bounded.
+    for (let call = 0; call < 40; call++) await run('true')
+    const runs = readdirSync(tmpdir()).filter(name => name.startsWith('dsh-run-') && !before.has(name)).length
+    console.log(`DSH-RUN-DIRS ${runs} after 42 calls without a session and 4 sessions`)
+    expect(runs).toBeLessThanOrEqual(32 + 4)
   })
 })

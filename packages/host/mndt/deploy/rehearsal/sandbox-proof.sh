@@ -136,6 +136,21 @@ done
 absent=$(echo "$with" | sed -n 's/^WITNESS-ABSENT //p' | tr '\n' ' ')
 [ -n "$absent" ] && echo "NOTE witness      absent from the image: $absent"
 echo "$with" | grep -q '^RUNNER .*landlock' || { echo "KO  runner         not Landlock with the allow-list"; ok=1; }
+# The names a confined command sees: none may look like a credential (a kept
+# prefix such as DSH_ must not bring one).
+names=$(echo "$with" | sed -n 's/^environment names: //p' | head -1)
+if [ -n "$names" ] && ! printf '%s\n' $names | grep -qiE 'KEY|TOKEN|SECRET|PASSWORD'; then echo "OK  env-names      a confined command sees only: $names"
+else echo "KO  env-names      credential-shaped names, or none printed: « $names »"; ok=1; fi
+
+# The real executor path, INSIDE the image: one process, one provider, the real
+# SandboxBashExecutor, spec.env. DSH_REQUIRE_LANDLOCK=1 turns a skip into a failure.
+e2e=$(docker run --rm -e DSH_REQUIRE_LANDLOCK=1 -e NO_COLOR=1 -e FORCE_COLOR=0 --memory 3g --entrypoint sh "$image" -c \
+  'cd /app && node_modules/.bin/vitest run --config vitest.e2e.config.ts packages/shell/bash-sandbox/tests/read-allowlist.e2e.ts' 2>&1)
+passed=$(echo "$e2e" | sed -n 's/^ *Tests  *\([0-9]*\) passed.*/\1/p' | tail -1)
+failed=$(echo "$e2e" | grep -cE '^ *Tests .*failed|✗|×')
+echo "$e2e" | grep -E 'ENV-NAMES|DSH-RUN-DIRS' | sort -u | sed 's/^/      /'
+if [ "${passed:-0}" -ge 2 ] && [ "$failed" = 0 ]; then echo "OK  e2e-in-image   read-allowlist.e2e.ts ran in the image, $passed passed, none skipped by a missing Landlock"
+else echo "KO  e2e-in-image   read-allowlist.e2e.ts in the image: ${passed:-0} passed, $failed failure line(s)"; echo "$e2e" | tail -15 | sed 's/^/      /'; ok=1; fi
 echo "$with" | grep '^ARGV-BYTES' | head -1
 echo "sandbox-proof exit $ok (docker $code)"
 exit $ok

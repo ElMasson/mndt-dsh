@@ -315,12 +315,14 @@ static int kept(const struct cli *cli, const char *entry) {
   return 0;
 }
 
-/* Whether `entry` (NAME=value) is overridden by a --set-env of the same name. */
-static int overridden(const struct cli *cli, const char *entry) {
+/* Whether `entry` (NAME=value) is overridden by a --set-env of the same name
+ * at or after index `from` (the set list itself is deduplicated this way: the
+ * last --set-env of a name wins). */
+static int overridden(const struct cli *cli, const char *entry, size_t from) {
   const char *eq = strchr(entry, '=');
   if (eq == NULL) return 0;
   size_t name_len = (size_t)(eq - entry);
-  for (size_t i = 0; i < cli->set_count; i++) {
+  for (size_t i = from; i < cli->set_count; i++) {
     if (strncmp(cli->set[i], entry, name_len) == 0 && cli->set[i][name_len] == '=') return 1;
   }
   return 0;
@@ -337,10 +339,12 @@ static char **command_env(const struct cli *cli) {
   if (env == NULL) return NULL;
   size_t n = 0;
   for (char **entry = environ; *entry != NULL; entry++) {
-    if (overridden(cli, *entry)) continue;
+    if (overridden(cli, *entry, 0)) continue;
     if (!cli->filter_env || kept(cli, *entry)) env[n++] = *entry;
   }
-  for (size_t i = 0; i < cli->set_count; i++) env[n++] = (char *)cli->set[i];
+  for (size_t i = 0; i < cli->set_count; i++) {
+    if (!overridden(cli, cli->set[i], i + 1)) env[n++] = (char *)cli->set[i];
+  }
   env[n] = NULL;
   return env;
 }
@@ -378,10 +382,10 @@ int main(int argc, char **argv) {
 
   char **env = command_env(&cli);
   if (env == NULL) return fail("out of memory", NULL);
-  /* execvp searches PATH in the launcher's own environment, then the command
-   * starts with exactly `env`. */
-  environ = env;
-  execvp(cli.command[0], cli.command);
+  /* execvpe resolves the command in the launcher's OWN PATH (the process
+   * environment, left untouched), never in a PATH the filtered environment
+   * carries; the command then starts with exactly `env`. */
+  execvpe(cli.command[0], cli.command, env);
   /* exec only returns on failure. */
   return fail("exec failed", strerror(errno));
 }

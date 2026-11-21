@@ -16,8 +16,8 @@ landlock-run --probe
 - Everything not granted is denied — Landlock rulesets are allow-lists.
 - A grant on a non-directory keeps only its file-compatible access bits (this is how a `--rw /dev/null` grant works).
 - `--keep-env <name>`, `--keep-env-prefix <prefix>`: the environment allow-list. As soon as one is given, the command receives only the variables of the launcher's own environment whose name equals a kept name or starts with a kept prefix. A name or prefix containing `=`, or empty, is a usage error.
-- `--set-env <name>=<value>`: a variable set for the command, over any of the same name (an empty name is a usage error).
-- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvp` (which searches the launcher's own `PATH`). Without `--keep-env*` the command gets the launcher's environment unchanged, plus any `--set-env`.
+- `--set-env <name>=<value>`: a variable set for the command, over any of the same name; repeated, the last value of a name wins (an empty name is a usage error).
+- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvpe`: the command is resolved in the launcher's OWN `PATH` (its process environment, left untouched), never in a `PATH` the filtered environment or a `--set-env` carries. Without `--keep-env*` the command gets the launcher's environment unchanged, plus any `--set-env`.
 - `--probe`: mutually exclusive with grants and a command.
 - No other flags, no environment-variable inputs.
 
