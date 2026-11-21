@@ -382,9 +382,14 @@ int main(int argc, char **argv) {
 
   char **env = command_env(&cli);
   if (env == NULL) return fail("out of memory", NULL);
-  /* execvpe resolves the command in the launcher's OWN PATH (the process
-   * environment, left untouched), never in a PATH the filtered environment
-   * carries; the command then starts with exactly `env`. */
+  /* With an environment allow-list, the command is resolved in a fixed system
+   * PATH: the launcher's own environment comes from its caller, who may have
+   * added a PATH (a command's spec.env), so neither that one nor a --set-env one
+   * chooses which program runs. Without the list, the launcher's own PATH, as
+   * before. The command then starts with exactly `env` (its PATH included). */
+  if (cli.filter_env && setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1) != 0) {
+    return fail("cannot set the resolution PATH", strerror(errno));
+  }
   execvpe(cli.command[0], cli.command, env);
   /* exec only returns on failure. */
   return fail("exec failed", strerror(errno));
