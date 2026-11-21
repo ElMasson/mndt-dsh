@@ -328,6 +328,9 @@ export const CSS = `
 
 .mndt-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #0C0F17; border-radius: 12px; }
 .mndt-confirm p { margin: 0; flex: 1 1 100%; font-weight: 500; }
+/* The people of Administration: the address column has one width, so the role buttons line up. */
+.mndt-post-card[data-kind="members"] .mndt-post-actions > .mndt-tag { flex: 0 0 220px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 767px) { .mndt-post-card[data-kind="members"] .mndt-post-actions > .mndt-tag { flex-basis: 100%; } }
 .mndt-segmented { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .mndt-segment {
   padding: 5px 10px; border: 1px solid var(--mndt-border, #E2E4E9); border-radius: 999px;
