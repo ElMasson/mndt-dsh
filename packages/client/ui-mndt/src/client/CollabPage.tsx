@@ -10,12 +10,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
+import { TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
@@ -60,6 +61,27 @@ export interface CollabPageProps {
   readonly team?: TeamFrame | undefined
   /** A channel's documents (the team frame); absent, the section says « Bientôt ». */
   readonly documents?: DocumentsFace | undefined
+}
+
+/**
+ * @param failure - a refusal of the agents route. @param t - the copy.
+ * @returns it in the page's words where the core's sentence is known, else as served.
+ */
+function agentRefusal(failure: unknown, t: ChatTranslate): string {
+  if (failure instanceof ChatRefusal) {
+    const taken = /^the handle @(\S+) is taken$/u.exec(failure.message)
+    if (failure.status === 409 && taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
+    if (failure.message.startsWith('only the owner raises the ceiling')) return t('agentOnlyOwnerRaises')
+    if (failure.message.startsWith('a handle is a slug')) return t('agentHandleShape')
+  }
+  return reasonOf(failure, t)
+}
+
+/** @param before - the agent as the sheet opened on it. @param now - as it is now. @returns whether it changed meanwhile. */
+function agentChanged(before: ChatAgent, now: ChatAgent): boolean {
+  return before.name !== now.name || before.provider !== now.provider || before.model !== now.model
+    || (before.instructions ?? '') !== (now.instructions ?? '') || before.eurPerMonth !== now.eurPerMonth
+    || [...before.connectors].sort().join(',') !== [...now.connectors].sort().join(',')
 }
 
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
@@ -257,6 +279,43 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       return reasonOf(failure, tc)
     }
   }, [chat, chatId, tc])
+
+  // Owners and admins declare and change agents; the sheet open, if any.
+  const canManageAgents = chat?.createAgent !== undefined && (state?.role === 'owner' || state?.role === 'admin')
+  const [editing, setEditing] = useState<ChatAgent | 'new' | undefined>(undefined)
+  // An agent's sheet opens on the agent as it is now, read again, not as the list last showed it.
+  const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
+    if (chat === undefined) return
+    try {
+      const fresh = (await chat.agents()).find(a => a.id === agent.id)
+      setChatAgents(await chat.agents())
+      setEditing(fresh ?? agent)
+    } catch {
+      setEditing(agent)
+    }
+  }, [chat])
+  const saveAgent = useCallback(async (input: AgentInput): Promise<string | undefined> => {
+    if (chat?.createAgent === undefined || chat.updateAgent === undefined || editing === undefined) return undefined
+    try {
+      if (editing === 'new') await chat.createAgent(input)
+      else {
+        // Someone may have changed the agent since the sheet opened: said, never overwritten.
+        const now = (await chat.agents()).find(a => a.id === editing.id)
+        if (now === undefined) return tc('agentGone')
+        if (agentChanged(editing, now)) {
+          setChatAgents(await chat.agents())
+          return tc('agentChangedMeanwhile')
+        }
+        const { handle: _fixed, ...patch } = input
+        await chat.updateAgent(editing.id, patch)
+      }
+      setEditing(undefined)
+      setChatAgents(await chat.agents())
+      return undefined
+    } catch (failure) {
+      return agentRefusal(failure, tc)
+    }
+  }, [chat, editing, tc])
 
   /** @param next - the channel as the Host returned it. */
   const replaceChannel = (next: ChatChannel): void => {
@@ -1546,18 +1605,52 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           )}
           {view !== 'agents' ? undefined : (
             <section className="mw-screen" data-testid="team-agents">
-              <h1 className="mw-title">{t('shell.agents')}</h1>
+              <div className="mw-screen-head">
+                <h1 className="mw-title">{t('shell.agents')}</h1>
+                {/* Owners and admins declare and change agents (Stéphane, 15/11). */}
+                {!canManageAgents || editing !== undefined ? undefined : (
+                  <button type="button" className="mw-primary" onClick={() => { setEditing('new') }}>{tc('agentNew')}</button>
+                )}
+              </div>
+              {editing === undefined || chat === undefined ? undefined : (
+                <TeamAgentForm
+                  key={editing === 'new' ? 'new' : editing.id}
+                  agent={editing === 'new' ? undefined : editing}
+                  models={modelsOf(chatAgents)}
+                  mounted={mounted === undefined || mounted === 'absent' ? [] : mounted}
+                  canRaiseCeiling={state.role === 'owner'}
+                  onSave={saveAgent}
+                  onCancel={() => { setEditing(undefined) }}
+                  t={tc}
+                />
+              )}
               {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? (
                 <div className="mw-empty-state"><p>{t('shell.agents-none')}</p></div>
               ) : (
                 <ul className="mw-tiles">
-                  {chatAgents.filter(a => a.retiredAt === undefined).map(agent => (
-                    <li key={agent.id} className="mw-tile" data-testid="team-agent">
-                      <p className="mw-tile-title"><Icon name="Bot" className="mw-slate" />{agent.name}</p>
-                      <p className="mw-tile-text">@{agent.handle} · {agent.model}</p>
-                      <p className="mw-tile-text">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</p>
-                    </li>
-                  ))}
+                  {chatAgents.filter(a => a.retiredAt === undefined).map((agent) => {
+                    const body = (
+                      <>
+                        <span className="mw-tile-title"><Icon name="Bot" className="mw-slate" />{agent.name}</span>
+                        <span className="mw-tile-text">@{agent.handle} · {agent.model}</span>
+                        <span className="mw-tile-text">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</span>
+                      </>
+                    )
+                    return (
+                      <li key={agent.id} data-testid="team-agent">
+                        {canManageAgents ? (
+                          <button
+                            type="button"
+                            className="mw-tile mw-tile-link"
+                            aria-label={tc('agentEdit', { name: agent.name })}
+                            onClick={() => { void openAgent(agent) }}
+                          >
+                            {body}
+                          </button>
+                        ) : <div className="mw-tile">{body}</div>}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </section>

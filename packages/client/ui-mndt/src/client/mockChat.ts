@@ -249,6 +249,31 @@ export function createMockChat(
     mounted() {
       return settle(() => [...(seed.mounted ?? [])])
     },
+    createAgent(input) {
+      return settle(() => {
+        // As the core: a slug of 2 to 32 characters, unique, a name and a model.
+        if (!/^[a-z0-9][a-z0-9-]{1,31}$/u.test(input.handle)) throw new ChatRefusal(`a handle is a slug of 2 to 32 characters: ${input.handle}`, 400)
+        if ([...agents.values()].some(a => a.handle === input.handle)) throw new ChatRefusal(`the handle @${input.handle} is taken`, 409)
+        if (input.name.trim() === '') throw new ChatRefusal('an agent needs a name', 400)
+        const agent: ChatAgent & { eurThisMonth: number } = {
+          id: `agt_${agents.size + 1}_${input.handle}`, handle: input.handle, name: input.name, provider: input.provider, model: input.model,
+          ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+          connectors: [...(input.connectors ?? [])], eurPerMonth: input.eurPerMonth ?? 5, eurThisMonth: 0,
+          createdBy: seed.you, createdAt: now(),
+        }
+        agents.set(agent.id, agent)
+        return agent
+      })
+    },
+    updateAgent(agentId, patch) {
+      return settle(() => {
+        const agent = agents.get(agentId)
+        if (agent === undefined) throw new ChatRefusal(`no agent ${agentId}`, 404)
+        const next = { ...agent, ...patch, ...(patch.connectors === undefined ? {} : { connectors: [...patch.connectors] }) }
+        agents.set(agentId, next)
+        return next
+      })
+    },
     tick() {
       for (const m of [...messages.values()]) {
         if (
