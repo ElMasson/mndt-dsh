@@ -53,6 +53,12 @@ export type ChatAuthor =
 export type CoordinationChange =
   | { readonly mode: 'solo' }
   | { readonly mode: 'author-verifier'; readonly author: string; readonly verifier: string }
+  | {
+    readonly mode: 'parallel-synthesis'
+    readonly workers: readonly string[]
+    readonly synthesizer: string
+    readonly maxEurPerTurn?: number
+  }
 
 /** One agent turn started by a mention. */
 export interface ChatTurn {

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatAgent, ChatChannel, ChatTurn, CoordinationChange } from '../src/client/chat.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
-import { CoordinationSection, coordinatedTurn, coordinationOf, stepsOf } from '../src/client/coordination.tsx'
+import { CoordinationSection, coordinatedTurn, coordinationOf, stepsOf, turnSteps } from '../src/client/coordination.tsx'
 import { createMockChat } from '../src/client/mockChat.ts'
 
 afterEach(() => { cleanup() })
@@ -180,5 +180,124 @@ describe('the core\'s refusals of a coordination, in words (#84)', () => {
     expect(say('the author and the verifier must both be active agents of this channel')).toBe('L\'auteur et le vérificateur doivent être deux agents actifs de ce canal.')
     expect(say('the author and the verifier must be two agents')).toBe('L\'auteur et le vérificateur doivent être deux agents différents.')
     expect(say('mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)')).toBe('Cet espace ne connaît pas ce mode de réponse.')
+  })
+})
+
+describe('« en parallèle puis synthèse » (#85)', () => {
+  const FOUR = [...AGENTS, agent('agt_4', 'synthese', 'glm-5.2')]
+  const WIDE: ChatChannel = { ...CHANNEL, agents: ['agt_1', 'agt_2', 'agt_3', 'agt_4'] }
+
+  it('two workers, a synthesiser that is not one of them, a budget, then « Enregistrer »', async () => {
+    const sent = vi.fn()
+    const chat = createMockChat({ you, agents: FOUR, channels: [WIDE] }, () => Date.parse(at))
+    /** The section over the double, re-drawn on what it returns. */
+    function Wide(): ReactNode {
+      const [channel, setChannel] = useState(WIDE)
+      return (
+        <CoordinationSection
+          channel={channel}
+          agents={FOUR}
+          canManage
+          onChange={async (change) => {
+            sent(change)
+            setChannel(await (chat.setCoordination?.(channel.id, change) ?? Promise.resolve(channel)))
+            return undefined
+          }}
+          t={chatFrench}
+        />
+      )
+    }
+    render(<Wide />)
+    fireEvent.click(screen.getByRole('button', { name: 'En parallèle puis synthèse' }))
+    const save = (): HTMLElement => screen.getByRole('button', { name: 'Enregistrer' })
+    const saveOff = (): boolean => {
+      const button = save()
+      return button instanceof HTMLButtonElement && button.disabled
+    }
+    expect(saveOff()).toBe(true)
+    const workers = screen.getByTestId('coord-workers')
+    fireEvent.click(within(workers).getByRole('button', { name: '@redacteur' }))
+    fireEvent.click(within(workers).getByRole('button', { name: '@relecteur' }))
+    // A worker cannot synthesise.
+    expect(within(screen.getByTestId('coord-synthesizer')).getByRole('button', { name: /@redacteur/u }).getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(within(screen.getByTestId('coord-synthesizer')).getByRole('button', { name: '@synthese' }))
+    fireEvent.click(within(screen.getByTestId('coord-budget')).getByRole('button', { name: /^2/u }))
+    fireEvent.click(save())
+    await waitFor(() => { expect(sent).toHaveBeenCalledWith({ mode: 'parallel-synthesis', workers: ['agt_1', 'agt_2'], synthesizer: 'agt_4', maxEurPerTurn: 2 }) })
+    await waitFor(() => { expect(saveOff()).toBe(true) })
+  })
+
+  it('a reader reads it; fewer than three agents greys the mode; a malformed one reads as alone', () => {
+    const parallel = { ...CHANNEL, coordination: { mode: 'parallel-synthesis', workerIds: ['agt_1', 'agt_2'], synthesizerId: 'agt_3', maxEurPerTurn: 1 } }
+    render(<Panel canManage={false} channel={parallel} />)
+    expect(screen.getByTestId('coordination-read').textContent).toMatch(/^En parallèle : @redacteur, @relecteur, puis synthèse par @jumeau \(1/u)
+    cleanup()
+    render(<Panel channel={{ ...CHANNEL, agents: ['agt_1', 'agt_2'] }} />)
+    expect(screen.getByRole('button', { name: 'En parallèle puis synthèse' }).getAttribute('aria-disabled')).toBe('true')
+    for (const coordination of [
+      { mode: 'parallel-synthesis', workerIds: ['agt_1'], synthesizerId: 'agt_3', maxEurPerTurn: 1 },
+      { mode: 'parallel-synthesis', workerIds: ['agt_1', 'agt_3'], synthesizerId: 'agt_3', maxEurPerTurn: 1 },
+      { mode: 'parallel-synthesis', workerIds: ['agt_1', 'agt_2'], synthesizerId: 'agt_3', maxEurPerTurn: 9 },
+    ]) {
+      expect(coordinationOf({ ...CHANNEL, coordination })).toBeUndefined()
+    }
+  })
+})
+
+describe('a parallel turn in the feed (#85)', () => {
+  it('synthesised: who answered, who synthesised, the cost; the parts folded under their agents', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'worker', agentId: 'agt_1', text: 'Part A : <b>chiffres</b>', eur: 0.01 },
+      { role: 'worker', agentId: 'agt_2', text: 'Part B', eur: 0.01 },
+      { role: 'synthesis', agentId: 'agt_3', eur: 0.02 },
+    ], 0.04), byId, chatFrench)}</>)
+    expect(screen.getByTestId('chat-turn-cost').textContent).toMatch(/^En parallèle : @redacteur, @relecteur · synthèse par @jumeau · /u)
+    const steps = screen.getByTestId('turn-steps')
+    expect(steps instanceof HTMLDetailsElement && steps.open).toBe(false)
+    expect(screen.getAllByTestId('turn-part').map(p => p.textContent)).toEqual(['Part A : <b>chiffres</b>', 'Part B'])
+    expect(steps.querySelector('b')).toBeNull()
+  })
+
+  it('a missing part is counted and its reason said; not synthesised shows the parts unfolded', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'worker', agentId: 'agt_1', text: 'Part A' },
+      { role: 'worker', agentId: 'agt_2', verdict: 'skipped', notes: ['plafond mensuel'] },
+      { role: 'synthesis', agentId: 'agt_3', verdict: 'skipped', notes: ['le coût du tour atteindrait sa borne (1 €)'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('chat-turn-cost').textContent).toContain('1 parts sur 2')
+    expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('synthèse par')
+    expect(screen.getByTestId('turn-not-synthesised').textContent).toBe('Non synthétisé : le coût du tour atteindrait sa borne (1 €). Les parts sont dans le détail ci-dessous.')
+    const steps = screen.getByTestId('turn-steps')
+    expect(steps instanceof HTMLDetailsElement && steps.open).toBe(true)
+    expect(steps.textContent).toContain('Part manquante @relecteur')
+    expect(steps.textContent).toContain('plafond mensuel')
+  })
+
+  it('no part at all: said, with the reasons', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'worker', agentId: 'agt_1', verdict: 'skipped', notes: ['aucun texte'] },
+      { role: 'worker', agentId: 'agt_2', verdict: 'skipped', notes: ['tour arrêté'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-no-part').textContent).toBe('Aucune part n\'a abouti : les raisons sont dans le détail ci-dessous.')
+    expect(screen.getByTestId('turn-steps').textContent).toContain('aucun texte')
+  })
+
+  it('the core\'s refusals of a parallel turn, in words', async () => {
+    const { coordinationRefusal } = await import('../src/client/CollabPage.tsx')
+    const { ChatRefusal } = await import('../src/client/chat.ts')
+    const say = (m: string): string => coordinationRefusal(new ChatRefusal(m, 400), chatFrench)
+    expect(say('a parallel turn has 2 to 4 distinct workers')).toBe('Un tour parallèle compte 2 à 4 travailleurs différents.')
+    expect(say('the workers and the synthesizer must all be active agents of this channel')).toBe('Les travailleurs et le synthétiseur doivent tous être des agents actifs de ce canal.')
+    expect(say('the synthesizer is not one of the workers')).toBe('Le synthétiseur ne peut pas être un des travailleurs.')
+    expect(say('a parallel turn costs 5 € at most (maxEurPerTurn)')).toBe('Un tour parallèle coûte 5 € au plus.')
+  })
+})
+
+describe('a stopped turn keeps its steps (#85)', () => {
+  it('its parts and costs stay readable, folded', () => {
+    const stopped = { ...turn([{ role: 'worker', agentId: 'agt_1', text: 'Part A', eur: 0.01 }, { role: 'worker', agentId: 'agt_2', verdict: 'skipped', notes: ['tour arrêté'] }]), status: 'cancelled' as const }
+    render(<>{turnSteps(stopped, byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-part').textContent).toBe('Part A')
+    expect(screen.getByTestId('turn-steps').textContent).toContain('tour arrêté')
   })
 })

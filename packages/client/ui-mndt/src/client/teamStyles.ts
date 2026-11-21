@@ -405,6 +405,10 @@ export const TEAM_CSS = `
 }
 .mw-turn-steps summary { cursor: pointer; color: var(--mw-slate); font-size: 12.5px; }
 .mw-turn-steps ol { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.mw-turn-part {
+  margin: 4px 0 6px; padding: 8px 10px; border-left: 2px solid var(--mw-line); background: var(--mw-surface);
+  border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px;
+}
 .mw-turn-notes { margin: 2px 0 4px; padding-left: 16px; color: var(--mw-slate); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }

@@ -88,6 +88,11 @@ export function coordinationRefusal(failure: unknown, t: ChatTranslate): string 
     if (failure.message.includes('must both be active agents of this channel')) return t('coordNotActive')
     if (failure.message.includes('must be two agents')) return t('coordTwoAgents')
     if (failure.message.startsWith('mode is solo')) return t('coordModeUnknown')
+    if (failure.message.includes('has 2 to 4 distinct workers')) return t('coordWorkersCount')
+    if (failure.message.includes('must all be active agents of this channel')) return t('coordParallelNotActive')
+    if (failure.message.includes('the synthesizer is not one of the workers')) return t('coordSynthNotWorker')
+    if (failure.message.includes('costs 5 € at most')) return t('coordBudgetMax')
+    if (failure.message.startsWith('parallel-synthesis needs workers')) return t('coordParallelNeeds')
   }
   return reasonOf(failure, t)
 }

@@ -1,6 +1,7 @@
 /**
- * The « auteur puis vérificateur » mode (A1, #84): a channel can have one agent write and another,
- * of a different model, check the draft before it is published. Read here from what the core
+ * How agents answer in a channel (A1, #84 and #85): alone; « auteur puis vérificateur », one agent
+ * writes and another, of a different model, checks the draft before it is published; or « en
+ * parallèle puis synthèse », two to four agents answer side by side and a last one synthesises. Read here from what the core
  * serves, defensively: a value of another shape shows nothing rather than breaking the page.
  */
 import { useRef, useState } from 'react'
@@ -10,16 +11,24 @@ import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 
 /** A channel's coordination, as `channel.coordination` serves it. */
-export interface Coordination {
-  readonly mode: 'author-verifier'
-  readonly authorId: string
-  readonly verifierId: string
-}
+export type Coordination =
+  | { readonly mode: 'author-verifier'; readonly authorId: string; readonly verifierId: string }
+  | {
+    readonly mode: 'parallel-synthesis'
+    readonly workerIds: readonly string[]
+    readonly synthesizerId: string
+    readonly maxEurPerTurn: number
+  }
+
+/** The budget choices of a parallel turn, in euros (the core takes (0, 5]). */
+const TURN_BUDGETS = [0.5, 1, 2, 5] as const
 
 /** One step of a coordinated turn, as `turn.steps` serves it. */
 export interface TurnStep {
-  readonly role: 'author' | 'verifier' | 'revision'
+  readonly role: 'author' | 'verifier' | 'revision' | 'worker' | 'synthesis'
   readonly agentId: string
+  /** A worker's part, the only source of the parts (#85). */
+  readonly text?: string
   readonly tokens?: number
   readonly eur?: number
   readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
@@ -27,7 +36,7 @@ export interface TurnStep {
 }
 
 
-const ROLES = new Set(['author', 'verifier', 'revision'])
+const ROLES = new Set(['author', 'verifier', 'revision', 'worker', 'synthesis'])
 const VERDICT_WORDS = {
   ok: 'coordVerdictOk',
   issues: 'coordVerdictIssues',
@@ -54,6 +63,18 @@ export function coordinationOf(channel: ChatChannel): Coordination | undefined {
   const raw: unknown = channel.coordination
   if (typeof raw !== 'object' || raw === null) return undefined
   const c = raw as Record<string, unknown>
+  if (c.mode === 'parallel-synthesis') {
+    const synthesizerId = idOf(c.synthesizerId)
+    const workers: unknown = c.workerIds
+    if (synthesizerId === undefined || !Array.isArray(workers) || workers.length < 2 || workers.length > 4) return undefined
+    const workerIds = workers.map(idOf)
+    const distinct = new Set(workerIds).size === workerIds.length
+    if (workerIds.some(id => id === undefined) || !distinct || workerIds.includes(synthesizerId)) return undefined
+    const max = c.maxEurPerTurn
+    const maxEurPerTurn = typeof max === 'number' && Number.isFinite(max) && max > 0 && max <= 5 ? max : undefined
+    if (maxEurPerTurn === undefined) return undefined
+    return { mode: 'parallel-synthesis', workerIds: workerIds.filter((id): id is string => id !== undefined), synthesizerId, maxEurPerTurn }
+  }
   const authorId = idOf(c.authorId)
   const verifierId = idOf(c.verifierId)
   if (c.mode !== 'author-verifier' || authorId === undefined || verifierId === undefined || authorId === verifierId) return undefined
@@ -77,16 +98,18 @@ export function stepsOf(turn: ChatTurn): readonly TurnStep[] {
     const notes = Array.isArray(s.notes) ? s.notes.filter((n): n is string => typeof n === 'string' && n.trim() !== '').map(n => n.slice(0, 2000)) : []
     const tokens = amountOf(s.tokens)
     const eur = amountOf(s.eur)
+    const text = typeof s.text === 'string' && s.text.trim() !== '' ? s.text.slice(0, 20_000) : undefined
     steps.push({
       role: s.role as TurnStep['role'],
       agentId,
+      ...(text === undefined ? {} : { text }),
       ...(tokens === undefined ? {} : { tokens }),
       ...(eur === undefined ? {} : { eur }),
       ...(s.verdict === undefined ? {} : { verdict: s.verdict as NonNullable<TurnStep['verdict']> }),
       ...(notes.length === 0 ? {} : { notes }),
     })
   }
-  return steps[0]?.role === 'author' ? steps : []
+  return steps[0]?.role === 'author' || steps[0]?.role === 'worker' ? steps : []
 }
 
 /** @param a - an agent. @param b - another. @returns whether they run on the same model. */
@@ -94,10 +117,14 @@ function sameModel(a: ChatAgent, b: ChatAgent): boolean {
   return a.provider === b.provider && a.model === b.model
 }
 
+type Mode = 'solo' | 'author-verifier' | 'parallel-synthesis'
+
 /**
- * The COORDINATION section of a channel's panel: « Seul » or « Auteur puis vérificateur »; in the
- * second, the author then the verifier are chosen among the channel's agents, by pills. A verifier
- * on the author's model is greyed, with the reason. Owners and admins change it; others read it.
+ * The COORDINATION section of a channel's panel: « Seul », « Auteur puis vérificateur » or « En
+ * parallèle puis synthèse », by pills, no drop-down. For the pair, the author then the verifier
+ * (one of another model, else greyed with the reason); for the parallel turn, two to four workers,
+ * the synthesiser (not a worker) and the turn's budget, then « Enregistrer ». Owners and admins
+ * change it; others read it.
  */
 export function CoordinationSection(props: {
   readonly channel: ChatChannel
@@ -111,9 +138,13 @@ export function CoordinationSection(props: {
   const here = props.agents.filter(a => channel.agents.includes(a.id) && a.retiredAt === undefined)
   const byId = new Map(props.agents.map(a => [a.id, a]))
   const writable = props.canManage && props.onChange !== undefined
-  // The pair being chosen: opens on the channel's, or on nothing when « Auteur puis vérificateur » is picked.
-  const [drafting, setDrafting] = useState(false)
-  const [author, setAuthor] = useState<string | undefined>(current?.authorId)
+  // The mode picked here and not yet sent; otherwise the channel's.
+  const [picked, setPicked] = useState<Mode | undefined>(undefined)
+  const shown: Mode = picked ?? current?.mode ?? 'solo'
+  const [author, setAuthor] = useState<string | undefined>(current?.mode === 'author-verifier' ? current.authorId : undefined)
+  const [workers, setWorkers] = useState<readonly string[]>(current?.mode === 'parallel-synthesis' ? current.workerIds : [])
+  const [synthesizer, setSynthesizer] = useState<string | undefined>(current?.mode === 'parallel-synthesis' ? current.synthesizerId : undefined)
+  const [budget, setBudget] = useState<number>(current?.mode === 'parallel-synthesis' ? current.maxEurPerTurn : 1)
   const [error, setError] = useState<string | undefined>(undefined)
   const busy = useRef(false)
   const [pending, setPending] = useState(false)
@@ -123,49 +154,64 @@ export function CoordinationSection(props: {
     setPending(true)
     const refused = await props.onChange(change)
     setError(refused)
-    if (refused === undefined) setDrafting(false)
+    if (refused === undefined) setPicked(undefined)
     busy.current = false
     setPending(false)
   }
-  const paired = current !== undefined || drafting
   const handle = (id: string): string => `@${byId.get(id)?.handle ?? id}`
   if (!writable) {
     return (
       <p data-testid="coordination-read">
-        {current === undefined ? t('coordSolo') : t('coordPair', { author: handle(current.authorId), verifier: handle(current.verifierId) })}
+        {current === undefined ? t('coordSolo')
+          : current.mode === 'author-verifier'
+            ? t('coordPair', { author: handle(current.authorId), verifier: handle(current.verifierId) })
+            : t('coordParallelRead', {
+              workers: current.workerIds.map(handle).join(', '),
+              synthesizer: handle(current.synthesizerId),
+              max: euros(current.maxEurPerTurn),
+            })}
       </p>
     )
   }
   const authorAgent = author === undefined ? undefined : byId.get(author)
+  const pick = (mode: Mode): void => {
+    if (pending) return
+    setError(undefined)
+    if (mode === 'solo') {
+      if (current === undefined) setPicked(undefined)
+      else void send({ mode: 'solo' })
+      return
+    }
+    setPicked(mode === current?.mode ? undefined : mode)
+  }
+  const modePill = (mode: Mode, label: string, needs: number, why: string): ReactNode => {
+    const short = mode !== 'solo' && here.length < needs
+    return (
+      <button
+        type="button"
+        className="mw-pill"
+        aria-pressed={shown === mode}
+        aria-disabled={pending || short}
+        title={short ? why : undefined}
+        onClick={() => { if (!short) pick(mode) }}
+      >
+        {label}
+      </button>
+    )
+  }
+  // The parallel turn as it would be sent, when it can be.
+  const parallelReady = workers.length >= 2 && workers.length <= 4 && synthesizer !== undefined && !workers.includes(synthesizer)
+  const parallelSame = current?.mode === 'parallel-synthesis' && synthesizer === current.synthesizerId && budget === current.maxEurPerTurn
+    && workers.length === current.workerIds.length && workers.every((id, i) => id === current.workerIds[i])
   return (
     <div data-testid="coordination">
       <div className="mw-pills" role="group" aria-label={t('coordMode')}>
-        <button
-          type="button"
-          className="mw-pill"
-          aria-pressed={!paired}
-          aria-disabled={pending}
-          onClick={() => {
-            if (pending) return
-            if (current === undefined) { setDrafting(false); return }
-            void send({ mode: 'solo' })
-          }}
-        >
-          {t('coordSoloButton')}
-        </button>
-        <button
-          type="button"
-          className="mw-pill"
-          aria-pressed={paired}
-          aria-disabled={pending || here.length < 2}
-          title={here.length < 2 ? t('coordNeedsTwo') : undefined}
-          onClick={() => { if (!pending && here.length >= 2) { setDrafting(true); setError(undefined) } }}
-        >
-          {t('coordPairButton')}
-        </button>
+        {modePill('solo', t('coordSoloButton'), 0, '')}
+        {modePill('author-verifier', t('coordPairButton'), 2, t('coordNeedsTwo'))}
+        {modePill('parallel-synthesis', t('coordParallelButton'), 3, t('coordNeedsThree'))}
       </div>
       {here.length < 2 ? <p className="mw-ctx-small mw-ctx-muted">{t('coordNeedsTwo')}</p> : undefined}
-      {!paired || here.length < 2 ? undefined : (
+      {shown !== 'author-verifier' || here.length < 2 ? undefined : (
         <>
           <p className="mw-ctx-small mw-ctx-muted">{t('coordAuthor')}</p>
           <div className="mw-pills" role="group" aria-label={t('coordAuthor')} data-testid="coord-author">
@@ -176,7 +222,7 @@ export function CoordinationSection(props: {
                 className="mw-pill"
                 aria-pressed={author === a.id}
                 aria-disabled={pending}
-                onClick={() => { if (!pending) { setAuthor(a.id); setDrafting(true); setError(undefined) } }}
+                onClick={() => { if (!pending) { setAuthor(a.id); setPicked('author-verifier'); setError(undefined) } }}
               >
                 @{a.handle}
               </button>
@@ -189,16 +235,15 @@ export function CoordinationSection(props: {
               const twin = authorAgent !== undefined && !self && sameModel(a, authorAgent)
               // The author this pill pairs with, when one click may send the pair.
               const pairWith = pending || self || twin ? undefined : author
-              const inert = pairWith === undefined
               const why = author === undefined ? t('coordAuthorFirst') : self ? t('coordNotSelf') : twin ? t('coordSameModel') : undefined
-              const chosen = !drafting && current?.verifierId === a.id && current.authorId === author
+              const chosen = picked === undefined && current?.mode === 'author-verifier' && current.verifierId === a.id && current.authorId === author
               return (
                 <button
                   key={a.id}
                   type="button"
                   className="mw-pill"
                   aria-pressed={chosen}
-                  aria-disabled={inert}
+                  aria-disabled={pairWith === undefined}
                   aria-label={why === undefined ? `@${a.handle}` : `@${a.handle}, ${why}`}
                   title={why}
                   data-off={twin || self ? 'true' : undefined}
@@ -215,7 +260,175 @@ export function CoordinationSection(props: {
           </div>
         </>
       )}
+      {here.length === 2 ? <p className="mw-ctx-small mw-ctx-muted">{t('coordNeedsThree')}</p> : undefined}
+      {shown !== 'parallel-synthesis' || here.length < 3 ? undefined : (
+        <>
+          <p className="mw-ctx-small mw-ctx-muted">{t('coordWorkers')}</p>
+          <div className="mw-pills" role="group" aria-label={t('coordWorkers')} data-testid="coord-workers">
+            {here.map((a) => {
+              const on = workers.includes(a.id)
+              const full = !on && workers.length >= 4
+              const why = full ? t('coordFourAtMost') : undefined
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="mw-pill"
+                  aria-pressed={on}
+                  aria-disabled={pending || full}
+                  aria-label={why === undefined ? `@${a.handle}` : `@${a.handle}, ${why}`}
+                  title={why}
+                  onClick={() => {
+                    if (pending || full) return
+                    setPicked('parallel-synthesis')
+                    setError(undefined)
+                    setWorkers(held => (on ? held.filter(id => id !== a.id) : [...held, a.id]))
+                    // A worker cannot be the synthesiser too.
+                    if (!on && synthesizer === a.id) setSynthesizer(undefined)
+                  }}
+                >
+                  @{a.handle}
+                </button>
+              )
+            })}
+          </div>
+          <p className="mw-ctx-small mw-ctx-muted">{t('coordSynthesizer')}</p>
+          <div className="mw-pills" role="group" aria-label={t('coordSynthesizer')} data-testid="coord-synthesizer">
+            {here.map((a) => {
+              const worker = workers.includes(a.id)
+              const why = worker ? t('coordIsWorker') : undefined
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="mw-pill"
+                  aria-pressed={synthesizer === a.id}
+                  aria-disabled={pending || worker}
+                  aria-label={why === undefined ? `@${a.handle}` : `@${a.handle}, ${why}`}
+                  title={why}
+                  data-off={worker ? 'true' : undefined}
+                  onClick={() => { if (!pending && !worker) { setSynthesizer(a.id); setPicked('parallel-synthesis'); setError(undefined) } }}
+                >
+                  @{a.handle}
+                </button>
+              )
+            })}
+          </div>
+          <p className="mw-ctx-small mw-ctx-muted">{t('coordBudget')}</p>
+          <div className="mw-pills" role="group" aria-label={t('coordBudget')} data-testid="coord-budget">
+            {TURN_BUDGETS.map(value => (
+              <button
+                key={value}
+                type="button"
+                className="mw-pill"
+                aria-pressed={budget === value}
+                aria-disabled={pending}
+                onClick={() => { if (!pending) { setBudget(value); setPicked('parallel-synthesis') } }}
+              >
+                {euros(value)}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mw-primary"
+            disabled={pending || !parallelReady || parallelSame}
+            onClick={() => {
+              if (!parallelReady) return
+              void send({ mode: 'parallel-synthesis', workers, synthesizer, maxEurPerTurn: budget })
+            }}
+          >
+            {t('coordSave')}
+          </button>
+        </>
+      )}
       {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
+    </div>
+  )
+}
+
+const STEP_WORDS = {
+  author: 'coordStepAuthor',
+  verifier: 'coordStepVerifier',
+  revision: 'coordStepRevision',
+  worker: 'coordStepWorker',
+  synthesis: 'coordStepSynthesis',
+} as const
+
+/**
+ * The steps of a coordinated turn, folded: each with its agent, verdict, cost and notes; a worker's
+ * part is shown under its agent, as text. A missing part is said, with its reason.
+ * @param steps - the turn's steps. @param agents - by id. @param t - the copy. @param open - unfolded.
+ * @returns the folded list.
+ */
+function stepsList(steps: readonly TurnStep[], agents: ReadonlyMap<string, ChatAgent>, t: ChatTranslate, open: boolean): ReactNode {
+  const handle = (id: string): string => `@${agents.get(id)?.handle ?? id}`
+  return (
+    <details className="mw-turn-steps" data-testid="turn-steps" open={open}>
+      <summary>{t('coordSteps', { count: steps.length })}</summary>
+      <ol>
+        {steps.map((s, index) => (
+          <li key={`${s.role}-${index}`} data-role={s.role}>
+            <span className="mw-ctx-strong">
+              {s.role === 'worker' && s.verdict === 'skipped' ? t('coordStepMissing') : t(STEP_WORDS[s.role])}
+            </span>
+            {' '}{handle(s.agentId)}
+            {s.verdict === undefined || (s.role === 'worker' && s.verdict === 'skipped') ? '' : ` · ${t(VERDICT_WORDS[s.verdict])}`}
+            {s.eur === undefined ? '' : ` · ${euros(s.eur)}`}
+            {s.tokens === undefined ? '' : ` · ${t('webTokens', { n: s.tokens.toLocaleString('fr') })}`}
+            {s.role === 'worker' && s.text !== undefined ? <div className="mw-turn-part" data-testid="turn-part">{s.text}</div> : undefined}
+            {s.notes === undefined ? undefined : (
+              <ul className="mw-turn-notes">
+                {s.notes.map((note, n) => <li key={n}>{note}</li>)}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
+/**
+ * The folded steps of a turn that did not finish (cancelled, failed): it keeps its steps (#85).
+ * @param turn - the turn. @param agents - by id. @param t - the copy.
+ * @returns the steps, or undefined when it has none readable.
+ */
+export function turnSteps(turn: ChatTurn, agents: ReadonlyMap<string, ChatAgent>, t: ChatTranslate): ReactNode {
+  const steps = stepsOf(turn)
+  return steps.length === 0 ? undefined : stepsList(steps, agents, t, false)
+}
+
+/**
+ * A parallel turn's line: who answered side by side, how many parts came, who synthesised, the
+ * total cost. Not synthesised or no part at all is said plainly, and the parts are shown unfolded.
+ */
+function parallelTurn(turn: ChatTurn, steps: readonly TurnStep[], agents: ReadonlyMap<string, ChatAgent>, t: ChatTranslate): ReactNode {
+  const handle = (id: string): string => `@${agents.get(id)?.handle ?? id}`
+  const workers = steps.filter(s => s.role === 'worker')
+  const received = workers.filter(s => s.verdict === undefined && s.text !== undefined)
+  const synthesis = steps.find(s => s.role === 'synthesis')
+  const synthesised = synthesis !== undefined && synthesis.verdict === undefined
+  const parts = [
+    t('coordParallelBy', { handles: workers.map(s => handle(s.agentId)).join(', ') }),
+    received.length === workers.length ? undefined : t('coordPartsOf', { got: received.length, total: workers.length }),
+    synthesised ? t('coordSynthBy', { handle: handle(synthesis.agentId) }) : undefined,
+    turn.eur === undefined ? undefined : euros(turn.eur),
+  ].filter((part): part is string => part !== undefined)
+  return (
+    <div className="mw-turn mw-turn-coord" data-testid="chat-turn" data-status="done" data-coordinated="parallel">
+      <p className="mw-turn-coord-line">
+        <span className="mw-chip mw-chip-strong">{t('webTurn')}</span>
+        <span data-testid="chat-turn-cost">{parts.join(' · ')}</span>
+      </p>
+      {synthesis === undefined ? (
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-no-part">{t('coordNoPart')}</p>
+      ) : synthesised ? undefined : (
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-not-synthesised">
+          {t('coordNotSynthesised', { reason: synthesis.notes?.[0] ?? t('coordVerdictSkipped') })}
+        </p>
+      )}
+      {stepsList(steps, agents, t, !synthesised)}
     </div>
   )
 }
@@ -228,6 +441,7 @@ export function CoordinationSection(props: {
  */
 export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, ChatAgent>, t: ChatTranslate): ReactNode {
   const steps = stepsOf(turn)
+  if (steps[0]?.role === 'worker') return parallelTurn(turn, steps, agents, t)
   const author = steps.find(s => s.role === 'author')
   const verifier = steps.find(s => s.role === 'verifier')
   if (author === undefined || verifier === undefined) return undefined
@@ -261,25 +475,7 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
           {revision?.verdict === 'skipped' ? t('coordUncorrectedCeiling', { handle: handle(author.agentId) }) : t('coordUncorrected', { handle: handle(author.agentId) })}
         </p>
       ) : undefined}
-      <details className="mw-turn-steps" data-testid="turn-steps">
-        <summary>{t('coordSteps', { count: steps.length })}</summary>
-        <ol>
-          {steps.map((s, index) => (
-            <li key={`${s.role}-${index}`}>
-              <span className="mw-ctx-strong">{t(s.role === 'author' ? 'coordStepAuthor' : s.role === 'verifier' ? 'coordStepVerifier' : 'coordStepRevision')}</span>
-              {' '}{handle(s.agentId)}
-              {s.verdict === undefined ? '' : ` · ${t(VERDICT_WORDS[s.verdict])}`}
-              {s.eur === undefined ? '' : ` · ${euros(s.eur)}`}
-              {s.tokens === undefined ? '' : ` · ${t('webTokens', { n: s.tokens.toLocaleString('fr') })}`}
-              {s.notes === undefined ? undefined : (
-                <ul className="mw-turn-notes">
-                  {s.notes.map((note, n) => <li key={n}>{note}</li>)}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ol>
-      </details>
+      {stepsList(steps, agents, t, false)}
     </div>
   )
 }
