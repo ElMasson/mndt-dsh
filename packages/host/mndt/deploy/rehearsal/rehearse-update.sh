@@ -22,6 +22,7 @@ set -uo pipefail
 old_image=${1:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/checks.sh"
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 old_ref=${OLD_REF:-96d2801d8a}
@@ -268,10 +269,7 @@ approvals_after=$(approvals_print)
 # restart is the right answer: the check does not assume the update changes it.
 restarted=0
 if [ "$old_state" = installed ]; then
-  if [ "$approvals_before" = "$approvals_after" ]; then
-    echo "OK  seed-restart   approvals descriptor and patch unchanged by seed-team.sh: no restart needed ($([ "$started_before" = "$started_after" ] && echo none || echo 'one anyway'))"
-  elif [ "$started_before" != "$started_after" ]; then echo "OK  seed-restart   seed-team.sh restarted the workbench after rewriting approvals"
-  else echo "KO  seed-restart   seed-team.sh rewrote approvals but did not restart the workbench"; restarted=1; fi
+  seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
 fi
 own
 patch_before=$(sha256sum < "$web_patch" 2>/dev/null)
