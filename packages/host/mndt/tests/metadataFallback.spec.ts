@@ -169,6 +169,17 @@ describe('part 2: names and parties', () => {
       'mndt: mandate mnd_self retired on load (its two parties are the same person); it was active, duke@datanalysis.re to duke@datanalysis.re',
       'mndt: mandate mnd_half retired on load (a party is missing); it was active, duke@datanalysis.re to ?',
     ])
+    // The first operation after a load that retired a mandate is a write: it
+    // stays on disk (the load's save never writes its older snapshot over it).
+    const store2 = new MemoryStore()
+    const state2 = await store2.load()
+    await store2.save({ ...state2, mandates: [{ ...base, id: 'mnd_self2', delegant: 'A@datanalysis.re', delegataire: 'a@datanalysis.re' }] } as unknown as typeof state2)
+    const service2 = new WorkbenchService({ store: store2, warn: () => {} })
+    await service2.createChannel({ name: 'apres-chargement', title: 'Après chargement' }, 'duke@datanalysis.re')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const reloaded = await new WorkbenchService({ store: store2, warn: () => {} }).snapshot()
+    expect((reloaded.channels ?? []).map(channel => channel.name)).toContain('apres-chargement')
+    expect(reloaded.mandates.find(m => m.id === 'mnd_self2')?.state).toBe('retired')
     // Recorded once: the next start says nothing more.
     const again: string[] = []
     await new WorkbenchService({ store, warn: (message) => { again.push(message) } }).mandates()

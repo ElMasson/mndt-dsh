@@ -191,9 +191,10 @@ export class WorkbenchService {
       // Recorded once: a mandate retired on load is said at this start only, not at every start.
       // Through the write chain, behind any write already queued: never a save
       // that races another one.
+      // The state saved is the one current when this link runs, never the load's
+      // snapshot: a write queued before it must not be overwritten on disk.
       if (retiredOnLoad > 0) {
-        const recorded = this.#state
-        const save = this.#chain.then(() => this.#options.store.save(recorded))
+        const save = this.#chain.then(() => this.#options.store.save(this.#state))
         this.#chain = save.catch(() => undefined)
       }
     }
