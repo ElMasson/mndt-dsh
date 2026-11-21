@@ -161,11 +161,12 @@ def main(argv: list[str]) -> int:
                 os.chown(temporary, PROXY_UID, PROXY_UID)
         except OSError as error:
             return refuse(f"cannot give {output} to the proxy ({PROXY_UID}): {error}")
-        expected = os.geteuid() if unprivileged else PROXY_UID
+        expected_uid = os.geteuid() if unprivileged else PROXY_UID
+        expected_gid = os.getegid() if unprivileged else PROXY_UID
         st = os.stat(temporary)
-        if st.st_uid != expected or st.st_gid != (os.getegid() if unprivileged else PROXY_UID) or (st.st_mode & 0o777) != 0o640:
+        if st.st_uid != expected_uid or st.st_gid != expected_gid or (st.st_mode & 0o777) != 0o640:
             return refuse(
-                f"the new list would be {st.st_uid}:{st.st_gid} {oct(st.st_mode & 0o777)}, not {expected}:{expected} 0o640; "
+                f"the new list would be {st.st_uid}:{st.st_gid} {oct(st.st_mode & 0o777)}, not {expected_uid}:{expected_gid} 0o640; "
                 "the proxy could not read it at its next start"
             )
         os.replace(temporary, output)
