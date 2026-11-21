@@ -1382,7 +1382,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <div className="mndt-post-body">
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
-                  <span className="mndt-tag">{member.subject}</span>
+                  <span className="mndt-tag" title={member.subject}>{member.subject}</span>
                   {canTouch(member.subject, member.role) && !rolesFromFile ? (
                     <>
                       <Segmented

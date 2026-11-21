@@ -462,6 +462,8 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     await admin('owner', 'duke@datanalysis.re')
     fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Admin' }))
     expect(screen.getByTestId('role-confirm').textContent).toContain('Faire de smarion@datanalysis.re un Admin ?')
+    // The address is never cut: not in the line, not in the question.
+    expect(screen.getByText('smarion@datanalysis.re', { selector: '.mndt-tag' }).getAttribute('title')).toBe('smarion@datanalysis.re')
     fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Annuler' }))
     expect(screen.queryByTestId('role-confirm')).toBeNull()
     expect(grantMember).not.toHaveBeenCalled()
