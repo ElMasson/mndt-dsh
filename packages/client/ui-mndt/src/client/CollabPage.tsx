@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector, OfferedModel } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
@@ -214,6 +214,16 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // `absent`: the route is not served here, and nothing is marked « non branché » for that.
   const [mounted, setMounted] = useState<readonly MountedConnector[] | 'absent' | undefined>(undefined)
   const [mountedError, setMountedError] = useState<string | undefined>(undefined)
+  // The models the core offers (#82); undefined while unknown or not served.
+  const [offered, setOffered] = useState<readonly OfferedModel[] | undefined>(undefined)
+  const loadOffered = useCallback(async () => {
+    if (team === undefined || chat?.models === undefined) return
+    try {
+      setOffered(await chat.models())
+    } catch {
+      setOffered(undefined)
+    }
+  }, [team, chat])
   const loadMounted = useCallback(async () => {
     if (team === undefined || chat?.mounted === undefined) return
     try {
@@ -231,6 +241,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     if (chat === undefined) return
     void loadCards()
     void loadMounted()
+    void loadOffered()
     const started = Date.now()
     try {
       const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
@@ -249,7 +260,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
-  }, [chat, tc, loadCards, loadMounted])
+  }, [chat, tc, loadCards, loadMounted, loadOffered])
 
   useEffect(() => {
     void loadChat()
@@ -386,8 +397,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       if (decision === 'approved' && options?.showsProposal === true && chat !== undefined) void chat.agents().then(setChatAgents, () => undefined)
       return undefined
     }
+    // A model or a connector gone since the card was drawn: both lists are read again, and the card
+    // then offers « Refuser » only — no second try of what the core just refused.
+    if (options?.showsProposal === true) {
+      void loadOffered()
+      void loadMounted()
+    }
     return decisionRefusal(outcome.error ?? decision, tc)
-  }, [api, load, loadCards, chat, tc])
+  }, [api, load, loadCards, chat, tc, loadOffered, loadMounted])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
@@ -1180,6 +1197,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   onPending={() => { setView('pending') }}
                   mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                   isOwner={state.role === 'owner'}
+                  offered={offered}
                   look="mndt-web"
                 />
               </section>
@@ -1571,6 +1589,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             names={team.names}
                             mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                             isOwner={state.role === 'owner'}
+                            offered={offered}
                             t={tc}
                           />
                         </div>

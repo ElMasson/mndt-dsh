@@ -9,7 +9,7 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
+import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { DecideOptions } from './face.ts'
@@ -135,6 +135,8 @@ export function WebCard(props: {
   readonly mounted?: readonly MountedConnector[] | undefined
   /** Whether the reader owns the team: only the owner validates a proposed ceiling above 5 EUR. */
   readonly isOwner?: boolean | undefined
+  /** The models the core offers (`GET /models`); undefined while unknown. */
+  readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -145,6 +147,13 @@ export function WebCard(props: {
   const ownerOnly = proposal !== undefined && (proposal.eurPerMonth ?? 0) > ADMIN_CEILING_EUR && props.isOwner !== true
   // A proposal the page cannot read is never validated blind: only « Refuser » is offered, and why.
   const unreadable = card.kind === 'propose_agent' && proposal === undefined
+  // What the proposal needs and the workbench no longer has: the core would refuse it, so only
+  // « Refuser » is offered, and why. Unknown lists block nothing; the core still checks.
+  const modelGone = proposal !== undefined && props.offered !== undefined
+    && !props.offered.some(m => m.provider === proposal.provider && m.model === proposal.model)
+  const unmountedNow = proposal === undefined || props.mounted === undefined ? []
+    : (proposal.connectors ?? []).filter(server => !props.mounted?.some(m => m.server === server && m.enabled))
+  const refuseOnly = unreadable || modelGone || unmountedNow.length > 0
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -199,9 +208,15 @@ export function WebCard(props: {
           </label>
           {missing ? <p role="alert" className="mw-decide-error">{t('webReasonMissing')}</p> : undefined}
           {unreadable ? <p className="mw-decide-error" data-testid="proposal-unreadable">{t('proposeAgentUnreadable')}</p> : undefined}
+          {modelGone ? (
+            <p className="mw-decide-error" data-testid="proposal-model-gone">{t('proposeAgentModelGone', { model: `${proposal.provider}/${proposal.model}` })}</p>
+          ) : undefined}
+          {unmountedNow.length === 0 ? undefined : (
+            <p className="mw-decide-error" data-testid="proposal-unmounted">{t('proposeAgentUnmounted', { names: unmountedNow.join(', ') })}</p>
+          )}
           {ownerOnly ? <p className="mw-decide-error" data-testid="proposal-owner-only">{t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })}</p> : undefined}
           <div className="mw-decide-buttons">
-            {unreadable ? undefined : (
+            {refuseOnly ? undefined : (
               <button type="button" className="mw-primary" disabled={busy || ownerOnly} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
             )}
             <button type="button" className="mw-secondary" disabled={busy} onClick={() => { void decide('rejected') }}>{t('webRefuse')}</button>
@@ -230,6 +245,7 @@ export function WebMessage(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly mounted?: readonly MountedConnector[] | undefined
   readonly isOwner?: boolean | undefined
+  readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { message: m, agents, t } = props
@@ -293,6 +309,7 @@ export function WebMessage(props: {
           names={props.names}
           mounted={props.mounted}
           isOwner={props.isOwner}
+          offered={props.offered}
           t={t}
         />
       ))}

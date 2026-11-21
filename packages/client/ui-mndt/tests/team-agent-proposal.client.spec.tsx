@@ -45,13 +45,16 @@ describe('a card that proposes an agent', () => {
     expect(sheet.textContent).toContain('dolibarrnon branché')
     // Read-only: no field to type in the sheet.
     expect(within(sheet).queryByRole('textbox')).toBeNull()
+    cleanup()
+    // Every connector mounted: one click validates.
+    render(<WebCard card={card()} canDecide onDecide={onDecide} mounted={mounted.map(m => ({ ...m, enabled: true }))} t={chatFrench} />)
     fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
     await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined, { showsProposal: true }) })
   })
 
   it('above 5 EUR, an admin is told only the owner validates, and may only refuse; the owner validates', async () => {
     const rich = card({ proposal: { ...proposal, eurPerMonth: 20 } })
-    const { unmount } = render(<WebCard card={rich} canDecide onDecide={vi.fn()} mounted={mounted} t={chatFrench} />)
+    const { unmount } = render(<WebCard card={rich} canDecide onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.getByTestId('proposal-owner-only').textContent).toBe('Au-dessus de 5 € par mois, seul l\'owner peut valider cet agent.')
     const validate = screen.getByRole('button', { name: 'Valider' })
     expect(validate instanceof HTMLButtonElement && validate.disabled).toBe(true)
@@ -59,7 +62,7 @@ describe('a card that proposes an agent', () => {
     expect(refuse instanceof HTMLButtonElement && refuse.disabled).toBe(false)
     unmount()
     const onDecide = vi.fn(async () => undefined)
-    render(<WebCard card={rich} canDecide isOwner onDecide={onDecide} mounted={mounted} t={chatFrench} />)
+    render(<WebCard card={rich} canDecide isOwner onDecide={onDecide} t={chatFrench} />)
     expect(screen.queryByTestId('proposal-owner-only')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
     await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined, { showsProposal: true }) })
@@ -113,7 +116,7 @@ describe('approving a proposal over HTTP (#82)', () => {
     expect(say('only the owner gives an agent a ceiling above 5 € a month')).toBe('Au-dessus de 5 € par mois, seul l\'owner peut valider cet agent.')
     expect(say('the handle @resume is taken')).toBe('L\'identifiant @resume est déjà pris.')
     expect(say('connector not mounted: qonto')).toBe('Ce connecteur n\'est pas branché : qonto.')
-    expect(say('model not offered: x/y')).toBe('Ce modèle n\'est plus proposé (x/y) : refusez la carte et demandez un autre modèle.')
+    expect(say('model not offered: x/y')).toBe('Ce modèle n\'est plus proposé (x/y) : cette carte ne peut qu\'être refusée.')
     expect(say('this card proposes an agent: approve it from a screen that shows the whole proposal')).toBe('Cette proposition ne peut pas être lue en entier : elle ne peut qu\'être refusée.')
     expect(say('something else')).toBe('something else')
   })
@@ -122,5 +125,33 @@ describe('approving a proposal over HTTP (#82)', () => {
     expect(proposalOf({ ...proposal, name: 'Ligne\nDeux' })).toBeUndefined()
     expect(proposalOf({ ...proposal, name: 'x'.repeat(61) })).toBeUndefined()
     expect(proposalOf({ ...proposal, name: 'x'.repeat(60) })?.name).toHaveLength(60)
+  })
+})
+
+describe('a proposal the workbench can no longer serve (#82)', () => {
+  const offered = [{ provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' }]
+  const allOn = [{ module: 'm', server: 'qonto', enabled: true }, { module: 'm', server: 'dolibarr', enabled: true }]
+
+  it('a model gone from GET /models: said, and only « Refuser »', () => {
+    render(<WebCard card={card()} canDecide isOwner onDecide={vi.fn()} mounted={allOn} offered={[{ provider: 'x', model: 'y' }]} t={chatFrench} />)
+    expect(screen.getByTestId('proposal-model-gone').textContent).toBe('Ce modèle n\'est plus proposé (scaleway-genapi/deepseek-v4.1-flash) : cette carte ne peut qu\'être refusée.')
+    expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refuser' })).toBeTruthy()
+  })
+
+  it('a connector no longer mounted: said, and only « Refuser »', () => {
+    render(<WebCard card={card()} canDecide isOwner onDecide={vi.fn()} mounted={mounted} offered={offered} t={chatFrench} />)
+    expect(screen.getByTestId('proposal-unmounted').textContent).toBe('Plus branché : dolibarr. Cette carte ne peut qu\'être refusée.')
+    expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
+  })
+
+  it('all there: « Valider » is offered; lists not known yet block nothing', () => {
+    const { unmount } = render(
+      <WebCard card={card()} canDecide isOwner onDecide={vi.fn()} mounted={allOn} offered={offered} t={chatFrench} />,
+    )
+    expect(screen.getByRole('button', { name: 'Valider' })).toBeTruthy()
+    unmount()
+    render(<WebCard card={card()} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByRole('button', { name: 'Valider' })).toBeTruthy()
   })
 })

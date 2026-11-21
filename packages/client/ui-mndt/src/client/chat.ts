@@ -171,6 +171,8 @@ export interface ChatFace {
   setConnectors?(channelId: string, servers: readonly string[]): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
+  /** The models offered to agents (`GET /models`, #82). Optional: the team page only. */
+  models?(): Promise<readonly OfferedModel[]>
   /** Declare an agent (`POST /agents`, agents.write). Optional: the team page only. */
   createAgent?(input: AgentInput): Promise<ChatAgent>
   /** Change an agent; its handle never changes (`POST /agents/:id`). Optional: the team page only. */
@@ -188,6 +190,12 @@ export interface AgentInput {
   readonly connectors?: readonly string[]
   /** The monthly ceiling, in euros (5 by default on the server). */
   readonly eurPerMonth?: number
+}
+
+/** A model the core offers to agents: one line of `GET /models`. */
+export interface OfferedModel {
+  readonly provider: string
+  readonly model: string
 }
 
 /** A connector as the workbench reports it: an MCP server, and whether it is switched on. */

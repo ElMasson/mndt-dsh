@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { DecideOptions } from './face.ts'
 import type { ApprovalRow } from './face.ts'
@@ -336,6 +336,8 @@ export function ChannelThread(props: {
   readonly mounted?: readonly MountedConnector[] | undefined
   /** Whether the reader owns the team (the mndt-web look). */
   readonly isOwner?: boolean | undefined
+  /** The models the core offers, for a card that proposes an agent (the mndt-web look). */
+  readonly offered?: readonly OfferedModel[] | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const web = props.look === 'mndt-web'
@@ -444,6 +446,7 @@ export function ChannelThread(props: {
                 names={props.names}
                 mounted={props.mounted}
                 isOwner={props.isOwner}
+                offered={props.offered}
                 t={t}
               />
             </div>
