@@ -28,8 +28,13 @@ describe('a card that proposes an agent', () => {
     for (const odd of [null, {}, 'x', { ...proposal, handle: 'Pas Un Slug' }, { ...proposal, name: '' }, { ...proposal, model: 7 }]) {
       expect(proposalOf(odd)).toBeUndefined()
     }
-    expect(proposalOf({ ...proposal, connectors: ['qonto', 3, '../x'] })?.connectors).toEqual(['qonto'])
-    expect(proposalOf({ ...proposal, eurPerMonth: -1 })?.eurPerMonth).toBeUndefined()
+    // A present field the page cannot read makes the proposal unreadable: never dropped in silence.
+    expect(proposalOf({ ...proposal, connectors: ['qonto', 3, '../x'] })).toBeUndefined()
+    expect(proposalOf({ ...proposal, connectors: 'qonto' })).toBeUndefined()
+    expect(proposalOf({ ...proposal, eurPerMonth: -1 })).toBeUndefined()
+    expect(proposalOf({ ...proposal, eurPerMonth: '3' })).toBeUndefined()
+    expect(proposalOf({ ...proposal, instructions: 'x'.repeat(2001) })).toBeUndefined()
+    expect(proposalOf({ ...proposal, instructions: 7 })).toBeUndefined()
   })
 
   it('shows the whole sheet read-only, and validates in one click', async () => {
@@ -153,5 +158,27 @@ describe('a proposal the workbench can no longer serve (#82)', () => {
     unmount()
     render(<WebCard card={card()} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.getByRole('button', { name: 'Valider' })).toBeTruthy()
+  })
+})
+
+describe('the instructions bounded as the core bounds them (#87)', () => {
+  it('2 000 characters followed by spaces are read whole, and « Valider » stays offered', () => {
+    const long = 'a'.repeat(2000)
+    const read = proposalOf({ ...proposal, instructions: `${long}     \n  ` })
+    expect(read?.instructions).toBe(long)
+    render(<WebCard card={card({ proposal: { ...proposal, connectors: ['qonto'], instructions: `${long}   ` } })} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('agent-sheet-view').textContent).toContain(long)
+    expect(screen.getByRole('button', { name: 'Valider' })).toBeTruthy()
+  })
+
+  it('a field the page cannot read: the card offers only « Refuser », never a sheet without it', () => {
+    for (const odd of [{ instructions: 'x'.repeat(2001) }, { connectors: ['qonto', 'bad name'] }, { eurPerMonth: 'cinq' }]) {
+      const oddCard = card({ proposal: { ...proposal, ...odd } })
+      const { unmount } = render(<WebCard card={oddCard} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
+      expect(screen.queryByTestId('agent-sheet-view')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
+      expect(screen.getByTestId('proposal-unreadable')).toBeTruthy()
+      unmount()
+    }
   })
 })

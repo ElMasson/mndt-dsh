@@ -238,9 +238,12 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
 export function proposalOf(raw: unknown): AgentInput | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const p = raw as Record<string, unknown>
+  // Bounded after trim(), as the core bounds them (#82).
   const text = (key: string, max: number): string | undefined => {
     const value = p[key]
-    return typeof value === 'string' && value.trim() !== '' && value.length <= max ? value : undefined
+    if (typeof value !== 'string') return undefined
+    const trimmed = value.trim()
+    return trimmed !== '' && trimmed.length <= max ? trimmed : undefined
   }
   // A name is one line of 60 characters at most, as the core holds it (#82).
   const rawName = text('name', 60)
@@ -250,11 +253,29 @@ export function proposalOf(raw: unknown): AgentInput | undefined {
   const model = text('model', 128)
   if (name === undefined || handle === undefined || provider === undefined || model === undefined) return undefined
   if (!/^[a-z0-9][a-z0-9-]{1,31}$/u.test(handle)) return undefined
-  const connectors = Array.isArray(p.connectors)
-    ? p.connectors.filter((c): c is string => typeof c === 'string' && /^[A-Za-z0-9_-]{1,32}$/u.test(c))
-    : []
-  const eur = p.eurPerMonth
-  const instructions = text('instructions', MAX_PURPOSE)
+  // A field that is present is never dropped: one the page cannot read makes the whole proposal
+  // unreadable (only « Refuser »), so what is validated is never less than what the core holds.
+  let connectors: string[] = []
+  if (p.connectors !== undefined) {
+    if (!Array.isArray(p.connectors)) return undefined
+    for (const c of p.connectors) {
+      if (typeof c !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/u.test(c)) return undefined
+    }
+    connectors = p.connectors as string[]
+  }
+  let eurPerMonth: number | undefined
+  if (p.eurPerMonth !== undefined) {
+    const eur = p.eurPerMonth
+    if (typeof eur !== 'number' || !Number.isFinite(eur) || eur <= 0 || eur > MAX_CEILING_EUR) return undefined
+    eurPerMonth = eur
+  }
+  let instructions: string | undefined
+  if (p.instructions !== undefined) {
+    if (typeof p.instructions !== 'string') return undefined
+    const trimmed = p.instructions.trim()
+    if (trimmed.length > MAX_PURPOSE) return undefined
+    instructions = trimmed === '' ? undefined : trimmed
+  }
   return {
     name,
     handle,
@@ -262,7 +283,7 @@ export function proposalOf(raw: unknown): AgentInput | undefined {
     model,
     connectors,
     ...(instructions === undefined ? {} : { instructions }),
-    ...(typeof eur === 'number' && Number.isFinite(eur) && eur > 0 ? { eurPerMonth: eur } : {}),
+    ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
   }
 }
 
