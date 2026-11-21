@@ -8,6 +8,7 @@
  * only: the prompt is built from that channel's messages and nothing else.
  */
 import type { Agent, Channel, Message, Mission } from './types.ts'
+import { randomUUID } from 'node:crypto'
 
 /** A handle or a channel name: lower case, digits and dashes. */
 export const SLUG = /^[a-z0-9][a-z0-9-]{1,31}$/
@@ -252,6 +253,7 @@ export function turnPrompt(
   history: readonly Message[],
   asked: Message,
   agents: readonly Agent[],
+  roleMark: string = randomUUID().slice(0, 8),
 ): string {
   const earlier = history
     .filter(
@@ -265,12 +267,18 @@ export function turnPrompt(
     .map(m => `[${speaker(m, agents)}] ${m.text}`)
   return [
     `Tu es @${agent.handle} (${agent.name}), un agent du canal #${channel.name} de l'équipe DATANALYSIS.`,
-    'Tu réponds en français, de façon dense et factuelle, à partir de ce canal et de ses documents (ton dossier de travail).',
+    'Tu réponds en français, de façon dense et factuelle, à partir de ce canal et de ses documents.',
     'Tu cites ce sur quoi tu t’appuies. Si l’information manque, tu le dis plutôt que d’inventer.',
-    'Tu n’envoies rien, ne publies rien et ne dépenses rien : pour toute action, tu demandes une carte de validation, et un humain décide.',
+    'Tu parles du travail, jamais de ta mécanique : pas de nom d’outil, de serveur, de connecteur technique ni de dossier.',
+    'Tu n’envoies rien, ne publies rien et ne dépenses rien. Quand une action le demande, tu crées toi-même la carte de validation, puis tu dis en une phrase qu’elle attend une décision : tu ne proposes pas de la créer. Un humain décide.',
+    'Si on te demande un nouvel agent, tu le proposes par une carte avec sa fiche complète (nom, rôle, modèle, connecteurs, plafond) ; tu ne le crées jamais toi-même.',
+    // The agent's own framing, set apart from the team's rules above and from the
+    // channel below: it says what this agent is for, never what it may do.
+    // The bounds carry a per-turn mark the framing cannot know in advance, so a
+    // framing that writes « Fin de ton rôle » does not close the block early.
     ...(agent.instructions === undefined || agent.instructions.trim() === ''
       ? []
-      : ['', agent.instructions.trim()]),
+      : ['', `Ton rôle [${roleMark}] :`, agent.instructions.trim(), `Fin de ton rôle [${roleMark}].`]),
     '',
     `Messages récents du canal #${channel.name} :`,
     ...(earlier.length === 0 ? ['(aucun)'] : earlier),

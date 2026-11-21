@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
+  AgentProposal,
   Approval,
   ApprovalAction,
   ApprovalPayload,
@@ -65,6 +66,8 @@ export interface ApprovalRequest {
   readonly channelId?: string
   readonly messageId?: string
   readonly requestedBy: string
+  /** A propose_agent card's agent, checked as POST /agents checks it. */
+  readonly proposal?: AgentProposal
 }
 
 /** What creating an agent needs. */
@@ -93,6 +96,14 @@ export interface ChannelDraft {
 
 /** The default monthly ceiling of an agent, in euros. */
 export const DEFAULT_EUR_PER_MONTH = 5
+/** The highest monthly ceiling of an agent, whoever sets it (21/11, rule of C on #81). */
+export const MAX_EUR_PER_MONTH = 50
+/** The longest framing of an agent, in characters: it is added to every turn. */
+export const MAX_INSTRUCTIONS = 2000
+/** The longest name of an agent: it enters the turn prompt of every agent of its channels. */
+export const MAX_AGENT_NAME = 60
+/** The propose_agent cards one requester may have pending at once. */
+export const MAX_PENDING_PROPOSALS = 3
 
 /** An MCP server name, as the MCP client accepts it. */
 const SERVER = /^[A-Za-z0-9_-]{1,32}$/
@@ -416,10 +427,18 @@ export class WorkbenchService {
     if (!needsApproval(request.kind)) return Promise.reject(new Error(`action ${String(request.kind)} does not need approval`))
     if (request.title.trim() === '') return Promise.reject(new Error('an approval needs a title'))
     if (request.requestedBy.trim() === '') return Promise.reject(new Error('an approval needs a requester'))
+    if (request.kind === 'propose_agent') {
+      // The proposal is checked when the card is made, with the rules of POST /agents.
+      const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
+      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    }
+    // A propose_agent card's title is the server's, built from the proposal: what an
+    // agent writes never names what a person grants.
+    const title = request.kind === 'propose_agent' && request.proposal !== undefined ? proposalTitle(request.proposal) : request.title.trim()
     const approval: Approval = {
       id: this.#id('apr'),
       kind: request.kind,
-      title: request.title.trim(),
+      title,
       payload: request.payload ?? {},
       requestedBy: request.requestedBy.trim(),
       requestedAt: this.#at(),
@@ -427,12 +446,75 @@ export class WorkbenchService {
       ...(request.missionId === undefined ? {} : { missionId: request.missionId }),
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
+      ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
     }
-    return this.#write(state => ({
-      state: { ...state, approvals: [approval, ...state.approvals] },
-      event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
-      value: approval,
-    }))
+    return this.#write((state) => {
+      if (approval.kind === 'propose_agent') {
+        const pending = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending' && card.requestedBy === approval.requestedBy)
+        if (pending.length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
+        }
+      }
+      return {
+        state: { ...state, approvals: [approval, ...state.approvals] },
+        event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
+        value: approval,
+      }
+    })
+  }
+
+  /** @param draft - a checked draft. @param actor - its creator. @param at - when. @returns the agent. */
+  #newAgent(draft: AgentDraft, actor: string, at: string): Agent {
+    return {
+      id: this.#id('agt'),
+      handle: draft.handle,
+      name: draft.name.trim(),
+      provider: draft.provider.trim(),
+      model: draft.model.trim(),
+      ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
+      connectors: [...new Set(draft.connectors ?? [])].sort(),
+      eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
+      createdBy: actor,
+      createdAt: at,
+    }
+  }
+
+  /**
+   * Approve a propose_agent card and create its agent, in ONE write: the card
+   * is approved only if the agent is created, from the proposal recorded on the
+   * card. The rules of POST /agents apply, with the approver's role: a ceiling
+   * above the default is the owner's to give. A refusal leaves the card pending.
+   * @param id - the card.
+   * @param actor - who approves it (an owner or an admin).
+   * @param role - their role.
+   * @returns the approved card and the agent.
+   */
+  approveAgentProposal(id: string, actor: string, role: Role | undefined): Promise<{ approval: Approval; agent: Agent }> {
+    return this.#write((state) => {
+      const approval = state.approvals.find(candidate => candidate.id === id)
+      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Error(`approval ${id} proposes no agent`)
+      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      const proposal = approval.proposal
+      const refusal = agentRefusal(proposal)
+      if (refusal !== undefined) throw new Error(refusal)
+      if ((proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+        throw new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`)
+      }
+      if ((state.agents ?? []).some(agent => agent.handle === proposal.handle)) throw new Error(`the handle @${proposal.handle} is taken`)
+      const at = this.#at()
+      const agent = this.#newAgent(proposal, actor.trim(), at)
+      const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, agentId: agent.id }
+      return {
+        state: {
+          ...state,
+          agents: [...(state.agents ?? []), agent],
+          approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
+        },
+        event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `agent @${agent.handle} created (${agent.id})` },
+        value: { approval: next, agent },
+      }
+    })
   }
 
   /**
@@ -688,6 +770,29 @@ export class WorkbenchService {
 
   // ---------------------------------------------------------------- agents
 
+  /**
+   * Retire an agent: kept for the record (its messages, its spending), it no
+   * longer answers, no longer appears among the agents, and cannot be added to
+   * a channel again. Retiring twice is refused.
+   * @param id - the agent.
+   * @param actor - who retires it.
+   * @returns the retired agent.
+   */
+  retireAgent(id: string, actor: string): Promise<Agent> {
+    return this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === id)
+      if (agent === undefined) throw new Error(`no agent ${id}`)
+      if (agent.retiredAt !== undefined) throw new Error(`the agent @${agent.handle} is already retired`)
+      const at = this.#at()
+      const next: Agent = { ...agent, retiredAt: at, retiredBy: actor }
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'agent.retired', subject: id, detail: agent.handle },
+        value: next,
+      }
+    })
+  }
+
   /** @param includeRetired - whether retired agents show. @returns the agents, oldest first. */
   async listAgents(includeRetired = false): Promise<readonly Agent[]> {
     const agents = (await this.#ready()).agents ?? []
@@ -703,27 +808,23 @@ export class WorkbenchService {
    * Declare an agent.
    * @param draft - handle, name, model and connectors.
    * @param actor - who declares it.
+   * @param role - their role: only the owner gives a ceiling above the default.
    * @returns the agent.
    */
-  createAgent(draft: AgentDraft, actor: string): Promise<Agent> {
+  createAgent(draft: AgentDraft, actor: string, role?: Role): Promise<Agent> {
     const refusal = agentRefusal(draft)
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    // A ceiling above the default is the owner's to give, at creation as at a
+    // change: an admin cannot create an agent at 50 € a month, nor recreate under
+    // another handle one the owner bounded.
+    if ((draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+      return Promise.reject(new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`))
+    }
     return this.#write((state) => {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
         throw new Error(`the handle @${draft.handle} is taken`)
       }
-      const agent: Agent = {
-        id: this.#id('agt'),
-        handle: draft.handle,
-        name: draft.name.trim(),
-        provider: draft.provider.trim(),
-        model: draft.model.trim(),
-        ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
-        connectors: [...new Set(draft.connectors ?? [])].sort(),
-        eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
-        createdBy: actor,
-        createdAt: this.#at(),
-      }
+      const agent = this.#newAgent(draft, actor, this.#at())
       return {
         state: { ...state, agents: [...(state.agents ?? []), agent] },
         event: { at: agent.createdAt, actor, action: 'agent.created', subject: agent.id, detail: `@${agent.handle} ${agent.provider}/${agent.model}` },
@@ -1091,11 +1192,49 @@ export class WorkbenchService {
  * @param agent - an agent as drafted or patched.
  * @returns why it cannot be kept, or undefined.
  */
+/**
+ * The title of a propose_agent card, built from what it grants: name, handle,
+ * model, connectors, ceiling. Never the requester's words.
+ * @param proposal - the agent proposed.
+ * @returns the title.
+ */
+function proposalTitle(proposal: AgentProposal): string {
+  const connectors = (proposal.connectors ?? []).length === 0 ? 'aucun connecteur' : `connecteurs ${[...new Set(proposal.connectors)].sort().join(', ')}`
+  return `Créer l'agent ${proposal.name.trim()} (@${proposal.handle}) : ${proposal.provider}/${proposal.model}, ${connectors}, plafond ${proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH} €/mois`
+}
+
+/** @param draft - a proposal as asked. @returns it with only the fields of POST /agents. */
+function proposalOf(draft: AgentProposal): AgentProposal {
+  return {
+    handle: draft.handle,
+    name: draft.name,
+    provider: draft.provider,
+    model: draft.model,
+    ...(draft.instructions === undefined ? {} : { instructions: draft.instructions }),
+    ...(draft.connectors === undefined ? {} : { connectors: [...draft.connectors] }),
+    ...(draft.eurPerMonth === undefined ? {} : { eurPerMonth: draft.eurPerMonth }),
+  }
+}
+
 function agentRefusal(agent: AgentDraft): string | undefined {
   if (!SLUG.test(agent.handle)) return `a handle is a slug of 2 to 32 characters: ${agent.handle}`
   if (agent.name.trim() === '') return 'an agent needs a name'
+  // The name enters the turn prompt of every agent of the channel (speaker()): one
+  // line, no control character nor line separator, 60 characters at most.
+  if (agent.name.trim().length > MAX_AGENT_NAME || /[\u0000-\u001f\u007f\u2028\u2029]/.test(agent.name)) {
+    return `an agent's name is one line of ${MAX_AGENT_NAME} characters at most`
+  }
   if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
+  // Even when the host lists no models: one line each, no control character, bounded.
+  for (const [field, value] of [['provider', agent.provider], ['model', agent.model]] as const) {
+    if (value.trim().length > 128 || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return `an agent's ${field} is one line of 128 characters at most`
+  }
   const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
+  if (typeof ceiling === 'number' && ceiling > MAX_EUR_PER_MONTH) return `a monthly ceiling is ${MAX_EUR_PER_MONTH} € at most: ${ceiling}`
+  // The framing is added to every turn, so to its cost.
+  if (agent.instructions !== undefined && agent.instructions.trim().length > MAX_INSTRUCTIONS) {
+    return `the instructions are ${MAX_INSTRUCTIONS} characters at most (${agent.instructions.trim().length})`
+  }
   if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling <= 0) return 'a monthly ceiling is a positive number of euros'
   return serversRefusal(agent.connectors ?? [])
 }
