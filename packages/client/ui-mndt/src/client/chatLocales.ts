@@ -179,6 +179,9 @@ export const chatEn = {
   coordVerdictIssues: 'reservations',
   coordVerdictUnreadable: 'unreadable',
   coordVerdictSkipped: 'not done',
+  coordNotActive: 'The author and the verifier must both be active agents of this channel.',
+  coordTwoAgents: 'The author and the verifier must be two different agents.',
+  coordModeUnknown: 'This way of answering is not known to this workspace.',
 } as const
 
 /** One copy key. */
@@ -358,6 +361,9 @@ export const chatFr: Record<ChatKey, string> = {
   coordVerdictIssues: 'réserves',
   coordVerdictUnreadable: 'illisible',
   coordVerdictSkipped: 'non faite',
+  coordNotActive: 'L\'auteur et le vérificateur doivent être deux agents actifs de ce canal.',
+  coordTwoAgents: 'L\'auteur et le vérificateur doivent être deux agents différents.',
+  coordModeUnknown: 'Cet espace ne connaît pas ce mode de réponse.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -170,3 +170,15 @@ describe('a coordinated turn in the feed (#84)', () => {
     expect(coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }]), byId, chatFrench)).toBeUndefined()
   })
 })
+
+describe('the core\'s refusals of a coordination, in words (#84)', () => {
+  it('says each sentence A1 serves in French', async () => {
+    const { coordinationRefusal } = await import('../src/client/CollabPage.tsx')
+    const { ChatRefusal } = await import('../src/client/chat.ts')
+    const say = (m: string): string => coordinationRefusal(new ChatRefusal(m, 400), chatFrench)
+    expect(say('the verifier must run another model than the author (both are scaleway-genapi/qwen-3.5)')).toBe('Le vérificateur doit tourner sur un autre modèle que l\'auteur.')
+    expect(say('the author and the verifier must both be active agents of this channel')).toBe('L\'auteur et le vérificateur doivent être deux agents actifs de ce canal.')
+    expect(say('the author and the verifier must be two agents')).toBe('L\'auteur et le vérificateur doivent être deux agents différents.')
+    expect(say('mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)')).toBe('Cet espace ne connaît pas ce mode de réponse.')
+  })
+})

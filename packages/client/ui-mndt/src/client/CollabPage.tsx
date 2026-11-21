@@ -80,10 +80,14 @@ const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
  * @param failure - a refusal of the coordination route. @param t - the copy.
  * @returns it in the page's words where the core's sentence is known, else as served.
  */
-function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
+export function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
     if (failure.status === 404) return t('coordNotServed')
-    if (failure.message.includes('another model')) return t('coordSameModel')
+    // The core's sentences (A1, #84), said in the page's words.
+    if (failure.message.includes('must run another model')) return t('coordSameModel')
+    if (failure.message.includes('must both be active agents of this channel')) return t('coordNotActive')
+    if (failure.message.includes('must be two agents')) return t('coordTwoAgents')
+    if (failure.message.startsWith('mode is solo')) return t('coordModeUnknown')
   }
   return reasonOf(failure, t)
 }
