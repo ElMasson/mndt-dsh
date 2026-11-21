@@ -10,7 +10,15 @@ RUN apt-get update -qq && apt-get install -y -qq git musl-tools >/dev/null
 WORKDIR /src
 COPY . /src
 RUN npm install -g pnpm@11.28.5 >/dev/null 2>&1
-RUN pnpm install --frozen-lockfile
+# The registry has been slow enough to fail a build twice (21/11: requests of
+# 10 to 680 s, timeouts in series): wait longer and retry more before giving up.
+# A platform package whose download still fails is skipped by pnpm as optional,
+# and the build would break much later on an obscure error: check-native-deps
+# names it right after the install instead.
+RUN pnpm_config_fetch_timeout=600000 pnpm_config_fetch_retries=6 \
+    pnpm_config_fetch_retry_mintimeout=10000 pnpm_config_fetch_retry_maxtimeout=120000 \
+    pnpm install --frozen-lockfile \
+ && node packages/host/mndt/deploy/check-native-deps.mjs /src
 RUN pnpm exec tsx scripts/generate-typert.ts
 # The system binaries this platform declares (native/system/packages/<os>-<arch>
 # /prebuilds.json): the static landlock-run launcher and the flock addon. The
