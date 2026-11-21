@@ -145,12 +145,18 @@ else echo "KO  env-names      credential-shaped names, or none printed: « $name
 # The real executor path, INSIDE the image: one process, one provider, the real
 # SandboxBashExecutor, spec.env. DSH_REQUIRE_LANDLOCK=1 turns a skip into a failure.
 e2e=$(docker run --rm -e DSH_REQUIRE_LANDLOCK=1 -e NO_COLOR=1 -e FORCE_COLOR=0 --memory 3g --entrypoint sh "$image" -c \
-  'cd /app && node_modules/.bin/vitest run --config vitest.e2e.config.ts packages/shell/bash-sandbox/tests/read-allowlist.e2e.ts' 2>&1)
+  'cd /app && node_modules/.bin/vitest run --reporter=verbose --config vitest.e2e.config.ts packages/shell/bash-sandbox/tests/read-allowlist.e2e.ts' 2>&1)
 passed=$(echo "$e2e" | sed -n 's/^ *Tests  *\([0-9]*\) passed.*/\1/p' | tail -1)
 failed=$(echo "$e2e" | grep -cE '^ *Tests .*failed|✗|×')
 echo "$e2e" | grep -E 'ENV-NAMES|DSH-RUN-DIRS' | sort -u | sed 's/^/      /'
-if [ "${passed:-0}" -ge 2 ] && [ "$failed" = 0 ]; then echo "OK  e2e-in-image   read-allowlist.e2e.ts ran in the image, $passed passed, none skipped by a missing Landlock"
-else echo "KO  e2e-in-image   read-allowlist.e2e.ts in the image: ${passed:-0} passed, $failed failure line(s)"; echo "$e2e" | tail -15 | sed 's/^/      /'; ok=1; fi
+# Exactly the three tests of the executor block, each named: one no longer
+# collected (the trapped PATH, say) must not pass unseen.
+named=0
+for test in 'runs the launcher of this build' 'resolves the command in its own PATH' 'keeps sessions and workflow calls apart'; do
+  echo "$e2e" | grep -q "$test" && named=$((named + 1))
+done
+if [ "${passed:-0}" = 3 ] && [ "$failed" = 0 ] && [ "$named" = 3 ]; then echo "OK  e2e-in-image   read-allowlist.e2e.ts ran in the image: the 3 executor tests passed, none skipped by a missing Landlock"
+else echo "KO  e2e-in-image   read-allowlist.e2e.ts in the image: ${passed:-0} passed (3 expected), $named of 3 named, $failed failure line(s)"; echo "$e2e" | tail -15 | sed 's/^/      /'; ok=1; fi
 echo "$with" | grep '^ARGV-BYTES' | head -1
 echo "sandbox-proof exit $ok (docker $code)"
 exit $ok
