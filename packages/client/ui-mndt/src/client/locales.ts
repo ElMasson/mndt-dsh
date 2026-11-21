@@ -350,6 +350,9 @@ export const en = {
   'ui.confirmer-promotion': 'Make {name} {role}?',
   'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
   'ui.roles-par-fichier': 'The roles of this workspace are managed in the role file, by the owner.',
+  'ui.roles-poste-seul': 'This station has a single owner: there is no role to change here.',
+  'ui.autorite-sans-reponse': 'The team authority did not answer within 10 s: the role is unchanged.',
+  'ui.roles-illisibles': 'The role table cannot be read: {reason}',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -704,6 +707,9 @@ export const fr: Record<MndtKey, string> = {
   'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
   'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
   'ui.roles-par-fichier': 'Les rôles de cet espace se gèrent dans le fichier des rôles, par l\'owner.',
+  'ui.roles-poste-seul': 'Ce poste n\'a qu\'un owner : il n\'y a pas de rôle à changer ici.',
+  'ui.autorite-sans-reponse': 'L\'autorité d\'équipe n\'a pas répondu en 10 s : le rôle est inchangé.',
+  'ui.roles-illisibles': 'La table des rôles est illisible : {reason}',
 }
 
 /** Substitution values for a message. */

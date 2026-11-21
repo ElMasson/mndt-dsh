@@ -485,15 +485,24 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const theirs = MEMBER_ROLES.find(r => r === role)
     return subject !== state?.you && theirs !== undefined && below(theirs)
   }
-  // On the team instance the roles come from the role file, kept by the owner: `/state` says so
-  // (`rolesFrom: "file"`), or a grant or a revoke is refused with 503 `no-authority`; the page then
-  // stops offering them. Any other 503 (a role file that cannot be read) stays an error, with its
-  // reason: the owner must see a broken file.
+  // Where the roles come from (`/state.rolesFrom`, A1 #88): only « authority » lets the page change
+  // one; « file » (grants.json, kept by the owner) and « local » (a solo station and its owner)
+  // offer no button. An older Host without the field: a 503 `no-authority` (or, before the code,
+  // an error starting « no team authority ») says the same. Any other 503 (`grants-unreadable`) and
+  // the authority's 504 stay errors, said with their reason: the owner must see them.
   const [refusedForFile, setRefusedForFile] = useState(false)
-  const rolesFromFile = state?.rolesFrom === 'file' || refusedForFile
+  const rolesFrom: unknown = state?.rolesFrom
+  const rolesFixed: 'file' | 'local' | undefined = rolesFrom === 'file' || rolesFrom === 'local' ? rolesFrom
+    : rolesFrom === undefined && refusedForFile ? 'file' : undefined
+  const rolesFromFile = rolesFixed !== undefined
   /** @param result - a refused grant or revoke. @returns whether it says the roles live in the file. */
   const noAuthority = (result: { readonly status?: number; readonly code?: string; readonly error?: string }): boolean =>
     result.status === 503 && (result.code === undefined ? (result.error ?? '').startsWith('no team authority') : result.code === 'no-authority')
+  /** @param result - a refused grant or revoke. @param fallback - when nothing is served. @returns its reason in words. */
+  const roleRefusal = (result: { readonly status?: number; readonly code?: string; readonly error?: string }, fallback: string): string =>
+    result.status === 504 ? t('ui.autorite-sans-reponse')
+      : result.code === 'grants-unreadable' ? t('ui.roles-illisibles', { reason: result.error ?? '' })
+        : result.error ?? fallback
   /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
   const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
     to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
@@ -522,7 +531,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     try {
       const result = await api.grantMember(subject, role)
       if (!result.ok && noAuthority(result)) setRefusedForFile(true)
-      else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le droit n a pas ete accorde'))
       else {
         setAdminNotice(`${subject} : ${role}`)
         setAdminMembers(await api.members())
@@ -543,7 +552,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     try {
       const result = await api.grantMember(subject, grantRole)
       if (!result.ok && noAuthority(result)) setRefusedForFile(true)
-      else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le droit n a pas ete accorde'))
       else {
         setAdminNotice(`${subject} : ${grantRole}`)
         setGrantEmail('')
@@ -563,7 +572,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     try {
       const result = await api.revokeMember(subject)
       if (!result.ok && noAuthority(result)) setRefusedForFile(true)
-      else if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le retrait a ete refuse'))
       else {
         setAdminNotice(`${subject} : acces retire`)
         setAdminMembers(await api.members())
@@ -1373,7 +1382,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <div className="mndt-post-body">
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
-                  <span className="mndt-tag">{member.subject}</span>
+                  <span className="mndt-tag" title={member.subject}>{member.subject}</span>
                   {canTouch(member.subject, member.role) && !rolesFromFile ? (
                     <>
                       <Segmented
@@ -1430,7 +1439,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               )}
             </div>
             {rolesFromFile ? (
-              <p className="mndt-empty" role="note" data-testid="roles-from-file">{t('ui.roles-par-fichier')}</p>
+              <p className="mndt-empty" role="note" data-testid="roles-from-file">{rolesFixed === 'local' ? t('ui.roles-poste-seul') : t('ui.roles-par-fichier')}</p>
             ) : (
               <div className="mndt-post-actions">
                 <input
