@@ -46,7 +46,7 @@ describe('a card that proposes an agent', () => {
     // Read-only: no field to type in the sheet.
     expect(within(sheet).queryByRole('textbox')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
-    await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined) })
+    await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined, { showsProposal: true }) })
   })
 
   it('above 5 EUR, an admin is told only the owner validates, and may only refuse; the owner validates', async () => {
@@ -62,7 +62,7 @@ describe('a card that proposes an agent', () => {
     render(<WebCard card={rich} canDecide isOwner onDecide={onDecide} mounted={mounted} t={chatFrench} />)
     expect(screen.queryByTestId('proposal-owner-only')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
-    await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined) })
+    await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined, { showsProposal: true }) })
   })
 
   it('an absent or malformed proposal is never validated blind: only « Refuser », and why', () => {
@@ -87,5 +87,40 @@ describe('a card that proposes an agent', () => {
   it('a card of another kind never reads a proposal field', () => {
     render(<WebCard card={card({ kind: 'send-email', title: 'Envoyer' })} canDecide onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.queryByTestId('agent-sheet-view')).toBeNull()
+  })
+})
+
+describe('approving a proposal over HTTP (#82)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('says the page shows the whole proposal on approval only', async () => {
+    const { createHttpFace } = await import('../src/client/httpFace.ts')
+    const sent: Headers[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      sent.push(new Headers(init.headers))
+      return new Response(JSON.stringify({ approval: { id: 'apr_p' } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const face = createHttpFace()
+    await face.decide('apr_p', 'approved', undefined, { showsProposal: true })
+    await face.decide('apr_p', 'rejected', 'non', { showsProposal: true })
+    await face.decide('apr_q', 'approved')
+    expect(sent.map(h => h.get('x-mndt-shows-proposal'))).toEqual(['1', null, null])
+  })
+
+  it('the core\'s refusals are said in the page\'s words', async () => {
+    const { decisionRefusal } = await import('../src/client/CollabPage.tsx')
+    const say = (m: string): string => decisionRefusal(m, chatFrench)
+    expect(say('only the owner gives an agent a ceiling above 5 € a month')).toBe('Au-dessus de 5 € par mois, seul l\'owner peut valider cet agent.')
+    expect(say('the handle @resume is taken')).toBe('L\'identifiant @resume est déjà pris.')
+    expect(say('connector not mounted: qonto')).toBe('Ce connecteur n\'est pas branché : qonto.')
+    expect(say('model not offered: x/y')).toBe('Ce modèle n\'est plus proposé (x/y) : refusez la carte et demandez un autre modèle.')
+    expect(say('this card proposes an agent: approve it from a screen that shows the whole proposal')).toBe('Cette proposition ne peut pas être lue en entier : elle ne peut qu\'être refusée.')
+    expect(say('something else')).toBe('something else')
+  })
+
+  it('a name on two lines or over 60 characters is no proposal', () => {
+    expect(proposalOf({ ...proposal, name: 'Ligne\nDeux' })).toBeUndefined()
+    expect(proposalOf({ ...proposal, name: 'x'.repeat(61) })).toBeUndefined()
+    expect(proposalOf({ ...proposal, name: 'x'.repeat(60) })?.name).toHaveLength(60)
   })
 })

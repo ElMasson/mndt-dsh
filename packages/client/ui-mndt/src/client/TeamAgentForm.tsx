@@ -242,7 +242,9 @@ export function proposalOf(raw: unknown): AgentInput | undefined {
     const value = p[key]
     return typeof value === 'string' && value.trim() !== '' && value.length <= max ? value : undefined
   }
-  const name = text('name', 80)
+  // A name is one line of 60 characters at most, as the core holds it (#82).
+  const rawName = text('name', 60)
+  const name = rawName !== undefined && /[\r\n]/u.test(rawName) ? undefined : rawName
   const handle = text('handle', 32)
   const provider = text('provider', 64)
   const model = text('model', 128)

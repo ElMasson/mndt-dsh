@@ -89,10 +89,10 @@ async function outcomeOf<T>(work: () => Promise<T>): Promise<OutcomeRow<T>> {
 }
 
 /** @param path - route. @param payload - JSON body. @returns one JSON POST. */
-function post(path: string, payload: unknown): Promise<Response> {
+function post(path: string, payload: unknown, headers: Readonly<Record<string, string>> = {}): Promise<Response> {
   return call(path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(payload),
   })
 }
@@ -108,8 +108,10 @@ export function createHttpFace(): MndtFace {
       const body = await bodyOf<Record<string, unknown>>(await post('/missions', { kind, prompt }))
       return body as { readonly mission: never; readonly brief?: never }
     }),
-    decide: (approvalId, decision, reason) => outcomeOf(async () => {
-      const body = await bodyOf<{ approval: ApprovalRow }>(await post(`/approvals/${approvalId}/decide`, { decision, reason }))
+    decide: (approvalId, decision, reason, options) => outcomeOf(async () => {
+      // Only a screen that shows the whole proposal says so; a refusal never needs it.
+      const shows = options?.showsProposal === true && decision === 'approved' ? { 'x-mndt-shows-proposal': '1' } : undefined
+      const body = await bodyOf<{ approval: ApprovalRow }>(await post(`/approvals/${approvalId}/decide`, { decision, reason }, shows))
       return body.approval
     }),
     approveBrief: briefId => outcomeOf(async () => {

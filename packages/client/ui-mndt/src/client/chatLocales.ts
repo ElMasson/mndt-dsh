@@ -177,6 +177,7 @@ export const chatEn = {
   proposeAgentTitle: 'Create the agent {name}',
   proposeAgentOwnerOnly: 'Above {max} EUR a month, only the owner validates this agent.',
   proposeAgentUnreadable: 'This proposal cannot be read in full: it can only be refused.',
+  proposeAgentModelGone: 'This model is no longer offered ({model}): refuse the card and ask for another model.',
 } as const
 
 /** One copy key. */
@@ -354,6 +355,7 @@ export const chatFr: Record<ChatKey, string> = {
   proposeAgentTitle: 'Créer l\'agent {name}',
   proposeAgentOwnerOnly: 'Au-dessus de {max} € par mois, seul l\'owner peut valider cet agent.',
   proposeAgentUnreadable: 'Cette proposition ne peut pas être lue en entier : elle ne peut qu\'être refusée.',
+  proposeAgentModelGone: 'Ce modèle n\'est plus proposé ({model}) : refusez la carte et demandez un autre modèle.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

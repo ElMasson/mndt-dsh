@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
 import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
 import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
+import type { DecideOptions } from './face.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
 import { Icon } from './Icons.tsx'
@@ -128,7 +129,7 @@ function StatusBadge(props: { readonly state: ThreadCard['state']; readonly t: C
 export function WebCard(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The connectors mounted, to say which ones a proposed agent would carry but cannot use. */
   readonly mounted?: readonly MountedConnector[] | undefined
@@ -161,7 +162,11 @@ export function WebCard(props: {
     }
     setMissing(false)
     setBusy(true)
-    setError(await props.onDecide(card.id, decision, decision === 'rejected' ? reason.trim() : undefined))
+    // The sheet above is the whole proposal: only then does the page say it shows it.
+    const why = decision === 'rejected' ? reason.trim() : undefined
+    setError(await (proposal === undefined
+      ? props.onDecide(card.id, decision, why)
+      : props.onDecide(card.id, decision, why, { showsProposal: true })))
     setBusy(false)
   }
   return (
@@ -217,7 +222,7 @@ export function WebMessage(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   /** The author may delete their own message; the Host still decides. */
   readonly onRemove?: (() => Promise<string | undefined>) | undefined
   /** Open À traiter, where the waiting cards are. */

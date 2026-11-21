@@ -12,6 +12,7 @@ import type { KeyboardEvent, ReactNode } from 'react'
 import { ChatRefusal } from './chat.ts'
 import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
+import type { DecideOptions } from './face.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
@@ -197,7 +198,7 @@ function TurnLine(props: {
 export function CardView(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -253,7 +254,7 @@ function MessageView(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   readonly t: ChatTranslate
 }): ReactNode {
@@ -314,7 +315,7 @@ export function ChannelThread(props: {
   readonly agents: readonly ChatAgent[]
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   /** Why the cards could not be read: said in the thread, never shown as « no card ». */
   readonly cardsError?: string | undefined
