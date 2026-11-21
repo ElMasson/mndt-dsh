@@ -204,7 +204,7 @@ export function CoordinationSection(props: {
                   data-off={twin || self ? 'true' : undefined}
                   onClick={() => {
                     if (pairWith === undefined) return
-                    void send({ mode: 'author-verifier', authorId: pairWith, verifierId: a.id })
+                    void send({ mode: 'author-verifier', author: pairWith, verifier: a.id })
                   }}
                 >
                   @{a.handle}
@@ -232,11 +232,15 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
   const verifier = steps.find(s => s.role === 'verifier')
   if (author === undefined || verifier === undefined) return undefined
   const handle = (id: string): string => `@${agents.get(id)?.handle ?? id}`
-  const revised = steps.some(s => s.role === 'revision')
-  const unchecked = verifier.verdict === 'unreadable' || verifier.verdict === 'skipped' || verifier.verdict === undefined
-  const outcome = unchecked ? undefined
-    : revised ? t('coordRevised')
-      : verifier.verdict === 'ok' ? t('coordConfirmed') : t('coordIssuesLeft')
+  // The four states, read from the steps, never from the published text (A1, #84):
+  // ok → checked; issues + revision without verdict → corrected; issues + revision « skipped » (or no
+  // revision at all) → reservations not corrected; verifier skipped or unreadable → not checked.
+  const revision = steps.find(s => s.role === 'revision')
+  const revised = revision !== undefined && revision.verdict === undefined
+  const unchecked = verifier.verdict !== 'ok' && verifier.verdict !== 'issues'
+  const uncorrected = verifier.verdict === 'issues' && !revised
+  const outcome = unchecked || uncorrected ? undefined
+    : revised ? t('coordRevised') : t('coordConfirmed')
   const parts = [
     t('coordWrittenBy', { handle: handle(author.agentId) }),
     unchecked ? undefined : t('coordCheckedBy', { handle: handle(verifier.agentId) }),
@@ -251,6 +255,11 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
       </p>
       {unchecked ? (
         <p className="mw-turn-unchecked" role="note" data-testid="turn-unchecked">{t('coordUnchecked', { handle: handle(verifier.agentId) })}</p>
+      ) : undefined}
+      {uncorrected ? (
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-uncorrected">
+          {revision?.verdict === 'skipped' ? t('coordUncorrectedCeiling', { handle: handle(author.agentId) }) : t('coordUncorrected', { handle: handle(author.agentId) })}
+        </p>
       ) : undefined}
       <details className="mw-turn-steps" data-testid="turn-steps">
         <summary>{t('coordSteps', { count: steps.length })}</summary>

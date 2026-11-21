@@ -243,15 +243,15 @@ export function createMockChat(
           return rest
         }
         // As the core (#84): two agents of the channel, on two different models.
-        const author = agents.get(change.authorId)
-        const verifier = agents.get(change.verifierId)
+        const author = agents.get(change.author)
+        const verifier = agents.get(change.verifier)
         if (author === undefined || verifier === undefined || !c.agents.includes(author.id) || !c.agents.includes(verifier.id)) {
           throw new ChatRefusal('author and verifier must be agents of the channel', 400)
         }
         if (author.provider === verifier.provider && author.model === verifier.model) {
           throw new ChatRefusal('the verifier must run on another model than the author', 400)
         }
-        const next = { ...c, coordination: { ...change } }
+        const next = { ...c, coordination: { mode: 'author-verifier', authorId: author.id, verifierId: verifier.id } }
         channels.set(c.id, next)
         return next
       })

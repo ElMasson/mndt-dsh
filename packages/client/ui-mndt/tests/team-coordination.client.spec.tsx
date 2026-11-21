@@ -61,7 +61,7 @@ describe('the coordination of a channel, in its panel (#84)', () => {
     expect(within(verifiers).getByRole('button', { name: /@jumeau/u }).getAttribute('aria-label')).toBe('@jumeau, Le vérificateur doit tourner sur un autre modèle que l\'auteur.')
     expect(within(verifiers).getByRole('button', { name: /@redacteur/u }).getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(within(verifiers).getByRole('button', { name: '@relecteur' }))
-    await waitFor(() => { expect(sent).toHaveBeenCalledWith({ mode: 'author-verifier', authorId: 'agt_1', verifierId: 'agt_2' }) })
+    await waitFor(() => { expect(sent).toHaveBeenCalledWith({ mode: 'author-verifier', author: 'agt_1', verifier: 'agt_2' }) })
     await waitFor(() => { expect(within(screen.getByTestId('coord-verifier')).getByRole('button', { name: '@relecteur' }).getAttribute('aria-pressed')).toBe('true') })
     fireEvent.click(screen.getByRole('button', { name: 'Seul' }))
     await waitFor(() => { expect(sent).toHaveBeenLastCalledWith({ mode: 'solo' }) })
@@ -116,6 +116,38 @@ describe('a coordinated turn in the feed (#84)', () => {
     ]), byId, chatFrench)}</>)
     expect(screen.getByTestId('turn-unchecked').textContent).toBe('Vérification impossible (@relecteur) : brouillon publié tel quel, non vérifié.')
     expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('vérifié par')
+  })
+
+  it('reservations not corrected: a third state, an orange band, never « corrigé »', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1' },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'issues', notes: ['Chiffre faux.'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-uncorrected').textContent).toBe('Réserves non corrigées (@redacteur) : publié avec les remarques du vérificateur en suspens.')
+    const line = screen.getByTestId('chat-turn-cost').textContent
+    expect(line).toContain('vérifié par @relecteur')
+    expect(line).not.toContain('corrigé')
+    expect(line).not.toContain('conforme')
+  })
+
+  it('a correction skipped at the author\'s ceiling: « plafond de @a atteint », never « corrigé »', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1' },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'issues', notes: ['Chiffre faux.'] },
+      { role: 'revision', agentId: 'agt_1', verdict: 'skipped', notes: ['ceiling reached'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-uncorrected').textContent).toBe('Réserves non corrigées : plafond de @redacteur atteint.')
+    expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('corrigé')
+    expect(screen.getByTestId('turn-steps').textContent).toContain('Correction @redacteur · non faite')
+  })
+
+  it('a verifier skipped is not checked, its reason in the steps', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1' },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'skipped', notes: ['ceiling of the verifier reached'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-unchecked')).toBeTruthy()
+    expect(screen.getByTestId('turn-steps').textContent).toContain('ceiling of the verifier reached')
   })
 
   it('notes come from an agent: text, never markup', () => {

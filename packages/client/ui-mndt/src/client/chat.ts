@@ -52,7 +52,7 @@ export type ChatAuthor =
 /** What a channel's coordination is set to: alone, or an author then a verifier. */
 export type CoordinationChange =
   | { readonly mode: 'solo' }
-  | { readonly mode: 'author-verifier'; readonly authorId: string; readonly verifierId: string }
+  | { readonly mode: 'author-verifier'; readonly author: string; readonly verifier: string }
 
 /** One agent turn started by a mention. */
 export interface ChatTurn {
