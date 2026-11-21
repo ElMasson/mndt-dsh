@@ -1038,9 +1038,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               <span className="mndt-composer-note">{t('ui.elle-demarre-en-prive-cochez-le-partage')}</span>
             </div>
             <div className="mndt-composer-row">
-              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label={t('ui.type-de-mission')}>
-                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              <Segmented
+                label={t('ui.type-de-mission')}
+                value={kind}
+                options={MISSION_KINDS.map(option => ({ value: option.value, label: t(option.label) }))}
+                onChange={setKind}
+              />
               {state.canShare === true ? (
                 <label className="mndt-check">
                   <input type="checkbox" checked={share} onChange={(event) => { setShare(event.target.checked) }} />
@@ -1245,15 +1248,13 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
                   <span className="mndt-tag">{member.subject}</span>
-                  <select
-                    className="mndt-input"
-                    aria-label={t('ui.role-de-personne', { name: member.subject })}
+                  <Segmented
+                    label={t('ui.role-de-personne', { name: member.subject })}
                     value={member.role}
                     disabled={adminBusy === `grant:${member.subject}`}
-                    onChange={(event) => { void changeMemberRole(member.subject, event.target.value as MemberRole) }}
-                  >
-                    {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-                  </select>
+                    options={MEMBER_ROLES.map(role => ({ value: role, label: roleWord(role, t) }))}
+                    onChange={(role) => { void changeMemberRole(member.subject, role) }}
+                  />
                   <button
                     type="button"
                     className="mndt-button"
@@ -1274,14 +1275,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 value={grantEmail}
                 onChange={(event) => { setGrantEmail(event.target.value) }}
               />
-              <select
-                className="mndt-input"
-                aria-label={t('ui.role-a-accorder')}
+              <Segmented
+                label={t('ui.role-a-accorder')}
                 value={grantRole}
-                onChange={(event) => { setGrantRole(event.target.value as MemberRole) }}
-              >
-                {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-              </select>
+                options={MEMBER_ROLES.map(role => ({ value: role, label: roleWord(role, t) }))}
+                onChange={setGrantRole}
+              />
               <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
                 {t('ui.accorder')}
               </button>
@@ -1346,21 +1345,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <p className="mndt-channel-subject">{t('ui.tout-ce-qui-s-est-passe-dans')}</p>
           </div>
           <div className="mndt-channel-head-side">
-            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label={t('ui.filtrer-par-canal')}>
-              <option value="all">{t('ui.tous-les-canaux')}</option>
-              {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-            </select>
-            <select
-              className="mndt-input"
+            <Segmented
+              label={t('ui.filtrer-par-canal')}
+              value={activityChannel}
+              options={[{ value: 'all', label: t('ui.tous-les-canaux') }, ...channels.map(candidate => ({ value: candidate.id, label: candidate.name }))]}
+              onChange={setActivityChannel}
+            />
+            <Segmented
+              label={t('ui.filtrer-l-activite')}
               value={activityFilter}
-              onChange={(event) => { setActivityFilter(event.target.value as 'all' | 'humans' | 'agents' | 'me') }}
-              aria-label={t('ui.filtrer-l-activite')}
-            >
-              <option value="all">{t('ui.tout')}</option>
-              <option value="humans">{t('ui.humains')}</option>
-              <option value="agents">{t('ui.agents')}</option>
-              <option value="me">{t('ui.moi')}</option>
-            </select>
+              options={[
+                { value: 'all', label: t('ui.tout') },
+                { value: 'humans', label: t('ui.humains') },
+                { value: 'agents', label: t('ui.agents') },
+                { value: 'me', label: t('ui.moi') },
+              ] as const}
+              onChange={setActivityFilter}
+            />
             <button type="button" className="mndt-button" onClick={markAllRead}>{t('ui.tout-marquer-comme-lu')}</button>
             <button type="button" className="mndt-button" onClick={exportActivity}>{t('ui.exporter-en-csv')}</button>
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
@@ -1785,5 +1786,42 @@ function PostView(props: {
       </div>
       {open && body.brief !== undefined ? <div className="mndt-brief-body">{renderBrief(body.brief.markdown)}</div> : undefined}
     </article>
+  )
+}
+
+/** @param role - a role of the grant table. @param t - the copy. @returns its name for a person. */
+function roleWord(role: string, t: MndtTranslate): string {
+  return role === 'owner' ? t('shell.role-owner')
+    : role === 'admin' ? t('shell.role-admin')
+      : role === 'operator' ? t('shell.role-operator')
+        : role === 'viewer' ? t('shell.role-viewer') : role
+}
+
+/**
+ * A choice among a few values, as buttons side by side rather than a drop-down (Stéphane's rule):
+ * every option is visible, one click chooses.
+ */
+function Segmented<V extends string>(props: {
+  readonly label: string
+  readonly value: V
+  readonly options: readonly { readonly value: V; readonly label: string }[]
+  readonly onChange: (value: V) => void
+  readonly disabled?: boolean
+}): ReactNode {
+  return (
+    <div className="mndt-segmented" role="group" aria-label={props.label}>
+      {props.options.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          className="mndt-segment"
+          aria-pressed={option.value === props.value}
+          disabled={props.disabled === true}
+          onClick={() => { if (option.value !== props.value) props.onChange(option.value) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 }

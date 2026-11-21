@@ -188,8 +188,12 @@ describe('collaboration page', () => {
       return found
     })
     const before = rows.length
-    const filter = screen.getByLabelText(/Filtrer par canal/) as HTMLSelectElement
-    fireEvent.change(filter, { target: { value: 'mandate:mnd_1' } })
+    // One click on the channel, no list to open.
+    const filter = screen.getByRole('group', { name: /Filtrer par canal/ })
+    const mandate = within(filter).getAllByRole('button').find(button => button.textContent?.startsWith('Reporting marketing'))
+    expect(mandate).toBeTruthy()
+    if (mandate !== undefined) fireEvent.click(mandate)
+    expect(mandate?.getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => {
       expect(document.querySelectorAll('.mndt-activity .mndt-event-post').length).toBeLessThan(before + 1)
     })
