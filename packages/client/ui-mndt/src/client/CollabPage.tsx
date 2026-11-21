@@ -77,6 +77,13 @@ function agentRefusal(failure: unknown, t: ChatTranslate): string {
   return reasonOf(failure, t)
 }
 
+/** @param before - the agent as the sheet opened on it. @param now - as it is now. @returns whether it changed meanwhile. */
+function agentChanged(before: ChatAgent, now: ChatAgent): boolean {
+  return before.name !== now.name || before.provider !== now.provider || before.model !== now.model
+    || (before.instructions ?? '') !== (now.instructions ?? '') || before.eurPerMonth !== now.eurPerMonth
+    || [...before.connectors].sort().join(',') !== [...now.connectors].sort().join(',')
+}
+
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
 const MEMORY_COLUMNS: readonly { readonly scope: string; readonly icon: IconName; readonly title: MndtKey; readonly help: MndtKey }[] = [
   { scope: 'user', icon: 'Lock', title: 'shell.memory-user', help: 'shell.memory-user-help' },
@@ -276,11 +283,29 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // Owners and admins declare and change agents; the sheet open, if any.
   const canManageAgents = chat?.createAgent !== undefined && (state?.role === 'owner' || state?.role === 'admin')
   const [editing, setEditing] = useState<ChatAgent | 'new' | undefined>(undefined)
+  // An agent's sheet opens on the agent as it is now, read again, not as the list last showed it.
+  const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
+    if (chat === undefined) return
+    try {
+      const fresh = (await chat.agents()).find(a => a.id === agent.id)
+      setChatAgents(await chat.agents())
+      setEditing(fresh ?? agent)
+    } catch {
+      setEditing(agent)
+    }
+  }, [chat])
   const saveAgent = useCallback(async (input: AgentInput): Promise<string | undefined> => {
     if (chat?.createAgent === undefined || chat.updateAgent === undefined || editing === undefined) return undefined
     try {
       if (editing === 'new') await chat.createAgent(input)
       else {
+        // Someone may have changed the agent since the sheet opened: said, never overwritten.
+        const now = (await chat.agents()).find(a => a.id === editing.id)
+        if (now === undefined) return tc('agentGone')
+        if (agentChanged(editing, now)) {
+          setChatAgents(await chat.agents())
+          return tc('agentChangedMeanwhile')
+        }
         const { handle: _fixed, ...patch } = input
         await chat.updateAgent(editing.id, patch)
       }
@@ -1618,7 +1643,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             type="button"
                             className="mw-tile mw-tile-link"
                             aria-label={tc('agentEdit', { name: agent.name })}
-                            onClick={() => { setEditing(agent) }}
+                            onClick={() => { void openAgent(agent) }}
                           >
                             {body}
                           </button>

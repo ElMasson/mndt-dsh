@@ -396,6 +396,7 @@ export const TEAM_CSS = `
 }
 .mw-field { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; color: var(--mw-slate); }
 .mw-field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.mw-counter { align-self: flex-end; font-size: 11px; color: var(--mw-slate); }
 .mw-field-narrow { flex: 0 0 140px; }
 .mw-input {
   width: 100%; padding: 8px 12px; border: 1px solid var(--mw-line); border-radius: 12px;

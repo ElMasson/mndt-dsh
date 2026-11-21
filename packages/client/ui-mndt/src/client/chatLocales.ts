@@ -168,6 +168,12 @@ export const chatEn = {
   agentCreate: 'Create the agent',
   agentHandleTaken: 'The handle @{handle} is already taken.',
   agentHandleShape: 'A handle is 2 to 32 letters, digits or dashes, without accents.',
+  agentPurposeCount: '{count} / {max}',
+  agentCeilingOwner: 'Up to {max} EUR a month.',
+  agentCeilingAdmin: 'Up to {max} EUR a month: only the owner sets a higher ceiling.',
+  agentCeilingTooHigh: 'A ceiling is at most {max} EUR a month.',
+  agentChangedMeanwhile: 'This agent was changed meanwhile: open its sheet again to see it as it is.',
+  agentGone: 'This agent no longer exists.',
 } as const
 
 /** One copy key. */
@@ -336,6 +342,12 @@ export const chatFr: Record<ChatKey, string> = {
   agentCreate: 'Créer l\'agent',
   agentHandleTaken: 'L\'identifiant @{handle} est déjà pris.',
   agentHandleShape: 'Un identifiant fait 2 à 32 lettres, chiffres ou tirets, sans accent.',
+  agentPurposeCount: '{count} / {max}',
+  agentCeilingOwner: 'Jusqu\'à {max} € par mois.',
+  agentCeilingAdmin: 'Jusqu\'à {max} € par mois : seul l\'owner fixe un plafond plus haut.',
+  agentCeilingTooHigh: 'Un plafond est de {max} € par mois au plus.',
+  agentChangedMeanwhile: 'Cet agent a été modifié entre-temps : rouvrez sa fiche pour le voir tel qu\'il est.',
+  agentGone: 'Cet agent n\'existe plus.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

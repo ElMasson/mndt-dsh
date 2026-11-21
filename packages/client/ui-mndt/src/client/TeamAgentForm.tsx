@@ -56,6 +56,13 @@ export function handleOf(name: string): string {
   return slug.length >= 2 ? slug : ''
 }
 
+/** The ceiling an admin may set on a new agent: above it, only the owner decides. */
+export const ADMIN_CEILING_EUR = 5
+/** The ceiling nobody may exceed from this sheet. */
+export const MAX_CEILING_EUR = 50
+/** The longest purpose (the agent's instructions) the sheet takes. */
+export const MAX_PURPOSE = 2000
+
 /** What the sheet needs. */
 export interface TeamAgentFormProps {
   /** The agent to change; absent, the sheet declares a new one. */
@@ -93,8 +100,14 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
   const [error, setError] = useState<string | undefined>(undefined)
 
   const euros = Number(ceiling.replace(',', '.'))
-  const raising = editing && Number.isFinite(euros) && euros > agent.eurPerMonth && !props.canRaiseCeiling
+  // The highest ceiling this person may set here: an admin keeps an agent at most where it is (or at
+  // 5 EUR for a new one), only the owner goes higher, and nobody beyond 50 EUR a month.
+  const allowed = props.canRaiseCeiling ? MAX_CEILING_EUR : Math.min(editing ? agent.eurPerMonth : ADMIN_CEILING_EUR, MAX_CEILING_EUR)
+  const raising = Number.isFinite(euros) && euros > allowed
+  // A connector the agent still carries but that is no longer mounted: the API would refuse the whole sheet.
+  const stale = connectors.filter(server => !usable.includes(server))
   const ready = name.trim() !== '' && shownHandle !== '' && Number.isFinite(euros) && euros > 0 && !raising
+    && purpose.length <= MAX_PURPOSE && stale.length === 0
 
   const save = async (): Promise<void> => {
     // No model known yet (no agent declared on the server): nothing can be declared from here.
@@ -121,8 +134,16 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
       </label>
       <label className="mw-field">
         {t('agentPurpose')}
-        <textarea className="mw-input" rows={2} placeholder={t('agentPurposeHint')} value={purpose} onChange={(event) => { setPurpose(event.target.value) }} />
+        <textarea
+          className="mw-input"
+          rows={2}
+          maxLength={MAX_PURPOSE}
+          placeholder={t('agentPurposeHint')}
+          value={purpose}
+          onChange={(event) => { setPurpose(event.target.value) }}
+        />
       </label>
+      <span className="mw-counter" aria-live="polite">{t('agentPurposeCount', { count: purpose.length, max: MAX_PURPOSE })}</span>
       <div className="mw-field">
         <span>{t('agentModelLabel')}</span>
         {models.length === 0 ? <p className="mw-ctx-muted">{t('agentNoModel')}</p> : (
@@ -189,7 +210,15 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
         </label>
       </div>
       {editing ? <p className="mw-ctx-small mw-ctx-muted">{t('agentHandleFixed')}</p> : undefined}
-      {raising ? <p role="alert" className="mw-ctx-error">{t('agentOnlyOwnerRaises')}</p> : undefined}
+      <p className="mw-ctx-small mw-ctx-muted">
+        {props.canRaiseCeiling ? t('agentCeilingOwner', { max: MAX_CEILING_EUR }) : t('agentCeilingAdmin', { max: allowed })}
+      </p>
+      {raising ? (
+        <p role="alert" className="mw-ctx-error">
+          {props.canRaiseCeiling ? t('agentCeilingTooHigh', { max: MAX_CEILING_EUR }) : t('agentOnlyOwnerRaises')}
+        </p>
+      ) : undefined}
+      {stale.length === 0 ? undefined : <p role="alert" className="mw-ctx-error">{t('connRemoveFirst', { names: stale.join(', ') })}</p>}
       {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
       <div className="mw-actions">
         <button type="submit" className="mw-primary" disabled={!ready || busy || model === undefined}>{editing ? t('agentSave') : t('agentCreate')}</button>
