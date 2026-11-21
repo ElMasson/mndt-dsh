@@ -15,15 +15,19 @@ import type {
   Message,
   Mission,
   Turn,
+  TurnStep,
   WorkbenchService,
 } from './core/index.ts'
 import {
   ceilingRefusal,
   eurOf,
+  parseVerdict,
   priceOf,
+  revisionPrompt,
   spentThisMonth,
   turnPrompt,
   turnServers,
+  verifierPrompt,
 } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 
@@ -232,34 +236,72 @@ export class TurnScheduler {
     })
     try {
       const history = await service.messages(channel.id)
-      const output = await engine.run({
-        turnId: turn.id,
-        agent,
-        channel,
-        actor: message.author.kind === 'human' ? message.author.email : '',
-        prompt: turnPrompt(
-          agent,
+      const agents = await service.listAgents(true)
+      const prompt = turnPrompt(agent, channel, history, message, agents)
+      const actor = message.author.kind === 'human' ? message.author.email : ''
+      /** One call of the engine for one agent, priced with that agent's model. */
+      const call = async (who: Agent, suffix: string, text: string): Promise<{ output: TurnOutput; eur: number | undefined }> => {
+        const output = await engine.run({
+          turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
+          agent: who,
           channel,
-          history,
-          message,
-          await service.listAgents(true),
-        ),
-        cwd: channelFolder(dataDir, channel.id),
-        servers: turnServers(agent, channel),
-        signal: controller.signal,
-      })
+          actor,
+          prompt: text,
+          cwd: channelFolder(dataDir, channel.id),
+          servers: turnServers(who, channel),
+          signal: controller.signal,
+        })
+        const price = priceOf(prices, who)
+        return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price) }
+      }
+      const first = await call(agent, '', prompt)
+      if (first.output.text.trim() === '')
+        throw new Error('l’agent n’a produit aucun texte')
+      // « Auteur puis vérificateur »: a turn of the channel's author is checked by
+      // its verifier (another model), and corrected once if needed. A host script:
+      // at most three calls, each step priced for its own agent and bounded by
+      // its own ceiling. A check that cannot happen says why; the draft goes out.
+      let output = first.output
+      let steps: TurnStep[] | undefined
+      const coordination = channel.coordination
+      if (coordination?.mode === 'author-verifier' && coordination.authorId === agent.id) {
+        steps = [{ role: 'author', agentId: agent.id, ...(first.output.tokens === undefined ? {} : { tokens: first.output.tokens }), ...(first.eur === undefined ? {} : { eur: first.eur }) }]
+        const verifier = agents.find(candidate =>
+          candidate.id === coordination.verifierId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
+        const spent = verifier === undefined
+          ? undefined
+          : ceilingRefusal(verifier, prices,
+            spentThisMonth((await service.snapshot()).messages ?? [], verifier.id, new Date().toISOString()))
+        if (verifier === undefined) {
+          steps.push({ role: 'verifier', agentId: coordination.verifierId, verdict: 'skipped', notes: ['le vérificateur n’est plus un agent actif de ce canal'] })
+        } else if (spent !== undefined) {
+          steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
+        } else {
+          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text))
+          const verdict = parseVerdict(checked.output.text)
+          steps.push({
+            role: 'verifier', agentId: verifier.id, verdict: verdict.kind,
+            ...(verdict.kind === 'issues' ? { notes: verdict.issues } : {}),
+            ...(checked.output.tokens === undefined ? {} : { tokens: checked.output.tokens }),
+            ...(checked.eur === undefined ? {} : { eur: checked.eur }),
+          })
+          if (verdict.kind === 'issues') {
+            const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues))
+            steps.push({
+              role: 'revision', agentId: agent.id,
+              ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
+              ...(revised.eur === undefined ? {} : { eur: revised.eur }),
+            })
+            if (revised.output.text.trim() !== '') output = revised.output
+          }
+        }
+      }
       const after = await this.#stale(messageId, turn.agentId)
       if (controller.signal.aborted || after.reason !== undefined) {
         await cancel(after.reason ?? 'Tour arrêté.')
         return
       }
-      const price = priceOf(prices, agent)
-      const eur =
-        output.tokens === undefined || price === undefined
-          ? undefined
-          : eurOf(output.tokens, price)
-      if (output.text.trim() === '')
-        throw new Error('l’agent n’a produit aucun texte')
+      const eur = steps === undefined ? first.eur : sumEur(steps)
       await service.reply(
         channel.id,
         messageId,
@@ -274,6 +316,7 @@ export class TurnScheduler {
           : { sessionId: output.sessionId }),
         ...(output.tokens === undefined ? {} : { tokens: output.tokens }),
         ...(eur === undefined ? {} : { eur }),
+        ...(steps === undefined ? {} : { steps }),
       })
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
@@ -290,4 +333,11 @@ export class TurnScheduler {
       this.#running.delete(turn.id)
     }
   }
+}
+
+/** @param steps - a coordinated turn's steps. @returns their total cost, or undefined when none is priced. */
+function sumEur(steps: readonly TurnStep[]): number | undefined {
+  const priced = steps.filter(step => step.eur !== undefined)
+  if (priced.length === 0) return undefined
+  return Math.round(priced.reduce((total, step) => total + (step.eur ?? 0), 0) * 1_000_000) / 1_000_000
 }

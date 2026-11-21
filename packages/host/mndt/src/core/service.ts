@@ -12,6 +12,7 @@ import { emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
   AgentProposal,
+  Coordination,
   Approval,
   ApprovalAction,
   ApprovalPayload,
@@ -993,11 +994,59 @@ export class WorkbenchService {
         ...channel,
         members,
         agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
+        // A coordination whose author or verifier leaves the channel ends with it.
+        ...(channel.coordination !== undefined
+          && [channel.coordination.authorId, channel.coordination.verifierId].some(agentId => (change.removeAgents ?? []).includes(agentId))
+          ? { coordination: undefined }
+          : {}),
         ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
       }
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: { at: this.#at(), actor, action: 'channel.updated', subject: id },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Set how a channel's turns are coordinated, or go back to each agent alone.
+   * « Auteur puis vérificateur »: both agents are on the channel, active, distinct,
+   * and of DIFFERENT models (a model rarely catches its own mistakes).
+   * @param id - the channel.
+   * @param coordination - the mode, or undefined for each agent alone.
+   * @param actor - a member who sets it.
+   * @returns the channel.
+   */
+  setCoordination(id: string, coordination: Coordination | undefined, actor: string): Promise<Channel> {
+    return this.#write((state) => {
+      const channel = (state.channels ?? []).find(candidate => candidate.id === id)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      if (coordination !== undefined) {
+        if (coordination.mode !== 'author-verifier') throw new Error(`unknown coordination mode: ${String(coordination.mode)}`)
+        const active = (agentId: string): Agent | undefined =>
+          (state.agents ?? []).find(agent => agent.id === agentId && agent.retiredAt === undefined)
+        const author = active(coordination.authorId)
+        const verifier = active(coordination.verifierId)
+        if (author === undefined || verifier === undefined) throw new Error('the author and the verifier must be active agents')
+        if (!channel.agents.includes(author.id) || !channel.agents.includes(verifier.id)) {
+          throw new Error('the author and the verifier must both be agents of this channel')
+        }
+        if (author.id === verifier.id) throw new Error('the author and the verifier must be two agents')
+        if (author.provider === verifier.provider && author.model === verifier.model) {
+          throw new Error(`the verifier must run another model than the author (both are ${author.provider}/${author.model})`)
+        }
+      }
+      const { coordination: _previous, ...rest } = channel
+      const next: Channel = coordination === undefined
+        ? rest
+        : { ...rest, coordination: { mode: coordination.mode, authorId: coordination.authorId, verifierId: coordination.verifierId } }
+      return {
+        state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: {
+          at: this.#at(), actor, action: 'channel.coordination', subject: id,
+          detail: coordination === undefined ? 'solo' : `author-verifier ${coordination.authorId} ${coordination.verifierId}`,
+        },
         value: next,
       }
     })
