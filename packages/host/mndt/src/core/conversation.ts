@@ -373,7 +373,13 @@ export function parseVerdict(text: string): Verdict {
   if (ok !== false) return { kind: 'unreadable' }
   const raw = (value as { issues?: unknown }).issues
   const issues = Array.isArray(raw)
-    ? raw.filter((issue): issue is string => typeof issue === 'string' && issue.trim() !== '').map(issue => issue.trim().slice(0, 400)).slice(0, 5)
+    ? raw
+      .filter((issue): issue is string => typeof issue === 'string' && issue.trim() !== '')
+      // One line each: a remark never spans lines, so it cannot close the block
+      // it is quoted in and speak outside it.
+      .map(issue => issue.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').trim().slice(0, 400))
+      .filter(issue => issue !== '')
+      .slice(0, 5)
     : []
   return issues.length === 0 ? { kind: 'unreadable' } : { kind: 'issues', issues }
 }

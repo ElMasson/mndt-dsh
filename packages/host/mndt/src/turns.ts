@@ -314,7 +314,10 @@ export class TurnScheduler {
           if (verdict.kind === 'issues' && authorRefusal !== undefined) {
             steps.push({ role: 'revision', agentId: agent.id, verdict: 'skipped', notes: [authorRefusal] })
           } else if (verdict.kind === 'issues') {
-            const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, mark))
+            // A second mark, drawn after the verdict: the verifier read the first one
+            // and could have written it into its remarks.
+            const revisionMark = randomUUID().slice(0, 8)
+            const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, revisionMark))
             steps.push({
               role: 'revision', agentId: agent.id,
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
@@ -333,9 +336,14 @@ export class TurnScheduler {
       const tokens = steps === undefined ? output.tokens : sumTokens(steps)
       // A check that did not happen, or could not be read, is said in the text itself.
       const unchecked = steps?.find(step => step.role === 'verifier' && (step.verdict === 'skipped' || step.verdict === 'unreadable'))
-      const published = unchecked === undefined
-        ? output.text
-        : `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
+      // Remarks found but not corrected (the author's ceiling): said in the text too.
+      const uncorrected = steps?.find(step => step.role === 'revision' && step.verdict === 'skipped')
+      const remarks = steps?.find(step => step.role === 'verifier' && step.verdict === 'issues')?.notes ?? []
+      const published = unchecked !== undefined
+        ? `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
+        : uncorrected !== undefined
+          ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
+          : output.text
       await service.reply(
         channel.id,
         messageId,
