@@ -1253,7 +1253,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     value={member.role}
                     disabled={adminBusy === `grant:${member.subject}`}
                     options={MEMBER_ROLES.map(role => ({ value: role, label: roleWord(role, t) }))}
-                    onChange={(role) => { void changeMemberRole(member.subject, role) }}
+                    onChange={(role) => {
+                      // A button gives one of the table's roles: found back, never cast.
+                      const chosen = MEMBER_ROLES.find(r => r === role)
+                      if (chosen !== undefined) void changeMemberRole(member.subject, chosen)
+                    }}
                   />
                   <button
                     type="button"
