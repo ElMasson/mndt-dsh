@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
+  AgentProposal,
   Approval,
   ApprovalAction,
   ApprovalPayload,
@@ -65,6 +66,8 @@ export interface ApprovalRequest {
   readonly channelId?: string
   readonly messageId?: string
   readonly requestedBy: string
+  /** A propose_agent card's agent, checked as POST /agents checks it. */
+  readonly proposal?: AgentProposal
 }
 
 /** What creating an agent needs. */
@@ -420,6 +423,11 @@ export class WorkbenchService {
     if (!needsApproval(request.kind)) return Promise.reject(new Error(`action ${String(request.kind)} does not need approval`))
     if (request.title.trim() === '') return Promise.reject(new Error('an approval needs a title'))
     if (request.requestedBy.trim() === '') return Promise.reject(new Error('an approval needs a requester'))
+    if (request.kind === 'propose_agent') {
+      // The proposal is checked when the card is made, with the rules of POST /agents.
+      const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
+      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    }
     const approval: Approval = {
       id: this.#id('apr'),
       kind: request.kind,
@@ -431,12 +439,67 @@ export class WorkbenchService {
       ...(request.missionId === undefined ? {} : { missionId: request.missionId }),
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
+      ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
     }
     return this.#write(state => ({
       state: { ...state, approvals: [approval, ...state.approvals] },
       event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
       value: approval,
     }))
+  }
+
+  /** @param draft - a checked draft. @param actor - its creator. @param at - when. @returns the agent. */
+  #newAgent(draft: AgentDraft, actor: string, at: string): Agent {
+    return {
+      id: this.#id('agt'),
+      handle: draft.handle,
+      name: draft.name.trim(),
+      provider: draft.provider.trim(),
+      model: draft.model.trim(),
+      ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
+      connectors: [...new Set(draft.connectors ?? [])].sort(),
+      eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
+      createdBy: actor,
+      createdAt: at,
+    }
+  }
+
+  /**
+   * Approve a propose_agent card and create its agent, in ONE write: the card
+   * is approved only if the agent is created, from the proposal recorded on the
+   * card. The rules of POST /agents apply, with the approver's role: a ceiling
+   * above the default is the owner's to give. A refusal leaves the card pending.
+   * @param id - the card.
+   * @param actor - who approves it (an owner or an admin).
+   * @param role - their role.
+   * @returns the approved card and the agent.
+   */
+  approveAgentProposal(id: string, actor: string, role: Role | undefined): Promise<{ approval: Approval; agent: Agent }> {
+    return this.#write((state) => {
+      const approval = state.approvals.find(candidate => candidate.id === id)
+      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Error(`approval ${id} proposes no agent`)
+      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      const proposal = approval.proposal
+      const refusal = agentRefusal(proposal)
+      if (refusal !== undefined) throw new Error(refusal)
+      if ((proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+        throw new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`)
+      }
+      if ((state.agents ?? []).some(agent => agent.handle === proposal.handle)) throw new Error(`the handle @${proposal.handle} is taken`)
+      const at = this.#at()
+      const agent = this.#newAgent(proposal, actor.trim(), at)
+      const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, agentId: agent.id }
+      return {
+        state: {
+          ...state,
+          agents: [...(state.agents ?? []), agent],
+          approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
+        },
+        event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `agent @${agent.handle} created (${agent.id})` },
+        value: { approval: next, agent },
+      }
+    })
   }
 
   /**
@@ -746,18 +809,7 @@ export class WorkbenchService {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
         throw new Error(`the handle @${draft.handle} is taken`)
       }
-      const agent: Agent = {
-        id: this.#id('agt'),
-        handle: draft.handle,
-        name: draft.name.trim(),
-        provider: draft.provider.trim(),
-        model: draft.model.trim(),
-        ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
-        connectors: [...new Set(draft.connectors ?? [])].sort(),
-        eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
-        createdBy: actor,
-        createdAt: this.#at(),
-      }
+      const agent = this.#newAgent(draft, actor, this.#at())
       return {
         state: { ...state, agents: [...(state.agents ?? []), agent] },
         event: { at: agent.createdAt, actor, action: 'agent.created', subject: agent.id, detail: `@${agent.handle} ${agent.provider}/${agent.model}` },
@@ -1125,6 +1177,19 @@ export class WorkbenchService {
  * @param agent - an agent as drafted or patched.
  * @returns why it cannot be kept, or undefined.
  */
+/** @param draft - a proposal as asked. @returns it with only the fields of POST /agents. */
+function proposalOf(draft: AgentProposal): AgentProposal {
+  return {
+    handle: draft.handle,
+    name: draft.name,
+    provider: draft.provider,
+    model: draft.model,
+    ...(draft.instructions === undefined ? {} : { instructions: draft.instructions }),
+    ...(draft.connectors === undefined ? {} : { connectors: [...draft.connectors] }),
+    ...(draft.eurPerMonth === undefined ? {} : { eurPerMonth: draft.eurPerMonth }),
+  }
+}
+
 function agentRefusal(agent: AgentDraft): string | undefined {
   if (!SLUG.test(agent.handle)) return `a handle is a slug of 2 to 32 characters: ${agent.handle}`
   if (agent.name.trim() === '') return 'an agent needs a name'

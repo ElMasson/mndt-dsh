@@ -771,23 +771,50 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
         const kind = input.kind
-        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete') {
+        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent') {
           return respond(400, { error: `unknown approval kind: ${String(kind)}` })
+        }
+        // A propose_agent card carries the agent to create: the fields of POST /agents,
+        // checked now as POST /agents checks them (the connectors must be mounted).
+        const raw = typeof input.proposal === 'object' && input.proposal !== null ? input.proposal as Record<string, unknown> : undefined
+        const field = (key: string): string | undefined => (typeof raw?.[key] === 'string' ? raw[key] as string : undefined)
+        const proposal = kind !== 'propose_agent' || raw === undefined
+          ? undefined
+          : {
+            handle: field('handle') ?? '',
+            name: field('name') ?? '',
+            provider: field('provider') ?? '',
+            model: field('model') ?? '',
+            ...(field('instructions') === undefined ? {} : { instructions: field('instructions') as string }),
+            ...(raw.connectors === undefined ? {} : { connectors: strings(raw.connectors) }),
+            ...(typeof raw.eurPerMonth === 'number' ? { eurPerMonth: raw.eurPerMonth } : {}),
+          }
+        if (proposal?.connectors !== undefined) {
+          const missing = await unmounted(proposal.connectors)
+          if (missing !== undefined) return missing
         }
         // A card asked during an agent turn belongs to that turn's thread: the
         // approvals connector names the run it acts for (x-mndt-run).
         const run = request.headers?.['x-mndt-run']
         const turn = options.turns?.current()
         const thread = turn !== undefined && run !== undefined && run === turn.turnId ? turn : undefined
-        const approval = await service.requestApproval({
+        const asked = service.requestApproval({
           kind,
-          title: typeof input.title === 'string' ? input.title : '',
+          title: typeof input.title === 'string' && input.title.trim() !== ''
+            ? input.title
+            : proposal === undefined ? '' : `Créer l'agent ${proposal.name}`,
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
           ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId }),
+          ...(proposal === undefined ? {} : { proposal }),
         })
-        return respond(201, { approval })
+        // A card refused as asked (an invalid proposal, no title) is the caller's mistake.
+        try {
+          return respond(201, { approval: await asked })
+        } catch (error) {
+          return respond(400, { error: messageOf(error) })
+        }
       }
 
       if (request.method === 'POST' && /^\/approvals\/[^/]+\/decide$/.test(path)) {
@@ -802,6 +829,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const decision = input.decision
         if (decision !== 'approved' && decision !== 'rejected') {
           return respond(400, { error: 'decision must be approved or rejected' })
+        }
+        if (card.kind === 'propose_agent' && decision === 'approved') {
+          // The agent is created from the proposal recorded on the card, by whoever
+          // approves it (an owner or an admin, rights.write above), with their role.
+          const missing = await unmounted(card.proposal?.connectors ?? [])
+          if (missing !== undefined) return missing
+          const table = await grants.grants()
+          const role = table.ok ? roleOf(table.grants, identity) : undefined
+          try {
+            return respond(200, await service.approveAgentProposal(id, identity, role))
+          } catch (error) {
+            return respond(400, { error: messageOf(error) })
+          }
         }
         const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined)
         return respond(200, { approval })
