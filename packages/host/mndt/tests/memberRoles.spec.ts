@@ -3,6 +3,8 @@ import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
 import { roleChangeRefusal } from '../src/policy.ts'
+import { emptyState } from '../src/core/index.ts'
+import { canReadEvent } from '../src/visibility.ts'
 
 const owner = 'owner@datanalysis.re'
 const second = 'second@datanalysis.re'
@@ -123,5 +125,45 @@ describe('who may change whose role (members routes)', () => {
     })
     const answer = await api({ method: 'POST', path: '/members/grant', authorization: `Bearer ${owner}`, body: JSON.stringify({ subject: viewer, role: 'admin' }) })
     expect(answer.status).toBe(503)
+  })
+
+  it('two owners removing each other at once: one is applied, the team keeps an owner', async () => {
+    // A live table the authority changes, answering after a delay so the two requests overlap.
+    const table = [{ subject: owner, role: 'owner' as const }, { subject: second, role: 'owner' as const }]
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+      const { subject } = JSON.parse(init.body) as { subject: string }
+      await new Promise(resolve => setTimeout(resolve, 20))
+      const at = table.findIndex(grant => grant.subject === subject)
+      if (at >= 0) table.splice(at, 1)
+      return new Response(JSON.stringify({ allowed: true, reason: 'ok' }), { status: 200 })
+    })
+    const api = createMndtApi({
+      service, runner: noMissions,
+      identity: { tokens: { [owner]: { user: owner }, [second]: { user: second } } },
+      grants: { grants: async () => ({ ok: true, grants: [...table] }) },
+      authority: { baseUrl: 'http://authority.test', token: 'deployment-token' },
+    })
+    const revoke = (who: string, subject: string) =>
+      api({ method: 'POST', path: '/members/revoke', authorization: `Bearer ${who}`, body: JSON.stringify({ subject }) })
+    const [a, b] = await Promise.all([revoke(owner, second), revoke(second, owner)])
+    expect([a.status, b.status].sort()).toEqual([200, 403])
+    expect(table.filter(grant => grant.role === 'owner')).toHaveLength(1)
+  })
+
+  it('refuses a subject that is not plain ASCII', async () => {
+    const b = bench()
+    // The Kelvin sign folds onto k under toLowerCase().
+    const answer = await b.call('/members/grant', owner, { subject: 'admin@\u212Aey.re', role: 'viewer' })
+    expect(answer.status).toBe(400)
+    expect(answer.body.error).toBe('the subject is not a plain ASCII e-mail')
+    expect(b.forwarded).toHaveLength(0)
+  })
+
+  it('the role journal is read by those who administer rights, and only them', () => {
+    const event = { at: '2026-11-21T00:00:00Z', actor: admin, action: 'member.role', subject: viewer, detail: 'viewer -> operator: applied' }
+    const reader = (decider: boolean) => ({ identity: operator, channels: new Set<string>(), decider })
+    expect(canReadEvent(reader(true), event, emptyState)).toBe(true)
+    expect(canReadEvent(reader(false), event, emptyState)).toBe(false)
   })
 })

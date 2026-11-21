@@ -212,6 +212,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     return owner ? undefined : respond(404, { error: 'not found' })
   }
 
+  /** Role changes, one at a time: the table is read again inside the section. */
+  let roleChanges: Promise<unknown> = Promise.resolve()
+  const serialRoleChange = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = roleChanges.then(work, work)
+    roleChanges = next.catch(() => undefined)
+    return next
+  }
+
   /** A team instance: people other than the owner reach this API through the sign-on proxy. */
   const teamInstance = options.identity.proxyUserHeader !== undefined && options.identity.proxyUserHeader !== ''
 
@@ -1166,7 +1174,13 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(503, { error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
-        const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
+        const raw = typeof input.subject === 'string' ? input.subject : ''
+        // Printable ASCII only, as for a proven identity (isPlainAscii in #75):
+        // toLowerCase() folds a few Unicode characters onto ASCII ones.
+        if (raw.trim() !== '' && !/^[\x21-\x7e]+$/.test(raw.trim())) {
+          return respond(400, { error: 'the subject is not a plain ASCII e-mail' })
+        }
+        const subject = raw.trim().toLowerCase()
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }
         let next: 'viewer' | 'operator' | 'admin' | 'owner' | undefined
@@ -1177,38 +1191,43 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           next = input.role
           body.role = input.role
         }
-        // The authority is called with this deployment's token, not the caller's:
-        // who may change whose role is decided here, on the current table.
-        const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
-        const before = roleOf(table.grants, subject)
-        const refusal = roleChangeRefusal(table.grants, identity, subject, next)
-        if (refusal !== undefined) {
-          await service.recordRoleChange(identity, subject, { before, after: next, outcome: `refused: ${refusal.reason}` })
-          return respond(refusal.status, { error: refusal.reason })
-        }
-        let answer: { status: number; body: unknown }
-        try {
-          // The authority names its write routes /governance/grant and
-          // /governance/revoke; the product exposes them under /members.
-          const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
-          const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
-            body: JSON.stringify(body),
+        // Reading the table, checking and forwarding are one section, one change
+        // at a time for the team: two owners removing each other at once would
+        // otherwise each read two owners and leave none.
+        return serialRoleChange(async () => {
+          // The authority is called with this deployment's token, not the caller's:
+          // who may change whose role is decided here, on the current table.
+          const table = await grants.grants()
+          if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+          const before = roleOf(table.grants, subject)
+          const refusal = roleChangeRefusal(table.grants, identity, subject, next)
+          if (refusal !== undefined) {
+            await service.recordRoleChange(identity, subject, { before, after: next, outcome: `refused: ${refusal.reason}` })
+            return respond(refusal.status, { error: refusal.reason })
+          }
+          let answer: { status: number; body: unknown }
+          try {
+            // The authority names its write routes /governance/grant and
+            // /governance/revoke; the product exposes them under /members.
+            const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
+            const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+            answer = { status: response.status, body: await response.json().catch(() => ({})) }
+          } catch (error) {
+            await service.recordRoleChange(identity, subject, { before, after: next, outcome: 'not applied: authority unreachable' })
+            return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+          }
+          await service.recordRoleChange(identity, subject, {
+            before,
+            after: next,
+            outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
           })
-          answer = { status: response.status, body: await response.json().catch(() => ({})) }
-        } catch (error) {
-          await service.recordRoleChange(identity, subject, { before, after: next, outcome: 'not applied: authority unreachable' })
-          return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
-        }
-        await service.recordRoleChange(identity, subject, {
-          before,
-          after: next,
-          outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
+          return respond(answer.status, answer.body)
         })
-        return respond(answer.status, answer.body)
       }
 
       if (request.method === 'GET' && path === '/connectors') {
