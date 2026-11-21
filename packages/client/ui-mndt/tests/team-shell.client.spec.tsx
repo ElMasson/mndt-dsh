@@ -559,7 +559,10 @@ describe('the channel panel, by pills', () => {
 
   it('an older server without { add, remove }: the whole list, and an unmounted connector blocks an add with words', async () => {
     const chat = double(MOUNTED, ['qonto', 'dolibarr'])
-    const panel = await open({ ...chat, changeConnectors: undefined })
+    // A face without the route, as an older server's.
+    const older: ChatFace = { ...chat }
+    Reflect.deleteProperty(older, 'changeConnectors')
+    const panel = await open(older)
     fireEvent.click(await within(panel).findByRole('button', { name: 'Ajouter office365 au canal' }))
     expect((await within(panel).findByRole('alert')).textContent).toBe('Retirez d\'abord dolibarr, qui n\'est plus branché.')
   })
@@ -615,11 +618,11 @@ describe('the channel panel, by pills', () => {
 
 describe('rows of the role file set aside (#75)', () => {
   it('reads only well-formed rows; anything else gives none', () => {
-    expect(skippedOf({ you: 'a', grantsSkipped: [{ row: 4, reason: 'unknown role « boss »' }] })).toEqual([{ row: 4, reason: 'unknown role « boss »' }])
+    expect(skippedOf({ grantsSkipped: [{ row: 4, reason: 'unknown role « boss »' }] })).toEqual([{ row: 4, reason: 'unknown role « boss »' }])
     for (const grantsSkipped of [undefined, null, {}, 'x', [null], [{ row: 0, reason: 'x' }], [{ row: '4', reason: 'x' }], [{ row: 4, reason: '' }], [{ row: 4 }]]) {
-      expect(skippedOf({ you: 'a', grantsSkipped })).toEqual([])
+      expect(skippedOf({ grantsSkipped })).toEqual([])
     }
-    expect(skippedOf({ you: 'a', grantsSkipped: [{ row: 2, reason: 'x'.repeat(500) }] })[0]?.reason.length).toBe(200)
+    expect(skippedOf({ grantsSkipped: [{ row: 2, reason: 'x'.repeat(500) }] })[0]?.reason.length).toBe(200)
   })
 
   it('Réglages says the set-aside row to whom /me tells it', async () => {
