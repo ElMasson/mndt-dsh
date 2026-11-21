@@ -182,7 +182,7 @@ function face(ctx: ClientContext, served: Promise<Probe>): MndtFace {
     cancelMission: id => route(next => next.cancelMission(id)),
     search: query => route(next => next.search(query)),
     retryMission: id => route(next => next.retryMission(id)),
-    decide: (approvalId, decision, reason) => route(next => next.decide(approvalId, decision, reason)),
+    decide: (approvalId, decision, reason, options) => route(next => next.decide(approvalId, decision, reason, options)),
     approveBrief: briefId => route(next => next.approveBrief(briefId)),
     remember: (scope, kind, text) => route(next => next.remember(scope, kind, text)),
     shareMission: (id, visibility) => route(next => next.shareMission(id, visibility)),

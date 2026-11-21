@@ -269,6 +269,15 @@ export const TEAM_CSS = `
 .mw-agent-text tr:last-child td { border-bottom: 0; }
 .mw-agent-text th { background: var(--mw-surface); font-weight: 500; }
 .mw-agent-text code { padding: 1px 4px; border-radius: 4px; background: var(--mw-surface); font-size: 12.5px; }
+/* A fenced block: its lines as written, in a frame; long lines scroll inside it, never the page. */
+.mw-agent-text pre.md-code {
+  margin: 0; max-width: 100%; overflow-x: auto; padding: 8px 12px;
+  border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-surface);
+}
+.mw-agent-text pre.md-code code {
+  padding: 0; background: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; line-height: 18px; white-space: pre;
+}
 .mw-message-removed { margin: 0; font-size: 14px; font-style: italic; color: var(--mw-slate); }
 .mw-chip { padding: 2px 6px; border: 1px solid var(--mw-line); border-radius: 10px; font-size: 12px; line-height: 16px; }
 .mw-chip-strong { font-weight: 500; }
@@ -387,6 +396,44 @@ export const TEAM_CSS = `
 .mw-app .mw-pill[aria-pressed="true"][aria-disabled="true"] { opacity: 0.8; background: var(--mw-charcoal); }
 @media (max-width: 767px) { .mw-app .mw-pill { min-height: 36px; padding: 6px 12px; } }
 .mw-pill-note { font-size: 11px; opacity: 0.8; }
+
+/* The agent sheet (lot 1a): short, buttons rather than lists. */
+.mw-screen-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.mw-agent-form {
+  display: flex; flex-direction: column; gap: 12px; max-width: 640px; padding: 16px;
+  border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
+}
+.mw-field { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; color: var(--mw-slate); }
+.mw-field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.mw-counter { align-self: flex-end; font-size: 11px; color: var(--mw-slate); }
+.mw-field-narrow { flex: 0 0 140px; }
+.mw-input {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--mw-line); border-radius: 12px;
+  background: var(--mw-card); color: var(--mw-charcoal); font: inherit; font-size: 14px;
+}
+.mw-input[readonly] { background: var(--mw-surface); color: var(--mw-slate); }
+.mw-input:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(52, 69, 209, 0.3); }
+.mw-model-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.mw-app .mw-model {
+  display: flex; min-width: 120px; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px;
+  border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-card); color: var(--mw-charcoal);
+  text-align: left; cursor: pointer;
+}
+.mw-app .mw-model[aria-pressed="true"] { border-color: var(--mw-charcoal); box-shadow: inset 0 0 0 1px var(--mw-charcoal); }
+.mw-model-label { font-size: 14px; font-weight: 500; }
+.mw-model-tech { font-size: 11px; color: var(--mw-slate); }
+@media (max-width: 767px) { .mw-app .mw-model { min-height: 44px; } }
+
+.mw-sheet-view { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 14px; }
+.mw-sheet-view dt { color: var(--mw-slate); font-size: 13px; }
+.mw-sheet-view dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mw-sheet-purpose { white-space: pre-wrap; }
+/* On a phone the proposed sheet reads label above value, not in two cramped columns. */
+@media (max-width: 639px) {
+  .mw-sheet-view { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .mw-sheet-view dd { margin-bottom: 8px; }
+}
+.mw-app .mw-pill-static { cursor: default; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }

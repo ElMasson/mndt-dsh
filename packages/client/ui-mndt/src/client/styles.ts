@@ -326,6 +326,20 @@ export const CSS = `
 .mndt-event-button:hover { background: #F0EFED; }
 
 
+.mndt-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #0C0F17; border-radius: 12px; }
+.mndt-confirm p { margin: 0; flex: 1 1 100%; font-weight: 500; }
+/* The people of Administration: the address column has one width, so the role buttons line up. */
+.mndt-post-card[data-kind="members"] .mndt-post-actions > .mndt-tag { flex: 0 0 220px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 767px) { .mndt-post-card[data-kind="members"] .mndt-post-actions > .mndt-tag { flex-basis: 100%; } }
+.mndt-segmented { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.mndt-segment {
+  padding: 5px 10px; border: 1px solid var(--mndt-border, #E2E4E9); border-radius: 999px;
+  background: var(--mndt-card, #FFFFFF); color: var(--mndt-text, #0C0F17); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.mndt-segment[aria-pressed="true"] { border-color: #0C0F17; background: #0C0F17; color: #FFFFFF; }
+.mndt-segment:disabled { cursor: default; opacity: 0.55; }
+@media (max-width: 767px) { .mndt-segment { min-height: 36px; } }
+
 .mndt-mobile-bar { display: none; gap: 6px; align-items: center; width: 100%; }
 .mndt-mobile-bar .mndt-input { max-width: 200px; }
 @media (max-width: 820px) {
@@ -369,6 +383,8 @@ export const CSS = `
 .mndt-message-markdown h3, .mndt-message-markdown h4 { margin: 8px 0 4px; font-family: "Space Grotesk", Inter, sans-serif; font-size: 15px; }
 .mndt-message-markdown ul { margin: 4px 0 6px 18px; padding: 0; }
 .mndt-message-markdown code { background: #F0EFED; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.mndt-message-markdown pre.md-code, .mndt-brief-body pre.md-code { margin: 6px 0; max-width: 100%; overflow-x: auto; padding: 8px 10px; background: #F0EFED; border-radius: 8px; }
+.mndt-message-markdown pre.md-code code, .mndt-brief-body pre.md-code code { padding: 0; background: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre; }
 .mndt-message-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
 .mndt-message-markdown th, .mndt-message-markdown td { border-bottom: 1px solid #E2E4E9; padding: 5px 8px; text-align: left; vertical-align: top; white-space: nowrap; }
 .mndt-message-markdown th { font-weight: 600; background: #F0EFED; }
