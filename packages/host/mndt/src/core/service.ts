@@ -990,15 +990,15 @@ export class WorkbenchService {
       const members = [...new Set([...channel.members, ...(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
+      // A coordination whose author or verifier leaves the channel ends with it.
+      const { coordination, ...base } = channel
+      const ended = coordination !== undefined
+        && [coordination.authorId, coordination.verifierId].some(agentId => (change.removeAgents ?? []).includes(agentId))
       const next: Channel = {
-        ...channel,
+        ...base,
+        ...(coordination === undefined || ended ? {} : { coordination }),
         members,
         agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
-        // A coordination whose author or verifier leaves the channel ends with it.
-        ...(channel.coordination !== undefined
-          && [channel.coordination.authorId, channel.coordination.verifierId].some(agentId => (change.removeAgents ?? []).includes(agentId))
-          ? { coordination: undefined }
-          : {}),
         ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
       }
       return {
