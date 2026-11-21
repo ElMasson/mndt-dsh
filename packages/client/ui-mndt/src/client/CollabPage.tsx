@@ -377,6 +377,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [adminBusy, setAdminBusy] = useState<string | undefined>(undefined)
   const [grantEmail, setGrantEmail] = useState('')
   const [grantRole, setGrantRole] = useState<MemberRole>('viewer')
+  // A role change waiting for its confirmation (a promotion to admin or owner, any demotion).
+  type RoleChange = { readonly subject: string; readonly from?: MemberRole; readonly to: MemberRole }
+  const [confirming, setConfirming] = useState<RoleChange | undefined>(undefined)
+  const RANK: Readonly<Record<MemberRole, number>> = { viewer: 0, operator: 1, admin: 2, owner: 3 }
+  const readerRole = MEMBER_ROLES.find(r => r === state?.role)
+  // Only the roles this person may give: never owner but by an owner, never above their own role.
+  // A reader whose role is not served gives at most « Opérateur ».
+  const grantable = MEMBER_ROLES.filter(role => readerRole === undefined
+    ? RANK[role] <= RANK.operator
+    : RANK[role] <= RANK[readerRole] && (role !== 'owner' || readerRole === 'owner'))
+  /** @param subject - a person of the table. @param role - their role. @returns whether this reader may change their line. */
+  const canTouch = (subject: string, role: string): boolean =>
+    subject !== state?.you && (role !== 'owner' || readerRole === 'owner')
+  /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
+  const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
+    to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
   const [mandatePurpose, setMandatePurpose] = useState('')
   const [mandateDelegate, setMandateDelegate] = useState('')
   const [mandateUntil, setMandateUntil] = useState('')
@@ -1248,28 +1264,60 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
                   <span className="mndt-tag">{member.subject}</span>
-                  <Segmented
-                    label={t('ui.role-de-personne', { name: member.subject })}
-                    value={member.role}
-                    disabled={adminBusy === `grant:${member.subject}`}
-                    options={MEMBER_ROLES.map(role => ({ value: role, label: roleWord(role, t) }))}
-                    onChange={(role) => {
-                      // A button gives one of the table's roles: found back, never cast.
-                      const chosen = MEMBER_ROLES.find(r => r === role)
-                      if (chosen !== undefined) void changeMemberRole(member.subject, chosen)
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="mndt-button"
-                    disabled={adminBusy === `revoke:${member.subject}`}
-                    onClick={() => { void revokeMemberNow(member.subject) }}
-                  >
-                    {t('ui.retirer')}
-                  </button>
+                  {canTouch(member.subject, member.role) ? (
+                    <>
+                      <Segmented
+                        label={t('ui.role-de-personne', { name: member.subject })}
+                        value={member.role}
+                        disabled={adminBusy === `grant:${member.subject}` || confirming !== undefined}
+                        options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                        onChange={(role) => {
+                          // A button gives one of the table's roles: found back, never cast.
+                          const chosen = grantable.find(r => r === role)
+                          if (chosen === undefined) return
+                          const from = MEMBER_ROLES.find(r => r === member.role)
+                          const change = { subject: member.subject, ...(from === undefined ? {} : { from }), to: chosen }
+                          if (asksFirst(from, chosen)) setConfirming(change)
+                          else void changeMemberRole(member.subject, chosen)
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="mndt-button"
+                        disabled={adminBusy === `revoke:${member.subject}`}
+                        onClick={() => { void revokeMemberNow(member.subject) }}
+                      >
+                        {t('ui.retirer')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="mndt-role" data-testid="member-role-fixed">{roleWord(member.role, t)}</span>
+                  )}
                 </div>
               ))}
               {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">{t('ui.aucune-personne')}</p> : undefined}
+              {confirming === undefined ? undefined : (
+                <div className="mndt-confirm" role="alertdialog" aria-label={t('ui.confirmer-le-role')} data-testid="role-confirm">
+                  <p>
+                    {confirming.from === undefined || RANK[confirming.to] > RANK[confirming.from]
+                      ? t('ui.confirmer-promotion', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, role: roleWord(confirming.to, t) })
+                      : t('ui.confirmer-retrogradation', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, from: roleWord(confirming.from, t), to: roleWord(confirming.to, t) })}
+                  </p>
+                  <button
+                    type="button"
+                    className="mndt-button"
+                    onClick={() => {
+                      const { subject, to } = confirming
+                      setConfirming(undefined)
+                      if (subject === '') void grantTypedMember()
+                      else void changeMemberRole(subject, to)
+                    }}
+                  >
+                    {t('ui.confirmer')}
+                  </button>
+                  <button type="button" className="mndt-button" onClick={() => { setConfirming(undefined) }}>{t('ui.annuler')}</button>
+                </div>
+              )}
             </div>
             <div className="mndt-post-actions">
               <input
@@ -1282,10 +1330,19 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               <Segmented
                 label={t('ui.role-a-accorder')}
                 value={grantRole}
-                options={MEMBER_ROLES.map(role => ({ value: role, label: roleWord(role, t) }))}
+                options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
                 onChange={setGrantRole}
               />
-              <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
+              <button
+                type="button"
+                className="mndt-button"
+                disabled={grantEmail.trim() === '' || adminBusy === 'grant' || confirming !== undefined || !grantable.includes(grantRole)}
+                onClick={() => {
+                  // Admin or owner to a new person: asked first, naming them. An empty subject marks the typed one.
+                  if (asksFirst(undefined, grantRole)) setConfirming({ subject: '', to: grantRole })
+                  else void grantTypedMember()
+                }}
+              >
                 {t('ui.accorder')}
               </button>
             </div>

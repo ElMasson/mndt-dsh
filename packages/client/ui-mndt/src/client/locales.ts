@@ -345,6 +345,10 @@ export const en = {
   'shell.role-admin': 'Admin',
   'shell.role-operator': 'Operator',
   'shell.role-viewer': 'Reader',
+  'ui.confirmer': 'Confirm',
+  'ui.confirmer-le-role': 'Confirm the role',
+  'ui.confirmer-promotion': 'Make {name} {role}?',
+  'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -694,6 +698,10 @@ export const fr: Record<MndtKey, string> = {
   'shell.role-admin': 'Admin',
   'shell.role-operator': 'Opérateur',
   'shell.role-viewer': 'Lecteur',
+  'ui.confirmer': 'Confirmer',
+  'ui.confirmer-le-role': 'Confirmer le rôle',
+  'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
+  'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
 }
 
 /** Substitution values for a message. */
