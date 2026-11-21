@@ -176,7 +176,9 @@ if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environmen
 else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
 # The negative witness: what an operator's clone could bring, planted on purpose in a
 # throwaway container of the image, must be found, or the scan proves nothing.
-witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && printf -- "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n" > /app/witness/deploy_key && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
+# The planted key's header is assembled at run time (printf %s): this script is
+# copied into the image, and its own text must not match the scan it runs.
+witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && printf -- "-----BEGIN OPENSSH %s KEY-----\nb3BlbnNzaA==\n" PRIVATE > /app/witness/deploy_key && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
 caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/witness/.env' -e '/app/witness/notes.txt' -e '/app/witness/readme.md' -e '/app/witness/deploy_key')
 if [ "$caught" -ge 5 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line, sk-ant- key and private key are all found"
 else echo "KO  scan-witness   the scan missed a planted secret ($caught of 5 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
