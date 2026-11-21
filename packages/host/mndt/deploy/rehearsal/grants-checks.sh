@@ -9,7 +9,9 @@ data=${1:?data folder}; project=${2:?project}; owner=${3:?owner}; viewer=${4:?vi
 base=http://127.0.0.1:18080/mndt-api
 ko=0
 saved=$(mktemp); cp "$data/grants.json" "$saved"
-trap 'cp "$saved" "$data/grants.json"; rm -f "$saved"' EXIT
+state_saved=$(mktemp); cp "$data/state.json" "$state_saved"
+# The role file and the state are put back as they were, whatever happens.
+trap 'cp "$saved" "$data/grants.json"; cp "$state_saved" "$data/state.json"; rm -f "$saved" "$state_saved"' EXIT
 check() { if [ "$2" = 1 ]; then echo "OK  $1  $3"; else echo "KO  $1  $3"; ko=$((ko + 1)); fi; }
 # GET as a person; extra headers as forged by a browser. Prints "<status> <body>".
 get() { local who=$1 path=$2; shift 2; curl -s -w '\n%{http_code}' -H "x-forwarded-email: $who" "$@" "$base$path" | { body=$(cat); echo "$(echo "$body" | tail -1) $(echo "$body" | sed '$d' | tr -d '\n')"; }; }
@@ -55,9 +57,16 @@ card=$(curl -s -X POST -H "x-forwarded-email: $owner" -H 'x-mndt-run: trn_forged
   --data '{"kind":"publish","title":"Carte forgee","payload":{}}' "$base/approvals")
 check forged-run "$(echo "$card" | grep -q '"approval"' && echo "$card" | grep -vq 'requestedByAgent' && echo "$card" | grep -vq '"channelId"' && echo 1)" "a card with a forged x-mndt-run names no agent, no thread"
 
-# 6. /metrics, read by a viewer and by the owner.
+# 6. /metrics, read by a viewer and by the owner: the owner's private card of
+# step 5 (outside any channel) is counted and dated for the owner, not for the
+# viewer, who must not learn of it.
 m_owner=$(get $owner /metrics); m_viewer=$(get $viewer /metrics)
-check metrics-reader "$(echo "$m_owner" | grep -q '^200 ' && echo "$m_viewer" | grep -q '^200 ' && echo 1)" "owner: $(echo "$m_owner" | grep -o '"approvalsPending":[0-9]*'), viewer: $(echo "$m_viewer" | grep -o '"approvalsPending":[0-9]*,"oldest[^,]*,"activeMandates":[0-9]*')"
+pending_owner=$(echo "$m_owner" | grep -o '"approvalsPending":[0-9]*' | cut -d: -f2)
+pending_viewer=$(echo "$m_viewer" | grep -o '"approvalsPending":[0-9]*' | cut -d: -f2)
+last_owner=$(echo "$m_owner" | grep -o '"lastEventAt":[^,}]*' | cut -d: -f2-)
+last_viewer=$(echo "$m_viewer" | grep -o '"lastEventAt":[^,}]*' | cut -d: -f2-)
+check metrics-reader "$(echo "$m_owner" | grep -q '^200 ' && echo "$m_viewer" | grep -q '^200 ' && [ "${pending_owner:-0}" -gt "${pending_viewer:-0}" ] && [ "$last_owner" != "$last_viewer" ] && echo 1)" \
+  "approvalsPending owner $pending_owner / viewer $pending_viewer, lastEventAt owner $last_owner / viewer $last_viewer"
 
 # 7. A mandate to oneself in other capitals, loaded at start: retired, no crash.
 python3 - "$data/state.json" "$owner" <<'PY'

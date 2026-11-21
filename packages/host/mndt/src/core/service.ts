@@ -189,7 +189,13 @@ export class WorkbenchService {
       this.#state = { ...loaded, mandates, ...(channels === undefined ? {} : { channels }) }
       this.#loaded = true
       // Recorded once: a mandate retired on load is said at this start only, not at every start.
-      if (retiredOnLoad > 0) await this.#options.store.save(this.#state)
+      // Through the write chain, behind any write already queued: never a save
+      // that races another one.
+      if (retiredOnLoad > 0) {
+        const recorded = this.#state
+        const save = this.#chain.then(() => this.#options.store.save(recorded))
+        this.#chain = save.catch(() => undefined)
+      }
     }
     return this.#state
   }
