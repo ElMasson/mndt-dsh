@@ -24,7 +24,7 @@ import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
-import { can, roleOf } from './policy.ts'
+import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
@@ -1169,11 +1169,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }
+        let next: 'viewer' | 'operator' | 'admin' | 'owner' | undefined
         if (path === '/members/grant') {
           if (input.role !== 'viewer' && input.role !== 'operator' && input.role !== 'admin' && input.role !== 'owner') {
             return respond(400, { error: 'role must be viewer, operator, admin or owner' })
           }
+          next = input.role
           body.role = input.role
+        }
+        // The authority is called with this deployment's token, not the caller's:
+        // who may change whose role is decided here, on the current table.
+        const table = await grants.grants()
+        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        const before = roleOf(table.grants, subject)
+        const refusal = roleChangeRefusal(table.grants, identity, subject, next)
+        if (refusal !== undefined) {
+          await service.recordRoleChange(identity, subject, { before, after: next, outcome: `refused: ${refusal.reason}` })
+          return respond(refusal.status, { error: refusal.reason })
         }
         let answer: { status: number; body: unknown }
         try {
@@ -1188,8 +1200,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           })
           answer = { status: response.status, body: await response.json().catch(() => ({})) }
         } catch (error) {
+          await service.recordRoleChange(identity, subject, { before, after: next, outcome: 'not applied: authority unreachable' })
           return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
         }
+        await service.recordRoleChange(identity, subject, {
+          before,
+          after: next,
+          outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
+        })
         return respond(answer.status, answer.body)
       }
 
