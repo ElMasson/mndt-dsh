@@ -369,6 +369,8 @@ export const CSS = `
 .mndt-message-markdown h3, .mndt-message-markdown h4 { margin: 8px 0 4px; font-family: "Space Grotesk", Inter, sans-serif; font-size: 15px; }
 .mndt-message-markdown ul { margin: 4px 0 6px 18px; padding: 0; }
 .mndt-message-markdown code { background: #F0EFED; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.mndt-message-markdown pre.md-code, .mndt-brief-body pre.md-code { margin: 6px 0; max-width: 100%; overflow-x: auto; padding: 8px 10px; background: #F0EFED; border-radius: 8px; }
+.mndt-message-markdown pre.md-code code, .mndt-brief-body pre.md-code code { padding: 0; background: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre; }
 .mndt-message-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
 .mndt-message-markdown th, .mndt-message-markdown td { border-bottom: 1px solid #E2E4E9; padding: 5px 8px; text-align: left; vertical-align: top; white-space: nowrap; }
 .mndt-message-markdown th { font-weight: 600; background: #F0EFED; }
