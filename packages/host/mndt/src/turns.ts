@@ -15,9 +15,11 @@ import type {
   Channel,
   Message,
   Mission,
+  ParallelSynthesis,
   Turn,
   TurnStep,
   WorkbenchService,
+  WorkerPart,
 } from './core/index.ts'
 import {
   ceilingRefusal,
@@ -26,6 +28,7 @@ import {
   priceOf,
   revisionPrompt,
   spentThisMonth,
+  synthesisPrompt,
   turnPrompt,
   turnServers,
   verifierPrompt,
@@ -160,6 +163,85 @@ export class TurnScheduler {
     }
   }
 
+  /**
+   * A « en parallèle puis synthèse » turn: each worker in order (one engine at a
+   * time), then the synthesis. A worker that cannot run (gone, at its ceiling,
+   * past the turn's cost bound, failed) is recorded and named as missing; the
+   * synthesis step has no tool and receives the parts as data between a mark
+   * drawn after they were written. Without a synthesis (no part, or the
+   * synthesizer at a bound), the parts go out as they are, and the text says so.
+   */
+  async #parallel(input: {
+    readonly coordination: ParallelSynthesis
+    readonly synthesizer: Agent
+    readonly channel: Channel
+    readonly message: Message
+    readonly history: readonly Message[]
+    readonly agents: readonly Agent[]
+    readonly call: (who: Agent, suffix: string, text: string, reading?: boolean) => Promise<{ output: TurnOutput; eur: number | undefined }>
+  }): Promise<{ output: TurnOutput; steps: TurnStep[]; note?: string }> {
+    const { coordination, synthesizer, channel, message, history, agents, call } = input
+    const { service, prices } = this.#options
+    const steps: TurnStep[] = []
+    const parts: WorkerPart[] = []
+    const missing: string[] = []
+    let spent = 0
+    for (const [index, workerId] of coordination.workerIds.entries()) {
+      const worker = agents.find(candidate =>
+        candidate.id === workerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
+      const name = worker === undefined ? workerId : `@${worker.handle}`
+      const why = worker === undefined
+        ? 'n’est plus un agent actif de ce canal'
+        : spent >= coordination.maxEurPerTurn
+          ? `le coût du tour a atteint sa borne (${coordination.maxEurPerTurn} €)`
+          : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
+      if (worker === undefined || why !== undefined) {
+        steps.push({ role: 'worker', agentId: workerId, verdict: 'skipped', notes: [why ?? 'indisponible'] })
+        missing.push(`${name} (${why ?? 'indisponible'})`)
+        continue
+      }
+      let answered: { output: TurnOutput; eur: number | undefined }
+      try {
+        answered = await call(worker, `w${index + 1}`, turnPrompt(worker, channel, history, message, agents))
+      } catch (error) {
+        if (error instanceof Error && error.message === 'turn stopped') throw error
+        const reason = error instanceof Error ? error.message : String(error)
+        steps.push({ role: 'worker', agentId: worker.id, verdict: 'skipped', notes: [reason] })
+        missing.push(`${name} (${reason})`)
+        continue
+      }
+      spent += answered.eur ?? 0
+      steps.push({
+        role: 'worker', agentId: worker.id,
+        ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
+        ...(answered.eur === undefined ? {} : { eur: answered.eur }),
+      })
+      if (answered.output.text.trim() === '') missing.push(`${name} (aucun texte)`)
+      else parts.push({ handle: worker.handle, text: answered.output.text })
+    }
+    const asIs = (): string => parts.map(part => `Part de @${part.handle} :\n${part.text}`).join('\n\n')
+    if (parts.length === 0) {
+      return { output: { text: `Aucune part n’a abouti : ${missing.join(' ; ')}.` }, steps }
+    }
+    const synthesisRefusal = spent >= coordination.maxEurPerTurn
+      ? `le coût du tour a atteint sa borne (${coordination.maxEurPerTurn} €)`
+      : ceilingRefusal(synthesizer, prices,
+        spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
+    if (synthesisRefusal !== undefined) {
+      steps.push({ role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [synthesisRefusal] })
+      return { output: { text: asIs() }, steps, note: `Non synthétisé : ${synthesisRefusal}.` }
+    }
+    const mark = randomUUID().slice(0, 8)
+    const synthesis = await call(synthesizer, 's', synthesisPrompt(synthesizer, channel, message, parts, missing, mark), true)
+    steps.push({
+      role: 'synthesis', agentId: synthesizer.id,
+      ...(synthesis.output.tokens === undefined ? {} : { tokens: synthesis.output.tokens }),
+      ...(synthesis.eur === undefined ? {} : { eur: synthesis.eur }),
+    })
+    if (synthesis.output.text.trim() === '') return { output: { text: asIs() }, steps, note: 'Non synthétisé : la synthèse n’a produit aucun texte.' }
+    return { output: synthesis.output, steps }
+  }
+
   /** @returns once every queued turn has settled (for tests and shutdown). */
   async settled(): Promise<void> {
     while (this.#pending.size > 0) await Promise.all([...this.#pending])
@@ -274,7 +356,17 @@ export class TurnScheduler {
         const price = priceOf(prices, who)
         return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price) }
       }
-      const first = await call(agent, '', prompt)
+      // « En parallèle puis synthèse »: a turn of the channel's synthesizer has each
+      // worker answer on its own (its own connectors, its own ceiling), then the
+      // synthesizer assembles their parts with NO tool. Bounded: 2 to 4 workers,
+      // workers + 1 calls, and the channel's cost bound for the whole turn.
+      const parallelMode = channel.coordination?.mode === 'parallel-synthesis' && channel.coordination.synthesizerId === agent.id
+        ? channel.coordination
+        : undefined
+      const parallel = parallelMode === undefined ? undefined : await this.#parallel({
+        coordination: parallelMode, synthesizer: agent, channel, message, history, agents, call,
+      })
+      const first = parallel === undefined ? await call(agent, '', prompt) : { output: parallel.output, eur: undefined }
       if (first.output.text.trim() === '')
         throw new Error('l’agent n’a produit aucun texte')
       // « Auteur puis vérificateur »: a turn of the channel's author is checked by
@@ -282,7 +374,7 @@ export class TurnScheduler {
       // at most three calls, each step priced for its own agent and bounded by
       // its own ceiling. A check that cannot happen says why; the draft goes out.
       let output = first.output
-      let steps: TurnStep[] | undefined
+      let steps: TurnStep[] | undefined = parallel?.steps
       const coordination = channel.coordination
       if (coordination?.mode === 'author-verifier' && coordination.authorId === agent.id) {
         steps = [{ role: 'author', agentId: agent.id, ...(first.output.tokens === undefined ? {} : { tokens: first.output.tokens }), ...(first.eur === undefined ? {} : { eur: first.eur }) }]
@@ -339,11 +431,13 @@ export class TurnScheduler {
       // Remarks found but not corrected (the author's ceiling): said in the text too.
       const uncorrected = steps?.find(step => step.role === 'revision' && step.verdict === 'skipped')
       const remarks = steps?.find(step => step.role === 'verifier' && step.verdict === 'issues')?.notes ?? []
-      const published = unchecked !== undefined
-        ? `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
-        : uncorrected !== undefined
-          ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
-          : output.text
+      const published = parallel?.note !== undefined
+        ? `${output.text}\n\n${parallel.note}`
+        : unchecked !== undefined
+          ? `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
+          : uncorrected !== undefined
+            ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
+            : output.text
       await service.reply(
         channel.id,
         messageId,

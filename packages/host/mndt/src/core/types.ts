@@ -228,15 +228,39 @@ export interface Channel {
  * verifier, an agent of ANOTHER model, against the request; the author corrects
  * once if the verifier finds something. A host script, never an agent's choice.
  */
-export interface Coordination {
+export type Coordination = AuthorVerifier | ParallelSynthesis
+
+/** « Auteur puis vérificateur ». */
+export interface AuthorVerifier {
   readonly mode: 'author-verifier'
   readonly authorId: string
   readonly verifierId: string
 }
 
+/**
+ * « En parallèle puis synthèse » (lot 2): a turn of the synthesizer has each
+ * worker (2 to 4) answer the request on its own, with its own connectors, then
+ * the synthesizer, with NO tool, assembles their parts and says where they
+ * disagree. Bounded in agents, in calls (workers + 1) and in euros per turn.
+ */
+export interface ParallelSynthesis {
+  readonly mode: 'parallel-synthesis'
+  readonly workerIds: readonly string[]
+  readonly synthesizerId: string
+  /** The most one such turn may cost, all steps together, in euros. */
+  readonly maxEurPerTurn: number
+}
+
+/** @param coordination - a channel's coordination. @returns the agents it engages. */
+export function coordinationAgents(coordination: Coordination): readonly string[] {
+  return coordination.mode === 'author-verifier'
+    ? [coordination.authorId, coordination.verifierId]
+    : [...coordination.workerIds, coordination.synthesizerId]
+}
+
 /** One step of a coordinated turn: who did what, at what cost. */
 export interface TurnStep {
-  readonly role: 'author' | 'verifier' | 'revision'
+  readonly role: 'author' | 'verifier' | 'revision' | 'worker' | 'synthesis'
   readonly agentId: string
   readonly tokens?: Mission['tokens']
   readonly eur?: number
