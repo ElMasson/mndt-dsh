@@ -8,6 +8,7 @@
  * was deleted, or whose agent left the channel, stops: before it starts, while
  * it runs (its engine is aborted), and before its answer is written.
  */
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
   Agent,
@@ -43,6 +44,13 @@ export interface TurnInput {
   readonly cwd: string
   /** The MCP servers the turn may use: the agent's that the channel allows. */
   readonly servers: readonly string[]
+  /** « none »: a step that only reads what it is given (a verifier): no server, no tool. */
+  readonly tools?: 'none'
+  /**
+   * The turn a step belongs to: a card asked during a step is filed in that
+   * turn's thread (x-mndt-run), not outside any channel.
+   */
+  readonly runId?: string
   /** Aborted when the turn must stop. */
   readonly signal: AbortSignal
 }
@@ -239,16 +247,28 @@ export class TurnScheduler {
       const agents = await service.listAgents(true)
       const prompt = turnPrompt(agent, channel, history, message, agents)
       const actor = message.author.kind === 'human' ? message.author.email : ''
-      /** One call of the engine for one agent, priced with that agent's model. */
-      const call = async (who: Agent, suffix: string, text: string): Promise<{ output: TurnOutput; eur: number | undefined }> => {
+      /**
+       * One call of the engine for one agent, priced with that agent's model. A
+       * reading step (the verifier) runs with no server and no tool. Every step
+       * files its cards in the thread of this turn. The turn stops between steps.
+       */
+      const call = async (
+        who: Agent,
+        suffix: string,
+        text: string,
+        reading = false,
+      ): Promise<{ output: TurnOutput; eur: number | undefined }> => {
+        if (controller.signal.aborted) throw new Error('turn stopped')
         const output = await engine.run({
           turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
+          runId: turn.id,
           agent: who,
           channel,
           actor,
           prompt: text,
           cwd: channelFolder(dataDir, channel.id),
-          servers: turnServers(who, channel),
+          servers: reading ? [] : turnServers(who, channel),
+          ...(reading ? { tools: 'none' as const } : {}),
           signal: controller.signal,
         })
         const price = priceOf(prices, who)
@@ -277,7 +297,8 @@ export class TurnScheduler {
         } else if (spent !== undefined) {
           steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
         } else {
-          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text))
+          const mark = randomUUID().slice(0, 8)
+          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark), true)
           const verdict = parseVerdict(checked.output.text)
           steps.push({
             role: 'verifier', agentId: verifier.id, verdict: verdict.kind,
@@ -285,8 +306,15 @@ export class TurnScheduler {
             ...(checked.output.tokens === undefined ? {} : { tokens: checked.output.tokens }),
             ...(checked.eur === undefined ? {} : { eur: checked.eur }),
           })
-          if (verdict.kind === 'issues') {
-            const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues))
+          // The author's own ceiling, again, before it pays for a correction.
+          const authorRefusal = verdict.kind === 'issues'
+            ? ceilingRefusal(agent, prices,
+              spentThisMonth((await service.snapshot()).messages ?? [], agent.id, new Date().toISOString()) + (first.eur ?? 0))
+            : undefined
+          if (verdict.kind === 'issues' && authorRefusal !== undefined) {
+            steps.push({ role: 'revision', agentId: agent.id, verdict: 'skipped', notes: [authorRefusal] })
+          } else if (verdict.kind === 'issues') {
+            const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, mark))
             steps.push({
               role: 'revision', agentId: agent.id,
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
@@ -302,11 +330,17 @@ export class TurnScheduler {
         return
       }
       const eur = steps === undefined ? first.eur : sumEur(steps)
+      const tokens = steps === undefined ? output.tokens : sumTokens(steps)
+      // A check that did not happen, or could not be read, is said in the text itself.
+      const unchecked = steps?.find(step => step.role === 'verifier' && (step.verdict === 'skipped' || step.verdict === 'unreadable'))
+      const published = unchecked === undefined
+        ? output.text
+        : `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
       await service.reply(
         channel.id,
         messageId,
         { kind: 'agent', agentId: agent.id },
-        output.text,
+        published,
       )
       await service.updateTurn(messageId, turn.id, {
         status: 'done',
@@ -314,7 +348,7 @@ export class TurnScheduler {
         ...(output.sessionId === undefined
           ? {}
           : { sessionId: output.sessionId }),
-        ...(output.tokens === undefined ? {} : { tokens: output.tokens }),
+        ...(tokens === undefined ? {} : { tokens }),
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
       })
@@ -340,4 +374,20 @@ function sumEur(steps: readonly TurnStep[]): number | undefined {
   const priced = steps.filter(step => step.eur !== undefined)
   if (priced.length === 0) return undefined
   return Math.round(priced.reduce((total, step) => total + (step.eur ?? 0), 0) * 1_000_000) / 1_000_000
+}
+
+/** @param steps - a coordinated turn's steps. @returns their tokens added up, or undefined when none counted. */
+function sumTokens(steps: readonly TurnStep[]): TurnStep['tokens'] {
+  const counted = steps.map(step => step.tokens).filter((tokens): tokens is NonNullable<TurnStep['tokens']> => tokens !== undefined)
+  if (counted.length === 0) return undefined
+  return counted.reduce((total, tokens) => ({
+    input: total.input + tokens.input,
+    output: total.output + tokens.output,
+    ...(total.cacheRead === undefined && tokens.cacheRead === undefined
+      ? {}
+      : { cacheRead: (total.cacheRead ?? 0) + (tokens.cacheRead ?? 0) }),
+    ...(total.cacheWrite === undefined && tokens.cacheWrite === undefined
+      ? {}
+      : { cacheWrite: (total.cacheWrite ?? 0) + (tokens.cacheWrite ?? 0) }),
+  }))
 }
