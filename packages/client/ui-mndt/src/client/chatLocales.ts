@@ -175,6 +175,7 @@ export const chatEn = {
   agentChangedMeanwhile: 'This agent was changed meanwhile: open its sheet again to see it as it is.',
   agentGone: 'This agent no longer exists.',
   proposeAgentTitle: 'Create the agent {name}',
+  proposeAgentOwnerOnly: 'Above {max} EUR a month, only the owner validates this agent.',
 } as const
 
 /** One copy key. */
@@ -350,6 +351,7 @@ export const chatFr: Record<ChatKey, string> = {
   agentChangedMeanwhile: 'Cet agent a été modifié entre-temps : rouvrez sa fiche pour le voir tel qu\'il est.',
   agentGone: 'Cet agent n\'existe plus.',
   proposeAgentTitle: 'Créer l\'agent {name}',
+  proposeAgentOwnerOnly: 'Au-dessus de {max} € par mois, seul l\'owner peut valider cet agent.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

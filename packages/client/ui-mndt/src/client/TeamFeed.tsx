@@ -10,7 +10,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
-import { AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
+import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
@@ -132,11 +132,16 @@ export function WebCard(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The connectors mounted, to say which ones a proposed agent would carry but cannot use. */
   readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether the reader owns the team: only the owner validates a proposed ceiling above 5 EUR. */
+  readonly isOwner?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
   const state = card.state ?? 'pending'
   const proposal = card.kind === 'propose_agent' ? proposalOf(card.proposal) : undefined
+  // The core accepts a proposed ceiling above 5 EUR only from the owner: an admin is told before
+  // clicking, and only « Refuser » stays offered to them.
+  const ownerOnly = proposal !== undefined && (proposal.eurPerMonth ?? 0) > ADMIN_CEILING_EUR && props.isOwner !== true
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -186,8 +191,9 @@ export function WebCard(props: {
             />
           </label>
           {missing ? <p role="alert" className="mw-decide-error">{t('webReasonMissing')}</p> : undefined}
+          {ownerOnly ? <p className="mw-decide-error" data-testid="proposal-owner-only">{t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })}</p> : undefined}
           <div className="mw-decide-buttons">
-            <button type="button" className="mw-primary" disabled={busy} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
+            <button type="button" className="mw-primary" disabled={busy || ownerOnly} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
             <button type="button" className="mw-secondary" disabled={busy} onClick={() => { void decide('rejected') }}>{t('webRefuse')}</button>
           </div>
           {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
@@ -213,6 +219,7 @@ export function WebMessage(props: {
   readonly onPending?: (() => void) | undefined
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly mounted?: readonly MountedConnector[] | undefined
+  readonly isOwner?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { message: m, agents, t } = props
@@ -275,6 +282,7 @@ export function WebMessage(props: {
           onDecide={props.onDecide}
           names={props.names}
           mounted={props.mounted}
+          isOwner={props.isOwner}
           t={t}
         />
       ))}

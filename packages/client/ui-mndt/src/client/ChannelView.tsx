@@ -333,6 +333,8 @@ export function ChannelThread(props: {
   readonly onPending?: (() => void) | undefined
   /** The connectors mounted, for a card that proposes an agent (the mndt-web look). */
   readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether the reader owns the team (the mndt-web look). */
+  readonly isOwner?: boolean | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const web = props.look === 'mndt-web'
@@ -440,6 +442,7 @@ export function ChannelThread(props: {
                 onPending={props.onPending}
                 names={props.names}
                 mounted={props.mounted}
+                isOwner={props.isOwner}
                 t={t}
               />
             </div>

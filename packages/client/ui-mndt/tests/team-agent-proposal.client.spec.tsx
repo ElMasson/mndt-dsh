@@ -49,6 +49,22 @@ describe('a card that proposes an agent', () => {
     await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined) })
   })
 
+  it('above 5 EUR, an admin is told only the owner validates, and may only refuse; the owner validates', async () => {
+    const rich = card({ proposal: { ...proposal, eurPerMonth: 20 } })
+    const { unmount } = render(<WebCard card={rich} canDecide onDecide={vi.fn()} mounted={mounted} t={chatFrench} />)
+    expect(screen.getByTestId('proposal-owner-only').textContent).toBe('Au-dessus de 5 € par mois, seul l\'owner peut valider cet agent.')
+    const validate = screen.getByRole('button', { name: 'Valider' })
+    expect(validate instanceof HTMLButtonElement && validate.disabled).toBe(true)
+    const refuse = screen.getByRole('button', { name: 'Refuser' })
+    expect(refuse instanceof HTMLButtonElement && refuse.disabled).toBe(false)
+    unmount()
+    const onDecide = vi.fn(async () => undefined)
+    render(<WebCard card={rich} canDecide isOwner onDecide={onDecide} mounted={mounted} t={chatFrench} />)
+    expect(screen.queryByTestId('proposal-owner-only')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
+    await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined) })
+  })
+
   it('a malformed proposal falls back to the card as served, never a half sheet', () => {
     render(<WebCard card={card({ proposal: { name: 'X' }, title: 'Proposition illisible' })} canDecide onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.queryByTestId('agent-sheet-view')).toBeNull()
