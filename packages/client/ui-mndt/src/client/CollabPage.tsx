@@ -485,9 +485,15 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const theirs = MEMBER_ROLES.find(r => r === role)
     return subject !== state?.you && theirs !== undefined && below(theirs)
   }
-  // On the team instance the roles come from the role file, kept by the owner: the Host answers 503
-  // to a grant or a revoke, and the page then stops offering them.
-  const [rolesFromFile, setRolesFromFile] = useState(false)
+  // On the team instance the roles come from the role file, kept by the owner: `/state` says so
+  // (`rolesFrom: "file"`), or a grant or a revoke is refused with 503 `no-authority`; the page then
+  // stops offering them. Any other 503 (a role file that cannot be read) stays an error, with its
+  // reason: the owner must see a broken file.
+  const [refusedForFile, setRefusedForFile] = useState(false)
+  const rolesFromFile = state?.rolesFrom === 'file' || refusedForFile
+  /** @param result - a refused grant or revoke. @returns whether it says the roles live in the file. */
+  const noAuthority = (result: { readonly status?: number; readonly code?: string; readonly error?: string }): boolean =>
+    result.status === 503 && (result.code === undefined ? (result.error ?? '').startsWith('no team authority') : result.code === 'no-authority')
   /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
   const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
     to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
@@ -515,7 +521,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.grantMember(subject, role)
-      if (!result.ok && result.status === 503) setRolesFromFile(true)
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
       else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
       else {
         setAdminNotice(`${subject} : ${role}`)
@@ -536,7 +542,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminNotice(undefined)
     try {
       const result = await api.grantMember(subject, grantRole)
-      if (!result.ok && result.status === 503) setRolesFromFile(true)
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
       else if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
       else {
         setAdminNotice(`${subject} : ${grantRole}`)
@@ -556,7 +562,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.revokeMember(subject)
-      if (!result.ok && result.status === 503) setRolesFromFile(true)
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
       else if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
       else {
         setAdminNotice(`${subject} : acces retire`)

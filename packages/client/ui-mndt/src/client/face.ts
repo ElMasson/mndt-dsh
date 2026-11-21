@@ -106,6 +106,8 @@ export interface PageStateRow {
   readonly you: string
   readonly canWrite: boolean
   readonly role?: string
+  /** Where the roles come from: `file` when they are kept in the role file by the owner (no grant route). */
+  readonly rolesFrom?: unknown
   readonly canAdmin?: boolean
   readonly canShare?: boolean
   readonly missions: readonly MissionRow[]
@@ -144,6 +146,8 @@ export interface OutcomeRow<T> {
   readonly error?: string
   /** The HTTP status of a refusal, when the Host answered one. */
   readonly status?: number
+  /** The refusal's code, when the Host serves one (`no-authority`, …). */
+  readonly code?: string
 }
 
 /** One mounted connector, as the page reads it. */

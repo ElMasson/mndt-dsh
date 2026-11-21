@@ -53,7 +53,7 @@ export class FaceRefusal extends Error {
    * @param message - the Host's `{ error }`, or the status said in words.
    * @param status - the HTTP status.
    */
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'FaceRefusal'
   }
@@ -70,7 +70,10 @@ async function bodyOf<T>(response: Response): Promise<T> {
     const reason = typeof body === 'object' && body !== null && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
       ? (body as { error: string }).error
       : `the Host refused the call (${response.status})`
-    throw new FaceRefusal(reason, response.status)
+    const code = typeof body === 'object' && body !== null && 'code' in body && typeof (body as { code?: unknown }).code === 'string'
+      ? (body as { code: string }).code
+      : undefined
+    throw new FaceRefusal(reason, response.status, code)
   }
   return body as T
 }
@@ -84,7 +87,8 @@ async function outcomeOf<T>(work: () => Promise<T>): Promise<OutcomeRow<T>> {
   try {
     return { ok: true, value: await work() }
   } catch (error) {
-    return { ok: false, error: messageOf(error), ...(error instanceof FaceRefusal ? { status: error.status } : {}) }
+    if (!(error instanceof FaceRefusal)) return { ok: false, error: messageOf(error) }
+    return { ok: false, error: messageOf(error), status: error.status, ...(error.code === undefined ? {} : { code: error.code }) }
   }
 }
 
