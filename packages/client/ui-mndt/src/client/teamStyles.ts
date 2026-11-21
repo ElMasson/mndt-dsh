@@ -428,6 +428,11 @@ export const TEAM_CSS = `
 .mw-sheet-view dt { color: var(--mw-slate); font-size: 13px; }
 .mw-sheet-view dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .mw-sheet-purpose { white-space: pre-wrap; }
+/* On a phone the proposed sheet reads label above value, not in two cramped columns. */
+@media (max-width: 639px) {
+  .mw-sheet-view { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .mw-sheet-view dd { margin-bottom: 8px; }
+}
 .mw-app .mw-pill-static { cursor: default; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
