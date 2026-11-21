@@ -522,6 +522,28 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     expect(await screen.findByTestId('roles-from-file')).toBeTruthy()
   })
 
+  it('grants-unreadable and the authority\'s 504 are errors in words, the buttons stay', async () => {
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'line 4: unknown role', status: 503, code: 'grants-unreadable' }) as never)
+    await admin('owner', 'duke@datanalysis.re')
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect(await screen.findByText('La table des rôles est illisible : line 4: unknown role')).toBeTruthy()
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'the authority did not answer within 10 s', status: 504 }) as never)
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect(await screen.findByText('L\'autorité d\'équipe n\'a pas répondu en 10 s : le rôle est inchangé.')).toBeTruthy()
+    expect(screen.queryByTestId('roles-from-file')).toBeNull()
+  })
+
+  it('/state rolesFrom « local »: a solo station, said, and no button', async () => {
+    const api = fakeFace({
+      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'local' }),
+      members: async () => [{ subject: 'duke@datanalysis.re', role: 'owner' }],
+      grantMember,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    expect((await screen.findByTestId('roles-from-file')).textContent).toBe('Ce poste n\'a qu\'un owner : il n\'y a pas de rôle à changer ici.')
+  })
+
   it('/state says it ahead: no role button from the start', async () => {
     grantMember.mockClear()
     const api = fakeFace({
