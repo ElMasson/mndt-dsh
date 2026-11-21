@@ -8,15 +8,15 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
+import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector, OfferedModel } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
-import { TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
+import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
@@ -61,6 +61,22 @@ export interface CollabPageProps {
   readonly team?: TeamFrame | undefined
   /** A channel's documents (the team frame); absent, the section says « Bientôt ». */
   readonly documents?: DocumentsFace | undefined
+}
+
+/**
+ * @param message - the core's sentence refusing a decision. @param t - the copy.
+ * @returns it in the page's words where the sentence is known (#82), else as served.
+ */
+export function decisionRefusal(message: string, t: ChatTranslate): string {
+  const taken = /the handle @(\S+) is taken/u.exec(message)
+  if (taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
+  if (message.includes('only the owner gives an agent a ceiling above')) return t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })
+  const unmounted = /connector not mounted: (.+)$/u.exec(message)
+  if (unmounted !== null) return t('connNotMounted', { names: unmounted[1] ?? '' })
+  const model = /model not offered: (.+)$/u.exec(message)
+  if (model !== null) return t('proposeAgentModelGone', { model: model[1] ?? '' })
+  if (message.includes('approve it from a screen that shows the whole proposal')) return t('proposeAgentUnreadable')
+  return message
 }
 
 /**
@@ -198,6 +214,16 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // `absent`: the route is not served here, and nothing is marked « non branché » for that.
   const [mounted, setMounted] = useState<readonly MountedConnector[] | 'absent' | undefined>(undefined)
   const [mountedError, setMountedError] = useState<string | undefined>(undefined)
+  // The models the core offers (#82); undefined while unknown or not served.
+  const [offered, setOffered] = useState<readonly OfferedModel[] | undefined>(undefined)
+  const loadOffered = useCallback(async () => {
+    if (team === undefined || chat?.models === undefined) return
+    try {
+      setOffered(await chat.models())
+    } catch {
+      setOffered(undefined)
+    }
+  }, [team, chat])
   const loadMounted = useCallback(async () => {
     if (team === undefined || chat?.mounted === undefined) return
     try {
@@ -215,6 +241,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     if (chat === undefined) return
     void loadCards()
     void loadMounted()
+    void loadOffered()
     const started = Date.now()
     try {
       const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
@@ -233,7 +260,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
-  }, [chat, tc, loadCards, loadMounted])
+  }, [chat, tc, loadCards, loadMounted, loadOffered])
 
   useEffect(() => {
     void loadChat()
@@ -361,15 +388,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     }
   }, [chat, chatId, tc, mounted])
 
-  const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
-    const outcome = await api.decide(id, decision, reason)
+  const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions): Promise<string | undefined> => {
+    const outcome = await api.decide(id, decision, reason, options)
     if (outcome.ok) {
       void load()
       void loadCards()
+      // An approved proposal created an agent: the list is read again.
+      if (decision === 'approved' && options?.showsProposal === true && chat !== undefined) void chat.agents().then(setChatAgents, () => undefined)
       return undefined
     }
-    return outcome.error ?? decision
-  }, [api, load, loadCards])
+    // A model or a connector gone since the card was drawn: both lists are read again, and the card
+    // then offers « Refuser » only — no second try of what the core just refused.
+    if (options?.showsProposal === true) {
+      void loadOffered()
+      void loadMounted()
+    }
+    return decisionRefusal(outcome.error ?? decision, tc)
+  }, [api, load, loadCards, chat, tc, loadOffered, loadMounted])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
@@ -1179,6 +1214,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                   names={team.names}
                   onPending={() => { setView('pending') }}
+                  mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
+                  isOwner={state.role === 'owner'}
+                  offered={offered}
                   look="mndt-web"
                 />
               </section>
@@ -1611,6 +1649,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             canDecide={card.canDecide ?? state.canAdmin === true}
                             onDecide={decideCard}
                             names={team.names}
+                            mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
+                            isOwner={state.role === 'owner'}
+                            offered={offered}
                             t={tc}
                           />
                         </div>

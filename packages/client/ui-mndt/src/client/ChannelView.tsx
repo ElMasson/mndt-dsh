@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
+import type { DecideOptions } from './face.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
@@ -40,6 +41,8 @@ export interface ThreadCard extends ApprovalRow {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them. */
   readonly canDecide?: boolean
+  /** What the card proposes to declare, when an agent proposes an agent. */
+  readonly proposal?: unknown
   /** The mission that asked for it, when one did. */
   readonly missionId?: string
   /** The agent whose turn asked for it, when one did. */
@@ -195,7 +198,7 @@ function TurnLine(props: {
 export function CardView(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -251,7 +254,7 @@ function MessageView(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   readonly t: ChatTranslate
 }): ReactNode {
@@ -312,7 +315,7 @@ export function ChannelThread(props: {
   readonly agents: readonly ChatAgent[]
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   /** Why the cards could not be read: said in the thread, never shown as « no card ». */
   readonly cardsError?: string | undefined
@@ -329,6 +332,12 @@ export function ChannelThread(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** Open À traiter, where the waiting cards are (the mndt-web look). */
   readonly onPending?: (() => void) | undefined
+  /** The connectors mounted, for a card that proposes an agent (the mndt-web look). */
+  readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether the reader owns the team (the mndt-web look). */
+  readonly isOwner?: boolean | undefined
+  /** The models the core offers, for a card that proposes an agent (the mndt-web look). */
+  readonly offered?: readonly OfferedModel[] | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const web = props.look === 'mndt-web'
@@ -435,6 +444,9 @@ export function ChannelThread(props: {
                 onRemove={removeOf(m)}
                 onPending={props.onPending}
                 names={props.names}
+                mounted={props.mounted}
+                isOwner={props.isOwner}
+                offered={props.offered}
                 t={t}
               />
             </div>
