@@ -786,7 +786,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             provider: field('provider') ?? '',
             model: field('model') ?? '',
             ...(field('instructions') === undefined ? {} : { instructions: field('instructions') as string }),
-            ...(raw.connectors === undefined ? {} : { connectors: strings(raw.connectors) }),
+            ...(raw.connectors === undefined ? {} : { connectors: Array.isArray(raw.connectors) ? raw.connectors.filter((server): server is string => typeof server === 'string') : [] }),
             ...(typeof raw.eurPerMonth === 'number' ? { eurPerMonth: raw.eurPerMonth } : {}),
           }
         if (proposal?.connectors !== undefined) {

@@ -246,6 +246,13 @@ describe('an agent proposed on a card (propose_agent), created when an owner or 
     expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(0)
   })
 
+  it('records the connectors of the proposal, server names only', async () => {
+    const { call } = bench()
+    const card = await propose(call, { proposal: { ...proposal, connectors: ['qonto', 'office365', 42] } })
+    expect(card.status).toBe(201)
+    expect((card.body.approval as { proposal: { connectors: string[] } }).proposal.connectors).toEqual(['qonto', 'office365'])
+  })
+
   it('checks the proposal when the card is made, with the rules of POST /agents', async () => {
     const { call } = bench()
     for (const bad of [{ ...proposal, handle: 'Pas Un Slug' }, { ...proposal, instructions: 'x'.repeat(2001) }, { ...proposal, eurPerMonth: 51 }, { ...proposal, model: '' }]) {
