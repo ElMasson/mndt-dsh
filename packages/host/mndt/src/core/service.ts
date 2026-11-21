@@ -688,6 +688,29 @@ export class WorkbenchService {
 
   // ---------------------------------------------------------------- agents
 
+  /**
+   * Retire an agent: kept for the record (its messages, its spending), it no
+   * longer answers, no longer appears among the agents, and cannot be added to
+   * a channel again. Retiring twice is refused.
+   * @param id - the agent.
+   * @param actor - who retires it.
+   * @returns the retired agent.
+   */
+  retireAgent(id: string, actor: string): Promise<Agent> {
+    return this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === id)
+      if (agent === undefined) throw new Error(`no agent ${id}`)
+      if (agent.retiredAt !== undefined) throw new Error(`the agent @${agent.handle} is already retired`)
+      const at = this.#at()
+      const next: Agent = { ...agent, retiredAt: at, retiredBy: actor }
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'agent.retired', subject: id, detail: agent.handle },
+        value: next,
+      }
+    })
+  }
+
   /** @param includeRetired - whether retired agents show. @returns the agents, oldest first. */
   async listAgents(includeRetired = false): Promise<readonly Agent[]> {
     const agents = (await this.#ready()).agents ?? []

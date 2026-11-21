@@ -178,6 +178,8 @@ export interface Agent {
   readonly createdBy: string
   readonly createdAt: string
   readonly retiredAt?: string
+  /** Who retired it. */
+  readonly retiredBy?: string
 }
 
 /** A team channel, or one person's own lane. */

@@ -80,6 +80,19 @@ interface UsageTotals {
   cacheWrite: number
 }
 
+/**
+ * One model an agent may be given: a priced route of the price grid. `kind`
+ * gives the screen its three buttons (rapide, analyse, local), `eur` its price
+ * per million tokens (null when to be provided: such a model is refused for a turn).
+ */
+export interface ModelChoice {
+  readonly provider: string
+  readonly model: string
+  readonly label: string
+  readonly kind: 'rapide' | 'analyse' | 'local' | 'other'
+  readonly eur: { readonly input: number; readonly output: number } | null
+}
+
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
   readonly authority?: { readonly baseUrl: string; readonly token: string }
@@ -95,6 +108,8 @@ export interface MndtApiOptions {
   readonly grants: GrantSource
   /** Mounted connectors, when the host can enumerate them. */
   readonly connectors?: () => Promise<readonly ConnectorInfo[]>
+  /** The models an agent may be given (the priced routes), for the agent form. */
+  readonly models?: () => Promise<readonly ModelChoice[]>
   /** Agent turns of mentions; without it, a mention queues a turn nobody runs. */
   readonly turns?: TurnScheduler
   /** The organisation the top bar names: its name, its slug and, when declared, its environment (prod, preprod). */
@@ -299,8 +314,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const agents = await service.listAgents()
         return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now) })) })
       }
+      if (request.method === 'POST' && parts.length === 3 && parts[2] === 'retire') {
+        // Retiring an agent is creating's mirror: owners and admins only.
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const agent = await service.retireAgent(parts[1] ?? '', identity)
+        // A retired agent stops answering, a turn already running included.
+        options.turns?.stop({ agentId: agent.id })
+        return respond(200, { agent })
+      }
       if (request.method === 'POST' && parts.length <= 2) {
-        const denied = await authorise(identity, 'agents.write')
+        // Creating and changing an agent (its instructions, model, connectors,
+        // ceiling): owners and admins only (rights.write), decided by Stephane on
+        // 15/11. agents.write alone would let every operator do it.
+        const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const connectors = input.connectors === undefined ? undefined : strings(input.connectors)
         const missing = await unmounted(connectors ?? [])
@@ -1191,6 +1218,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
         }
         return respond(answer.status, answer.body)
+      }
+
+      if (request.method === 'GET' && path === '/models') {
+        // The models an agent may be given, for the agent form: the priced routes only.
+        return respond(200, { models: options.models === undefined ? [] : await options.models() })
       }
 
       if (request.method === 'GET' && path === '/connectors') {
