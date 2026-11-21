@@ -853,6 +853,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (card.kind === 'propose_agent' && decision === 'approved') {
           // An agent wrote this proposal: it is approved only from a screen that shows
           // all of it (name, model, connectors, ceiling, instructions), which says so.
+          // A screen guard, NOT a security barrier: any client can send the header.
+          // What protects the decision is rights.write above and, at creation, the
+          // owner alone above the default ceiling (approveAgentProposal).
           if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
             return respond(409, { error: 'this card proposes an agent: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
           }

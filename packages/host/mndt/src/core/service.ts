@@ -1225,6 +1225,10 @@ function agentRefusal(agent: AgentDraft): string | undefined {
     return `an agent's name is one line of ${MAX_AGENT_NAME} characters at most`
   }
   if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
+  // Even when the host lists no models: one line each, no control character, bounded.
+  for (const [field, value] of [['provider', agent.provider], ['model', agent.model]] as const) {
+    if (value.trim().length > 128 || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return `an agent's ${field} is one line of 128 characters at most`
+  }
   const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
   if (typeof ceiling === 'number' && ceiling > MAX_EUR_PER_MONTH) return `a monthly ceiling is ${MAX_EUR_PER_MONTH} € at most: ${ceiling}`
   // The framing is added to every turn, so to its cost.
