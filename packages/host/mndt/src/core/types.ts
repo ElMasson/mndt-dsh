@@ -219,6 +219,31 @@ export interface Channel {
   readonly connectors: readonly string[]
   readonly createdBy: string
   readonly createdAt: string
+  /** How a turn of this channel is coordinated; absent, each agent answers alone. */
+  readonly coordination?: Coordination
+}
+
+/**
+ * « Auteur puis vérificateur » (lot 2): a turn of the author is checked by the
+ * verifier, an agent of ANOTHER model, against the request; the author corrects
+ * once if the verifier finds something. A host script, never an agent's choice.
+ */
+export interface Coordination {
+  readonly mode: 'author-verifier'
+  readonly authorId: string
+  readonly verifierId: string
+}
+
+/** One step of a coordinated turn: who did what, at what cost. */
+export interface TurnStep {
+  readonly role: 'author' | 'verifier' | 'revision'
+  readonly agentId: string
+  readonly tokens?: Mission['tokens']
+  readonly eur?: number
+  /** The verifier's reading: nothing to fix, things to fix, or no usable verdict. */
+  readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
+  /** What the verifier asked to fix, or why the check did not happen. */
+  readonly notes?: readonly string[]
 }
 
 /** Who wrote a message. */
@@ -242,6 +267,8 @@ export interface Turn {
   readonly eur?: number
   /** Why it failed, was refused or cancelled, in plain words. */
   readonly reason?: string
+  /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
+  readonly steps?: readonly TurnStep[]
   readonly startedAt?: string
   readonly finishedAt?: string
 }
