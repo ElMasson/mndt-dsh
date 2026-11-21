@@ -142,6 +142,8 @@ export function WebCard(props: {
   // The core accepts a proposed ceiling above 5 EUR only from the owner: an admin is told before
   // clicking, and only « Refuser » stays offered to them.
   const ownerOnly = proposal !== undefined && (proposal.eurPerMonth ?? 0) > ADMIN_CEILING_EUR && props.isOwner !== true
+  // A proposal the page cannot read is never validated blind: only « Refuser » is offered, and why.
+  const unreadable = card.kind === 'propose_agent' && proposal === undefined
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -191,9 +193,12 @@ export function WebCard(props: {
             />
           </label>
           {missing ? <p role="alert" className="mw-decide-error">{t('webReasonMissing')}</p> : undefined}
+          {unreadable ? <p className="mw-decide-error" data-testid="proposal-unreadable">{t('proposeAgentUnreadable')}</p> : undefined}
           {ownerOnly ? <p className="mw-decide-error" data-testid="proposal-owner-only">{t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })}</p> : undefined}
           <div className="mw-decide-buttons">
-            <button type="button" className="mw-primary" disabled={busy || ownerOnly} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
+            {unreadable ? undefined : (
+              <button type="button" className="mw-primary" disabled={busy || ownerOnly} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
+            )}
             <button type="button" className="mw-secondary" disabled={busy} onClick={() => { void decide('rejected') }}>{t('webRefuse')}</button>
           </div>
           {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}

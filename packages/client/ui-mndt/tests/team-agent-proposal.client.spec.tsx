@@ -65,10 +65,23 @@ describe('a card that proposes an agent', () => {
     await waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_p', 'approved', undefined) })
   })
 
-  it('a malformed proposal falls back to the card as served, never a half sheet', () => {
-    render(<WebCard card={card({ proposal: { name: 'X' }, title: 'Proposition illisible' })} canDecide onDecide={vi.fn()} t={chatFrench} />)
-    expect(screen.queryByTestId('agent-sheet-view')).toBeNull()
-    expect(screen.getByText('Proposition illisible')).toBeTruthy()
+  it('an absent or malformed proposal is never validated blind: only « Refuser », and why', () => {
+    for (const odd of [undefined, { name: 'X' }, null]) {
+      const { unmount } = render(<WebCard card={card({ proposal: odd, title: 'Créer un agent' })} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
+      expect(screen.queryByTestId('agent-sheet-view')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Refuser' })).toBeTruthy()
+      expect(screen.getByTestId('proposal-unreadable').textContent).toBe('Cette proposition ne peut pas être lue en entier : elle ne peut qu\'être refusée.')
+      unmount()
+    }
+  })
+
+  it('the instructions come from an agent: shown whole, as text', () => {
+    const long = `${'Relancer. '.repeat(150)}<script>alert(1)</script>`
+    render(<WebCard card={card({ proposal: { ...proposal, instructions: long } })} canDecide isOwner onDecide={vi.fn()} t={chatFrench} />)
+    const sheet = screen.getByTestId('agent-sheet-view')
+    expect(sheet.textContent).toContain('<script>alert(1)</script>')
+    expect(sheet.querySelector('script')).toBeNull()
   })
 
   it('a card of another kind never reads a proposal field', () => {
