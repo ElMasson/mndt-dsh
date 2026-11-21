@@ -98,6 +98,8 @@ export function createHttpChat(
       ).channel,
     removeAgents: async (channelId, agentIds) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/agents`, { remove: agentIds })).channel,
+    changeConnectors: async (channelId, change) =>
+      (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/connectors`, { add: change.add ?? [], remove: change.remove ?? [] })).channel,
     setConnectors: async (channelId, servers) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/connectors`, { connectors: servers })).channel,
     mounted: async () => {

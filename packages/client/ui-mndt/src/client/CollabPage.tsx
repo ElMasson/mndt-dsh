@@ -281,18 +281,25 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   }, [chat, chatId, tc])
 
   /**
-   * One click adds a connector to the open channel or takes it out. The API sets the whole list and
-   * has no concurrency check, so the list is built from the channel read again just before: a page
-   * not yet refreshed never gives back a connector someone else took out. A list holding a connector
-   * that is no longer mounted is refused whole by the API: the page says which one, in words.
+   * One click adds a connector to the open channel or takes it out. With #75 the server applies
+   * `{ add }` or `{ remove }` on its own current list, in one write: two pages never undo each
+   * other, and a connector already on the channel but since unmounted never blocks a change.
+   * Without it (an older server), the whole list is sent, built from the channel read again just
+   * before, and a list holding an unmounted connector is not sent.
+   * @param server - the connector. @param adding - true to add it, false to take it out.
    */
-  const toggleChannelConnector = useCallback(async (server: string, inChannel: boolean): Promise<string | undefined> => {
-    if (chat?.setConnectors === undefined || chatId === undefined) return undefined
+  const toggleChannelConnector = useCallback(async (server: string, adding: boolean): Promise<string | undefined> => {
+    if (chatId === undefined || chat === undefined) return undefined
     try {
+      if (chat.changeConnectors !== undefined) {
+        replaceChannel(await chat.changeConnectors(chatId, adding ? { add: [server] } : { remove: [server] }))
+        return undefined
+      }
+      if (chat.setConnectors === undefined) return undefined
       const fresh = (await chat.channels()).find(c => c.id === chatId)
       if (fresh === undefined) return tc('channelGone')
       replaceChannel(fresh)
-      const next = inChannel
+      const next = adding
         ? [...new Set([...fresh.connectors, server])]
         : fresh.connectors.filter(s => s !== server)
       const served = mounted === undefined || mounted === 'absent' ? undefined : mounted
@@ -1128,6 +1135,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   mounted={mounted}
                   mountedError={mountedError}
                   canManage={state.canWrite}
+                  // #75: a channel's connectors are set by owners and admins (rights.write).
+                  canManageConnectors={state.canAdmin === true}
                   names={team.names}
                   documents={documents}
                   onMemory={() => { setContextOpen(false); setView('memory') }}

@@ -46,8 +46,10 @@ export interface TeamContextProps {
   readonly mounted?: readonly MountedConnector[] | 'absent' | undefined
   /** Why the mounted connectors could not be read, if they could not. */
   readonly mountedError?: string | undefined
-  /** Whether the reader may change the channel's agents and connectors (workflows.write). */
+  /** Whether the reader may change the channel's agents (workflows.write). */
   readonly canManage?: boolean | undefined
+  /** Whether the reader may change the channel's connectors (rights.write, #75); `canManage` without it. */
+  readonly canManageConnectors?: boolean | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The documents route; without it the section says « Bientôt ». */
@@ -88,7 +90,8 @@ export function TeamContext(props: TeamContextProps): ReactNode {
   // The pills: what is mounted, and what the channel holds that is no longer mounted.
   const servers = [...new Set([...(served ?? []).map(m => m.server), ...channel.connectors])].sort()
   const enabled = new Set((served ?? []).filter(m => m.enabled).map(m => m.server))
-  const connectorsWritable = canManage && served !== undefined && props.onToggleConnector !== undefined
+  const canConnectors = props.canManageConnectors ?? canManage
+  const connectorsWritable = canConnectors && served !== undefined && props.onToggleConnector !== undefined
   return (
     <div className="mw-ctx" data-testid="context-panel">
       <Section title={t('ctxChannel')}>
@@ -168,7 +171,7 @@ export function TeamContext(props: TeamContextProps): ReactNode {
             })}
           </div>
         )}
-        {canManage || servers.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
+        {canConnectors || servers.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
         {connectorError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{connectorError}</p>}
       </Section>
       <Section title={t('ctxMemory')}>

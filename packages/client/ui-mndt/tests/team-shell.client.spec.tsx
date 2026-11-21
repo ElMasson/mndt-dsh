@@ -515,8 +515,8 @@ describe('the channel panel, by pills', () => {
   }
 
   /** @param chat - the face. @param canWrite - workflows.write. @returns the open channel's panel. */
-  async function open(chat: ChatFace, canWrite = true): Promise<HTMLElement> {
-    render(<CollabPage api={face(state({ canWrite }))} chat={chat} tc={chatFrench} team={{}} />)
+  async function open(chat: ChatFace, canWrite = true, canAdmin = canWrite): Promise<HTMLElement> {
+    render(<CollabPage api={face(state({ canWrite, canAdmin }))} chat={chat} tc={chatFrench} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: '# test' }))
     return screen.findByTestId('context-panel')
   }
@@ -544,24 +544,31 @@ describe('the channel panel, by pills', () => {
     expect((await chat.channels()).find(c => c.id === 'chn_1')?.connectors).toEqual(['office365'])
   })
 
-  it('a connector that is no longer mounted is greyed, can be taken out, and blocks an add with words', async () => {
-    const panel = await open(double(MOUNTED, ['qonto', 'dolibarr']))
+  it('with #75, a connector no longer mounted is greyed, can be taken out, and does not block an add', async () => {
+    const chat = double(MOUNTED, ['qonto', 'dolibarr'])
+    const panel = await open(chat)
     const dolibarr = await within(panel).findByRole('button', { name: 'Retirer dolibarr du canal, non branché' })
     expect(dolibarr.getAttribute('aria-disabled')).toBe('false')
     fireEvent.click(pill(panel, 'Ajouter office365 au canal'))
-    expect((await within(panel).findByRole('alert')).textContent).toBe('Retirez d\'abord dolibarr, qui n\'est plus branché.')
-    fireEvent.click(dolibarr)
-    // Out of the channel, it stays shown as mounted-but-off: greyed, and it cannot be added back.
+    await waitFor(() => { expect(pill(panel, 'Retirer office365 du canal').getAttribute('aria-pressed')).toBe('true') })
+    expect((await chat.channels()).find(c => c.id === 'chn_1')?.connectors).toEqual(['dolibarr', 'office365', 'qonto'])
+    fireEvent.click(pill(panel, 'Retirer dolibarr du canal, non branché'))
     const back = await within(panel).findByRole('button', { name: 'Ajouter dolibarr au canal, non branché' })
-    expect(back.getAttribute('aria-pressed')).toBe('false')
     expect(back.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('an older server without { add, remove }: the whole list, and an unmounted connector blocks an add with words', async () => {
+    const chat = double(MOUNTED, ['qonto', 'dolibarr'])
+    const panel = await open({ ...chat, changeConnectors: undefined })
+    fireEvent.click(await within(panel).findByRole('button', { name: 'Ajouter office365 au canal' }))
+    expect((await within(panel).findByRole('alert')).textContent).toBe('Retirez d\'abord dolibarr, qui n\'est plus branché.')
   })
 
   it('a refusal is said in words and the pill stays as the channel is', async () => {
     const chat = double()
     const refusing: ChatFace = {
       ...chat,
-      setConnectors: () => Promise.reject(new ChatRefusal('stephane@datanalysis.re is viewer and does not hold workflows.write', 403)),
+      changeConnectors: () => Promise.reject(new ChatRefusal('stephane@datanalysis.re is operator and does not hold rights.write', 403)),
       addAgents: () => Promise.reject(new ChatRefusal('connector not mounted: zzz', 400)),
     }
     const panel = await open(refusing)
@@ -592,9 +599,20 @@ describe('the channel panel, by pills', () => {
     expect(within(panel).getAllByText('Votre rôle ne permet pas de modifier ce canal.').length).toBe(2)
   })
 
+  it('#75: an operator changes the channel\'s agents, not its connectors (owners and admins)', async () => {
+    const panel = await open(double(), true, false)
+    await within(panel).findByRole('button', { name: /qonto/u })
+    expect(pill(panel, 'Ajouter @analyste au canal').getAttribute('aria-disabled')).toBe('false')
+    expect(pill(panel, 'Retirer qonto du canal').getAttribute('aria-disabled')).toBe('true')
+    expect(within(panel).getAllByText('Votre rôle ne permet pas de modifier ce canal.')).toHaveLength(1)
+  })
+
   it('says when no connector is mounted at all', async () => {
     const panel = await open(double([], []))
     expect(await within(panel).findByText('Aucun connecteur n\'est branché sur cet espace.')).toBeTruthy()
+  })
+})
+
 describe('rows of the role file set aside (#75)', () => {
   it('reads only well-formed rows; anything else gives none', () => {
     expect(skippedOf({ you: 'a', grantsSkipped: [{ row: 4, reason: 'unknown role « boss »' }] })).toEqual([{ row: 4, reason: 'unknown role « boss »' }])

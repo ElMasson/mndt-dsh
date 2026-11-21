@@ -164,8 +164,19 @@ export interface ChatFace {
   removeAgents?(channelId: string, agentIds: readonly string[]): Promise<ChatChannel>
   /** Set a channel's connectors, the whole list. Optional: the team page only. */
   setConnectors?(channelId: string, servers: readonly string[]): Promise<ChatChannel>
+  /**
+   * Add or take out connectors of a channel, applied by the server on its current list in one write
+   * (#75): two pages never undo each other. Optional: the team page only.
+   */
+  changeConnectors?(channelId: string, change: ConnectorsChange): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
+}
+
+/** A change of a channel's connectors: what to add, what to take out. */
+export interface ConnectorsChange {
+  readonly add?: readonly string[]
+  readonly remove?: readonly string[]
 }
 
 /** A connector as the workbench reports it: an MCP server, and whether it is switched on. */

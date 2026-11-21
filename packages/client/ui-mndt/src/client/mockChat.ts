@@ -246,6 +246,19 @@ export function createMockChat(
         return next
       })
     },
+    changeConnectors(channelId, change) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        const on = new Set((seed.mounted ?? []).filter(m => m.enabled).map(m => m.server))
+        // As the API (#75): only what is added must be mounted; applied on the current list.
+        const missing = (change.add ?? []).filter(server => !c.connectors.includes(server) && !on.has(server))
+        if (missing.length > 0) throw new ChatRefusal(`connector not mounted: ${missing.join(', ')}`, 400)
+        const kept = [...new Set([...c.connectors, ...(change.add ?? [])])]
+        const next = { ...c, connectors: kept.filter(s => !(change.remove ?? []).includes(s)).sort() }
+        channels.set(c.id, next)
+        return next
+      })
+    },
     mounted() {
       return settle(() => [...(seed.mounted ?? [])])
     },
