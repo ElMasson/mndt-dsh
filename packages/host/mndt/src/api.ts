@@ -277,6 +277,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    * @param servers - MCP server names asked for.
    * @returns a 400 naming those not mounted, when the host can say which are.
    */
+  /**
+   * @param provider - an agent's route. @param model - its model.
+   * @returns a 400 when the host lists its models (GET /models) and this one is not among them.
+   */
+  const unlistedModel = async (provider: string, model: string): Promise<MndtApiResponse | undefined> => {
+    if (options.models === undefined) return undefined
+    const listed = await options.models()
+    if (listed.some(choice => choice.provider === provider.trim() && choice.model === model.trim())) return undefined
+    return respond(400, { error: `model not offered: ${provider}/${model} (see GET /models)` })
+  }
+
   const unmounted = async (servers: readonly string[]): Promise<MndtApiResponse | undefined> => {
     if (options.connectors === undefined || servers.length === 0) return undefined
     const mounted = new Set((await options.connectors()).filter(c => c.enabled).map(c => c.server))
@@ -334,6 +345,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (missing !== undefined) return missing
         const eurPerMonth = typeof input.eurPerMonth === 'number' ? input.eurPerMonth : undefined
         const text = (key: string): string | undefined => (typeof input[key] === 'string' ? input[key] : undefined)
+        if (parts.length === 1 || text('provider') !== undefined || text('model') !== undefined) {
+          const current = parts.length === 2 ? await service.agent(parts[1] ?? '') : undefined
+          const offered = await unlistedModel(text('provider') ?? current?.provider ?? '', text('model') ?? current?.model ?? '')
+          if (offered !== undefined) return offered
+        }
         if (parts.length === 1) {
           const table = await grants.grants()
           const creatorRole = table.ok ? roleOf(table.grants, identity) : undefined
@@ -793,6 +809,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           const missing = await unmounted(proposal.connectors)
           if (missing !== undefined) return missing
         }
+        if (proposal !== undefined) {
+          const offered = await unlistedModel(proposal.provider, proposal.model)
+          if (offered !== undefined) return offered
+        }
         // A card asked during an agent turn belongs to that turn's thread: the
         // approvals connector names the run it acts for (x-mndt-run).
         const run = request.headers?.['x-mndt-run']
@@ -831,10 +851,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(400, { error: 'decision must be approved or rejected' })
         }
         if (card.kind === 'propose_agent' && decision === 'approved') {
+          // An agent wrote this proposal: it is approved only from a screen that shows
+          // all of it (name, model, connectors, ceiling, instructions), which says so.
+          if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
+            return respond(409, { error: 'this card proposes an agent: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
+          }
           // The agent is created from the proposal recorded on the card, by whoever
           // approves it (an owner or an admin, rights.write above), with their role.
           const missing = await unmounted(card.proposal?.connectors ?? [])
           if (missing !== undefined) return missing
+          const offered = await unlistedModel(card.proposal?.provider ?? '', card.proposal?.model ?? '')
+          if (offered !== undefined) return offered
           const table = await grants.grants()
           const role = table.ok ? roleOf(table.grants, identity) : undefined
           try {

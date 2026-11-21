@@ -52,11 +52,13 @@ function bench() {
     path: string,
     who: string,
     body?: unknown,
+    headers?: Record<string, string>,
   ) => {
     const answer = await api({
       method,
       path,
       authorization: `Bearer ${who}`,
+      ...(headers === undefined ? {} : { headers }),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     return {
@@ -66,6 +68,9 @@ function bench() {
   }
   return { call, models }
 }
+
+/** What a screen that shows the whole proposal declares when it approves one. */
+const SHOWS = { 'x-mndt-shows-proposal': '1' }
 
 const draft = {
   handle: 'recouvrement',
@@ -242,7 +247,10 @@ describe('an agent proposed on a card (propose_agent), created when an owner or 
     const { call } = bench()
     const card = await propose(call, { proposal })
     expect(card.status).toBe(201)
-    expect(card.body.approval).toMatchObject({ kind: 'propose_agent', title: "Créer l'agent Recouvrement", state: 'pending', proposal })
+    expect(card.body.approval).toMatchObject({
+      kind: 'propose_agent', state: 'pending', proposal,
+      title: "Créer l'agent Recouvrement (@recouvrement) : scaleway-genapi/deepseek-v4.1-flash, aucun connecteur, plafond 5 €/mois",
+    })
     expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(0)
   })
 
@@ -264,7 +272,7 @@ describe('an agent proposed on a card (propose_agent), created when an owner or 
   it('creates the agent from the recorded proposal, never from what the approver sends, in one write', async () => {
     const { call } = bench()
     const id = ((await propose(call, { proposal })).body.approval as { id: string }).id
-    const approved = await call('POST', `/approvals/${id}/decide`, 'admin', { decision: 'approved', proposal: { ...proposal, handle: 'autre', eurPerMonth: 40 } })
+    const approved = await call('POST', `/approvals/${id}/decide`, 'admin', { decision: 'approved', proposal: { ...proposal, handle: 'autre', eurPerMonth: 40 } }, SHOWS)
     expect(approved.status).toBe(200)
     const agent = approved.body.agent as { id: string; handle: string; eurPerMonth: number; createdBy: string; instructions?: string }
     expect(agent).toMatchObject({ handle: 'recouvrement', eurPerMonth: 5, createdBy: admin, instructions: 'Suit les impayés.' })
@@ -272,21 +280,21 @@ describe('an agent proposed on a card (propose_agent), created when an owner or 
     const listed = (await call('GET', '/agents', 'owner')).body.agents as { handle: string }[]
     expect(listed.map(a => a.handle)).toEqual(['recouvrement'])
     // Decided once.
-    expect((await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' })).status).toBe(400)
+    expect((await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, SHOWS)).status).toBe(400)
   })
 
   it('is decided by owners and admins only; a ceiling above 5 € needs the owner; a refusal leaves the card pending', async () => {
     const { call } = bench()
     const id = ((await propose(call, { proposal: { ...proposal, handle: 'cher', eurPerMonth: 20 } })).body.approval as { id: string }).id
     // An operator neither reads nor decides it: unreadable reads as absent.
-    expect((await call('POST', `/approvals/${id}/decide`, 'operator', { decision: 'approved' })).status).toBe(404)
-    const byAdmin = await call('POST', `/approvals/${id}/decide`, 'admin', { decision: 'approved' })
+    expect((await call('POST', `/approvals/${id}/decide`, 'operator', { decision: 'approved' }, SHOWS)).status).toBe(404)
+    const byAdmin = await call('POST', `/approvals/${id}/decide`, 'admin', { decision: 'approved' }, SHOWS)
     expect(byAdmin.status).toBe(400)
     expect(String(byAdmin.body.error)).toContain('only the owner gives an agent a ceiling above 5')
     const pending = (await call('GET', '/approvals', 'owner')).body.approvals as { id: string; state: string }[]
     expect(pending.find(card => card.id === id)?.state).toBe('pending')
     expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(0)
-    const byOwner = await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' })
+    const byOwner = await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, SHOWS)
     expect(byOwner.status).toBe(200)
     expect((byOwner.body.agent as { eurPerMonth: number }).eurPerMonth).toBe(20)
   })
@@ -295,12 +303,69 @@ describe('an agent proposed on a card (propose_agent), created when an owner or 
     const { call } = bench()
     const first = ((await propose(call, { proposal })).body.approval as { id: string }).id
     const second = ((await propose(call, { proposal })).body.approval as { id: string }).id
-    expect((await call('POST', `/approvals/${first}/decide`, 'owner', { decision: 'approved' })).status).toBe(200)
-    const taken = await call('POST', `/approvals/${second}/decide`, 'owner', { decision: 'approved' })
+    expect((await call('POST', `/approvals/${first}/decide`, 'owner', { decision: 'approved' }, SHOWS)).status).toBe(200)
+    const taken = await call('POST', `/approvals/${second}/decide`, 'owner', { decision: 'approved' }, SHOWS)
     expect(taken.status).toBe(400)
     expect(String(taken.body.error)).toContain('@recouvrement is taken')
     const rejected = await call('POST', `/approvals/${second}/decide`, 'owner', { decision: 'rejected', reason: 'doublon' })
     expect(rejected.status).toBe(200)
     expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(1)
+  })
+})
+
+describe('what a person grants on a propose_agent card is what the server shows', () => {
+  const proposal = { name: 'Résumé', handle: 'resume', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash', connectors: ['qonto', 'office365'], eurPerMonth: 4 }
+
+  it('builds the title from the proposal, never from the requester\'s words, and serves the whole proposal', async () => {
+    const { call } = bench()
+    const card = await call('POST', '/approvals', 'owner', { kind: 'propose_agent', title: 'Créer un petit agent de résumé', payload: {}, proposal })
+    const approval = card.body.approval as { title: string; proposal: unknown }
+    expect(approval.title).toBe("Créer l'agent Résumé (@resume) : scaleway-genapi/deepseek-v4.1-flash, connecteurs office365, qonto, plafond 4 €/mois")
+    const listed = (await call('GET', '/approvals', 'owner')).body.approvals as { proposal?: unknown }[]
+    expect(listed[0]?.proposal).toEqual(proposal)
+  })
+
+  it('refuses the approval from a client that does not show the proposal (409), and creates nothing', async () => {
+    const { call } = bench()
+    const id = ((await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal })).body.approval as { id: string }).id
+    const blind = await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' })
+    expect(blind.status).toBe(409)
+    expect(String(blind.body.error)).toContain('screen that shows the whole proposal')
+    expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(0)
+    // A rejection needs no such screen.
+    expect((await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'rejected', reason: 'non' })).status).toBe(200)
+  })
+
+  it('bounds the name to one line of 60 characters, at creation, at a change and in a proposal', async () => {
+    const { call } = bench()
+    for (const name of ['x'.repeat(61), 'deux\nlignes', 'sep\u2028ar']) {
+      expect((await call('POST', '/agents', 'owner', { ...draft, handle: 'nom', name })).status, JSON.stringify(name)).toBe(400)
+      expect((await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal: { ...proposal, name } })).status, JSON.stringify(name)).toBe(400)
+    }
+    const id = ((await call('POST', '/agents', 'owner', { ...draft, handle: 'nom', name: 'x'.repeat(60) })).body.agent as { id: string }).id
+    expect((await call('POST', `/agents/${id}`, 'owner', { name: 'y'.repeat(61) })).status).toBe(400)
+  })
+
+  it('checks the model against GET /models, at creation, in a proposal and at a change', async () => {
+    const { call } = bench()
+    const unlisted = { provider: 'scaleway-genapi', model: 'glm-9' }
+    expect((await call('POST', '/agents', 'owner', { ...draft, handle: 'hors', ...unlisted })).status).toBe(400)
+    const refused = await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal: { ...proposal, ...unlisted } })
+    expect(refused.status).toBe(400)
+    expect(String(refused.body.error)).toContain('model not offered')
+    const id = ((await call('POST', '/agents', 'owner', { ...draft, handle: 'liste' })).body.agent as { id: string }).id
+    expect((await call('POST', `/agents/${id}`, 'owner', { model: 'glm-9' })).status).toBe(400)
+  })
+
+  it('keeps at most 3 agent proposals pending per requester', async () => {
+    const { call } = bench()
+    for (const handle of ['un', 'deux', 'trois']) {
+      expect((await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal: { ...proposal, handle } })).status).toBe(201)
+    }
+    const fourth = await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal: { ...proposal, handle: 'quatre' } })
+    expect(fourth.status).toBe(400)
+    expect(String(fourth.body.error)).toContain('3 agent proposals already wait')
+    // Another requester is not held back by them.
+    expect((await call('POST', '/approvals', 'admin', { kind: 'propose_agent', payload: {}, proposal: { ...proposal, handle: 'autre' } })).status).toBe(201)
   })
 })

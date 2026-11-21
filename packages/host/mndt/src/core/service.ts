@@ -100,6 +100,10 @@ export const DEFAULT_EUR_PER_MONTH = 5
 export const MAX_EUR_PER_MONTH = 50
 /** The longest framing of an agent, in characters: it is added to every turn. */
 export const MAX_INSTRUCTIONS = 2000
+/** The longest name of an agent: it enters the turn prompt of every agent of its channels. */
+export const MAX_AGENT_NAME = 60
+/** The propose_agent cards one requester may have pending at once. */
+export const MAX_PENDING_PROPOSALS = 3
 
 /** An MCP server name, as the MCP client accepts it. */
 const SERVER = /^[A-Za-z0-9_-]{1,32}$/
@@ -428,10 +432,13 @@ export class WorkbenchService {
       const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
       if (refusal !== undefined) return Promise.reject(new Error(refusal))
     }
+    // A propose_agent card's title is the server's, built from the proposal: what an
+    // agent writes never names what a person grants.
+    const title = request.kind === 'propose_agent' && request.proposal !== undefined ? proposalTitle(request.proposal) : request.title.trim()
     const approval: Approval = {
       id: this.#id('apr'),
       kind: request.kind,
-      title: request.title.trim(),
+      title,
       payload: request.payload ?? {},
       requestedBy: request.requestedBy.trim(),
       requestedAt: this.#at(),
@@ -441,11 +448,19 @@ export class WorkbenchService {
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
       ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
     }
-    return this.#write(state => ({
-      state: { ...state, approvals: [approval, ...state.approvals] },
-      event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
-      value: approval,
-    }))
+    return this.#write((state) => {
+      if (approval.kind === 'propose_agent') {
+        const pending = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending' && card.requestedBy === approval.requestedBy)
+        if (pending.length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
+        }
+      }
+      return {
+        state: { ...state, approvals: [approval, ...state.approvals] },
+        event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
+        value: approval,
+      }
+    })
   }
 
   /** @param draft - a checked draft. @param actor - its creator. @param at - when. @returns the agent. */
@@ -1177,6 +1192,17 @@ export class WorkbenchService {
  * @param agent - an agent as drafted or patched.
  * @returns why it cannot be kept, or undefined.
  */
+/**
+ * The title of a propose_agent card, built from what it grants: name, handle,
+ * model, connectors, ceiling. Never the requester's words.
+ * @param proposal - the agent proposed.
+ * @returns the title.
+ */
+function proposalTitle(proposal: AgentProposal): string {
+  const connectors = (proposal.connectors ?? []).length === 0 ? 'aucun connecteur' : `connecteurs ${[...new Set(proposal.connectors)].sort().join(', ')}`
+  return `Créer l'agent ${proposal.name.trim()} (@${proposal.handle}) : ${proposal.provider}/${proposal.model}, ${connectors}, plafond ${proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH} €/mois`
+}
+
 /** @param draft - a proposal as asked. @returns it with only the fields of POST /agents. */
 function proposalOf(draft: AgentProposal): AgentProposal {
   return {
@@ -1193,6 +1219,11 @@ function proposalOf(draft: AgentProposal): AgentProposal {
 function agentRefusal(agent: AgentDraft): string | undefined {
   if (!SLUG.test(agent.handle)) return `a handle is a slug of 2 to 32 characters: ${agent.handle}`
   if (agent.name.trim() === '') return 'an agent needs a name'
+  // The name enters the turn prompt of every agent of the channel (speaker()): one
+  // line, no control character nor line separator, 60 characters at most.
+  if (agent.name.trim().length > MAX_AGENT_NAME || /[\u0000-\u001f\u007f\u2028\u2029]/.test(agent.name)) {
+    return `an agent's name is one line of ${MAX_AGENT_NAME} characters at most`
+  }
   if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
   const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
   if (typeof ceiling === 'number' && ceiling > MAX_EUR_PER_MONTH) return `a monthly ceiling is ${MAX_EUR_PER_MONTH} € at most: ${ceiling}`
