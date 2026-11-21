@@ -23,7 +23,7 @@ const t0 = Date.parse('2026-11-14T09:12:00.000Z')
 const at = (min: number): string => new Date(t0 + min * 60000).toISOString()
 const assistant = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash', connectors: ['office365', 'qonto'], eurPerMonth: 5, eurThisMonth: 0.0041, createdBy: you, createdAt: at(-600) }
 const analyste = { id: 'agt_2', handle: 'analyste', name: 'Analyste', provider: 'scaleway-genapi', model: 'glm-5.3', connectors: [], eurPerMonth: 5, eurThisMonth: 0, createdBy: you, createdAt: at(-600) }
-const channel = { id: 'chn_1', name: 'recouvrement', title: 'recouvrement', kind: 'team' as const, members: [you, 'smarion@datanalysis.re'], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at(-600) }
+const channel = { id: 'chn_1', name: 'recouvrement', title: 'recouvrement', kind: 'team' as const, members: [you, 'smarion@datanalysis.re'], agents: ['agt_1'], connectors: ['qonto'], createdBy: you, createdAt: at(-600) }
 const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at(-600) }
 const chat = createMockChat({
   you,
@@ -36,6 +36,11 @@ const chat = createMockChat({
       turns: [{ id: 'trn_1', agentId: 'agt_1', status: 'done', tokens: { input: 4421, output: 540 }, eur: 0.0041, startedAt: at(3), finishedAt: at(4) }],
     },
     { id: 'msg_3', channelId: 'chn_1', author: { kind: 'agent', agentId: 'agt_1' }, replyTo: 'msg_2', text: 'Brouillon prêt :\n\n| Facture | Montant | Échéance |\n|---|---:|---|\n| FA2610-031 | 1 640,00 € | 02/10 |\n\nLa carte attend votre décision : rien ne part sans elle.', mentions: [], createdAt: at(4), updatedAt: at(4) },
+  ],
+  mounted: [
+    { module: 'office365', server: 'office365', enabled: true },
+    { module: 'qonto', server: 'qonto', enabled: true },
+    { module: 'dolibarr', server: 'dolibarr', enabled: false },
   ],
   cards: [{ id: 'apr_1', kind: 'send-email', title: 'Envoyer la relance de la facture FA2610-031 à la comptabilité de Sodiac', requestedBy: 'assistant', requestedAt: at(4), channelId: 'chn_1', messageId: 'msg_2', state: 'pending' }],
 }, () => t0 + 10 * 60000)

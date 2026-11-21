@@ -160,4 +160,17 @@ export interface ChatFace {
     channelId: string,
     agentIds: readonly string[],
   ): Promise<ChatChannel>
+  /** Take agents out of a channel; they stop answering there. Optional: the team page only. */
+  removeAgents?(channelId: string, agentIds: readonly string[]): Promise<ChatChannel>
+  /** Set a channel's connectors, the whole list. Optional: the team page only. */
+  setConnectors?(channelId: string, servers: readonly string[]): Promise<ChatChannel>
+  /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
+  mounted?(): Promise<readonly MountedConnector[]>
+}
+
+/** A connector as the workbench reports it: an MCP server, and whether it is switched on. */
+export interface MountedConnector {
+  readonly module: string
+  readonly server: string
+  readonly enabled: boolean
 }
