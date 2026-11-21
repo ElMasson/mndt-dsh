@@ -44,15 +44,21 @@ describe('who may change whose role (members routes)', () => {
   beforeEach(() => { vi.unstubAllGlobals() })
   afterEach(() => { vi.unstubAllGlobals() })
 
-  it('an admin never grants owner, nor a role above their own', async () => {
-    const b = bench()
+  it('an admin only touches roles strictly below their own', async () => {
+    const peer = 'pair@datanalysis.re'
+    const b = bench([...TABLE, { subject: peer, role: 'admin' }])
     expect((await b.call('/members/grant', admin, { subject: viewer, role: 'owner' })).status).toBe(403)
     expect((await b.call('/members/grant', admin, { subject: 'new@datanalysis.re', role: 'owner' })).status).toBe(403)
+    expect((await b.call('/members/grant', admin, { subject: viewer, role: 'admin' })).status).toBe(403)
+    expect((await b.call('/members/grant', admin, { subject: peer, role: 'viewer' })).status).toBe(403)
+    expect((await b.call('/members/revoke', admin, { subject: peer })).status).toBe(403)
     expect((await b.call('/members/grant', admin, { subject: viewer, role: 'operator' })).status).toBe(200)
-    expect((await b.call('/members/grant', admin, { subject: viewer, role: 'admin' })).status).toBe(200)
+    expect((await b.call('/members/revoke', admin, { subject: operator })).status).toBe(200)
+    expect((await b.call('/members/grant', owner, { subject: peer, role: 'viewer' })).status).toBe(200)
     expect(b.forwarded.map(f => f.body)).toEqual([
       { subject: viewer, role: 'operator' },
-      { subject: viewer, role: 'admin' },
+      { subject: operator },
+      { subject: peer, role: 'viewer' },
     ])
   })
 

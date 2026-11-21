@@ -51,7 +51,8 @@ export interface GrantSource {
  * authority is called with this deployment's own token, so these rules are
  * the product's, applied before anything is forwarded:
  * - nobody changes their own role;
- * - an admin never grants owner, nor a role above their own;
+ * - below an owner, one only touches roles strictly below one's own (an
+ *   admin neither grants admin or owner, nor changes another admin);
  * - only an owner changes or removes an owner's role;
  * - there is always at least one owner left.
  * @param grants - the current table.
@@ -72,11 +73,13 @@ export function roleChangeRefusal(
   const before = roleOf(grants, subject)
   if (actorRole !== 'owner') {
     if (next === 'owner') return { status: 403, reason: 'only an owner grants the owner role' }
-    if (next !== undefined && compareRoles(next, actorRole) > 0) {
-      return { status: 403, reason: `${actor} is ${actorRole} and cannot grant ${next}` }
+    // Below an owner, one only touches roles strictly below one's own: the role
+    // a person holds now, and the role they are given.
+    if (next !== undefined && compareRoles(next, actorRole) >= 0) {
+      return { status: 403, reason: `${actor} is ${actorRole} and grants only roles below ${actorRole}` }
     }
     if (before === 'owner') return { status: 403, reason: 'only an owner changes or removes an owner' }
-    if (before !== undefined && compareRoles(before, actorRole) > 0) {
+    if (before !== undefined && compareRoles(before, actorRole) >= 0) {
       return { status: 403, reason: `${actor} is ${actorRole} and cannot change a ${before}` }
     }
   }
