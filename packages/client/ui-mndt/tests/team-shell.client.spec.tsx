@@ -292,7 +292,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
     expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
     expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
     // Members by the part before @, the address kept as title.
@@ -514,8 +514,8 @@ describe('the channel panel, by pills', () => {
   }
 
   /** @param chat - the face. @param canWrite - workflows.write. @returns the open channel's panel. */
-  async function open(chat: ChatFace, canWrite = true): Promise<HTMLElement> {
-    render(<CollabPage api={face(state({ canWrite }))} chat={chat} tc={chatFrench} team={{}} />)
+  async function open(chat: ChatFace, canWrite = true, canAdmin = canWrite): Promise<HTMLElement> {
+    render(<CollabPage api={face(state({ canWrite, canAdmin }))} chat={chat} tc={chatFrench} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: '# test' }))
     return screen.findByTestId('context-panel')
   }

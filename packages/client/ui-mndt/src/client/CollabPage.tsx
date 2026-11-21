@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, MountedConnector } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
@@ -74,6 +74,18 @@ const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
   fact: 'shell.memory-kind-fact',
   decision: 'shell.memory-kind-decision',
   preference: 'shell.memory-kind-preference',
+}
+
+/**
+ * @param failure - a refusal of the coordination route. @param t - the copy.
+ * @returns it in the page's words where the core's sentence is known, else as served.
+ */
+function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
+  if (failure instanceof ChatRefusal) {
+    if (failure.status === 404) return t('coordNotServed')
+    if (failure.message.includes('another model')) return t('coordSameModel')
+  }
+  return reasonOf(failure, t)
 }
 
 /** @param kind - a note's kind as served. @returns its label; an unknown kind is a « Note ». */
@@ -263,6 +275,17 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     lastWrite.current = Date.now()
     setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
   }
+
+  // The channel's coordination (#84): alone, or an author then a verifier.
+  const setChannelCoordination = useCallback(async (change: CoordinationChange): Promise<string | undefined> => {
+    if (chat?.setCoordination === undefined || chatId === undefined) return undefined
+    try {
+      replaceChannel(await chat.setCoordination(chatId, change))
+      return undefined
+    } catch (failure) {
+      return coordinationRefusal(failure, tc)
+    }
+  }, [chat, chatId, tc])
 
   // One click puts an agent in the open channel or takes it out (the team frame's pills).
   const toggleChatAgent = useCallback(async (agentId: string, inChannel: boolean): Promise<string | undefined> => {
@@ -1126,6 +1149,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   canManage={state.canWrite}
                   names={team.names}
                   documents={documents}
+                  onCoordination={chat.setCoordination === undefined ? undefined : setChannelCoordination}
+                  canCoordinate={state.canAdmin === true}
                   onMemory={() => { setContextOpen(false); setView('memory') }}
                 />
               </aside>

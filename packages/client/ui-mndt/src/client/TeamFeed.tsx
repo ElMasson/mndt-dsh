@@ -13,6 +13,7 @@ import type { ChatAgent, ChatMessage, ChatTurn } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
+import { coordinatedTurn } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
 
@@ -56,7 +57,12 @@ export function DaySeparator(props: { readonly at: string }): ReactNode {
 }
 
 /** One turn under the message that started it. */
-function WebTurn(props: { readonly turn: ChatTurn; readonly agent: ChatAgent | undefined; readonly t: ChatTranslate }): ReactNode {
+function WebTurn(props: {
+  readonly turn: ChatTurn
+  readonly agent: ChatAgent | undefined
+  readonly agents: ReadonlyMap<string, ChatAgent>
+  readonly t: ChatTranslate
+}): ReactNode {
   const { turn, agent, t } = props
   if (turn.status === 'queued' || turn.status === 'running') {
     return (
@@ -75,6 +81,9 @@ function WebTurn(props: { readonly turn: ChatTurn; readonly agent: ChatAgent | u
       </p>
     )
   }
+  // A coordinated turn (#84) says who wrote and who checked; unreadable steps fall back to the plain line.
+  const coordinated = coordinatedTurn(turn, props.agents, t)
+  if (coordinated !== undefined) return coordinated
   const seconds = turn.startedAt === undefined || turn.finishedAt === undefined
     ? undefined
     : (Date.parse(turn.finishedAt) - Date.parse(turn.startedAt)) / 1000
@@ -251,7 +260,7 @@ export function WebMessage(props: {
       ) : (
         <p className="mw-message-body">{m.text}</p>
       )}
-      {(m.turns ?? []).map(turn => <WebTurn key={turn.id} turn={turn} agent={agents.get(turn.agentId)} t={t} />)}
+      {(m.turns ?? []).map(turn => <WebTurn key={turn.id} turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />)}
       {waiting === 0 || props.onPending === undefined ? undefined : (
         <p className="mw-waiting">
           <Icon name="Inbox" size={14} />

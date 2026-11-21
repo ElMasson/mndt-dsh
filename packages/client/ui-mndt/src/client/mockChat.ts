@@ -234,6 +234,28 @@ export function createMockChat(
         return next
       })
     },
+    setCoordination(channelId, change) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        if (change.mode === 'solo') {
+          const { coordination: _gone, ...rest } = c
+          channels.set(c.id, rest)
+          return rest
+        }
+        // As the core (#84): two agents of the channel, on two different models.
+        const author = agents.get(change.authorId)
+        const verifier = agents.get(change.verifierId)
+        if (author === undefined || verifier === undefined || !c.agents.includes(author.id) || !c.agents.includes(verifier.id)) {
+          throw new ChatRefusal('author and verifier must be agents of the channel', 400)
+        }
+        if (author.provider === verifier.provider && author.model === verifier.model) {
+          throw new ChatRefusal('the verifier must run on another model than the author', 400)
+        }
+        const next = { ...c, coordination: { ...change } }
+        channels.set(c.id, next)
+        return next
+      })
+    },
     setConnectors(channelId, servers) {
       return settle(() => {
         const c = channelOf(channelId)
