@@ -436,6 +436,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [adminBusy, setAdminBusy] = useState<string | undefined>(undefined)
   const [grantEmail, setGrantEmail] = useState('')
   const [grantRole, setGrantRole] = useState<MemberRole>('viewer')
+  // A role change waiting for its confirmation (a promotion to admin or owner, any demotion).
+  type RoleChange = { readonly subject: string; readonly from?: MemberRole; readonly to: MemberRole }
+  const [confirming, setConfirming] = useState<RoleChange | undefined>(undefined)
+  const RANK: Readonly<Record<MemberRole, number>> = { viewer: 0, operator: 1, admin: 2, owner: 3 }
+  const readerRole = MEMBER_ROLES.find(r => r === state?.role)
+  // Only the roles this person may give: never owner but by an owner, never above their own role.
+  // A reader whose role is not served gives at most « Opérateur ».
+  const grantable = MEMBER_ROLES.filter(role => readerRole === undefined
+    ? RANK[role] <= RANK.operator
+    : RANK[role] <= RANK[readerRole] && (role !== 'owner' || readerRole === 'owner'))
+  /** @param subject - a person of the table. @param role - their role. @returns whether this reader may change their line. */
+  const canTouch = (subject: string, role: string): boolean =>
+    subject !== state?.you && (role !== 'owner' || readerRole === 'owner')
+  /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
+  const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
+    to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
   const [mandatePurpose, setMandatePurpose] = useState('')
   const [mandateDelegate, setMandateDelegate] = useState('')
   const [mandateUntil, setMandateUntil] = useState('')
@@ -1097,9 +1113,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               <span className="mndt-composer-note">{t('ui.elle-demarre-en-prive-cochez-le-partage')}</span>
             </div>
             <div className="mndt-composer-row">
-              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label={t('ui.type-de-mission')}>
-                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              <Segmented
+                label={t('ui.type-de-mission')}
+                value={kind}
+                options={MISSION_KINDS.map(option => ({ value: option.value, label: t(option.label) }))}
+                onChange={setKind}
+              />
               {state.canShare === true ? (
                 <label className="mndt-check">
                   <input type="checkbox" checked={share} onChange={(event) => { setShare(event.target.checked) }} />
@@ -1304,26 +1323,60 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
                   <span className="mndt-tag">{member.subject}</span>
-                  <select
-                    className="mndt-input"
-                    aria-label={t('ui.role-de-personne', { name: member.subject })}
-                    value={member.role}
-                    disabled={adminBusy === `grant:${member.subject}`}
-                    onChange={(event) => { void changeMemberRole(member.subject, event.target.value as MemberRole) }}
-                  >
-                    {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-                  </select>
-                  <button
-                    type="button"
-                    className="mndt-button"
-                    disabled={adminBusy === `revoke:${member.subject}`}
-                    onClick={() => { void revokeMemberNow(member.subject) }}
-                  >
-                    {t('ui.retirer')}
-                  </button>
+                  {canTouch(member.subject, member.role) ? (
+                    <>
+                      <Segmented
+                        label={t('ui.role-de-personne', { name: member.subject })}
+                        value={member.role}
+                        disabled={adminBusy === `grant:${member.subject}` || confirming !== undefined}
+                        options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                        onChange={(role) => {
+                          // A button gives one of the table's roles: found back, never cast.
+                          const chosen = grantable.find(r => r === role)
+                          if (chosen === undefined) return
+                          const from = MEMBER_ROLES.find(r => r === member.role)
+                          const change = { subject: member.subject, ...(from === undefined ? {} : { from }), to: chosen }
+                          if (asksFirst(from, chosen)) setConfirming(change)
+                          else void changeMemberRole(member.subject, chosen)
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="mndt-button"
+                        disabled={adminBusy === `revoke:${member.subject}`}
+                        onClick={() => { void revokeMemberNow(member.subject) }}
+                      >
+                        {t('ui.retirer')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="mndt-role" data-testid="member-role-fixed">{roleWord(member.role, t)}</span>
+                  )}
                 </div>
               ))}
               {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">{t('ui.aucune-personne')}</p> : undefined}
+              {confirming === undefined ? undefined : (
+                <div className="mndt-confirm" role="alertdialog" aria-label={t('ui.confirmer-le-role')} data-testid="role-confirm">
+                  <p>
+                    {confirming.from === undefined || RANK[confirming.to] > RANK[confirming.from]
+                      ? t('ui.confirmer-promotion', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, role: roleWord(confirming.to, t) })
+                      : t('ui.confirmer-retrogradation', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, from: roleWord(confirming.from, t), to: roleWord(confirming.to, t) })}
+                  </p>
+                  <button
+                    type="button"
+                    className="mndt-button"
+                    onClick={() => {
+                      const { subject, to } = confirming
+                      setConfirming(undefined)
+                      if (subject === '') void grantTypedMember()
+                      else void changeMemberRole(subject, to)
+                    }}
+                  >
+                    {t('ui.confirmer')}
+                  </button>
+                  <button type="button" className="mndt-button" onClick={() => { setConfirming(undefined) }}>{t('ui.annuler')}</button>
+                </div>
+              )}
             </div>
             <div className="mndt-post-actions">
               <input
@@ -1333,15 +1386,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 value={grantEmail}
                 onChange={(event) => { setGrantEmail(event.target.value) }}
               />
-              <select
-                className="mndt-input"
-                aria-label={t('ui.role-a-accorder')}
+              <Segmented
+                label={t('ui.role-a-accorder')}
                 value={grantRole}
-                onChange={(event) => { setGrantRole(event.target.value as MemberRole) }}
+                options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                onChange={setGrantRole}
+              />
+              <button
+                type="button"
+                className="mndt-button"
+                disabled={grantEmail.trim() === '' || adminBusy === 'grant' || confirming !== undefined || !grantable.includes(grantRole)}
+                onClick={() => {
+                  // Admin or owner to a new person: asked first, naming them. An empty subject marks the typed one.
+                  if (asksFirst(undefined, grantRole)) setConfirming({ subject: '', to: grantRole })
+                  else void grantTypedMember()
+                }}
               >
-                {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-              </select>
-              <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
                 {t('ui.accorder')}
               </button>
             </div>
@@ -1405,21 +1465,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <p className="mndt-channel-subject">{t('ui.tout-ce-qui-s-est-passe-dans')}</p>
           </div>
           <div className="mndt-channel-head-side">
-            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label={t('ui.filtrer-par-canal')}>
-              <option value="all">{t('ui.tous-les-canaux')}</option>
-              {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-            </select>
-            <select
-              className="mndt-input"
+            <Segmented
+              label={t('ui.filtrer-par-canal')}
+              value={activityChannel}
+              options={[{ value: 'all', label: t('ui.tous-les-canaux') }, ...channels.map(candidate => ({ value: candidate.id, label: candidate.name }))]}
+              onChange={setActivityChannel}
+            />
+            <Segmented
+              label={t('ui.filtrer-l-activite')}
               value={activityFilter}
-              onChange={(event) => { setActivityFilter(event.target.value as 'all' | 'humans' | 'agents' | 'me') }}
-              aria-label={t('ui.filtrer-l-activite')}
-            >
-              <option value="all">{t('ui.tout')}</option>
-              <option value="humans">{t('ui.humains')}</option>
-              <option value="agents">{t('ui.agents')}</option>
-              <option value="me">{t('ui.moi')}</option>
-            </select>
+              options={[
+                { value: 'all', label: t('ui.tout') },
+                { value: 'humans', label: t('ui.humains') },
+                { value: 'agents', label: t('ui.agents') },
+                { value: 'me', label: t('ui.moi') },
+              ] as const}
+              onChange={setActivityFilter}
+            />
             <button type="button" className="mndt-button" onClick={markAllRead}>{t('ui.tout-marquer-comme-lu')}</button>
             <button type="button" className="mndt-button" onClick={exportActivity}>{t('ui.exporter-en-csv')}</button>
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
@@ -1878,5 +1940,42 @@ function PostView(props: {
       </div>
       {open && body.brief !== undefined ? <div className="mndt-brief-body">{renderBrief(body.brief.markdown)}</div> : undefined}
     </article>
+  )
+}
+
+/** @param role - a role of the grant table. @param t - the copy. @returns its name for a person. */
+function roleWord(role: string, t: MndtTranslate): string {
+  return role === 'owner' ? t('shell.role-owner')
+    : role === 'admin' ? t('shell.role-admin')
+      : role === 'operator' ? t('shell.role-operator')
+        : role === 'viewer' ? t('shell.role-viewer') : role
+}
+
+/**
+ * A choice among a few values, as buttons side by side rather than a drop-down (Stéphane's rule):
+ * every option is visible, one click chooses.
+ */
+function Segmented<V extends string>(props: {
+  readonly label: string
+  readonly value: V
+  readonly options: readonly { readonly value: V; readonly label: string }[]
+  readonly onChange: (value: V) => void
+  readonly disabled?: boolean
+}): ReactNode {
+  return (
+    <div className="mndt-segmented" role="group" aria-label={props.label}>
+      {props.options.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          className="mndt-segment"
+          aria-pressed={option.value === props.value}
+          disabled={props.disabled === true}
+          onClick={() => { if (option.value !== props.value) props.onChange(option.value) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 }

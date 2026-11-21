@@ -326,6 +326,17 @@ export const CSS = `
 .mndt-event-button:hover { background: #F0EFED; }
 
 
+.mndt-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #0C0F17; border-radius: 12px; }
+.mndt-confirm p { margin: 0; flex: 1 1 100%; font-weight: 500; }
+.mndt-segmented { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.mndt-segment {
+  padding: 5px 10px; border: 1px solid var(--mndt-border, #E2E4E9); border-radius: 999px;
+  background: var(--mndt-card, #FFFFFF); color: var(--mndt-text, #0C0F17); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.mndt-segment[aria-pressed="true"] { border-color: #0C0F17; background: #0C0F17; color: #FFFFFF; }
+.mndt-segment:disabled { cursor: default; opacity: 0.55; }
+@media (max-width: 767px) { .mndt-segment { min-height: 36px; } }
+
 .mndt-mobile-bar { display: none; gap: 6px; align-items: center; width: 100%; }
 .mndt-mobile-bar .mndt-input { max-width: 200px; }
 @media (max-width: 820px) {

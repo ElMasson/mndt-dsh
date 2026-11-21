@@ -188,8 +188,12 @@ describe('collaboration page', () => {
       return found
     })
     const before = rows.length
-    const filter = screen.getByLabelText(/Filtrer par canal/) as HTMLSelectElement
-    fireEvent.change(filter, { target: { value: 'mandate:mnd_1' } })
+    // One click on the channel, no list to open.
+    const filter = screen.getByRole('group', { name: /Filtrer par canal/ })
+    const mandate = within(filter).getAllByRole('button').find(button => button.textContent?.startsWith('Reporting marketing'))
+    expect(mandate).toBeTruthy()
+    if (mandate !== undefined) fireEvent.click(mandate)
+    expect(mandate?.getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => {
       expect(document.querySelectorAll('.mndt-activity .mndt-event-post').length).toBeLessThan(before + 1)
     })
@@ -419,5 +423,75 @@ describe('the team channels of lot 1 in the page', () => {
     expect(note.textContent).toContain('Team channels are not served on this workstation.')
     expect(note.textContent).toContain('the product API is not served on this workstation')
     expect(await rail()).toBeTruthy()
+  })
+})
+
+describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }, () => {
+  const grantMember = vi.fn(async (subject: string, role: string) => ({ ok: true, value: { subject, role } }))
+  /** @param role - the reader's role. @returns the administration view, opened. */
+  async function admin(role: string, you = 'chef@datanalysis.re'): Promise<void> {
+    grantMember.mockClear()
+    const api = fakeFace({
+      state: async () => state({ you, role }),
+      members: async () => [
+        { subject: 'duke@datanalysis.re', role: 'owner' },
+        { subject: 'chef@datanalysis.re', role: 'admin' },
+        { subject: 'smarion@datanalysis.re', role: 'operator' },
+        { subject: 'lecteur@datanalysis.re', role: 'viewer' },
+      ],
+      grantMember,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    await screen.findByRole('group', { name: 'rôle à accorder' })
+    await waitFor(() => { expect(screen.getAllByText('lecteur@datanalysis.re').length).toBeGreaterThan(0) })
+  }
+  const group = (name: string): HTMLElement => screen.getByRole('group', { name })
+
+  it('an admin offers no Owner, and has no button on their own line nor on the owner\'s', async () => {
+    await admin('admin')
+    expect(screen.queryByRole('group', { name: 'rôle de duke@datanalysis.re' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'rôle de chef@datanalysis.re' })).toBeNull()
+    expect(screen.getAllByTestId('member-role-fixed').map(e => e.textContent)).toEqual(['Owner', 'Admin'])
+    expect(within(group('rôle de smarion@datanalysis.re')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin'])
+    expect(within(group('rôle à accorder')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin'])
+  })
+
+  it('a promotion to admin is asked first, naming the person and the role; « Annuler » sends nothing', async () => {
+    await admin('admin')
+    fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Admin' }))
+    expect(screen.getByTestId('role-confirm').textContent).toContain('Faire de smarion@datanalysis.re un Admin ?')
+    fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Annuler' }))
+    expect(screen.queryByTestId('role-confirm')).toBeNull()
+    expect(grantMember).not.toHaveBeenCalled()
+    fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Admin' }))
+    fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Confirmer' }))
+    await waitFor(() => { expect(grantMember).toHaveBeenCalledWith('smarion@datanalysis.re', 'admin') })
+  })
+
+  it('a demotion is asked first; a promotion below admin is not', async () => {
+    await admin('admin')
+    fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Lecteur' }))
+    expect(screen.getByTestId('role-confirm').textContent).toContain('Passer smarion@datanalysis.re de Opérateur à Lecteur ?')
+    fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Annuler' }))
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect(screen.queryByTestId('role-confirm')).toBeNull()
+    await waitFor(() => { expect(grantMember).toHaveBeenCalledWith('lecteur@datanalysis.re', 'operator') })
+  })
+
+  it('admin to a new person is asked first too', async () => {
+    await admin('admin')
+    fireEvent.change(screen.getByLabelText('adresse de la personne à accorder'), { target: { value: 'nouveau@datanalysis.re' } })
+    fireEvent.click(within(group('rôle à accorder')).getByRole('button', { name: 'Admin' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
+    expect(screen.getByTestId('role-confirm').textContent).toContain('Faire de nouveau@datanalysis.re un Admin ?')
+    fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Confirmer' }))
+    await waitFor(() => { expect(grantMember).toHaveBeenCalledWith('nouveau@datanalysis.re', 'admin') })
+  })
+
+  it('the owner offers Owner and may change another owner\'s line, never their own', async () => {
+    await admin('owner', 'duke@datanalysis.re')
+    expect(screen.queryByRole('group', { name: 'rôle de duke@datanalysis.re' })).toBeNull()
+    expect(within(group('rôle de chef@datanalysis.re')).getAllByRole('button').map(b => b.textContent)).toEqual(['Lecteur', 'Opérateur', 'Admin', 'Owner'])
   })
 })

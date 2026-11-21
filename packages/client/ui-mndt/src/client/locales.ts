@@ -341,6 +341,14 @@ export const en = {
   'shell.settings-automations': 'The workspace\'s scheduled tasks.',
   'shell.settings-legacy': 'Missions and briefs, the owner\'s.',
   'shell.owner-only': 'Reserved to the owner of the workspace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Operator',
+  'shell.role-viewer': 'Reader',
+  'ui.confirmer': 'Confirm',
+  'ui.confirmer-le-role': 'Confirm the role',
+  'ui.confirmer-promotion': 'Make {name} {role}?',
+  'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -686,6 +694,14 @@ export const fr: Record<MndtKey, string> = {
   'shell.settings-automations': 'Les tâches planifiées de l\'espace.',
   'shell.settings-legacy': 'Missions et briefs, réservés au propriétaire.',
   'shell.owner-only': 'Réservé au propriétaire de l\'espace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Opérateur',
+  'shell.role-viewer': 'Lecteur',
+  'ui.confirmer': 'Confirmer',
+  'ui.confirmer-le-role': 'Confirmer le rôle',
+  'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
+  'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
 }
 
 /** Substitution values for a message. */
