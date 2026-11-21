@@ -3,7 +3,7 @@ import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import type { Channel, Message, PriceGrid } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
-import { TurnScheduler } from '../src/turns.ts'
+import { TurnBudgetReached, TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 
 const owner = 'duke@datanalysis.re'
@@ -20,8 +20,11 @@ const noMissions: MissionRunner = {
 class ScriptedEngine implements TurnEngine {
   readonly seen: TurnInput[] = []
   synthesis = 'synthèse'
+  /** Called before answering: to stop the turn, or to throw. */
+  before?: (input: TurnInput) => void
   async run(input: TurnInput): Promise<TurnOutput> {
     this.seen.push(input)
+    this.before?.(input)
     const text = input.turnId.endsWith('-s') ? this.synthesis : `part de ${input.agent.handle}`
     return { text, tokens: { input: 1_000_000, output: 0 } }
   }
@@ -149,7 +152,11 @@ describe('« en parallèle puis synthèse »: a turn', () => {
     const { asked, replies } = await ask(b, channel, '@synthese fais le point')
     const [w1, w2, synthesis] = b.engine.seen
     expect([w1?.agent.id, w2?.agent.id, synthesis?.agent.id]).toEqual([first, second, synthesizer])
-    expect(w1?.tools).toBeUndefined()
+    expect(w1?.tools).toBe('no-cards')
+    expect(w1?.prompt).toContain('Tu ne demandes aucune action et aucune carte')
+    expect(w1?.budget?.eur).toBe(5)
+    expect(w2?.budget?.eur).toBe(4)
+    expect(synthesis?.prompt).toContain('cite le @handle')
     expect(synthesis?.tools).toBe('none')
     expect(synthesis?.servers).toEqual([])
     expect(new Set(b.engine.seen.map(input => input.runId)).size).toBe(1)
@@ -162,6 +169,7 @@ describe('« en parallèle puis synthèse »: a turn', () => {
     expect(replies.map(m => m.text)).toEqual(['synthèse'])
     const turn = asked?.turns?.[0]
     expect(turn?.steps?.map(step => step.role)).toEqual(['worker', 'worker', 'synthesis'])
+    expect(turn?.steps?.map(step => step.text)).toEqual(['part de alpha', 'part de beta', undefined])
     expect(turn?.eur).toBe(5)
     expect(turn?.tokens).toEqual({ input: 3_000_000, output: 0 })
   })
@@ -175,7 +183,8 @@ describe('« en parallèle puis synthèse »: a turn', () => {
     const steps = asked?.turns?.[0]?.steps
     expect(steps?.[1]).toMatchObject({ role: 'worker', agentId: second, verdict: 'skipped' })
     expect(steps?.[2]).toMatchObject({ role: 'synthesis', verdict: 'skipped' })
-    expect(replies.at(-1)?.text).toBe('Part de @alpha :\npart de alpha\n\nNon synthétisé : le coût du tour a atteint sa borne (1 €).')
+    expect(steps?.[0]).toMatchObject({ role: 'worker', text: 'part de alpha' })
+    expect(replies.at(-1)?.text).toBe('Non synthétisé : le coût du tour atteindrait sa borne (1 €).\n\nLes parts de @alpha sont dans le détail du tour.')
   })
 
   it('names a missing part to the synthesis (a retired worker)', async () => {
@@ -207,5 +216,46 @@ describe('« en parallèle puis synthèse »: a turn', () => {
     const { replies } = await ask(b, channel, '@synthese fais le point')
     expect(b.engine.seen).toHaveLength(0)
     expect(replies.at(-1)?.text).toMatch(/^Aucune part n’a abouti : /)
+  })
+
+  it('reserves the largest estimated cost of a call: skipped when it would pass the bound', async () => {
+    const b = bench()
+    const { first, second, synthesizer, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'parallel-synthesis', workers: [first, second], synthesizer, maxEurPerTurn: 1.01 })
+    const { asked } = await ask(b, channel, '@synthese fais le point')
+    // alpha spent 1 €; beta (4 €/M out) would reserve 8192 output tokens, over 0.01 €.
+    expect(b.engine.seen.map(input => input.agent.handle)).toEqual(['alpha'])
+    expect(asked?.turns?.[0]?.steps?.[1]).toMatchObject({ agentId: second, verdict: 'skipped', notes: ['le coût du tour atteindrait sa borne (1.01 €)'] })
+    expect(asked?.turns?.[0]?.eur).toBe(1)
+  })
+
+  it('a call stopped at the bound counts what it used and is a missing part', async () => {
+    const b = bench()
+    const { first, second, synthesizer, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'parallel-synthesis', workers: [first, second], synthesizer, maxEurPerTurn: 5 })
+    b.engine.before = (input) => { if (input.turnId.endsWith('-w2')) throw new TurnBudgetReached({ input: 100_000, output: 0 }) }
+    const { asked } = await ask(b, channel, '@synthese fais le point')
+    const steps = asked?.turns?.[0]?.steps
+    expect(steps?.[1]).toMatchObject({ agentId: second, verdict: 'skipped', eur: 0.3, notes: ['le coût du tour a atteint sa borne pendant l’appel'] })
+    const synthesis = b.engine.seen.find(input => input.turnId.endsWith('-s'))
+    expect(synthesis?.prompt).toContain('Parts manquantes : @beta (le coût du tour a atteint sa borne pendant l’appel)')
+    expect(asked?.turns?.[0]?.eur).toBe(2.3)
+  })
+
+  it('a stop during a worker is « tour arrêté », and what was spent still counts', async () => {
+    const b = bench()
+    const { first, second, synthesizer, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'parallel-synthesis', workers: [first, second], synthesizer, maxEurPerTurn: 5 })
+    b.engine.before = (input) => {
+      if (!input.turnId.endsWith('-w2')) return
+      b.turns.stop({ channelId: channel, agentId: synthesizer })
+      throw new Error('turn stopped')
+    }
+    const { asked, replies } = await ask(b, channel, '@synthese fais le point')
+    const turn = asked?.turns?.[0]
+    expect(turn?.status).toBe('cancelled')
+    expect(turn?.steps?.[1]).toMatchObject({ agentId: second, verdict: 'skipped', notes: ['tour arrêté'] })
+    expect(turn?.eur).toBe(1)
+    expect(replies).toHaveLength(0)
   })
 })

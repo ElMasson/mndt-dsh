@@ -71,6 +71,17 @@ export function channelPolicy(servers: readonly string[]): ToolPolicy {
  */
 export const NO_TOOLS_POLICY: ToolPolicy = { servers: new Set(), tools: new Set() }
 
+/**
+ * @param servers - the agent's servers that the channel allows.
+ * @returns the policy of a step that gathers but asks for nothing: its
+ * connectors, without the approvals (a worker of « en parallèle puis
+ * synthèse »: up to four workers must not ask four cards for one action).
+ */
+export function noCardsPolicy(servers: readonly string[]): ToolPolicy {
+  const connectors = servers.filter(isServerName).filter(server => !ALWAYS_SERVERS.includes(server))
+  return { servers: new Set(connectors), tools: new Set(ALLOWED_TOOLS) }
+}
+
 /** The policy of a mission on a team instance: MCP tools only, never the engine's own. */
 export const TEAM_MISSION_POLICY: ToolPolicy = { servers: 'any', tools: new Set(ALLOWED_TOOLS) }
 

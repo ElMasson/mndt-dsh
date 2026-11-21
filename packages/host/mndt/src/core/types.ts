@@ -268,6 +268,12 @@ export interface TurnStep {
   readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
   /** What the verifier asked to fix, or why the check did not happen. */
   readonly notes?: readonly string[]
+  /**
+   * A worker's part (« en parallèle puis synthèse »), kept apart from the
+   * published text: the screen presents each part under its agent, so a part
+   * cannot write a heading that passes for another agent's part.
+   */
+  readonly text?: string
 }
 
 /** Who wrote a message. */
