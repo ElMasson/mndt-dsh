@@ -93,6 +93,10 @@ export interface ChannelDraft {
 
 /** The default monthly ceiling of an agent, in euros. */
 export const DEFAULT_EUR_PER_MONTH = 5
+/** The highest monthly ceiling of an agent, whoever sets it (21/11, rule of C on #81). */
+export const MAX_EUR_PER_MONTH = 50
+/** The longest framing of an agent, in characters: it is added to every turn. */
+export const MAX_INSTRUCTIONS = 2000
 
 /** An MCP server name, as the MCP client accepts it. */
 const SERVER = /^[A-Za-z0-9_-]{1,32}$/
@@ -726,11 +730,18 @@ export class WorkbenchService {
    * Declare an agent.
    * @param draft - handle, name, model and connectors.
    * @param actor - who declares it.
+   * @param role - their role: only the owner gives a ceiling above the default.
    * @returns the agent.
    */
-  createAgent(draft: AgentDraft, actor: string): Promise<Agent> {
+  createAgent(draft: AgentDraft, actor: string, role?: Role): Promise<Agent> {
     const refusal = agentRefusal(draft)
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    // A ceiling above the default is the owner's to give, at creation as at a
+    // change: an admin cannot create an agent at 50 € a month, nor recreate under
+    // another handle one the owner bounded.
+    if ((draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+      return Promise.reject(new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`))
+    }
     return this.#write((state) => {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
         throw new Error(`the handle @${draft.handle} is taken`)
@@ -1119,6 +1130,11 @@ function agentRefusal(agent: AgentDraft): string | undefined {
   if (agent.name.trim() === '') return 'an agent needs a name'
   if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
   const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
+  if (typeof ceiling === 'number' && ceiling > MAX_EUR_PER_MONTH) return `a monthly ceiling is ${MAX_EUR_PER_MONTH} € at most: ${ceiling}`
+  // The framing is added to every turn, so to its cost.
+  if (agent.instructions !== undefined && agent.instructions.trim().length > MAX_INSTRUCTIONS) {
+    return `the instructions are ${MAX_INSTRUCTIONS} characters at most (${agent.instructions.trim().length})`
+  }
   if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling <= 0) return 'a monthly ceiling is a positive number of euros'
   return serversRefusal(agent.connectors ?? [])
 }

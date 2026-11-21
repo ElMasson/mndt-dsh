@@ -335,6 +335,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const eurPerMonth = typeof input.eurPerMonth === 'number' ? input.eurPerMonth : undefined
         const text = (key: string): string | undefined => (typeof input[key] === 'string' ? input[key] : undefined)
         if (parts.length === 1) {
+          const table = await grants.grants()
+          const creatorRole = table.ok ? roleOf(table.grants, identity) : undefined
           const agent = await service.createAgent({
             handle: text('handle') ?? '',
             name: text('name') ?? '',
@@ -343,7 +345,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
             ...(connectors === undefined ? {} : { connectors }),
             ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
-          }, identity)
+          }, identity, creatorRole)
           return respond(201, { agent })
         }
         const table = await grants.grants()

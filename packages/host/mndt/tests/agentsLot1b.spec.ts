@@ -202,3 +202,33 @@ describe('creating, changing and retiring an agent: owners and admins only', () 
     ).toBe(404)
   })
 })
+
+describe('the ceiling and the framing of a new agent', () => {
+  it('gives a ceiling above 5 € to the owner only, and 50 € a month at most to anyone', async () => {
+    const { call } = bench()
+    const above = await call('POST', '/agents', 'admin', { ...draft, handle: 'cher', eurPerMonth: 20 })
+    expect(above.status).toBe(400)
+    expect(String(above.body.error)).toContain('only the owner gives an agent a ceiling above 5')
+    expect((await call('POST', '/agents', 'admin', { ...draft, handle: 'borne', eurPerMonth: 5 })).status).toBe(201)
+    expect((await call('POST', '/agents', 'admin', { ...draft, handle: 'petit', eurPerMonth: 2 })).status).toBe(201)
+    expect((await call('POST', '/agents', 'owner', { ...draft, handle: 'vingt', eurPerMonth: 20 })).status).toBe(201)
+    for (const who of ['owner', 'admin']) {
+      const tooMuch = await call('POST', '/agents', who, { ...draft, handle: `trop-${who}`, eurPerMonth: 10000 })
+      expect(tooMuch.status, who).toBe(400)
+      expect(String(tooMuch.body.error), who).toContain('50 € at most')
+    }
+    // A change keeps the same bound.
+    const id = ((await call('POST', '/agents', 'owner', { ...draft, handle: 'change' })).body.agent as { id: string }).id
+    expect((await call('POST', `/agents/${id}`, 'owner', { eurPerMonth: 51 })).status).toBe(400)
+  })
+
+  it('bounds the instructions at 2,000 characters, added to every turn', async () => {
+    const { call } = bench()
+    expect((await call('POST', '/agents', 'owner', { ...draft, handle: 'long', instructions: 'x'.repeat(2000) })).status).toBe(201)
+    const tooLong = await call('POST', '/agents', 'owner', { ...draft, handle: 'trop-long', instructions: 'x'.repeat(2001) })
+    expect(tooLong.status).toBe(400)
+    expect(String(tooLong.body.error)).toContain('2000 characters at most')
+    const id = ((await call('POST', '/agents', 'owner', { ...draft, handle: 'court' })).body.agent as { id: string }).id
+    expect((await call('POST', `/agents/${id}`, 'owner', { instructions: 'y'.repeat(2001) })).status).toBe(400)
+  })
+})
