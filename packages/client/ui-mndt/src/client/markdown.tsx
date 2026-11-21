@@ -38,7 +38,10 @@ export function renderBrief(markdown: string): ReactNode[] {
     // closed by a fence of the same mark at least as long, or by the end of the text when the
     // agent never closed it. Its markers are never shown.
     const fence = /^(`{3,}|~{3,})\s*([^`\s]*)/u.exec(trimmed)
-    if (fence !== null) {
+    // As CommonMark: a backtick fence whose rest holds a backtick is inline code (« ```npm i``` »),
+    // never the opening of a block that would turn the rest of the answer into code.
+    const inline = fence !== null && (fence[1] ?? '').startsWith('`') && trimmed.slice((fence[1] ?? '').length).includes('`')
+    if (fence !== null && !inline) {
       flush()
       const mark = fence[1] ?? '```'
       const language = fence[2] ?? ''

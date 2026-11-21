@@ -41,6 +41,18 @@ describe('fenced code blocks in what an agent writes', () => {
     expect(box.querySelector('b, strong, table, ul')).toBeNull()
   })
 
+  it('a line that opens and closes with backticks is inline code, not a block swallowing the rest', () => {
+    // From the review of #80: « ```npm install``` puis relancer » must not open a block in « npm ».
+    const box = shown('```npm install``` puis relancer.\n\nEnsuite, vérifiez.')
+    expect(box.querySelector('pre')).toBeNull()
+    const paragraphs = [...box.querySelectorAll('p')].map(p => p.textContent)
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]).toContain('npm install')
+    expect(paragraphs[1]).toBe('Ensuite, vérifiez.')
+    // Tildes are not concerned: a tilde fence may carry a backtick in its rest.
+    expect(shown('~~~ a`b\nx\n~~~').querySelector('pre code')?.textContent).toBe('x')
+  })
+
   it('a longer fence closes only on a fence at least as long; a shorter one is content', () => {
     expect(shown('````\n```\nin\n```\n````').querySelector('pre code')?.textContent).toBe('```\nin\n```')
   })
