@@ -24,7 +24,7 @@ import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
-import { can, roleOf } from './policy.ts'
+import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
@@ -82,7 +82,14 @@ interface UsageTotals {
 
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
-  readonly authority?: { readonly baseUrl: string; readonly token: string }
+  readonly authority?: {
+    readonly baseUrl: string
+    readonly token: string
+    /** How long a role change waits for the authority (AUTHORITY_TIMEOUT_MS by default). */
+    readonly timeoutMs?: number
+  }
+  /** Where the roles come from when there is no authority (« file » by default). */
+  readonly rolesFrom?: 'file' | 'local'
   /** The briefing schedule file, editable from the page. */
   readonly schedulePath?: string
   /** The automation registry, editable from the page. */
@@ -183,6 +190,9 @@ function journalCsv(events: readonly WorkbenchEvent[]): string {
  * @param options - service, runner, identity and rights.
  * @returns the handler.
  */
+/** How long a role change waits for the team authority, in milliseconds. */
+export const AUTHORITY_TIMEOUT_MS = 10_000
+
 export function createMndtApi(options: MndtApiOptions): MndtApi {
   const { service, runner, grants } = options
 
@@ -192,7 +202,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     capability: 'workflows.write' | 'rights.write' | 'rights.read' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
-    if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+    if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
     const decision = can(table.grants, identity, capability)
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
@@ -210,6 +220,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     const table = await grants.grants()
     const owner = table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner')
     return owner ? undefined : respond(404, { error: 'not found' })
+  }
+
+  /** Role changes, one at a time: the table is read again inside the section. */
+  let roleChanges: Promise<unknown> = Promise.resolve()
+  const serialRoleChange = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = roleChanges.then(work, work)
+    roleChanges = next.catch(() => undefined)
+    return next
   }
 
   /** A team instance: people other than the owner reach this API through the sign-on proxy. */
@@ -510,6 +528,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           canWrite: decision.allowed,
           ...(role === undefined ? {} : { role }),
           canAdmin,
+          rolesFrom: options.authority !== undefined ? 'authority' : (options.rolesFrom ?? 'file'),
           canShare,
           missions: snapshot.missions.filter(mission => canReadMission(reader, mission)).slice(0, 30),
           briefs: snapshot.briefs.filter(brief => canReadMission(reader, brief)).slice(0, 30),
@@ -1163,34 +1182,71 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const authority = options.authority
         if (authority === undefined) {
-          return respond(503, { error: 'this deployment has no team authority to write to' })
+          return respond(503, { code: 'no-authority', error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
-        const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
+        const raw = typeof input.subject === 'string' ? input.subject : ''
+        // Printable ASCII only, as for a proven identity (isPlainAscii in #75):
+        // toLowerCase() folds a few Unicode characters onto ASCII ones.
+        if (raw.trim() !== '' && !/^[\x21-\x7e]+$/.test(raw.trim())) {
+          return respond(400, { error: 'the subject is not a plain ASCII e-mail' })
+        }
+        const subject = raw.trim().toLowerCase()
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }
+        let next: 'viewer' | 'operator' | 'admin' | 'owner' | undefined
         if (path === '/members/grant') {
           if (input.role !== 'viewer' && input.role !== 'operator' && input.role !== 'admin' && input.role !== 'owner') {
             return respond(400, { error: 'role must be viewer, operator, admin or owner' })
           }
+          next = input.role
           body.role = input.role
         }
-        let answer: { status: number; body: unknown }
-        try {
-          // The authority names its write routes /governance/grant and
-          // /governance/revoke; the product exposes them under /members.
-          const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
-          const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
-            body: JSON.stringify(body),
+        // Reading the table, checking and forwarding are one section, one change
+        // at a time for the team: two owners removing each other at once would
+        // otherwise each read two owners and leave none.
+        return serialRoleChange(async () => {
+          // The authority is called with this deployment's token, not the caller's:
+          // who may change whose role is decided here, on the current table.
+          const table = await grants.grants()
+          if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
+          const before = roleOf(table.grants, subject)
+          const refusal = roleChangeRefusal(table.grants, identity, subject, next)
+          if (refusal !== undefined) {
+            await service.recordRoleChange(identity, subject, { before, after: next, outcome: `refused: ${refusal.reason}` })
+            return respond(refusal.status, { error: refusal.reason })
+          }
+          let answer: { status: number; body: unknown }
+          try {
+            // The authority names its write routes /governance/grant and
+            // /governance/revoke; the product exposes them under /members.
+            const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
+            const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
+            // Bounded: changes wait in one line, so an authority that does not
+            // answer must not hold every role change behind it.
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS),
+            })
+            answer = { status: response.status, body: await response.json().catch(() => ({})) }
+          } catch (error) {
+            const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+            await service.recordRoleChange(identity, subject, {
+              before, after: next, outcome: timedOut ? 'not applied: authority did not answer in time' : 'not applied: authority unreachable',
+            })
+            return timedOut
+              ? respond(504, { error: `the authority did not answer within ${(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS) / 1000} s: the role is unchanged` })
+              : respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+          }
+          await service.recordRoleChange(identity, subject, {
+            before,
+            after: next,
+            outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
           })
-          answer = { status: response.status, body: await response.json().catch(() => ({})) }
-        } catch (error) {
-          return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
-        }
-        return respond(answer.status, answer.body)
+          return respond(answer.status, answer.body)
+        })
       }
 
       if (request.method === 'GET' && path === '/connectors') {

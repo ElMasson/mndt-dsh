@@ -124,6 +124,9 @@ export function canReadEvent(
     }
     case 'agent':
       return true
+    // Role changes asked through the members routes: for those who administer rights.
+    case 'member':
+      return reader.decider
     default:
       return false
   }
