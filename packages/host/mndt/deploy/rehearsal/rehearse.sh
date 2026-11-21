@@ -278,4 +278,7 @@ else
   echo "KO  counter-proof  the reference image $old_image is absent (REHEARSAL_COUNTER_IMAGE): no counter-proof"; proved=1
 fi
 
-[ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
+step "8. the role file row by row (#75), through the gateway"
+bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
+
+[ "$granted" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]

@@ -59,6 +59,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [[ $owner =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "--owner <email> is required" >&2; exit 1; }
+# Plain ASCII only: the gateway and the API never take another spelling for the owner.
+LC_ALL=C; [[ $owner =~ ^[!-~]+$ ]] || { echo "--owner must be a plain ASCII e-mail address" >&2; exit 1; }; unset LC_ALL
 [ -n "$email_domains" ] || email_domains=${domain#*.}
 [ -n "$org_name" ] || org_name=$(printf '%s' "$slug" | tr '[:lower:]' '[:upper:]')
 # Rendered by sed into a Compose file: a sed or Compose special character would
