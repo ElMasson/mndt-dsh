@@ -139,7 +139,7 @@ echo "$with" | grep -q '^RUNNER .*landlock' || { echo "KO  runner         not La
 # The names a confined command sees: none may look like a credential (a kept
 # prefix such as DSH_ must not bring one).
 names=$(echo "$with" | sed -n 's/^environment names: //p' | head -1)
-if [ -n "$names" ] && ! printf '%s\n' $names | grep -qiE 'KEY|TOKEN|SECRET|PASSWORD'; then echo "OK  env-names      a confined command sees only: $names"
+if [ -n "$names" ] && ! printf '%s\n' $names | grep -qiE 'KEY|TOKEN|SECRET|PASSWORD|CRED|AUTH|PASS|PRIVATE|COOKIE'; then echo "OK  env-names      a confined command sees only: $names"
 else echo "KO  env-names      credential-shaped names, or none printed: « $names »"; ok=1; fi
 
 # The real executor path, INSIDE the image: one process, one provider, the real

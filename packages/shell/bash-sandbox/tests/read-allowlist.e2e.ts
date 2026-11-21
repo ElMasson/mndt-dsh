@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,6 +55,21 @@ describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list 
     expect(spawnSync(launcherPath(), ['--ro', '/', '--keep-env', 'PATH', '--keep-env-prefix', 'LC_', '--set-env', 'A=1', '--', 'true']).status).toBe(0)
   })
 
+  it('resolves the command in its own PATH, never in one the filtered environment carries', async () => {
+    // A trapped `true`, readable under the ruleset, that leaves a witness if it ever runs.
+    const trap = await mkdtemp(join(homedir(), 'dsh-path-trap-'))
+    tempDirs.push(trap)
+    const witness = join(trap, 'witness')
+    writeFileSync(join(trap, 'true'), `#!/bin/sh\necho trapped > ${witness}\n`, { mode: 0o755 })
+    // 1. through --set-env PATH;
+    const set = spawnSync(launcherPath(), ['--ro', '/', '--rw', trap, '--set-env', `PATH=${trap}`, '--', 'true'])
+    // 2. through a kept PATH of the launcher's caller (spec.env of a command).
+    const kept = spawnSync(launcherPath(), ['--ro', '/', '--rw', trap, '--keep-env', 'PATH', '--', 'true'],
+      { env: { PATH: `${trap}:/usr/bin:/bin` } })
+    expect([set.status, kept.status]).toEqual([0, 0])
+    expect(existsSync(witness)).toBe(false)
+  })
+
   it('keeps sessions and workflow calls apart, and a caller-added credential out of the command', async () => {
     process.env.DSH_SANDBOX_READ_ROOTS = '/usr:/lib:/lib64:/bin:/sbin:/etc:/dev/null:/dev/urandom'
     const workspace = await mkdtemp(join(homedir(), 'dsh-allowlist-e2e-'))
@@ -88,7 +103,7 @@ describe.skipIf(!landlockUsable || !filters)('bash-sandbox: the read allow-list 
     // Printed for the rehearsal: the names a confined command really sees.
     console.log(`ENV-NAMES ${names.join(' ')}`)
     // A kept prefix (DSH_) must never bring a credential-shaped name.
-    for (const name of names) expect(name, name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD/i)
+    for (const name of names) expect(name, name).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD|CRED|AUTH|PASS|PRIVATE|COOKIE/i)
     for (const name of names) expect(['GIT_PAGER', 'HOME', 'NODE_VERSION', 'NODE_OPTIONS', 'NO_COLOR', 'PAGER', 'PATH', 'PWD', 'SHLVL', '_', 'TEMP', 'TERM', 'TMP', 'TMPDIR', 'LANG', 'LANGUAGE', 'TZ', 'USER', 'LOGNAME', 'SHELL'].includes(name) || /^(LC_|DSH_)/.test(name), name).toBe(true)
     const dirA = /dir=(\S+)/.exec(turnA.stdout.text)?.[1] ?? ''
     expect(existsSync(join(dirA, 'note'))).toBe(true)
