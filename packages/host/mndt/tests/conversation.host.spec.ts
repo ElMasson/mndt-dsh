@@ -16,6 +16,8 @@ const viewer = 'contact@datanalysis.re'
 const asOwner = { authorization: 'Bearer tok-owner' }
 const asAdmin = { authorization: 'Bearer tok-admin' }
 const asViewer = { authorization: 'Bearer tok-viewer' }
+const operator = 'operateur@datanalysis.re'
+const asOperator = { authorization: 'Bearer tok-operator' }
 
 const PRICES: PriceGrid = {
   'scaleway-genapi/deepseek-v4.1-flash': { input: 100, output: 100 },
@@ -66,6 +68,7 @@ function bench(prices: PriceGrid = PRICES) {
         'tok-owner': { user: owner },
         'tok-admin': { user: admin },
         'tok-viewer': { user: viewer },
+        'tok-operator': { user: operator },
       },
     },
     grants: {
@@ -75,6 +78,7 @@ function bench(prices: PriceGrid = PRICES) {
           { subject: owner, role: 'owner' },
           { subject: admin, role: 'admin' },
           { subject: viewer, role: 'viewer' },
+          { subject: operator, role: 'operator' },
         ],
       }),
     },
@@ -585,10 +589,17 @@ describe('the connectors of a channel, added and removed one at a time', () => {
     expect(seenByViewer.events.some(event => event.action === 'channel.connectors')).toBe(false)
   })
 
-  it('asks workflows.write: a viewer changes nothing', async () => {
+  it('is reserved to owners and admins: an operator or a viewer of the channel changes nothing', async () => {
     const b = bench()
-    const id = await channel(b, 'lecture', [], [], [admin, viewer])
-    const denied = await b.call('POST', `/channels/${id}/connectors`, asViewer, { add: ['qonto'] })
-    expect(denied.status).toBe(403)
+    const id = await channel(b, 'lecture', [], [], [admin, viewer, operator])
+    for (const who of [asOperator, asViewer]) {
+      const denied = await b.call('POST', `/channels/${id}/connectors`, who, { add: ['qonto'] })
+      expect(denied.status).toBe(403)
+      expect((denied.body as { error: string }).error).toContain('rights.write')
+      expect((await b.call('POST', `/channels/${id}/connectors`, who, { connectors: ['qonto'] })).status).toBe(403)
+    }
+    // The operator still manages the channel's agents and members (workflows.write).
+    expect((await b.call('POST', `/channels/${id}/members`, asOperator, { add: [owner] })).status).toBe(200)
+    expect((await b.call('POST', `/channels/${id}/connectors`, asAdmin, { add: ['qonto'] })).status).toBe(200)
   })
 })

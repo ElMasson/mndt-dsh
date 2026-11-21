@@ -392,7 +392,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     }
 
     if (request.method === 'POST' && parts.length === 3 && ['members', 'agents', 'connectors'].includes(parts[2] ?? '')) {
-      const denied = await authorise(identity, 'workflows.write')
+      // A channel's connectors give its agents access to data (Qonto, Dolibarr,
+      // Office 365): owners and admins only (rights.write), not every operator
+      // (decision taken in autonomy on 21/11, to be confirmed by Stephane).
+      const denied = await authorise(identity, parts[2] === 'connectors' ? 'rights.write' : 'workflows.write')
       if (denied !== undefined) return denied
       if (parts[2] === 'connectors') {
         // `{ add, remove }` (preferred: applied on the server's current list, in one
