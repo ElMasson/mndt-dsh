@@ -9,7 +9,8 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatMessage, ChatTurn } from './chat.ts'
+import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector } from './chat.ts'
+import { AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
@@ -129,10 +130,13 @@ export function WebCard(props: {
   readonly canDecide: boolean
   readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
   readonly names?: Readonly<Record<string, string>> | undefined
+  /** The connectors mounted, to say which ones a proposed agent would carry but cannot use. */
+  readonly mounted?: readonly MountedConnector[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
   const state = card.state ?? 'pending'
+  const proposal = card.kind === 'propose_agent' ? proposalOf(card.proposal) : undefined
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -156,10 +160,12 @@ export function WebCard(props: {
   return (
     <article className="mw-card-box" data-testid="chat-card" data-state={state}>
       <div className="mw-card-head">
-        <p className="mw-card-title">{card.title}</p>
+        <p className="mw-card-title">{proposal === undefined ? card.title : t('proposeAgentTitle', { name: proposal.name })}</p>
         <StatusBadge state={card.state} t={t} />
       </div>
       <p className="mw-card-meta">{askedBy} · {when(card.requestedAt)}</p>
+      {/* An agent proposes an agent: the whole sheet, read-only, so one click validates what was read. */}
+      {proposal === undefined ? undefined : <AgentSheetView proposal={proposal} mounted={props.mounted ?? []} t={t} />}
       {state !== 'pending' ? (
         <div className="mw-decided" data-testid="chat-card-decision">
           <p>
@@ -206,6 +212,7 @@ export function WebMessage(props: {
   /** Open À traiter, where the waiting cards are. */
   readonly onPending?: (() => void) | undefined
   readonly names?: Readonly<Record<string, string>> | undefined
+  readonly mounted?: readonly MountedConnector[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { message: m, agents, t } = props
@@ -267,6 +274,7 @@ export function WebMessage(props: {
           canDecide={card.canDecide ?? props.canDecide}
           onDecide={props.onDecide}
           names={props.names}
+          mounted={props.mounted}
           t={t}
         />
       ))}

@@ -174,6 +174,7 @@ export const chatEn = {
   agentCeilingTooHigh: 'A ceiling is at most {max} EUR a month.',
   agentChangedMeanwhile: 'This agent was changed meanwhile: open its sheet again to see it as it is.',
   agentGone: 'This agent no longer exists.',
+  proposeAgentTitle: 'Create the agent {name}',
 } as const
 
 /** One copy key. */
@@ -348,6 +349,7 @@ export const chatFr: Record<ChatKey, string> = {
   agentCeilingTooHigh: 'Un plafond est de {max} € par mois au plus.',
   agentChangedMeanwhile: 'Cet agent a été modifié entre-temps : rouvrez sa fiche pour le voir tel qu\'il est.',
   agentGone: 'Cet agent n\'existe plus.',
+  proposeAgentTitle: 'Créer l\'agent {name}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

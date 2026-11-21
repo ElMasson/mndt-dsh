@@ -1160,6 +1160,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                   names={team.names}
                   onPending={() => { setView('pending') }}
+                  mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                   look="mndt-web"
                 />
               </section>
@@ -1549,6 +1550,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             canDecide={card.canDecide ?? state.canAdmin === true}
                             onDecide={decideCard}
                             names={team.names}
+                            mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                             t={tc}
                           />
                         </div>

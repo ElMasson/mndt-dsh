@@ -104,6 +104,11 @@ export interface ChatCard {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them (pending cards only). */
   readonly canDecide?: boolean
+  /**
+   * What the card proposes to declare, when an agent proposes an agent (`propose_agent`, lot 1b):
+   * read through `proposalOf`, never trusted as is.
+   */
+  readonly proposal?: unknown
   /** The mission that asked for it, when one did (such a card belongs to no channel). */
   readonly missionId?: string
   /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */

@@ -227,3 +227,78 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
     </form>
   )
 }
+
+/**
+ * The agent a card proposes to declare (`propose_agent`), read from what the API served: only a
+ * proposal with a name, a handle the core accepts, a provider and a model is shown; anything else is
+ * no proposal at all. Text is bounded; connectors are server names.
+ * @param raw - the card's `proposal` field.
+ * @returns the proposal, or undefined.
+ */
+export function proposalOf(raw: unknown): AgentInput | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const p = raw as Record<string, unknown>
+  const text = (key: string, max: number): string | undefined => {
+    const value = p[key]
+    return typeof value === 'string' && value.trim() !== '' && value.length <= max ? value : undefined
+  }
+  const name = text('name', 80)
+  const handle = text('handle', 32)
+  const provider = text('provider', 64)
+  const model = text('model', 128)
+  if (name === undefined || handle === undefined || provider === undefined || model === undefined) return undefined
+  if (!/^[a-z0-9][a-z0-9-]{1,31}$/u.test(handle)) return undefined
+  const connectors = Array.isArray(p.connectors)
+    ? p.connectors.filter((c): c is string => typeof c === 'string' && /^[A-Za-z0-9_-]{1,32}$/u.test(c))
+    : []
+  const eur = p.eurPerMonth
+  const instructions = text('instructions', MAX_PURPOSE)
+  return {
+    name,
+    handle,
+    provider,
+    model,
+    connectors,
+    ...(instructions === undefined ? {} : { instructions }),
+    ...(typeof eur === 'number' && Number.isFinite(eur) && eur > 0 ? { eurPerMonth: eur } : {}),
+  }
+}
+
+/**
+ * The sheet of a proposed agent, read-only: the same fields as the form, so what is validated is
+ * what was read. A connector the proposal names but that is not mounted is said.
+ */
+export function AgentSheetView(props: {
+  readonly proposal: AgentInput
+  readonly mounted: readonly MountedConnector[]
+  readonly t: ChatTranslate
+}): ReactNode {
+  const { proposal: p, t } = props
+  const usable = new Set(props.mounted.filter(m => m.enabled).map(m => m.server))
+  const choice = { provider: p.provider, model: p.model }
+  return (
+    <dl className="mw-sheet-view" data-testid="agent-sheet-view">
+      <dt>{t('agentName')}</dt>
+      <dd>{p.name} <span className="mw-ctx-muted">· @{p.handle}</span></dd>
+      <dt>{t('agentPurpose')}</dt>
+      <dd className="mw-sheet-purpose">{p.instructions ?? '—'}</dd>
+      <dt>{t('agentModelLabel')}</dt>
+      <dd>{modelLabel(choice, t)} <span className="mw-model-tech">{p.provider} · {p.model}</span></dd>
+      <dt>{t('ctxConnectors')}</dt>
+      <dd>
+        {(p.connectors ?? []).length === 0 ? '—' : (
+          <span className="mw-pills">
+            {(p.connectors ?? []).map(server => (
+              <span key={server} className="mw-pill mw-pill-static" data-off={usable.has(server) ? undefined : 'true'}>
+                {server}
+                {usable.has(server) ? undefined : <span className="mw-pill-note">{t('connOff')}</span>}
+              </span>
+            ))}
+          </span>
+        )}
+      </dd>
+      <dt>{t('agentCeiling')}</dt>
+      <dd>{p.eurPerMonth ?? ADMIN_CEILING_EUR}</dd>
+    </dl>
+  )
+}
