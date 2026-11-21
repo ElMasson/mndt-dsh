@@ -82,7 +82,12 @@ interface UsageTotals {
 
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
-  readonly authority?: { readonly baseUrl: string; readonly token: string }
+  readonly authority?: {
+    readonly baseUrl: string
+    readonly token: string
+    /** How long a role change waits for the authority (AUTHORITY_TIMEOUT_MS by default). */
+    readonly timeoutMs?: number
+  }
   /** The briefing schedule file, editable from the page. */
   readonly schedulePath?: string
   /** The automation registry, editable from the page. */
@@ -183,6 +188,9 @@ function journalCsv(events: readonly WorkbenchEvent[]): string {
  * @param options - service, runner, identity and rights.
  * @returns the handler.
  */
+/** How long a role change waits for the team authority, in milliseconds. */
+export const AUTHORITY_TIMEOUT_MS = 10_000
+
 export function createMndtApi(options: MndtApiOptions): MndtApi {
   const { service, runner, grants } = options
 
@@ -1211,15 +1219,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             // /governance/revoke; the product exposes them under /members.
             const target = path === '/members/grant' ? '/governance/grant' : '/governance/revoke'
             const url = `${authority.baseUrl.replace(/\/$/, '')}${target}`
+            // Bounded: changes wait in one line, so an authority that does not
+            // answer must not hold every role change behind it.
             const response = await fetch(url, {
               method: 'POST',
               headers: { authorization: `Bearer ${authority.token}`, 'content-type': 'application/json' },
               body: JSON.stringify(body),
+              signal: AbortSignal.timeout(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS),
             })
             answer = { status: response.status, body: await response.json().catch(() => ({})) }
           } catch (error) {
-            await service.recordRoleChange(identity, subject, { before, after: next, outcome: 'not applied: authority unreachable' })
-            return respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+            const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+            await service.recordRoleChange(identity, subject, {
+              before, after: next, outcome: timedOut ? 'not applied: authority did not answer in time' : 'not applied: authority unreachable',
+            })
+            return timedOut
+              ? respond(504, { error: `the authority did not answer within ${(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS) / 1000} s: the role is unchanged` })
+              : respond(502, { error: `authority unreachable: ${messageOf(error)}` })
           }
           await service.recordRoleChange(identity, subject, {
             before,

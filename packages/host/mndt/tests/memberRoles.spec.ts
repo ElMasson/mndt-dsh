@@ -166,4 +166,32 @@ describe('who may change whose role (members routes)', () => {
     expect(canReadEvent(reader(true), event, emptyState)).toBe(true)
     expect(canReadEvent(reader(false), event, emptyState)).toBe(false)
   })
+
+  it('an authority that does not answer times out with a clear 504, and does not hold the next change', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    let hang = true
+    vi.stubGlobal('fetch', (_url: string, init: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
+      if (!hang) {
+        resolve(new Response(JSON.stringify({ allowed: true, reason: 'ok' }), { status: 200 }))
+        return
+      }
+      init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    }))
+    const api = createMndtApi({
+      service, runner: noMissions,
+      identity: { tokens: { [owner]: { user: owner } } },
+      grants: { grants: async () => ({ ok: true, grants: TABLE }) },
+      authority: { baseUrl: 'http://authority.test', token: 'deployment-token', timeoutMs: 50 },
+    })
+    const grant = (subject: string) =>
+      api({ method: 'POST', path: '/members/grant', authorization: `Bearer ${owner}`, body: JSON.stringify({ subject, role: 'operator' }) })
+    const first = grant(viewer)
+    const answer = await first
+    expect(answer.status).toBe(504)
+    expect((answer.body as { error: string }).error).toMatch(/did not answer within 0.05 s: the role is unchanged/)
+    hang = false
+    expect((await grant('new@datanalysis.re')).status).toBe(200)
+    const journal = (await service.events()).filter(event => event.action === 'member.role').map(event => event.detail)
+    expect(journal).toContain('viewer -> operator: not applied: authority did not answer in time')
+  })
 })
