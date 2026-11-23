@@ -271,9 +271,12 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
   const heldSteps = held?.steps ?? []
   const done = heldSteps.filter(step => step.role === 'worker' && typeof step.text === 'string')
   const stopped = heldSteps.find(step => step.role === 'worker' && step.verdict === 'skipped')
-  check('coord-bound', capped.status === 200 && done.length === 1 && /borne/.test(stopped?.notes?.[0] ?? '')
-    && (held?.eur ?? 0) <= tight,
-  `status ${held?.status}, steps ${heldSteps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}`).join(' ')}, « ${stopped?.notes?.[0] ?? '-'} », eur ${held?.eur} (bound ${tight} €)`)
+  // The worker stopped is the one whose reservation would pass the bound,
+  // @analyste, and the part kept is @assistant's: the bound stops the right step.
+  check('coord-bound', capped.status === 200 && done.length === 1 && done[0].agentId === assistant.id
+    && stopped?.agentId === analyste.id && /borne/.test(stopped?.notes?.[0] ?? '')
+    && typeof held?.eur === 'number' && held.eur > 0 && held.eur <= tight,
+  `status ${held?.status}, steps ${heldSteps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}@${agents.find(a => a.id === step.agentId)?.handle ?? step.agentId}`).join(' ')}, « ${stopped?.notes?.[0] ?? '-'} », eur ${held?.eur} (bound ${tight} €)`)
 } else {
   check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
 }

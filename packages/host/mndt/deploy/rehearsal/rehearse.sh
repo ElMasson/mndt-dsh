@@ -22,9 +22,9 @@ set -uo pipefail
 die() { echo "KO $1  $2"; exit 1; }
 image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
-# The checks a full run makes, every one printed OK or KO (the exit trap
-# compares): change it with the checks.
-EXPECTED_CHECKS=61
+# The checks a full run makes, by name, each printed once OK or KO (the exit
+# trap compares): change the list with the checks.
+EXPECTED_CHECKS=$here/expected-checks-rehearse.txt
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 project=mndt-rehearsal
@@ -61,15 +61,21 @@ cleanup() {
   if [ -n "${tee_pid:-}" ]; then exec 1>&3 2>&4; wait "$tee_pid" 2>/dev/null; fi
   total_ok=$(grep -acE '^OK ' "$root/output.log" 2>/dev/null) || total_ok=0
   total_ko=$(grep -acE '^KO ' "$root/output.log" 2>/dev/null) || total_ko=0
-  # Every check the run must make, counted: a check skipped without an error
-  # (a condition that jumps a block, an early return) prints neither OK nor KO.
-  # The KO lines about the run itself are not checks.
-  seen=$(grep -aE '^(OK|KO) ' "$root/output.log" 2>/dev/null | grep -avcE '^KO +(aborted|drive-exit|missing-checks) ') || seen=0
-  if [ "$seen" != "$EXPECTED_CHECKS" ]; then
-    echo "KO missing-checks $EXPECTED_CHECKS $seen  this run made $seen check(s), $EXPECTED_CHECKS expected"
-    total_ko=$((total_ko + 1))
-  fi
-  echo "TOTAL ok=$total_ok ko=$total_ko expected=$EXPECTED_CHECKS"
+  # Every check the run must make, by name: a check skipped without an error
+  # (a condition that jumps a block, an early return) prints neither OK nor KO,
+  # and a check printed twice would hide it in a mere count. The KO lines
+  # about the run itself are not checks.
+  grep -aE '^(OK|KO) ' "$root/output.log" 2>/dev/null \
+    | grep -avE '^KO +(aborted|drive-exit|missing-checks|duplicate-check|unexpected-check) ' \
+    | awk '{ print $2 }' > "$root/checks-seen.txt"
+  grep -v '^#' "$EXPECTED_CHECKS" | sort -u > "$root/checks-expected.txt"
+  expected=$(grep -c . "$root/checks-expected.txt") || expected=0
+  missing=$(sort -u "$root/checks-seen.txt" | comm -23 "$root/checks-expected.txt" - | tr '\n' ' ')
+  unexpected=$(sort -u "$root/checks-seen.txt" | comm -13 "$root/checks-expected.txt" - | tr '\n' ' ')
+  if [ -n "$missing" ]; then echo "KO missing-checks ${missing% }"; total_ko=$((total_ko + 1)); fi
+  for name in $(sort "$root/checks-seen.txt" | uniq -d); do echo "KO duplicate-check $name"; total_ko=$((total_ko + 1)); done
+  if [ -n "$unexpected" ]; then echo "KO unexpected-check ${unexpected% }  printed, not declared in $(basename "$EXPECTED_CHECKS")"; total_ko=$((total_ko + 1)); fi
+  echo "TOTAL ok=$total_ok ko=$total_ko expected=$expected"
   echo "rehearsal root: $root"
   if [ "$total_ko" -gt 0 ] || [ "${verdict:-1}" != 0 ]; then exit 1; fi
 }
