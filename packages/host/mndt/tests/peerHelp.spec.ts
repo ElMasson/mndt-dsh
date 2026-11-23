@@ -134,7 +134,36 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
     expect(served?.help?.advices).toHaveLength(2)
     expect(served?.help?.peerIds).toEqual([])
     expect(served?.help?.advices.every(advice => advice.agentId === undefined && advice.model === undefined)).toBe(true)
+    // Each advice's cost would name its model with the price grid: only the help's total is served.
+    expect(served?.help?.advices.every(advice => advice.eur === undefined && advice.tokens === undefined)).toBe(true)
+    expect(served?.help?.eur).toBeGreaterThan(0)
     expect(JSON.stringify(served)).not.toContain(t.beta)
+  })
+
+  it('serves a skipped reason by kind until the reading, then in full', async () => {
+    const b = bench()
+    const t = await team(b)
+    let served: Turn | undefined
+    const original = b.engine.run.bind(b.engine)
+    b.engine.run = async (input: TurnInput): Promise<TurnOutput> => {
+      if (input.turnId.endsWith('-h1a') || input.turnId.endsWith('-h1b')) {
+        if (b.engine.seen.filter(seen => /-h1[ab]$/.test(seen.turnId)).length === 0) {
+          b.engine.seen.push(input)
+          throw new Error(`@${input.agent.handle} : le moteur a refusé`)
+        }
+      }
+      if (input.turnId.endsWith('-hr1')) {
+        const page = await b.call('GET', `/channels/${t.channel}/messages`, 'operator')
+        served = ((page.body.messages as Message[]).find(m => m.turns?.[0]?.help !== undefined))?.turns?.[0]
+      }
+      return original(input)
+    }
+    const { turn } = await ask(b, t.channel, '@alpha le point ?')
+    expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/), reason: 'avis non obtenu : erreur' }])
+    expect(JSON.stringify(served)).not.toMatch(/@beta|@gamma/)
+    // After the reading, the reason in full and the peer named.
+    expect(turn.help?.skipped[0]?.reason).toMatch(/^@(beta|gamma) : le moteur a refusé$/)
+    expect(turn.help?.skipped[0]?.agentId).toBeDefined()
   })
 })
 
@@ -237,7 +266,42 @@ describe('ask_peers: bounds', () => {
     expect(turn.help?.closedBy).toMatchObject({ by: operator })
     expect(turn.help?.reading).toBeUndefined()
     expect(turn.help?.advices).toHaveLength(1)
-    expect(replies.at(-1)?.text).toContain('Entraide close')
+    // The person answered: the asker publishes nothing beside them.
+    expect(replies).toHaveLength(0)
+  })
+
+  it('a person who answers during the LAST advice: no reading, no publication, done, closedBy', async () => {
+    const b = bench()
+    const t = await team(b)
+    let origin = ''
+    b.engine.before = async (input) => {
+      if (input.turnId === input.runId) origin = (await b.service.snapshot()).messages?.at(-1)?.id ?? ''
+      // The second advice is the last call before the reading.
+      if (/-h1[ab]$/.test(input.turnId) && b.engine.seen.filter(seen => /-h1[ab]$/.test(seen.turnId)).length === 2) {
+        await b.service.postMessage(t.channel, operator, 'Je tranche : HT.', origin)
+      }
+    }
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(b.engine.seen.some(input => /-hr\d$/.test(input.turnId))).toBe(false)
+    expect(replies).toHaveLength(0)
+    expect(turn.status).toBe('done')
+    expect(turn.help).toMatchObject({ state: 'done', closedBy: { by: operator } })
+    expect(turn.help?.advices).toHaveLength(2)
+    expect(turn.help?.reading).toBeUndefined()
+    expect(turn.help?.escalation).toBeUndefined()
+  })
+
+  it('a person who answers during the reading: the reading is kept, nothing is published', async () => {
+    const b = bench()
+    const t = await team(b)
+    let origin = ''
+    b.engine.before = async (input) => {
+      if (input.turnId === input.runId) origin = (await b.service.snapshot()).messages?.at(-1)?.id ?? ''
+      if (input.turnId.endsWith('-hr1')) await b.service.postMessage(t.channel, operator, 'Je tranche : HT.', origin)
+    }
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(replies).toHaveLength(0)
+    expect(turn.help).toMatchObject({ state: 'done', closedBy: { by: operator } })
   })
 
   it('the cost bound: a peer that would pass it is skipped with the reason, and no advice escalates', async () => {
