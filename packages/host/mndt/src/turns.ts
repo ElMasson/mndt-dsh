@@ -524,10 +524,14 @@ export class TurnScheduler {
             const revisionMark = randomUUID().slice(0, 8)
             const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, revisionMark))
             // Said positively: the published text is the revision, or the draft kept.
-            const replaced = revised.output.text.trim() !== ''
+            // An empty correction keeps the draft; one identical to the draft
+            // changes nothing: neither is « corrigé ».
+            const revisedText = revised.output.text.trim()
+            const unchanged = revisedText === first.output.text.trim()
+            const replaced = revisedText !== '' && !unchanged
             steps.push({
               role: 'revision', agentId: agent.id, replaced,
-              ...(replaced ? {} : { notes: ['correction vide, brouillon publié'] }),
+              ...(replaced ? {} : { notes: [revisedText === '' ? 'correction vide, brouillon publié' : 'correction identique au brouillon'] }),
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
               ...(revised.eur === undefined ? {} : { eur: revised.eur }),
             })

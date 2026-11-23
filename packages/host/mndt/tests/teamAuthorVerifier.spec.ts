@@ -423,6 +423,17 @@ describe('what the screen reads without parsing the text (review of #99)', () =>
     expect(empty.replies.at(-1)?.text).toBe('premier brouillon')
   })
 
+  it('a correction identical to the draft (spaces aside) is not « corrigé »', async () => {
+    const b = bench()
+    const { author, verifier, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'author-verifier', author, verifier })
+    b.engine.verdict = '{"ok": false, "issues": ["ajoute la date"]}'
+    b.engine.revision = '  premier brouillon \n'
+    const same = await ask(b, channel, '@auteur fais le point')
+    expect(same.asked?.turns?.[0]?.steps?.[2]).toMatchObject({ role: 'revision', replaced: false, notes: ['correction identique au brouillon'] })
+    expect(same.replies.at(-1)?.text).toBe('premier brouillon')
+  })
+
   it('every refusal of a coordination carries a stable code, the text unchanged', async () => {
     const b = bench()
     const { author, verifier, channel } = await team(b)
