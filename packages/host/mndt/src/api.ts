@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -446,12 +446,13 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const since = request.query?.since
       if (since !== undefined) {
         if (Number.isNaN(Date.parse(since))) return respond(400, { error: 'since is an ISO instant' })
-        return respond(200, await service.changedSince(channel.id, since, Number.isFinite(limit) && limit > 0 ? limit : 200))
+        const changed = await service.changedSince(channel.id, since, Number.isFinite(limit) && limit > 0 ? limit : 200)
+        return respond(200, { ...changed, messages: changed.messages.map(servedMessage) })
       }
       const after = request.query?.after
       // The cursor of the first poll: the channel's last change, whatever this page holds.
       return respond(200, {
-        messages: await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200),
+        messages: (await service.messages(channel.id, after, Number.isFinite(limit) && limit > 0 ? limit : 200)).map(servedMessage),
         cursor: await service.lastChange(channel.id),
       })
     }
@@ -460,14 +461,21 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const text = typeof input.text === 'string' ? input.text : ''
       const replyTo = typeof input.replyTo === 'string' ? input.replyTo : undefined
       const message = await service.postMessage(channel.id, identity, text, replyTo)
-      options.turns?.launch(message)
-      return respond(201, { message })
+      // A reply to an agent's escalated question, by a member who may write,
+      // answers it and gives the asker the hand again.
+      const writer = replyTo !== undefined && (await grants.grants()).ok
+        ? await authorise(identity, 'workflows.write') === undefined
+        : false
+      const answered = writer ? await service.answerEscalation(message, identity) : undefined
+      options.turns?.launch(answered ?? message)
+      return respond(201, { message: servedMessage(answered ?? message) })
     }
 
     if (request.method === 'POST' && parts.length === 5 && parts[2] === 'messages' && parts[4] === 'delete') {
       const message = await service.deleteMessage(channel.id, parts[3] ?? '', identity)
       options.turns?.stop({ messageId: message.id })
-      return respond(200, { message })
+      // A deleted message may carry a help still running: served like any other.
+      return respond(200, { message: servedMessage(message) })
     }
 
     if (request.method === 'POST' && parts.length === 3 && parts[2] === 'context') {
@@ -910,6 +918,37 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           .map(approval => ({ ...approval, canDecide: reader.decider && approval.state === 'pending' }))
         const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
         return respond(200, { approvals })
+      }
+
+      if (request.method === 'POST' && path === '/help') {
+        // ask_peers, during the asking agent's own turn: the running turn is the
+        // one the approvals connector names (x-mndt-run), never what a body says.
+        const denied = await authorise(identity, 'workflows.write')
+        if (denied !== undefined) return denied
+        const run = request.headers?.['x-mndt-run']
+        const turn = options.turns?.current()
+        if (turn === undefined || run === undefined || run !== turn.turnId) {
+          return respond(400, { error: 'a help is asked during an agent turn', code: 'not-running' })
+        }
+        const input = parseBody(request.body)
+        const said = (key: string): string => (typeof input[key] === 'string' ? (input[key] as string).trim() : '')
+        const list = (key: string): string[] => (Array.isArray(input[key]) ? (input[key] as unknown[]).filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(item => item !== '') : [])
+        const need = input.need
+        try {
+          const help = await service.askPeers(turn.messageId, turn.turnId, turn.agent.id, {
+            task: said('task'), tried: said('tried'), blocker: said('blocker'), options: list('options'),
+            need: need === 'fact' || need === 'opinion' || need === 'check' || need === 'choice' ? need : ('' as never),
+          }, list('peers'))
+          return respond(201, { help: { state: help.state, peers: help.peerIds.length, capEur: help.capEur } })
+        } catch (error) {
+          if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: error.message, code: error.code })
+          throw error
+        }
+      }
+
+      if (request.method === 'GET' && path === '/escalations') {
+        // A person sees the open questions of the channels they are a member of; nothing else.
+        return respond(200, { escalations: await service.openEscalations(identity) })
       }
 
       if (request.method === 'POST' && path === '/approvals') {
