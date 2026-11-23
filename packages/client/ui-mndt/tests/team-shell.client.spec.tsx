@@ -616,6 +616,37 @@ describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20
     expect(await screen.findByRole('heading', { name: '# compta' }, { timeout: 5000 })).toBeTruthy()
   })
 
+  it('a draft already begun is kept: the mention goes in front, never twice', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane, team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const box = screen.getByRole('textbox', { name: /Écrivez|agents/u })
+    fireEvent.change(box, { target: { value: 'résume les impayés' } })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box instanceof HTMLTextAreaElement && box.value).toBe('@assistant résume les impayés') })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box instanceof HTMLTextAreaElement && box.value).toBe('@assistant résume les impayés') })
+  })
+
+  it('after a pill, typing in the middle of the draft keeps the caret where it is', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane, team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const box = screen.getByRole('textbox', { name: /Écrivez|agents/u })
+    if (!(box instanceof HTMLTextAreaElement)) throw new Error('no composer')
+    fireEvent.change(box, { target: { value: 'résume les impayés' } })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box.value).toBe('@assistant résume les impayés') })
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    // A correction in the middle: the caret stays after the inserted letters.
+    box.setSelectionRange(11, 11)
+    fireEvent.change(box, { target: { value: '@assistant Xrésume les impayés', selectionStart: 12, selectionEnd: 12 } })
+    box.setSelectionRange(12, 12)
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    expect(box.value).toBe('@assistant Xrésume les impayés')
+    expect(box.selectionStart).toBe(12)
+  })
+
   it('a lane without team channel says who adds the person; with no agent, who adds one', async () => {
     const chat = createMockChat({ you, agents: [agent], channels: [{ ...lane, agents: [] }] }, () => Date.parse(at))
     render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
