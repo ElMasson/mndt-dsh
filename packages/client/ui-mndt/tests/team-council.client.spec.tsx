@@ -220,3 +220,29 @@ describe('a position skipped before the council is revealed', () => {
     expect(screen.getByTestId('council-skipped').textContent).toBe('Position C non comptée : avis non obtenu')
   })
 })
+
+describe('finishing points of C (#120)', () => {
+  it('before the reveal, a slot\'s reason is always « avis non obtenu », whatever is served', () => {
+    const c = read({ state: 'critiquing', options, positions: positions.slice(0, 2), critiques: [], skipped: [{ slot: 'C', reason: 'plafond de @qwen atteint' }, { reason: 'avis non obtenu : redémarrage' }] })
+    expect(c.skipped).toEqual([{ slot: 'C', reason: 'avis non obtenu' }, { reason: 'avis non obtenu : redémarrage' }])
+  })
+
+  it('a critique with a choice out of the options says « choix illisible », not « confirme »', () => {
+    render(<CouncilThread turn={turn({})} council={read({ state: 'done', options, positions, critiques: [{ slot: 'A', about: ['B'], text: 'x', choice: 9 }] })} agents={byId} t={chatFrench} />)
+    const critique = screen.getByTestId('council-critique').textContent ?? ''
+    expect(critique).toContain('choix illisible')
+    expect(critique).not.toContain('confirme')
+  })
+
+  it('« Conseil de n » counts the members, a skipped one included', () => {
+    render(<CouncilThread turn={turn({})} council={read({ state: 'critiquing', options, positions: positions.slice(0, 2), critiques: [], skipped: [{ slot: 'C', reason: 'x' }] })} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('turn-council').textContent).toContain('Conseil de 3')
+  })
+
+  it('a state the page does not know is taken as ended: folded, never « en cours »', () => {
+    render(<CouncilThread turn={turn({})} council={read({ state: 'archived', options, positions, critiques })} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('council-outcome').textContent).toBe('clos sans décision')
+    const steps = screen.getByTestId('council-steps')
+    expect(steps instanceof HTMLDetailsElement && steps.open).toBe(false)
+  })
+})

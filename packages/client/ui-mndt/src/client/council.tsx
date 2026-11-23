@@ -29,6 +29,8 @@ export interface CouncilCritique {
   readonly about: string
   readonly text: string
   readonly choice?: number
+  /** A final choice was given but cannot be read (out of the options). */
+  readonly choiceUnreadable?: boolean
 }
 
 /** A turn's council, as `turn.council` serves it. */
@@ -146,7 +148,9 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     const choice = indexOf(k?.choice, labels.length)
     const text = textOf(k?.text)
     if (k === undefined || slot === undefined || about === undefined || text === undefined) continue
-    critiques.push({ slot, about, text, ...(choice === undefined ? {} : { choice }) })
+    // Absent, the position's choice counts (« confirme »); present but out of the options, unreadable.
+    const unreadable = k.choice !== undefined && choice === undefined
+    critiques.push({ slot, about, text, ...(choice === undefined ? {} : { choice }), ...(unreadable ? { choiceUnreadable: true } : {}) })
   }
   const dissent = (Array.isArray(c.dissent) ? c.dissent : []).flatMap((item: unknown) => {
     const x = recordOf(item)
@@ -160,7 +164,8 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     const reason = textOf(x?.reason)
     if (x === undefined || reason === undefined) return []
     const slot = slotOf(x.slot)
-    return [{ reason, ...(slot === undefined ? {} : { slot }) }]
+    // Before the reveal, a slot's reason is always the generic one, whatever is served (C, #120).
+    return [{ reason: slot !== undefined && !decided ? 'avis non obtenu' : reason, ...(slot === undefined ? {} : { slot }) }]
   })
   const framing = textOf(recordOf(c.framing)?.text)
   const eur = amountOf(c.eur)
@@ -203,9 +208,11 @@ export function CouncilThread(props: {
   const decided = c.decision !== undefined
   const waiting = c.escalation !== undefined && c.escalation.answeredAt === undefined
   // Running until it decides, asks a person, or ends otherwise (« done », « closed » after a restart).
-  const ended = c.state === 'done' || c.state === 'closed'
+  // A state the page does not know, but served, is taken as ended: folded, never « en cours ».
+  const ended = !['deliberating', 'critiquing', 'deciding'].includes(c.state)
   const running = !decided && c.escalation === undefined && !ended
-  const members = c.positions.length
+  // The members, not the positions received: a skipped member still sat.
+  const members = new Set([...c.positions.map(p => p.slot), ...c.skipped.flatMap(k => (k.slot === undefined ? [] : [k.slot]))]).size
   // Ended without a decision: the core's reason (a restart, a stopped turn), when it gives one.
   const endReasons = [...new Set(c.skipped.filter(k => k.slot === undefined).map(k => k.reason))]
   const endedWords = endReasons.length === 0 ? t('councilEnded') : t('councilEndedWhy', { why: endReasons.join(', ') })
@@ -280,9 +287,10 @@ export function CouncilThread(props: {
                     <p className="mw-ctx-small">
                       <b>{t('councilCritique', { about: critique.about })}</b>
                       {' · '}
-                      {/* No final choice: the position's counts, as the core does. */}
-                      {critique.choice === undefined || critique.choice === p.choice ? t('councilConfirms')
-                        : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
+                      {/* No final choice: the position's counts, as the core does; one out of the options is said. */}
+                      {critique.choiceUnreadable === true ? t('councilUnreadableChoice')
+                        : critique.choice === undefined || critique.choice === p.choice ? t('councilConfirms')
+                          : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
                     </p>
                     <div className="mw-turn-part mw-agent-text">{renderBrief(critique.text, { plainHeadings: true })}</div>
                   </div>
