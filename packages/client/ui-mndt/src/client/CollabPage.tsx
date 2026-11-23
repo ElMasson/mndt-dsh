@@ -473,8 +473,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       void loadOffered()
       void loadMounted()
     }
+    // A context changed since its proposal (#109): said, the channels read again so the card shows
+    // the context as it is now, and offers « Refuser » only.
+    if (outcome.code === 'context-changed') {
+      void loadChat()
+      return tc('proposeContextStale')
+    }
     return decisionRefusal(outcome.error ?? decision, tc)
-  }, [api, load, loadCards, chat, tc, loadOffered, loadMounted])
+  }, [api, load, loadCards, chat, tc, loadOffered, loadMounted, loadChat])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)

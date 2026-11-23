@@ -292,7 +292,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
     expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
     expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
     // Members by the part before @, the address kept as title.
@@ -584,7 +584,9 @@ describe('the channel panel, by pills', () => {
   it('a reader without the right sees every pill inert but reachable, and why', async () => {
     const panel = await open(double(), false)
     await within(panel).findByRole('button', { name: /qonto/u })
-    for (const button of within(panel).getAllByRole('button').filter(b => b.classList.contains('mw-pill'))) {
+    // The agent and connector pills; asking an agent for the context stays open to everyone.
+    const pills = [...within(panel).getByTestId('agent-pills').querySelectorAll('.mw-pill'), ...within(panel).getByTestId('connector-pills').querySelectorAll('.mw-pill')]
+    for (const button of pills) {
       expect(button.getAttribute('aria-disabled')).toBe('true')
       expect((button as HTMLButtonElement).disabled).toBe(false)
     }

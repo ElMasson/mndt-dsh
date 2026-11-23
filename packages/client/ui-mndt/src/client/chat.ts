@@ -126,6 +126,8 @@ export interface ChatCard {
    * read through `proposalOf`, never trusted as is.
    */
   readonly proposal?: unknown
+  /** What a propose_context card proposes (`{ text, baseVersion }`, #109), read through `contextProposalOf`. */
+  readonly contextProposal?: unknown
   /** The mission that asked for it, when one did (such a card belongs to no channel). */
   readonly missionId?: string
   /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */

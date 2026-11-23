@@ -170,7 +170,7 @@ export function WebCard(props: {
     : (proposal.connectors ?? []).filter(server => !props.mounted?.some(m => m.server === server && m.enabled))
   // A proposed channel context (lot 3): the whole text, and what it replaces. Unreadable, or the
   // context changed since it was proposed (a known channel only): « Refuser » only, and why.
-  const contextProposal = card.kind === 'propose_context' ? contextProposalOf(card.proposal) : undefined
+  const contextProposal = card.kind === 'propose_context' ? contextProposalOf(card.contextProposal) : undefined
   const contextUnreadable = card.kind === 'propose_context' && contextProposal === undefined
   const contextNow = props.channel === undefined ? undefined : contextOf(props.channel)
   const contextStale = contextProposal !== undefined && props.channel !== undefined
@@ -204,7 +204,7 @@ export function WebCard(props: {
     <article className="mw-card-box" data-testid="chat-card" data-state={state}>
       <div className="mw-card-head">
         <p className="mw-card-title">
-          {proposal !== undefined ? t('proposeAgentTitle', { name: proposal.name }) : card.kind === 'propose_context' ? t('proposeContextTitle') : card.title}
+          {proposal !== undefined ? t('proposeAgentTitle', { name: proposal.name }) : card.title}
         </p>
         <StatusBadge state={card.state} t={t} />
       </div>
@@ -213,16 +213,18 @@ export function WebCard(props: {
       {proposal === undefined ? undefined : <AgentSheetView proposal={proposal} mounted={props.mounted ?? []} t={t} />}
       {contextProposal === undefined ? undefined : (
         <div className="mw-context" data-testid="context-proposal">
-          <ContextFrame
-            context={{ text: contextProposal.text, version: contextProposal.baseVersion + 1 }}
-            names={props.names}
-            t={t}
-            testId="context-proposed"
-          />
+          {contextProposal.text === '' ? <p className="mw-ctx-muted" data-testid="context-proposed">{t('proposeContextErase')}</p> : (
+            <ContextFrame
+              context={{ text: contextProposal.text, version: contextProposal.baseVersion + 1 }}
+              names={props.names}
+              t={t}
+              testId="context-proposed"
+            />
+          )}
           {props.channel === undefined ? undefined : (
             <details className="mw-turn-steps" data-testid="context-replaced">
               <summary>{t('proposeContextReplaces')}</summary>
-              {contextNow === undefined ? <p className="mw-ctx-muted">{t('proposeContextNone')}</p> : <ContextFrame context={contextNow} names={props.names} t={t} testId="context-current" />}
+              {contextNow === undefined || contextNow.text === '' ? <p className="mw-ctx-muted">{t('proposeContextNone')}</p> : <ContextFrame context={contextNow} names={props.names} t={t} testId="context-current" />}
             </details>
           )}
         </div>

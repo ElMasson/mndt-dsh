@@ -283,6 +283,7 @@ export const chatEn = {
   proposeContextReplaces: 'Replaces',
   proposeContextNone: 'No context yet.',
   proposeContextStale: 'The context changed since this proposal: it can only be refused.',
+  proposeContextErase: 'Erase the context: the agents will read nothing more here.',
 } as const
 
 /** One copy key. */
@@ -566,6 +567,7 @@ export const chatFr: Record<ChatKey, string> = {
   proposeContextReplaces: 'Remplace',
   proposeContextNone: 'Pas encore de contexte.',
   proposeContextStale: 'Le contexte a changé depuis cette proposition : elle ne peut qu\'être refusée.',
+  proposeContextErase: 'Effacer le contexte : les agents ne liront plus rien ici.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -39,14 +39,15 @@ function versionOf(value: unknown): number | undefined {
 
 /**
  * @param channel - a channel as served.
- * @returns its context when well-formed and not empty; anything else reads as no context.
+ * @returns its context when well-formed (its text may be empty: erased); anything else is no context.
  */
 export function contextOf(channel: ChatChannel): ChannelContext | undefined {
   const raw: unknown = channel.context
   if (typeof raw !== 'object' || raw === null) return undefined
   const c = raw as Record<string, unknown>
   const version = versionOf(c.version)
-  if (typeof c.text !== 'string' || c.text.trim() === '' || c.text.length > MAX_CONTEXT * 2 || version === undefined) return undefined
+  // An empty text with a version is a context erased: its version is kept, for the next write.
+  if (typeof c.text !== 'string' || c.text.length > MAX_CONTEXT * 2 || version === undefined) return undefined
   return {
     text: c.text.trim(),
     version,
@@ -144,7 +145,7 @@ export function ContextSection(props: {
     <div className="mw-context" data-testid="context-section">
       <p className="mw-ctx-small mw-ctx-muted">{t('contextWhat')}</p>
       {draft === undefined ? (
-        context === undefined
+        context === undefined || context.text === ''
           ? <p className="mw-ctx-muted" data-testid="context-empty">{t('contextEmpty')}</p>
           : <ContextFrame context={context} names={props.names} t={t} />
       ) : (
@@ -166,7 +167,7 @@ export function ContextSection(props: {
       )}
       {!editable || draft !== undefined ? undefined : (
         <button type="button" className="mw-secondary" onClick={() => { setDraft(context?.text ?? ''); setError(undefined) }}>
-          {context === undefined ? t('contextWrite') : t('sheetEdit')}
+          {context === undefined || context.text === '' ? t('contextWrite') : t('sheetEdit')}
         </button>
       )}
       {props.onAsk === undefined || here.length === 0 || draft !== undefined ? undefined : (
@@ -177,7 +178,10 @@ export function ContextSection(props: {
               type="button"
               className="mw-pill"
               aria-label={t('contextAskOne', { handle: a.handle })}
-              onClick={() => { props.onAsk?.(context === undefined ? t('contextAskText', { handle: a.handle }) : t('contextAskUpdateText', { handle: a.handle })) }}
+              onClick={() => {
+                const empty = context === undefined || context.text === ''
+                props.onAsk?.(t(empty ? 'contextAskText' : 'contextAskUpdateText', { handle: a.handle }))
+              }}
             >
               @{a.handle}
             </button>

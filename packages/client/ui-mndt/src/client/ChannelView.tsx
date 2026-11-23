@@ -43,6 +43,8 @@ export interface ThreadCard extends ApprovalRow {
   readonly canDecide?: boolean
   /** What the card proposes to declare, when an agent proposes an agent. */
   readonly proposal?: unknown
+  /** What a propose_context card proposes (`{ text, baseVersion }`, #109), read through `contextProposalOf`. */
+  readonly contextProposal?: unknown
   /** The mission that asked for it, when one did. */
   readonly missionId?: string
   /** The agent whose turn asked for it, when one did. */
