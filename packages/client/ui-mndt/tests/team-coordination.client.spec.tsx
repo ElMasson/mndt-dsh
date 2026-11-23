@@ -318,7 +318,7 @@ describe('« corrigé » only when the draft was replaced (#99)', () => {
   const issues = { role: 'verifier', agentId: 'agt_2', verdict: 'issues', notes: ['Montant faux.'] }
   it('replaced: false is an empty correction, the draft published as is, never « corrigé »', () => {
     render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1', replaced: false }]), byId, chatFrench)}</>)
-    expect(screen.getByTestId('turn-empty-revision').textContent).toBe('Correction vide (@redacteur) : brouillon publié tel quel, remarques non prises en compte.')
+    expect(screen.getByTestId('turn-empty-revision').textContent).toBe('Pas de correction (@redacteur) : brouillon publié tel quel')
     expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('corrigé')
   })
 
@@ -334,5 +334,45 @@ describe('« corrigé » only when the draft was replaced (#99)', () => {
     render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1', replaced: true }]), byId, chatFrench)}</>)
     expect(screen.getByTestId('chat-turn-cost').textContent).toContain('corrigé')
     expect(screen.queryByTestId('turn-unchecked')).toBeNull()
+  })
+})
+
+describe('the core\'s codes for a coordination refused (#100)', () => {
+  it('reads the code first, and the sentence for a code it does not know', async () => {
+    const { coordinationRefusal } = await import('../src/client/CollabPage.tsx')
+    const { ChatRefusal } = await import('../src/client/chat.ts')
+    const say = (code: string, m = 'whatever'): string => coordinationRefusal(new ChatRefusal(m, 400, code), chatFrench)
+    expect(say('same-model')).toBe('Le vérificateur doit tourner sur un autre modèle que l\'auteur.')
+    expect(say('not-member')).toBe('Les agents choisis doivent tous être des agents actifs de ce canal.')
+    expect(say('same-agent')).toBe('L\'auteur et le vérificateur doivent être deux agents différents.')
+    expect(say('too-few-workers')).toBe('Un tour parallèle compte 2 à 4 travailleurs différents.')
+    expect(say('too-many-workers')).toBe('Un tour parallèle compte 2 à 4 travailleurs différents.')
+    expect(say('synthesizer-is-worker')).toBe('Le synthétiseur ne peut pas être un des travailleurs.')
+    expect(say('budget-out-of-range')).toBe('Un tour parallèle coûte 5 € au plus.')
+    expect(say('unknown-mode')).toBe('Cet espace ne connaît pas ce mode de réponse.')
+    expect(say('missing-fields')).toBe('Choisissez d\'abord les agents de ce mode.')
+    expect(say('brand-new', 'the synthesizer is not one of the workers')).toBe('Le synthétiseur ne peut pas être un des travailleurs.')
+  })
+
+  it('a correction identical to the draft says the core\'s note, as text and bounded', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1' },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'issues' },
+      { role: 'revision', agentId: 'agt_1', replaced: false, notes: [`<b>identique</b> ${'x'.repeat(300)}`] },
+    ]), byId, chatFrench)}</>)
+    const band = screen.getByTestId('turn-empty-revision')
+    expect(band.textContent?.startsWith('Pas de correction (@redacteur) : brouillon publié tel quel — <b>identique</b>')).toBe(true)
+    expect(band.querySelector('b')).toBeNull()
+    expect(band.textContent?.endsWith('…')).toBe(true)
+  })
+
+  it('an empty correction carries the core\'s note in the folded steps', () => {
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1' },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'issues', notes: ['Montant faux.'] },
+      { role: 'revision', agentId: 'agt_1', replaced: false, notes: ['correction vide, brouillon publié'] },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-empty-revision').textContent).toBe('Pas de correction (@redacteur) : brouillon publié tel quel — correction vide, brouillon publié')
+    expect(screen.getByTestId('turn-steps').textContent).toContain('correction vide, brouillon publié')
   })
 })

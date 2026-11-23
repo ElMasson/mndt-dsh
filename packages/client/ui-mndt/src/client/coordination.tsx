@@ -494,7 +494,11 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
         </p>
       ) : undefined}
       {emptyRevision ? (
-        <p className="mw-turn-unchecked" role="note" data-testid="turn-empty-revision">{t('coordEmptyRevision', { handle: handle(author.agentId) })}</p>
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-empty-revision">
+          {/* Empty or identical to the draft: the core's note says which, as text, bounded. */}
+          {t('coordEmptyRevision', { handle: handle(author.agentId) })}
+          {revision?.notes?.[0] === undefined ? '' : ` — ${revision.notes[0].length > 200 ? `${revision.notes[0].slice(0, 200)}…` : revision.notes[0]}`}
+        </p>
       ) : undefined}
       {uncorrected ? (
         <p className="mw-turn-unchecked" role="note" data-testid="turn-uncorrected">

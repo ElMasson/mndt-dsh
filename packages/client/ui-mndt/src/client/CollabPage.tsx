@@ -12,7 +12,7 @@ import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow }
 import { ChatRefusal } from './chat.ts'
 import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
-import type { ChatTranslate } from './chatLocales.ts'
+import type { ChatKey, ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
@@ -118,9 +118,24 @@ const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
  * @param failure - a refusal of the coordination route. @param t - the copy.
  * @returns it in the page's words where the core's sentence is known, else as served.
  */
+const COORDINATION_CODES: Readonly<Record<string, ChatKey>> = {
+  'not-member': 'coordNotMember',
+  'same-agent': 'coordTwoAgents',
+  'same-model': 'coordSameModel',
+  'too-few-workers': 'coordWorkersCount',
+  'too-many-workers': 'coordWorkersCount',
+  'synthesizer-is-worker': 'coordSynthNotWorker',
+  'budget-out-of-range': 'coordBudgetMax',
+  'unknown-mode': 'coordModeUnknown',
+  'missing-fields': 'coordMissingFields',
+}
+
 export function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
     if (failure.status === 404) return t('coordNotServed')
+    // The core's codes (A1, #100) first; a code the page does not know falls back on the sentence.
+    const word = failure.code === undefined ? undefined : COORDINATION_CODES[failure.code]
+    if (word !== undefined) return t(word)
     // The core's sentences (A1, #84), said in the page's words.
     if (failure.message.includes('must run another model')) return t('coordSameModel')
     if (failure.message.includes('must both be active agents of this channel')) return t('coordNotActive')
