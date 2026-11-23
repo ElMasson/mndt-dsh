@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -21,7 +21,7 @@ import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
-import { operatorLine } from './operator-log.ts'
+import { errorShape, operatorLine } from './operator-log.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -333,7 +333,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       // JSON error, a system error carrying a path) is an internal fault: the
       // caller gets « internal error », the detail goes to the operator's log.
       if (!isMeantRefusal(error)) {
-        warnInternal(`mndt: internal error on ${request.method} ${path}: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
+        warnInternal(`mndt: internal error on ${request.method} ${path}: ${internalDetail(error)}`)
         return respond(500, { error: 'internal error' })
       }
       const reason = messageOf(error)
@@ -1561,4 +1561,17 @@ function isMeantRefusal(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   if ('syscall' in error || 'errno' in error) return false
   return error.constructor === Error || error.name.endsWith('Refusal')
+}
+
+/**
+ * @param error - an internal fault of a route.
+ * @returns what the operator's log says of it: a SyntaxError by its name and
+ * position only (Node's message quotes the text it read, a team's messages for
+ * the state); a state file error with its path, which callers never see; any
+ * other by its name and message.
+ */
+function internalDetail(error: unknown): string {
+  if (error instanceof SyntaxError) return errorShape(error)
+  if (error instanceof StateFileError) return `${error.name}: ${error.message} (${error.path})`
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }
