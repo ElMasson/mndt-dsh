@@ -256,6 +256,23 @@ describe('ask_peers: escalation, answered by a member', () => {
     expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
   })
 
+  it('an escalated help keeps its peers withheld until a person answers', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "HT ?"}'
+    const { replies } = await ask(b, t.channel, '@alpha le point ?')
+    const served = async (): Promise<Turn | undefined> => (((await b.call('GET', `/channels/${t.channel}/messages`, 'operator')).body.messages as Message[])
+      .find(m => m.turns?.[0]?.help !== undefined))?.turns?.[0]
+    const open = await served()
+    expect(open?.help?.reading).toBeDefined()
+    expect(open?.help?.peerIds).toEqual([])
+    expect(open?.help?.advices.every(advice => advice.agentId === undefined && advice.eur === undefined)).toBe(true)
+    b.engine.helpBody = {}
+    await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'Oui, HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    expect((await served())?.help?.advices.every(advice => advice.agentId !== undefined)).toBe(true)
+  })
+
   it('« card » without a card is an escalation', async () => {
     const b = bench()
     const t = await team(b)

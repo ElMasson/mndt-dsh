@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -34,7 +34,7 @@ import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
 import type { TurnScheduler } from './turns.ts'
-import { spentThisMonth } from './core/index.ts'
+import { spentThisMonth, unattributedCouncilEur } from './core/index.ts'
 import type { Channel } from './core/index.ts'
 
 /** One request as the handler sees it. */
@@ -358,7 +358,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const now = new Date().toISOString()
         const messages = (await service.snapshot()).messages ?? []
         const agents = await service.listAgents()
-        return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now) })) })
+        return respond(200, {
+          agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now, true) })),
+          // Councils closed without naming their members: one sum for the space, never per agent.
+          eurUnattributedThisMonth: unattributedCouncilEur(messages, now),
+        })
       }
       if (request.method === 'POST' && parts.length === 3 && parts[2] === 'retire') {
         // Retiring an agent is creating's mirror: owners and admins only.
@@ -496,6 +500,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const denied = await authorise(identity, 'rights.write')
       if (denied !== undefined) return denied
       if (input.mode === 'solo') return respond(200, { channel: await service.setCoordination(channel.id, undefined, identity) })
+      if (input.mode === 'council') {
+        if (!Array.isArray(input.members)) {
+          return respond(400, { error: 'a council needs members (2 to 4 agent ids), decision (vote or synthesis) and, for a synthesis, a synthesizer', code: 'missing-fields' })
+        }
+        const decision = input.decision === undefined ? 'vote' : input.decision
+        const updated = await service.setCoordination(channel.id, {
+          mode: 'council',
+          memberIds: strings(input.members),
+          decision: decision as 'vote' | 'synthesis',
+          ...(typeof input.synthesizer === 'string' ? { synthesizerId: input.synthesizer } : {}),
+          maxEurPerTurn: typeof input.maxEurPerTurn === 'number' ? input.maxEurPerTurn : DEFAULT_EUR_PER_COUNCIL_TURN,
+        }, identity)
+        return respond(200, { channel: updated })
+      }
       if (input.mode === 'parallel-synthesis') {
         if (!Array.isArray(input.workers) || typeof input.synthesizer !== 'string') {
           return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)', code: 'missing-fields' })

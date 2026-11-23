@@ -266,7 +266,7 @@ export interface ContextProposal {
  * verifier, an agent of ANOTHER model, against the request; the author corrects
  * once if the verifier finds something. A host script, never an agent's choice.
  */
-export type Coordination = AuthorVerifier | ParallelSynthesis
+export type Coordination = AuthorVerifier | ParallelSynthesis | Council
 
 /** « Auteur puis vérificateur ». */
 export interface AuthorVerifier {
@@ -289,8 +289,28 @@ export interface ParallelSynthesis {
   readonly maxEurPerTurn: number
 }
 
+/**
+ * « Conseil » (brief of 15/11): 2 to 4 members answer a question framed by the
+ * first of them (the chair) on their own, then critique each other without
+ * names, and decide by vote (on the option's index) or by a synthesizer who is
+ * not a member. A tie, a lost quorum or « none of these options » escalates.
+ */
+export interface Council {
+  readonly mode: 'council'
+  /** The members; the first one, the chair, frames the question. */
+  readonly memberIds: readonly string[]
+  readonly decision: 'vote' | 'synthesis'
+  /** For a synthesis: who decides, never a member. */
+  readonly synthesizerId?: string
+  /** The most one such turn may cost, all calls together, in euros. */
+  readonly maxEurPerTurn: number
+}
+
 /** @param coordination - a channel's coordination. @returns the agents it engages. */
 export function coordinationAgents(coordination: Coordination): readonly string[] {
+  if (coordination.mode === 'council') {
+    return [...coordination.memberIds, ...(coordination.synthesizerId === undefined ? [] : [coordination.synthesizerId])]
+  }
   return coordination.mode === 'author-verifier'
     ? [coordination.authorId, coordination.verifierId]
     : [...coordination.workerIds, coordination.synthesizerId]
@@ -349,6 +369,13 @@ export interface Turn {
    * agent that asked. Served without the peers' identities until `reading`.
    */
   readonly help?: TurnHelp
+  /**
+   * A council this turn ran (its chair's turn in a « conseil » channel): the
+   * framing, the positions, the critiques and the decision. Each call counts
+   * for the member who made it. Served without the members' identities until
+   * the decision.
+   */
+  readonly council?: TurnCouncil
   readonly startedAt?: string
   readonly finishedAt?: string
 }
@@ -411,6 +438,60 @@ export interface TurnHelp {
   readonly capEur: number
   readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string }[]
   readonly askedAt: string
+}
+
+/** A council's slot: one per member, drawn. */
+export type CouncilSlot = 'A' | 'B' | 'C' | 'D'
+
+/** What a council's call cost, and who made it: withheld from what is served until the decision. */
+export interface CouncilCost {
+  readonly agentId?: string
+  readonly model?: string
+  readonly eur?: number
+  readonly tokens?: Mission['tokens']
+}
+
+/** One member's position. `choice` is the option's index (1-based), never its label. */
+export interface CouncilPosition extends CouncilCost {
+  readonly slot: CouncilSlot
+  readonly choice?: number
+  readonly text: string
+}
+
+/** One member's critique of the others, and its final choice (the one counted). */
+export interface CouncilCritique extends CouncilCost {
+  readonly slot: CouncilSlot
+  /** The slots it critiques. */
+  readonly about: readonly CouncilSlot[]
+  readonly text: string
+  readonly choice?: number
+}
+
+/** How a council decided. */
+export type CouncilDecision =
+  | { readonly kind: 'vote'; readonly tally: Readonly<Record<string, number>>; readonly chosen?: number }
+  | ({ readonly kind: 'synthesis'; readonly text: string; readonly chosen?: number } & CouncilCost)
+
+/** A council a chair's turn ran, and where it stands. */
+export interface TurnCouncil {
+  readonly state: 'deliberating' | 'critiquing' | 'deciding' | 'done'
+  /** The chair's framing (the chair is the turn's agent). */
+  readonly framing?: { readonly text: string } & CouncilCost
+  readonly question: string
+  /** The options, numbered from 1 by their position; the last is always « aucune de ces options ». */
+  readonly options: readonly string[]
+  readonly positions: readonly CouncilPosition[]
+  readonly critiques: readonly CouncilCritique[]
+  readonly decision?: CouncilDecision
+  /** Who did not follow the decision. */
+  readonly dissent: readonly { readonly slot: CouncilSlot; readonly why?: string }[]
+  readonly escalation?: HelpEscalation
+  /** What the council cost, every call together. */
+  readonly eur?: number
+  readonly capEur: number
+  /** A call that could not give its part; `eur` is what it consumed anyway (stopped at the bound). */
+  readonly skipped: readonly { readonly slot?: CouncilSlot; readonly agentId?: string; readonly reason: string; readonly eur?: number }[]
+  readonly startedAt: string
 }
 
 /** One message of a channel. */
