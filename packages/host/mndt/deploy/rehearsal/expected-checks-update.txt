@@ -11,8 +11,10 @@ coord-author-verifier
 coord-bound
 coord-parallel
 council-answered
+council-no-tools
 council-tie-escalated
 council-vote
+deleted-anonymous
 french
 gateway-alive
 help-escalated-anonymous

@@ -5,7 +5,7 @@
 //   node drive.mjs <playwright module> <project> <shots dir>
 import { execFileSync } from 'node:child_process'
 import { connect } from 'node:net'
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
 
 const [playwrightModule, project, shots] = process.argv.slice(2)
 const { chromium } = await import(playwrightModule)
@@ -298,17 +298,32 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
     return value
   }
   const escalations = async () => (await api('GET', '/escalations')).body.escalations ?? []
+  // What the « À traiter » queue serves names no agent, model nor price while it waits.
+  const NAMING = /@[a-z]|agt_|deepseek|glm|qwen|scaleway|vllm|€/i
+  /** @returns each seeded agent's served eurThisMonth, and the space's unattributed sum. */
+  const counters = async () => {
+    const body = (await api('GET', '/agents')).body
+    return { ...Object.fromEntries((body.agents ?? []).map(a => [a.handle, a.eurThisMonth])), space: body.eurUnattributedThisMonth }
+  }
+  const same = (a, b, keys) => keys.every(k => a[k] === b[k])
+  /** @param turn - a served turn. @returns whether its help or council carries any identity, model or cost per call. */
+  // The help's and the council's own totals are served on purpose: only what is per call counts here.
+  const names = turn => JSON.stringify({ help: turn?.help && { ...turn.help, eur: undefined }, council: turn?.council && { ...turn.council, eur: undefined } })
+    .match(/"agentId"|"model"|"tokens"|"eur":/) !== null
 
   // Peer help (#113): @qwen asks @assistant and @analyste, reads them, escalates; the
   // question waiting, nobody is named; a person answers, they are.
   const helpRoom = (await api('POST', '/channels', { name: 'entraide', agents: [assistant.id, analyste.id, qwen.id], members: [] })).body.channel
+  const helpBefore = await counters()
   const helped = await turnIn(helpRoom.id, '@qwen sonde-entraide le point du trimestre ?')
   const help = helped?.help
   const waiting = (await escalations()).find(e => e.turnId === helped?.id)
+  const helpWaiting = await counters()
   check('help-escalated-anonymous', helped?.status === 'done' && help?.state === 'done' && help.reading?.verdict === 'escalate'
-    && help.advices.length === 2 && help.peerIds.length === 0 && help.advices.every(a => a.agentId === undefined && a.model === undefined && a.eur === undefined)
-    && typeof help.escalation?.messageId === 'string' && waiting?.kind === 'help',
-  `turn ${helped?.status}, help ${help?.state}, verdict ${help?.reading?.verdict}, ${help?.advices.length ?? 0} advice(s), peers served ${help?.peerIds.length ?? '-'}, named ${help?.advices.filter(a => a.agentId !== undefined).length ?? '-'}, listed ${waiting?.kind ?? 'no'}`)
+    && help.advices.length === 2 && help.peerIds.length === 0 && !names(helped)
+    && typeof help.escalation?.messageId === 'string' && waiting?.kind === 'help'
+    && !NAMING.test(`${waiting.question} ${waiting.summary}`) && same(helpBefore, helpWaiting, ['assistant', 'analyste', 'space']),
+  `turn ${helped?.status}, help ${help?.state}, verdict ${help?.reading?.verdict}, ${help?.advices.length ?? 0} advice(s), peers served ${help?.peerIds.length ?? '-'}, named ${names(helped)}, listed ${waiting?.kind ?? 'no'} « ${waiting?.summary ?? ''} », peers' counters ${same(helpBefore, helpWaiting, ['assistant', 'analyste'])  ? 'unchanged' : 'MOVED'}, space ${helpBefore.space}→${helpWaiting.space}`)
   const answer = help?.escalation?.messageId === undefined ? undefined
     : (await api('POST', `/channels/${helpRoom.id}/messages`, { text: 'Oui, elle est HT.', replyTo: help.escalation.messageId })).body.message
   const relaunched = answer === undefined ? undefined
@@ -322,17 +337,22 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
   const councilRoom = (await api('POST', '/channels', { name: 'conseil', agents: [qwen.id, assistant.id, analyste.id], members: [] })).body.channel
   const convened = await api('POST', `/channels/${councilRoom.id}/coordination`, { mode: 'council', members: [qwen.id, assistant.id, analyste.id] })
   const voted = await turnIn(councilRoom.id, '@qwen conseil-vote HT ou TTC ?')
+  const unknownHandles = (logs('fakellm').match(/fake-llm council-unknown-handle/g) ?? []).length
   check('council-vote', convened.status === 200 && voted?.status === 'done' && voted.council?.decision?.kind === 'vote' && voted.council.decision.chosen === 1
+    && JSON.stringify(voted.council.decision.tally) === JSON.stringify({ 1: 2, 2: 1 }) && voted.council.dissent.length === 1 && unknownHandles === 0
     && voted.council.options.at(-1) === 'aucune de ces options' && voted.council.positions.length === 3 && voted.council.positions.every(p => p.agentId !== undefined),
-  `coordination ${convened.status}, turn ${voted?.status}, decision ${JSON.stringify(voted?.council?.decision ?? null)}, ${voted?.council?.positions.length ?? 0} position(s)`)
+  `coordination ${convened.status}, turn ${voted?.status}, decision ${JSON.stringify(voted?.council?.decision ?? null)}, dissent ${voted?.council?.dissent.length ?? '-'}, ${voted?.council?.positions.length ?? 0} position(s), unknown handles ${unknownHandles}`)
   // Every call the fake model receives: none may follow a person's answer to a council.
   const framings = () => (logs('fakellm').match(/fake-llm call \d+:/g) ?? []).length
+  const tieBefore = await counters()
   const tied = await turnIn(councilRoom.id, '@qwen conseil-egalite HT ou TTC ?')
   const tiedListed = (await escalations()).find(e => e.turnId === tied?.id)
+  const tieWaiting = await counters()
   check('council-tie-escalated', tied?.council?.decision?.kind === 'vote' && tied.council.decision.chosen === undefined
-    && typeof tied.council.escalation?.messageId === 'string' && tied.council.positions.every(p => p.agentId === undefined && p.eur === undefined)
-    && tiedListed?.kind === 'council',
-  `decision ${JSON.stringify(tied?.council?.decision ?? null)}, escalation ${tied?.council?.escalation?.messageId ?? 'none'}, named ${tied?.council?.positions.filter(p => p.agentId !== undefined).length ?? '-'}, listed ${tiedListed?.kind ?? 'no'}`)
+    && typeof tied.council.escalation?.messageId === 'string' && !names(tied) && tied.council.framing !== undefined && tied.council.critiques.length === 3
+    && tiedListed?.kind === 'council' && !NAMING.test(`${tiedListed.question} ${tiedListed.summary}`)
+    && same(tieBefore, tieWaiting, ['qwen', 'assistant', 'analyste', 'space']),
+  `decision ${JSON.stringify(tied?.council?.decision ?? null)}, escalation ${tied?.council?.escalation?.messageId ?? 'none'}, named ${names(tied)} (framing, positions, critiques), listed ${tiedListed?.kind ?? 'no'}, counters ${same(tieBefore, tieWaiting, ['qwen', 'assistant', 'analyste', 'space']) ? 'unchanged' : 'MOVED'}`)
   const callsBefore = framings()
   if (tied?.council?.escalation?.messageId !== undefined) {
     await api('POST', `/channels/${councilRoom.id}/messages`, { text: 'HT.', replyTo: tied.council.escalation.messageId })
@@ -341,6 +361,26 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
   await sleep(3000)
   check('council-answered', answered?.council?.positions.every(p => p.agentId !== undefined) === true && framings() === callsBefore,
     `answered ${answered?.council?.escalation?.answeredAt ?? 'no'}, named ${answered?.council?.positions.filter(p => p.agentId !== undefined).length ?? '-'}, calls after the answer ${framings() - callsBefore}`)
+  const councilTools = [...logs('fakellm').matchAll(/fake-llm council-tools \d+ (\w+): (\d+)/g)].map(m => [m[1], Number(m[2])])
+  check('council-no-tools', councilTools.length >= 14 && councilTools.every(([, n]) => n === 0)
+    && ['framing', 'position', 'critique'].every(kind => councilTools.some(([k]) => k === kind)),
+  `${councilTools.length} council call(s): ${['framing', 'position', 'critique'].map(k => `${k} ${councilTools.filter(([x]) => x === k).length}`).join(', ')}, offered a tool ${councilTools.filter(([, n]) => n > 0).length}`)
+
+  // Deleted while its question waits: the answer of the deletion route names nobody either.
+  const helpToDelete = await turnIn(helpRoom.id, '@qwen sonde-entraide un autre point ?')
+  const helpDeleteMessage = ((await api('GET', `/channels/${helpRoom.id}/messages`)).body.messages ?? []).find(m => m.turns?.[0]?.id === helpToDelete?.id)
+  const helpDeleted = helpDeleteMessage === undefined ? undefined
+    : (await api('POST', `/channels/${helpRoom.id}/messages/${helpDeleteMessage.id}/delete`)).body.message
+  const unreadable = await turnIn(councilRoom.id, '@qwen conseil-illisible HT ou TTC ?')
+  const councilDeleteMessage = ((await api('GET', `/channels/${councilRoom.id}/messages`)).body.messages ?? []).find(m => m.turns?.[0]?.id === unreadable?.id)
+  const councilDeleted = councilDeleteMessage === undefined ? undefined
+    : (await api('POST', `/channels/${councilRoom.id}/messages/${councilDeleteMessage.id}/delete`)).body.message
+  const slotSkips = councilDeleted?.turns?.[0]?.council?.skipped.filter(s => s.slot !== undefined) ?? []
+  check('deleted-anonymous', helpToDelete?.help?.escalation !== undefined && helpDeleted?.deletedAt !== undefined && !names(helpDeleted.turns?.[0])
+    && helpDeleted.turns?.[0]?.help?.peerIds.length === 0
+    && unreadable?.council?.escalation !== undefined && councilDeleted?.deletedAt !== undefined && !names(councilDeleted.turns?.[0])
+    && slotSkips.length === 1 && slotSkips.every(s => s.reason === 'avis non obtenu'),
+  `help deleted ${helpDeleted?.deletedAt !== undefined}, named ${names(helpDeleted?.turns?.[0])}; council deleted ${councilDeleted?.deletedAt !== undefined}, named ${names(councilDeleted?.turns?.[0])}, slot skips ${slotSkips.map(s => `« ${s.reason} »`).join(' ') || 'none'}`)
 } else {
   check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
 }
@@ -364,11 +404,18 @@ const asOwner = async (method, path, body) => {
   }).catch(() => undefined)
   return { status: answer?.status ?? 0, body: answer === undefined ? {} : await answer.json().catch(() => ({})) }
 }
-/** @returns the guide's count of helps and councils not done, run with jq on a copy of state.json. */
+/** The filter of the guide's §13.4 count, copied as is (« jq '<this>' …/state.json »). */
+const GUIDE_COUNT = '[.messages[]?.turns[]? | select((.help != null and .help.state != "done") or (.council != null and .council.state != "done"))] | length'
+/** @returns the guide's count of helps and councils not done, run with jq on a copy of state.json, removed after. */
 const openCount = () => {
   const copy = `/tmp/${project}-state-${Date.now()}.json`
   docker('cp', `${project}-workbench:/state/state.json`, copy)
-  return execFileSync('jq', ['[.messages[]?.turns[]? | select((.help != null and .help.state != "done") or (.council != null and .council.state != "done"))] | length', copy], { encoding: 'utf8' }).trim()
+  try {
+    // The command of the guide's §13.4, as written there.
+    return execFileSync('jq', [GUIDE_COUNT, copy], { encoding: 'utf8' }).trim()
+  } finally {
+    unlinkSync(copy)
+  }
 }
 const entraide = ((await asOwner('GET', '/channels')).body.channels ?? []).find(c => c.name === 'entraide')
 const slow = entraide === undefined ? undefined : (await asOwner('POST', `/channels/${entraide.id}/messages`, { text: '@qwen sonde-entraide sonde-lente encore ?' })).body.message
@@ -388,7 +435,8 @@ for (let attempt = 0; attempt < 90 && back !== 200; attempt += 1) {
 const after = back === 200 ? openCount() : 'no API'
 const closed = slow === undefined ? undefined : ((await asOwner('GET', `/channels/${entraide.id}/messages`)).body.messages ?? []).find(m => m.id === slow.id)?.turns?.[0]
 check('restart-closes', before === '1' && after === '0' && closed?.status === 'cancelled' && closed.reason === 'interrompu par un redémarrage'
-  && closed.help?.state === 'done' && closed.help.skipped.some(s => s.reason === 'avis non obtenu : redémarrage'),
+  && closed.help?.state === 'done' && closed.help.skipped.some(s => s.reason === 'avis non obtenu : redémarrage')
+  && closed.help.advices.every(a => a.agentId === undefined) && closed.help.peerIds.length === 0,
 `count before ${before}, after ${after}, turn ${closed?.status} « ${closed?.reason ?? '-'} », help ${closed?.help?.state ?? '-'}, API back ${back}`)
 
 // The same for a council left open (#119): turns run one at a time, so the

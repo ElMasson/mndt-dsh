@@ -11,9 +11,11 @@ coord-author-verifier
 coord-bound
 coord-parallel
 council-answered
+council-no-tools
 council-tie-escalated
 council-vote
 counter-proof
+deleted-anonymous
 e2e-in-image
 env-names
 forged-run

@@ -641,7 +641,7 @@ export function servedMessage(message: Message): Message {
  * @param reason - why a peer gave no advice, as recorded.
  * @returns the same reason by kind, naming no one: what is served before the reading.
  */
-function reasonKind(reason: string): string {
+export function reasonKind(reason: string): string {
   if (/borne/.test(reason)) return 'avis non obtenu : borne'
   if (/^Plafond mensuel|^Prix du modèle/.test(reason)) return 'avis non obtenu : plafond'
   if (reason === 'tour arrêté') return 'avis non obtenu : tour arrêté'

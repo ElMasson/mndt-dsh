@@ -354,6 +354,9 @@ describe('ask_peers: bounds', () => {
     // 100 000 tokens at 3 €/M = 0.30 €: the first advice passes the 0.20 € bound.
     expect(turn.help?.skipped.some(skip => /borne \(0\.2 €\)/.test(skip.reason))).toBe(true)
     expect(turn.help?.escalation).toBeDefined()
+    // The summary, served by GET /escalations while the question waits, says the reason by kind.
+    expect(turn.help?.escalation?.summary).toContain('Sans avis : avis non obtenu : borne')
+    expect(turn.help?.escalation?.summary).not.toMatch(/@|€|agt_|route-/)
   })
 
   it('two requests per thread at most, and a peer asked once per thread by the same asker', async () => {

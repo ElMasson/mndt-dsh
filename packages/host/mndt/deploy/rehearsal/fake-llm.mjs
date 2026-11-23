@@ -40,15 +40,26 @@ const handleOf = asked => /Tu es @([a-z0-9-]+)/.exec(asked)?.[1] ?? ''
 // different choices (a tie).
 const VOTE = { assistant: 1, analyste: 1, qwen: 2 }
 const TIE = { assistant: 1, analyste: 2, qwen: 3 }
-/** @param asked - a council prompt. @returns this member's choice. */
-const choiceOf = asked => ((asked.includes('conseil-egalite') ? TIE : VOTE)[handleOf(asked)] ?? 1)
+// « conseil-illisible »: one member answers outside the options (not counted), the two others tie.
+const UNREADABLE = { assistant: 1, analyste: 2, qwen: 'illisible' }
+/**
+ * @param asked - a council prompt.
+ * @returns this member's choice. An agent the fake does not know answers no
+ * valid choice, and says so in the log: a vote never passes by a default.
+ */
+const choiceOf = (asked) => {
+  const table = asked.includes('conseil-illisible') ? UNREADABLE : asked.includes('conseil-egalite') ? TIE : VOTE
+  const choice = table[handleOf(asked)]
+  if (choice === undefined) console.log(`fake-llm council-unknown-handle ${handleOf(asked) || '-'}`)
+  return choice ?? 'inconnu'
+}
 
 /** @param messages - the request's messages. @returns what the model answers, by the role the prompt gives it. */
 function answerOf(messages) {
   const asked = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
   // The council's chair frames; the members take positions, then critique.
   if (asked.includes("président d'un conseil")) {
-    const tie = asked.includes('conseil-egalite') ? ' (conseil-egalite)' : ''
+    const tie = asked.includes('conseil-egalite') ? ' (conseil-egalite)' : asked.includes('conseil-illisible') ? ' (conseil-illisible)' : ''
     const slow = asked.includes('sonde-lente') ? ' (sonde-lente)' : ''
     return JSON.stringify({ question: `HT ou TTC${tie}${slow} ?`, options: ['HT', 'TTC'] })
   }
@@ -149,6 +160,12 @@ createServer((req, res) => {
     // with the allow-list, exactly.
     const offered = (request.tools ?? []).map(tool => tool.function?.name ?? tool.name).sort()
     console.log(`fake-llm tools ${calls} ${tag}: ${JSON.stringify(offered)}`)
+    // The tools a council's framing, position or critique was offered: none, ever.
+    const prompted = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
+    const councilKind = prompted.includes("président d'un conseil") ? 'framing'
+      : prompted.includes('Voici les positions des autres membres') ? 'critique'
+        : prompted.includes('Prends position seul') ? 'position' : undefined
+    if (councilKind !== undefined) console.log(`fake-llm council-tools ${calls} ${councilKind}: ${offered.length}`)
     // Only the last call of a probe carries every result: log them there once.
     const call = nextCall(messages, tag) ?? helpCall(messages)
     if (call === undefined && tag !== '-') logResults(messages, tag)
