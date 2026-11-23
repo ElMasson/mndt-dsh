@@ -202,3 +202,14 @@ describe('options are numbered as the core numbers them (1-based)', () => {
     expect(screen.getByTestId('council-outcome').textContent).toBe('Attendre la fin du mois (synthèse par @synthese)')
   })
 })
+
+describe('authors only once the council is closed (#119)', () => {
+  it('a decision with an open question keeps the slots unnamed; answered, they are named', () => {
+    const open = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 1: 2, 2: 1 } },
+      escalation: { question: 'Pas de majorité absolue : que retenir ?', messageId: 'msg_9' } })
+    expect(open.positions.every(p => p.agentId === undefined)).toBe(true)
+    const answered = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 1: 2, 2: 1 } },
+      escalation: { question: 'Q', messageId: 'msg_9', answeredAt: at } })
+    expect(answered.positions[0]?.agentId).toBe('agt_1')
+  })
+})

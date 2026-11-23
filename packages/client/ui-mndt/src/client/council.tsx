@@ -109,7 +109,16 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
       ...(chosen === undefined ? {} : { chosen }),
     }
   }
-  const decided = decision !== undefined
+  const e = recordOf(c.escalation)
+  const question = textOf(e?.question)
+  const escalation = e === undefined || question === undefined ? undefined : {
+    question,
+    ...(textOf(e.summary) === undefined ? {} : { summary: textOf(e.summary) as string }),
+    ...(typeof e.answeredAt === 'string' && !Number.isNaN(Date.parse(e.answeredAt)) ? { answeredAt: e.answeredAt } : {}),
+    ...(textOf(e.messageId) === undefined ? {} : { messageId: textOf(e.messageId) as string }),
+  }
+  // Authors only once the council is closed: a decision, and no question left open (C, #119).
+  const decided = decision !== undefined && (escalation === undefined || escalation.answeredAt !== undefined)
   const positions: CouncilPosition[] = []
   for (const item of Array.isArray(c.positions) ? c.positions : []) {
     const p = recordOf(item)
@@ -153,14 +162,6 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     const slot = slotOf(x.slot)
     return [{ reason, ...(slot === undefined ? {} : { slot }) }]
   })
-  const e = recordOf(c.escalation)
-  const question = textOf(e?.question)
-  const escalation = e === undefined || question === undefined ? undefined : {
-    question,
-    ...(textOf(e.summary) === undefined ? {} : { summary: textOf(e.summary) as string }),
-    ...(typeof e.answeredAt === 'string' && !Number.isNaN(Date.parse(e.answeredAt)) ? { answeredAt: e.answeredAt } : {}),
-    ...(textOf(e.messageId) === undefined ? {} : { messageId: textOf(e.messageId) as string }),
-  }
   const framing = textOf(recordOf(c.framing)?.text)
   const eur = amountOf(c.eur)
   const capEur = amountOf(c.capEur)
@@ -169,7 +170,9 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     state: c.state,
     ...(textOf(c.question) === undefined ? {} : { question: textOf(c.question) as string }),
     ...(framing === undefined ? {} : { framing }),
-    ...(decision === undefined ? {} : { decision }),
+    ...(decision === undefined ? {} : {
+      decision: decision.kind === 'synthesis' && !decided ? { kind: 'synthesis' as const, text: decision.text, ...(decision.chosen === undefined ? {} : { chosen: decision.chosen }) } : decision,
+    }),
     ...(escalation === undefined ? {} : { escalation }),
     ...(eur === undefined ? {} : { eur }),
     ...(capEur === undefined ? {} : { capEur }),
