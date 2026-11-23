@@ -359,6 +359,20 @@ describe('ask_peers: bounds', () => {
     expect(turn.help?.escalation?.summary).not.toMatch(/@|€|agt_|route-/)
   })
 
+  it('a reading the bound refuses is said by kind in the published text: no € nor handle', async () => {
+    const b = bench()
+    const t = await team(b)
+    // Two advices at 3 €/M of 32 000 tokens (0.096 € each): the reading's reservation passes the 0.20 € bound.
+    b.engine.tokens = { input: 32_000, output: 0 }
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(turn.help?.advices).toHaveLength(2)
+    expect(turn.help?.reading).toBeUndefined()
+    expect(turn.help?.escalation).toBeDefined()
+    const published = replies.at(-1)?.text ?? ''
+    expect(published).toContain('Lecture des avis impossible (avis non obtenu : borne)')
+    expect(published).not.toMatch(/€|@beta|@gamma/)
+  })
+
   it('two requests per thread at most, and a peer asked once per thread by the same asker', async () => {
     const b = bench()
     const t = await team(b)
