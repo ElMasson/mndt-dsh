@@ -106,6 +106,8 @@ export interface PageStateRow {
   readonly you: string
   readonly canWrite: boolean
   readonly role?: string
+  /** Where the roles come from: `file` when they are kept in the role file by the owner (no grant route). */
+  readonly rolesFrom?: unknown
   readonly canAdmin?: boolean
   readonly canShare?: boolean
   readonly missions: readonly MissionRow[]
@@ -142,6 +144,10 @@ export interface OutcomeRow<T> {
   readonly ok: boolean
   readonly value?: T
   readonly error?: string
+  /** The HTTP status of a refusal, when the Host answered one. */
+  readonly status?: number
+  /** The refusal's code, when the Host serves one (`no-authority`, …). */
+  readonly code?: string
 }
 
 /** One mounted connector, as the page reads it. */
@@ -174,13 +180,23 @@ export interface AutomationsAnswer {
 }
 
 /** The Host face this page needs. */
+/** How a card is decided. */
+export interface DecideOptions {
+  /** The screen shows the whole proposal of a propose_agent card (sent as `x-mndt-shows-proposal`). */
+  readonly showsProposal?: boolean
+}
+
 export interface MndtFace {
   state(): Promise<PageStateRow>
   runMission(kind: string, prompt: string): Promise<OutcomeRow<{ readonly mission: MissionRow; readonly brief?: BriefRow }>>
   cancelMission(id: string): Promise<OutcomeRow<MissionRow>>
   search(query: string): Promise<readonly SearchRow[]>
   retryMission(id: string): Promise<OutcomeRow<MissionRow>>
-  decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string): Promise<OutcomeRow<ApprovalRow>>
+  /**
+   * Decide a card. `showsProposal`: the screen shows the whole agent a propose_agent card would
+   * create (the core refuses its approval otherwise, #82).
+   */
+  decide(approvalId: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions): Promise<OutcomeRow<ApprovalRow>>
   approveBrief(briefId: string): Promise<OutcomeRow<BriefRow>>
   remember(scope: 'team' | 'user' | 'mission', kind: 'fact' | 'decision' | 'preference', text: string): Promise<OutcomeRow<MemoryRow>>
   shareMission(missionId: string, visibility: 'team' | 'private'): Promise<OutcomeRow<MissionRow>>

@@ -1,4 +1,5 @@
 import type { Approval, WorkbenchState } from './types.ts'
+import { canReadMandate } from './visibility.ts'
 
 /** One search hit the page can show. */
 export interface SearchHitRow {
@@ -58,7 +59,7 @@ export function searchState(
     })
   }
   for (const mandate of snapshot.mandates) {
-    if (!canAdmin && mandate.delegataire !== identity && mandate.delegant !== identity) continue
+    if (!canReadMandate(identity, canAdmin, mandate)) continue
     const label = mandate.purpose === '' ? mandate.id : mandate.purpose
     if (!matches(label, needle) && !matches(mandate.id, needle)) continue
     hits.push({

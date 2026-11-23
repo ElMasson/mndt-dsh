@@ -49,6 +49,15 @@ export interface LauncherGrants {
   readonly readOnly?: readonly string[]
   /** Roots granted full filesystem access beneath (the launcher's `--rw`). */
   readonly readWrite?: readonly string[]
+  /**
+   * The environment allow-list (`--keep-env`, `--keep-env-prefix`): when either
+   * is given, the command receives only the variables of the launcher's own
+   * environment whose name is kept, the ones its caller added included.
+   */
+  readonly keepEnv?: readonly string[]
+  readonly keepEnvPrefixes?: readonly string[]
+  /** Variables set for the command (`--set-env NAME=value`), over any kept one. */
+  readonly setEnv?: Readonly<Record<string, string>>
 }
 
 /**
@@ -95,6 +104,9 @@ export function grantArgs(grants: LauncherGrants): string[] {
   return [
     ...(grants.readOnly ?? []).flatMap(root => ['--ro', root]),
     ...(grants.readWrite ?? []).flatMap(root => ['--rw', root]),
+    ...(grants.keepEnv ?? []).flatMap(name => ['--keep-env', name]),
+    ...(grants.keepEnvPrefixes ?? []).flatMap(prefix => ['--keep-env-prefix', prefix]),
+    ...Object.entries(grants.setEnv ?? {}).flatMap(([name, value]) => ['--set-env', `${name}=${value}`]),
   ]
 }
 

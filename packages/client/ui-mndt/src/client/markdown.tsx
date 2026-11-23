@@ -1,6 +1,7 @@
 /**
  * A small Markdown reader for what agents write: enough for briefs and channel answers (headings,
- * GFM tables, lists, bold, inline code). React escapes every string: nothing in the text becomes HTML.
+ * GFM tables, lists, bold, inline code, fenced code blocks). React escapes every string: nothing in
+ * the text becomes HTML.
  */
 import type { ReactNode } from 'react'
 
@@ -33,6 +34,35 @@ export function renderBrief(markdown: string): ReactNode[] {
   }
   for (let index = 0; index < lines.length; index += 1) {
     const trimmed = (lines[index] ?? '').trim()
+    // A fenced block (three or more backticks or tildes, a language or not): its lines as they are,
+    // closed by a fence of the same mark at least as long, or by the end of the text when the
+    // agent never closed it. Its markers are never shown.
+    const fence = /^(`{3,}|~{3,})\s*([^`\s]*)/u.exec(trimmed)
+    // As CommonMark: a backtick fence whose rest holds a backtick is inline code (« ```npm i``` »),
+    // never the opening of a block that would turn the rest of the answer into code.
+    const inline = fence !== null && (fence[1] ?? '').startsWith('`') && trimmed.slice((fence[1] ?? '').length).includes('`')
+    if (fence !== null && !inline) {
+      flush()
+      const mark = fence[1] ?? '```'
+      const language = fence[2] ?? ''
+      const indent = /^\s*/u.exec(lines[index] ?? '')?.[0].length ?? 0
+      const body: string[] = []
+      index += 1
+      while (index < lines.length) {
+        const raw = lines[index] ?? ''
+        const closing = raw.trim()
+        if (closing.length >= mark.length && closing === (mark[0] ?? '`').repeat(closing.length)) break
+        // A fence indented in a list keeps its lines relative to it.
+        body.push(raw.slice(Math.min(indent, /^\s*/u.exec(raw)?.[0].length ?? 0)))
+        index += 1
+      }
+      blocks.push(
+        <pre key={`pre-${index}`} className="md-code">
+          <code {...(language === '' ? {} : { 'data-lang': language })}>{body.join('\n')}</code>
+        </pre>,
+      )
+      continue
+    }
     const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed)
     if (heading !== null) {
       flush()
