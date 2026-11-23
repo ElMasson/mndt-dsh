@@ -337,13 +337,18 @@ export const chatEn = {
   councilDissent: 'Disagreement, position {slot}',
   councilDetail: 'The council, in detail',
   councilFraming: 'Framing by the chair, {who}',
-  councilPosition: 'Position {slot} · option {n}: {option}',
+  councilPosition: 'Position {slot} · {choice}',
+  councilOption: 'option {n}: {option}',
+  councilUnreadableChoice: 'unreadable choice',
   councilCritique: 'Critique of position {about}',
   councilConfirms: 'confirms',
   councilChanges: 'changes to option {n}: {option}',
+  councilChangesUnreadable: 'changes to an unreadable choice',
   councilTooFew: 'A council has 2 to 4 members.',
   councilSynthIsMember: 'The synthesiser is not one of the members.',
   councilUnknownDecision: 'A council decides by vote or by synthesis.',
+  councilEnded: 'ended without a decision',
+  councilSkipped: 'Position {slot} not counted: {reason}',
 } as const
 
 /** One copy key. */
@@ -681,13 +686,18 @@ export const chatFr: Record<ChatKey, string> = {
   councilDissent: 'Désaccord, position {slot}',
   councilDetail: 'Le conseil, en détail',
   councilFraming: 'Cadrage par le président, {who}',
-  councilPosition: 'Position {slot} · option {n} : {option}',
+  councilPosition: 'Position {slot} · {choice}',
+  councilOption: 'option {n} : {option}',
+  councilUnreadableChoice: 'choix illisible',
   councilCritique: 'Critique de la position {about}',
   councilConfirms: 'confirme',
   councilChanges: 'change pour l\'option {n} : {option}',
+  councilChangesUnreadable: 'change pour un choix illisible',
   councilTooFew: 'Un conseil compte 2 à 4 membres.',
   councilSynthIsMember: 'Le synthétiseur ne peut pas être un des membres.',
   councilUnknownDecision: 'Un conseil décide par vote ou par synthèse.',
+  councilEnded: 'clos sans décision',
+  councilSkipped: 'Position {slot} non comptée : {reason}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

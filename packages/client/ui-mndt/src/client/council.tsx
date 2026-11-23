@@ -16,7 +16,8 @@ import { renderBrief } from './markdown.tsx'
 /** A position, by slot; its author only once the council has decided. */
 export interface CouncilPosition {
   readonly slot: string
-  readonly choice: number
+  /** The option chosen; undefined when the choice could not be read (shown « choix illisible »). */
+  readonly choice?: number
   readonly text: string
   readonly agentId?: string
   readonly model?: string
@@ -27,12 +28,12 @@ export interface CouncilCritique {
   readonly slot: string
   readonly about: string
   readonly text: string
-  readonly choice: number
+  readonly choice?: number
 }
 
 /** A turn's council, as `turn.council` serves it. */
 export interface TurnCouncil {
-  readonly state?: string
+  readonly state: string
   readonly framing?: string
   readonly options: readonly string[]
   readonly positions: readonly CouncilPosition[]
@@ -41,6 +42,8 @@ export interface TurnCouncil {
     | { readonly kind: 'vote'; readonly tally: Readonly<Record<number, number>>; readonly chosen?: number }
     | { readonly kind: 'synthesis'; readonly text: string; readonly agentId?: string }
   readonly dissent: readonly { readonly slot: string; readonly why?: string }[]
+  /** Positions or critiques not counted, and why (by category before the decision). */
+  readonly skipped: readonly { readonly slot?: string; readonly reason: string }[]
   readonly escalation?: { readonly question: string; readonly summary?: string; readonly answeredAt?: string; readonly messageId?: string }
   readonly eur?: number
   readonly capEur?: number
@@ -71,12 +74,13 @@ function amountOf(value: unknown): number | undefined {
 
 /**
  * @param turn - a turn as served.
- * @returns its council when well-formed (options, and every position and critique pointing to one);
- * else undefined (nothing shown). No author is read before the decision, even if one were served.
+ * @returns its council when its shape is known (a state and options); a position or critique whose
+ * choice cannot be read stays, said « choix illisible »; anything else unreadable is left out, never
+ * the whole council. No author is read before the decision, even if one were served.
  */
 export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
   const c = recordOf(turn.council)
-  if (c === undefined || !Array.isArray(c.options)) return undefined
+  if (c === undefined || typeof c.state !== 'string' || c.state === '' || !Array.isArray(c.options)) return undefined
   const options = c.options.map(textOf)
   if (options.length < 2 || options.length > 6 || options.some(o => o === undefined)) return undefined
   const labels = options.filter((o): o is string => o !== undefined)
@@ -86,7 +90,7 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     const tally: Record<number, number> = {}
     for (const [key, n] of Object.entries(recordOf(d.tally) ?? {})) {
       const i = indexOf(Number(key), labels.length)
-      if (i === undefined || typeof n !== 'number' || !Number.isInteger(n) || n < 0) return undefined
+      if (i === undefined || typeof n !== 'number' || !Number.isInteger(n) || n < 0) continue
       tally[i] = n
     }
     const chosen = indexOf(d.chosen, labels.length)
@@ -102,20 +106,28 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     const slot = slotOf(p?.slot)
     const choice = indexOf(p?.choice, labels.length)
     const text = textOf(p?.text)
-    if (p === undefined || slot === undefined || choice === undefined || text === undefined) return undefined
+    if (p === undefined || slot === undefined || text === undefined) continue
     const agentId = decided ? textOf(p.agentId) : undefined
     const model = decided ? textOf(p.model) : undefined
-    positions.push({ slot, choice, text, ...(agentId === undefined ? {} : { agentId }), ...(model === undefined ? {} : { model }) })
+    positions.push({
+      slot, text,
+      ...(choice === undefined ? {} : { choice }),
+      ...(agentId === undefined ? {} : { agentId }),
+      ...(model === undefined ? {} : { model }),
+    })
   }
   const critiques: CouncilCritique[] = []
   for (const item of Array.isArray(c.critiques) ? c.critiques : []) {
     const k = recordOf(item)
     const slot = slotOf(k?.slot)
-    const about = slotOf(k?.about)
+    // The slots criticised: one, or several.
+    const aboutRaw = k?.about
+    const abouts = Array.isArray(aboutRaw) ? aboutRaw.map(slotOf) : [slotOf(aboutRaw)]
+    const about = abouts.length === 0 || abouts.some(x => x === undefined) ? undefined : abouts.join(', ')
     const choice = indexOf(k?.choice, labels.length)
     const text = textOf(k?.text)
-    if (k === undefined || slot === undefined || about === undefined || choice === undefined || text === undefined) return undefined
-    critiques.push({ slot, about, text, choice })
+    if (k === undefined || slot === undefined || about === undefined || text === undefined) continue
+    critiques.push({ slot, about, text, ...(choice === undefined ? {} : { choice }) })
   }
   const dissent = (Array.isArray(c.dissent) ? c.dissent : []).flatMap((item: unknown) => {
     const x = recordOf(item)
@@ -123,6 +135,13 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     if (x === undefined || slot === undefined) return []
     const why = textOf(x.why)
     return [{ slot, ...(why === undefined ? {} : { why }) }]
+  })
+  const skipped = (Array.isArray(c.skipped) ? c.skipped : []).flatMap((item: unknown) => {
+    const x = recordOf(item)
+    const reason = textOf(x?.reason)
+    if (x === undefined || reason === undefined) return []
+    const slot = slotOf(x.slot)
+    return [{ reason, ...(slot === undefined ? {} : { slot }) }]
   })
   const e = recordOf(c.escalation)
   const question = textOf(e?.question)
@@ -136,8 +155,8 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
   const eur = amountOf(c.eur)
   const capEur = amountOf(c.capEur)
   return {
-    options: labels, positions, critiques, dissent,
-    ...(typeof c.state === 'string' ? { state: c.state } : {}),
+    options: labels, positions, critiques, dissent, skipped,
+    state: c.state,
     ...(framing === undefined ? {} : { framing }),
     ...(decision === undefined ? {} : { decision }),
     ...(escalation === undefined ? {} : { escalation }),
@@ -165,9 +184,13 @@ export function CouncilThread(props: {
   const [error, setError] = useState<string | undefined>(undefined)
   const name = (id: string): string => `@${props.agents.get(id)?.handle ?? id}`
   const label = (i: number): string => c.options[i] ?? String(i + 1)
+  /** @param i - a choice, if read. @returns its words: « option n : label », or « choix illisible ». */
+  const choiceWords = (i: number | undefined): string => (i === undefined ? t('councilUnreadableChoice') : t('councilOption', { n: i + 1, option: label(i) }))
   const decided = c.decision !== undefined
   const waiting = c.escalation !== undefined && c.escalation.answeredAt === undefined
-  const running = !decided && c.escalation === undefined
+  // Running until it decides, asks a person, or ends otherwise (« done », « closed » after a restart).
+  const ended = c.state === 'done' || c.state === 'closed'
+  const running = !decided && c.escalation === undefined && !ended
   const members = c.positions.length
   const outcome = waiting ? t('helpQuestion')
     : c.escalation?.answeredAt !== undefined ? t('helpClosedByHuman')
@@ -175,7 +198,7 @@ export function CouncilThread(props: {
         ? (c.decision.chosen === undefined ? t('councilNoMajority') : t('councilChosen', { option: label(c.decision.chosen), n: c.decision.tally[c.decision.chosen] ?? 0, of: members }))
         : c.decision?.kind === 'synthesis'
           ? t('councilSynthBy', { who: c.decision.agentId === undefined ? t('councilSynthesis') : name(c.decision.agentId) })
-          : t('councilRunning')
+          : ended ? t('councilEnded') : t('councilRunning')
   const target = props.canAnswer === true && waiting ? c.escalation.messageId : undefined
   const send = async (): Promise<void> => {
     if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
@@ -229,7 +252,7 @@ export function CouncilThread(props: {
             const critique = c.critiques.find(k => k.slot === p.slot)
             return (
               <li key={p.slot} data-testid="council-position">
-                <span className="mw-ctx-strong">{t('councilPosition', { slot: p.slot, n: p.choice + 1, option: label(p.choice) })}</span>
+                <span className="mw-ctx-strong">{t('councilPosition', { slot: p.slot, choice: choiceWords(p.choice) })}</span>
                 {p.agentId === undefined ? '' : ` · ${name(p.agentId)}${p.model === undefined ? '' : ` (${p.model})`}`}
                 <div className="mw-turn-part mw-agent-text">{renderBrief(p.text, { plainHeadings: true })}</div>
                 {critique === undefined ? undefined : (
@@ -237,7 +260,9 @@ export function CouncilThread(props: {
                     <p className="mw-ctx-small">
                       <b>{t('councilCritique', { about: critique.about })}</b>
                       {' · '}
-                      {critique.choice === p.choice ? t('councilConfirms') : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
+                      {critique.choice === undefined ? t('councilChangesUnreadable')
+                        : critique.choice === p.choice ? t('councilConfirms')
+                          : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
                     </p>
                     <div className="mw-turn-part mw-agent-text">{renderBrief(critique.text, { plainHeadings: true })}</div>
                   </div>
@@ -246,6 +271,13 @@ export function CouncilThread(props: {
             )
           })}
         </ul>
+        {c.skipped.length === 0 ? undefined : (
+          <ul className="mw-turn-notes" data-testid="council-skipped">
+            {c.skipped.map((k, i) => (
+              <li key={i}>{k.slot === undefined ? k.reason : t('councilSkipped', { slot: k.slot, reason: k.reason })}</li>
+            ))}
+          </ul>
+        )}
         {c.decision?.kind === 'vote' ? (
           <p className="mw-pills" data-testid="council-tally">
             {c.options.map((o, i) => (

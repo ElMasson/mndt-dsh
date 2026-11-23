@@ -106,13 +106,15 @@ const read = (council: unknown): TurnCouncil => {
 
 describe('a council in the feed', () => {
   it('reads only a well-formed council; a choice out of the options makes it unreadable', () => {
-    expect(read({ options, positions, critiques }).positions).toHaveLength(3)
-    expect(councilOf(turn({ options, positions: [{ slot: 'A', choice: 7, text: 'x' }] }))).toBeUndefined()
-    expect(councilOf(turn({ options: ['seule'] }))).toBeUndefined()
+    expect(read({ state: 'done', options, positions, critiques }).positions).toHaveLength(3)
+    // Only an unknown shape closes the display: no state, or no options.
+    expect(councilOf(turn({ options, positions }))).toBeUndefined()
+    expect(councilOf(turn({ state: 'done', positions }))).toBeUndefined()
+    expect(councilOf(turn({ state: 'done', options: ['seule'] }))).toBeUndefined()
   })
 
   it('while deliberating: unfolded, no author; the chair frames it, by name', () => {
-    render(<CouncilThread turn={turn({})} council={read({ options, positions, critiques, framing: { text: 'Faut-il relancer Sodiac ?' } })} agents={byId} t={chatFrench} />)
+    render(<CouncilThread turn={turn({})} council={read({ state: 'deliberating', options, positions, critiques, framing: { text: 'Faut-il relancer Sodiac ?' } })} agents={byId} t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('délibération en cours')
     expect(screen.getByTestId('council-framing').textContent).toContain('Cadrage par le président, @assistant')
     const all = screen.getAllByTestId('council-position').map(p => p.textContent ?? '').join(' ')
@@ -121,7 +123,7 @@ describe('a council in the feed', () => {
   })
 
   it('decided by vote: the option and its count, the critique\'s choice said, authors revealed, disagreement always visible', () => {
-    const council = read({ options, positions, critiques, decision: { kind: 'vote', tally: { 0: 3, 1: 0 }, chosen: 0 }, dissent: [{ slot: 'B', why: 'préférait attendre' }] })
+    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 0: 3, 1: 0 }, chosen: 0 }, dissent: [{ slot: 'B', why: 'préférait attendre' }] })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('Relancer Sodiac maintenant (3 sur 3)')
     expect(screen.getByTestId('council-dissent').textContent).toBe('Désaccord, position B : préférait attendre')
@@ -136,7 +138,7 @@ describe('a council in the feed', () => {
 
   it('a tie asks a person: one field, where the answer counts', async () => {
     const onAnswer = vi.fn(async () => undefined)
-    const council = read({ options, positions, critiques, decision: { kind: 'vote', tally: { 0: 1, 1: 1 } },
+    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 0: 1, 1: 1 } },
       escalation: { question: 'Relancer ou attendre ?', messageId: 'msg_9' } })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} onAnswer={onAnswer} canAnswer t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('une question pour vous')
@@ -146,8 +148,30 @@ describe('a council in the feed', () => {
   })
 
   it('a synthesis is shown, by its synthesiser', () => {
-    render(<CouncilThread turn={turn({})} council={read({ options, positions, critiques, decision: { kind: 'synthesis', text: 'Relancer avec délai de 8 jours.', agentId: 'agt_4' } })} agents={byId} t={chatFrench} />)
+    render(<CouncilThread turn={turn({})} council={read({ state: 'done', options, positions, critiques, decision: { kind: 'synthesis', text: 'Relancer avec délai de 8 jours.', agentId: 'agt_4' } })} agents={byId} t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('synthèse par @synthese')
     expect(screen.getByTestId('council-synthesis').textContent).toContain('Relancer avec délai de 8 jours.')
+  })
+})
+
+describe('an unreadable choice keeps the council', () => {
+  it('the position stays, said « choix illisible »; the rest is shown', () => {
+    const council = read({ state: 'done', options, positions: [...positions.slice(0, 2), { slot: 'C', choice: 7, text: 'Hors des options.' }], critiques,
+      decision: { kind: 'vote', tally: { 0: 1, 1: 1 } }, skipped: [{ slot: 'C', reason: 'choix illisible' }] })
+    render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
+    const all = screen.getAllByTestId('council-position')
+    expect(all).toHaveLength(3)
+    expect(all[2]?.textContent).toContain('Position C · choix illisible')
+    expect(all[0]?.textContent).toContain('Position A · option 1 : Relancer Sodiac maintenant')
+    expect(screen.getByTestId('council-skipped').textContent).toContain('Position C non comptée : choix illisible')
+  })
+
+  it('a critique may name several positions; a council closed by a restart is not shown as running', () => {
+    const council = read({ state: 'closed', options, positions, critiques: [{ slot: 'A', about: ['B', 'C'], text: 'Les deux oublient le retard.', choice: 0 }],
+      skipped: [{ reason: 'redémarrage' }] })
+    render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('council-outcome').textContent).toBe('clos sans décision')
+    expect(screen.getByTestId('council-critique').textContent).toContain('Critique de la position B, C')
+    expect(screen.getByTestId('council-skipped').textContent).toContain('redémarrage')
   })
 })
