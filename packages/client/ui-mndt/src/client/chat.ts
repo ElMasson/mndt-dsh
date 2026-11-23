@@ -83,6 +83,8 @@ export interface ChatTurn {
   readonly finishedAt?: string
   /** The steps of a coordinated turn (#84), read through `stepsOf`, never trusted as is. */
   readonly steps?: unknown
+  /** Its agent's help from its peers (`ask_peers`), read through `helpOf`, never trusted as is. */
+  readonly help?: unknown
 }
 
 /** One message of a channel. */

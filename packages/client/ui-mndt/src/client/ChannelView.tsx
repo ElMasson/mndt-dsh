@@ -410,6 +410,16 @@ export function ChannelThread(props: {
     setThread(held => mergeThread(held ?? [], [message]))
   }, [])
 
+  // A person answers an agent's question after its peers' help: a reply to the published question.
+  const answer = useCallback(async (text: string, replyTo: string): Promise<string | undefined> => {
+    try {
+      posted(await chat.post(channel.id, text, replyTo))
+      return undefined
+    } catch (failure) {
+      return reasonOf(failure, t)
+    }
+  }, [chat, channel.id, posted, t])
+
   const removeOf = (m: ChatMessage): (() => Promise<string | undefined>) | undefined => {
     if (props.you === undefined || m.author.kind !== 'human' || m.author.email !== props.you) return undefined
     return async () => {
@@ -466,6 +476,7 @@ export function ChannelThread(props: {
                 isOwner={props.isOwner}
                 offered={props.offered}
                 channel={channel}
+                onAnswer={answer}
                 t={t}
               />
             </div>
