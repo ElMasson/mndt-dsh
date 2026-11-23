@@ -19,6 +19,7 @@ import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
 import { channelPolicy, scopeToolPolicy } from './tool-policy.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
+import { warnOperator } from './operator-log.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -86,7 +87,7 @@ async function endRun(ctx: Context, releases: readonly (() => unknown)[], unscop
     return
   }
   const reason = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
-  ctx.logger.warn(`mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
+  warnOperator(ctx, `mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
   throw failures[0]
 }
 
