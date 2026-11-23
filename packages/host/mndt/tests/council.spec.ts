@@ -236,7 +236,140 @@ describe('« conseil »: anonymous until the decision, in the core', () => {
       p.agentId === undefined && p.model === undefined && p.eur === undefined && p.tokens === undefined)).toBe(true)
     expect(served?.council?.framing?.eur).toBeUndefined()
     expect(served?.council?.eur).toBeGreaterThan(0)
-    expect(served?.council?.skipped).toEqual([{ slot: expect.stringMatching(/^[A-D]$/), reason: 'avis non obtenu : choix illisible' }])
+    // A slot's reason is one word for all: even « choix illisible » is not served before the members are named.
+    expect(served?.council?.skipped).toEqual([{ slot: expect.stringMatching(/^[A-D]$/), reason: 'avis non obtenu' }])
     expect(JSON.stringify(served)).not.toMatch(new RegExp(`${t.beta}|${t.gamma}`))
+  })
+})
+
+describe('« conseil »: what C\'s review of 616afddc4a asked', () => {
+  it('a decided council that escalates keeps its members withheld until a person answers', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.positions = { alpha: 1, beta: 2, gamma: 3 }
+    const { turn, replies } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.decision).toBeDefined()
+    const served = async (): Promise<Turn | undefined> => (((await b.call('GET', `/channels/${t.channel}/messages`, 'operator')).body.messages as Message[])
+      .find(m => m.turns?.[0]?.council !== undefined))?.turns?.[0]
+    const open = await served()
+    expect(open?.council?.positions.every(p => p.agentId === undefined && p.eur === undefined)).toBe(true)
+    expect(JSON.stringify(open)).not.toMatch(new RegExp(`${t.beta}|${t.gamma}`))
+    await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    expect((await served())?.council?.positions.every(p => p.agentId !== undefined)).toBe(true)
+  })
+
+  it('the served eurThisMonth of no member moves while the council deliberates and critiques; once over, in one block', async () => {
+    const b = bench()
+    const t = await team(b)
+    const counters = async (): Promise<number[]> => {
+      const agents = (await b.call('GET', '/agents', 'owner')).body.agents as { id: string; eurThisMonth: number }[]
+      return [t.alpha, t.beta, t.gamma].map(id => agents.find(a => a.id === id)?.eurThisMonth ?? -1)
+    }
+    const seen: number[][] = []
+    b.engine.before = async (input) => { if (/-c[pc][a-d]$/.test(input.turnId)) seen.push(await counters()) }
+    await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(seen.length).toBe(6)
+    expect(seen.every(row => row.every(eur => eur === 0))).toBe(true)
+    expect((await counters()).every(eur => eur > 0)).toBe(true)
+  })
+
+  it('an absolute majority is needed: 2-1-1 out of 4 does not decide (« pas de majorité »)', async () => {
+    const b = bench()
+    const t = await team(b)
+    await b.call('POST', `/channels/${t.channel}/coordination`, 'owner', { mode: 'council', members: [t.alpha, t.beta, t.gamma, t.judge] })
+    b.engine.positions = { alpha: 1, beta: 1, gamma: 2, juge: 3 }
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.decision).toEqual({ kind: 'vote', tally: { 1: 2, 2: 1, 3: 1 } })
+    expect(turn.council?.escalation?.summary).toContain('Pourquoi : pas de majorité.')
+  })
+
+  it('a member mentioned during the council reads no position nor critique in its history', async () => {
+    const b = bench()
+    const t = await team(b)
+    let mentioned = false
+    b.engine.before = async (input) => {
+      if (input.turnId.endsWith('-cpa') && !mentioned) {
+        mentioned = true
+        await b.call('POST', `/channels/${t.channel}/messages`, 'owner', { text: '@beta autre chose ?' })
+      }
+    }
+    await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const ordinary = b.engine.seen.find(input => input.agent.handle === 'beta' && input.turnId === input.runId)
+    expect(ordinary).toBeDefined()
+    expect(ordinary?.prompt).not.toMatch(/position de|critique de/)
+  })
+
+  it('a call stopped at the bound counts for the agent that made it, on its skipped entry', async () => {
+    const b = bench()
+    const t = await team(b)
+    const { TurnBudgetReached } = await import('../src/turns.ts')
+    b.engine.before = (input) => { if (input.turnId.endsWith('-cpb')) throw new TurnBudgetReached({ input: 50_000, output: 0 }) }
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const stopped = turn.council?.skipped.find(s => s.slot === 'B')
+    expect(stopped?.eur).toBeGreaterThan(0)
+    const messages = (await b.service.snapshot()).messages ?? []
+    const c = turn.council
+    const own = [c?.framing, ...(c?.positions ?? []), ...(c?.critiques ?? []), ...(c?.skipped ?? [])]
+      .filter(e => e?.agentId === stopped?.agentId).reduce((sum, e) => sum + (e?.eur ?? 0), 0)
+    expect(spentThisMonth(messages, stopped?.agentId ?? '', new Date().toISOString())).toBeCloseTo(own, 9)
+  })
+})
+
+describe('« conseil » closed without naming its members: never per agent, one sum for the space', () => {
+  it('a lost quorum answered by a person: no member\'s served eurThisMonth ever moves; the space\'s sum takes the council', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.positions = { alpha: 1, beta: 9, gamma: '"HT"' }
+    const read = async (): Promise<{ each: number[]; space: number }> => {
+      type Agents = { agents: { id: string; eurThisMonth: number }[]; eurUnattributedThisMonth: number }
+      const body = (await b.call('GET', '/agents', 'owner')).body as Agents
+      const each = [t.alpha, t.beta, t.gamma].map(id => body.agents.find(a => a.id === id)?.eurThisMonth ?? -1)
+      return { each, space: body.eurUnattributedThisMonth }
+    }
+    const during: { each: number[]; space: number }[] = []
+    b.engine.before = async (input) => { if (/-c[fpc][a-d]?$/.test(input.turnId)) during.push(await read()) }
+    const { turn, replies } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.decision).toBeUndefined()
+    expect(turn.council?.escalation).toBeDefined()
+    expect(during.every(row => row.each.every(eur => eur === 0) && row.space === 0)).toBe(true)
+    // The question waits: not over yet, counted nowhere.
+    expect(await read()).toEqual({ each: [0, 0, 0], space: 0 })
+    await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    // Over without a decision: still nothing per agent, the whole council in the space's sum.
+    const after = await read()
+    expect(after.each).toEqual([0, 0, 0])
+    const closed = (await b.service.message(turn.id === '' ? '' : (replies.at(-1)?.replyTo as string)))?.turns?.[0]?.council
+    const total = [closed?.framing, ...(closed?.positions ?? []), ...(closed?.critiques ?? []), ...(closed?.skipped ?? [])]
+      .reduce((sum, e) => sum + (e?.eur ?? 0), 0)
+    expect(after.space).toBeCloseTo(total, 6)
+    expect(after.space).toBeGreaterThan(0)
+    // The ceiling still reads every call.
+    const messages = (await b.service.snapshot()).messages ?? []
+    expect(spentThisMonth(messages, t.alpha, new Date().toISOString())).toBeGreaterThan(0)
+  })
+
+  it('a decided council goes to each member, never to the space\'s sum', async () => {
+    const b = bench()
+    const t = await team(b)
+    await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const body = (await b.call('GET', '/agents', 'owner')).body as { agents: { id: string; eurThisMonth: number }[]; eurUnattributedThisMonth: number }
+    expect([t.alpha, t.beta, t.gamma].every(id => (body.agents.find(a => a.id === id)?.eurThisMonth ?? 0) > 0)).toBe(true)
+    expect(body.eurUnattributedThisMonth).toBe(0)
+  })
+
+  it('a slot\'s skipped reason is « avis non obtenu » before the members are named, whatever it was (plafond, borne)', async () => {
+    const b = bench()
+    const t = await team(b)
+    const { TurnBudgetReached } = await import('../src/turns.ts')
+    b.engine.positions = { alpha: 1, beta: 2, gamma: 3 }
+    b.engine.before = (input) => { if (input.turnId.endsWith('-cpb')) throw new TurnBudgetReached({ input: 50_000, output: 0 }) }
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.skipped.some(s => s.slot !== undefined && /borne|coût/.test(s.reason))).toBe(true)
+    const served = (((await b.call('GET', `/channels/${t.channel}/messages`, 'operator')).body.messages as Message[])
+      .find(m => m.turns?.[0]?.council !== undefined))?.turns?.[0]?.council
+    expect(served?.skipped.filter(s => s.slot !== undefined).every(s => s.reason === 'avis non obtenu')).toBe(true)
+    expect(JSON.stringify(served?.skipped)).not.toMatch(/borne|plafond|coût/)
   })
 })

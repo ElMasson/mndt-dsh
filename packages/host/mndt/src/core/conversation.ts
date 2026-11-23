@@ -7,7 +7,9 @@
  * price is refused rather than counted as free. A turn sees its own channel
  * only: the prompt is built from that channel's messages and nothing else.
  */
-import type { Agent, Channel, CouncilSlot, HelpAdvice, HelpNeed, HelpReading, HelpRequest, Message, Mission, Turn, TurnCouncil } from './types.ts'
+import type {
+  Agent, Channel, CouncilSlot, HelpAdvice, HelpNeed, HelpReading, HelpRequest, Message, Mission, Turn, TurnCouncil, TurnHelp,
+} from './types.ts'
 import { randomUUID } from 'node:crypto'
 
 /** A handle or a channel name: lower case, digits and dashes. */
@@ -140,22 +142,29 @@ export function monthStart(at: string): string {
  * @param messages - the messages of every channel.
  * @param agentId - the agent.
  * @param now - the clock.
+ * @param served - for what is served (GET /agents): a council's costs only once its members are
+ * named, in one block. The ceiling reads everything (false, the default).
  * @returns the euros.
  */
 export function spentThisMonth(
   messages: readonly Message[],
   agentId: string,
   now: string,
+  served = false,
 ): number {
   const since = monthStart(now)
   let eur = 0
   for (const message of messages) {
     for (const turn of message.turns ?? []) {
       if ((turn.finishedAt ?? message.createdAt) < since) continue
-      // A council: each call counts for the member that made it.
+      // A council: each call counts for the member that made it. What is served
+      // per agent adds a council's costs only once its members are named, in one
+      // block: rising call by call, or for a council closed without naming them
+      // (a restart, a question answered without a decision), the counter would
+      // tie a slot to an agent. Those go to unattributedCouncilEur, for the space.
       const council = councilSpent(turn, agentId)
       if (council !== undefined) {
-        eur += council
+        if (!served || (turn.council !== undefined && councilRevealed(turn.council))) eur += council
         continue
       }
       // A coordinated turn: each step counts for the agent that ran it.
@@ -601,14 +610,14 @@ export function parseHelpReading(text: string): ParsedReading {
  * @returns the message to serve.
  */
 export function servedMessage(message: Message): Message {
-  const hidden = (turn: Turn): boolean => (turn.help !== undefined && turn.help.reading === undefined)
-    || (turn.council !== undefined && turn.council.decision === undefined)
+  const hidden = (turn: Turn): boolean => (turn.help !== undefined && !helpRevealed(turn.help))
+    || (turn.council !== undefined && !councilRevealed(turn.council))
   if (!(message.turns ?? []).some(hidden)) return message
   return {
     ...message,
     turns: (message.turns ?? []).map((turn) => {
-      if (turn.council !== undefined && turn.council.decision === undefined) return { ...turn, council: servedCouncil(turn.council) }
-      if (turn.help === undefined || turn.help.reading !== undefined) return turn
+      if (turn.council !== undefined && !councilRevealed(turn.council)) return { ...turn, council: servedCouncil(turn.council) }
+      if (turn.help === undefined || helpRevealed(turn.help)) return turn
       const { peerIds: _peers, ...help } = turn.help
       // What each advice cost would name its model (with the price grid), and an
       // engine's error may name a peer: before the reading, only the help's
@@ -790,6 +799,32 @@ export function councilSynthesisPrompt(
   ].join('\n')
 }
 
+/**
+ * What this month's councils cost that were closed without naming their members
+ * (a restart, a question answered without a decision): one sum for the whole
+ * space, never per agent, so nothing ties a slot to an agent. A council still
+ * running counts nowhere until it is over.
+ * @param messages - the messages of every channel.
+ * @param now - the clock.
+ * @returns the euros.
+ */
+export function unattributedCouncilEur(messages: readonly Message[], now: string): number {
+  const since = monthStart(now)
+  let eur = 0
+  for (const message of messages) {
+    for (const turn of message.turns ?? []) {
+      const council = turn.council
+      if (council === undefined || (turn.finishedAt ?? message.createdAt) < since) continue
+      if (!councilOver(council) || councilRevealed(council)) continue
+      eur += [
+        ...(council.framing === undefined ? [] : [council.framing]), ...council.positions, ...council.critiques,
+        ...(council.decision?.kind === 'synthesis' ? [council.decision] : []), ...council.skipped,
+      ].reduce((total, call) => total + (call.eur ?? 0), 0)
+    }
+  }
+  return Math.round(eur * 1_000_000) / 1_000_000
+}
+
 /** @param turn - a turn. @returns what its council's calls cost for this agent, or undefined when it ran none. */
 export function councilSpent(turn: Turn, agentId: string): number | undefined {
   const council = turn.council
@@ -798,8 +833,41 @@ export function councilSpent(turn: Turn, agentId: string): number | undefined {
     ...(council.framing === undefined ? [] : [council.framing]),
     ...council.positions, ...council.critiques,
     ...(council.decision?.kind === 'synthesis' ? [council.decision] : []),
+    // A call stopped at the bound still cost what it used, for the agent that made it.
+    ...council.skipped,
   ]
   return calls.reduce((total, call) => total + (call.agentId === agentId ? (call.eur ?? 0) : 0), 0)
+}
+
+/**
+ * @param escalation - an escalation, if any.
+ * @returns whether it still waits for a person.
+ */
+const waiting = (escalation: { readonly answeredAt?: string } | undefined): boolean =>
+  escalation !== undefined && escalation.answeredAt === undefined
+
+/**
+ * @param help - a help.
+ * @returns whether its peers may be named: read, and no question waiting for the people.
+ */
+export function helpRevealed(help: TurnHelp): boolean {
+  return help.reading !== undefined && !waiting(help.escalation)
+}
+
+/**
+ * @param council - a council.
+ * @returns whether its members may be named: decided, and no question waiting for the people.
+ */
+export function councilRevealed(council: TurnCouncil): boolean {
+  return council.decision !== undefined && !waiting(council.escalation)
+}
+
+/**
+ * @param council - a council.
+ * @returns whether it is over: done, and no question waiting (decided, or closed at a restart).
+ */
+export function councilOver(council: TurnCouncil): boolean {
+  return council.state === 'done' && !waiting(council.escalation)
 }
 
 /**
@@ -820,7 +888,10 @@ function servedCouncil(council: TurnCouncil): TurnCouncil {
     ...(council.framing === undefined ? {} : { framing: strip(council.framing) }),
     positions: council.positions.map(strip),
     critiques: council.critiques.map(strip),
-    skipped: council.skipped.map(({ agentId: _a, reason, ...skip }) => ({ ...skip, reason: reasonKind(reason) })),
+    // A slot's reason, even by kind (« plafond », « borne »), would point at its agent: one word for all.
+    skipped: council.skipped.map(({ agentId: _a, eur: _e, reason, ...skip }) => ({
+      ...skip, reason: skip.slot === undefined ? reasonKind(reason) : 'avis non obtenu',
+    })),
     eur: Math.round(total * 1_000_000) / 1_000_000,
   }
 }

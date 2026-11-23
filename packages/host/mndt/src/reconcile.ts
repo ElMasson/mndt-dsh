@@ -32,6 +32,8 @@ export async function reconcileInterrupted(
     // turn left running or queued: cancelled, never relaunched on their own.
     const helps = await service.closeInterruptedHelps(before)
     if (helps > 0) warn(`mndt: ${helps} help(s) left open by a previous process were closed (« redémarrage »)`)
+    const councils = await service.closeInterruptedCouncils(before)
+    if (councils > 0) warn(`mndt: ${councils} council(s) left open by a previous process were closed (« redémarrage »)`)
     const turns = await service.cancelInterruptedTurns(before)
     if (turns.running + turns.queued > 0) {
       warn(`mndt: ${turns.running} turn(s) running and ${turns.queued} queued, left by a previous process, were cancelled`)
