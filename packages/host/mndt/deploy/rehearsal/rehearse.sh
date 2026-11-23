@@ -13,6 +13,10 @@
 # The image is built beforehand from a clean export of the branch, as on the
 # server: docker build -f packages/host/mndt/deploy/Dockerfile.workbench -t <image> .
 # KEEP=1 leaves the containers running for inspection.
+# NEW_REF names the tenant scripts to deploy (create-tenant.sh, seed-team.sh,
+# the tools, the routes renderer), extracted from that commit; the harness
+# (deploy/rehearsal) stays the running tree's. Without it, the running tree's
+# scripts are deployed: an image of another version would be mixed with them.
 set -uo pipefail
 # A step that cannot go on says why, as a named KO, then stops.
 die() { echo "KO $1  $2"; exit 1; }
@@ -75,6 +79,12 @@ trap cleanup EXIT
 exec 3>&1 4>&2
 exec > >(tee -a "$root/output.log") 2>&1
 tee_pid=$!
+if [ -n "${NEW_REF:-}" ]; then
+  mkdir -p "$root/new"
+  git -C "$repo" archive "$NEW_REF" packages/host/mndt/deploy | tar -x -C "$root/new" || die new-archive "cannot extract the tenant scripts of $NEW_REF"
+  deploy=$root/new/packages/host/mndt/deploy
+  echo "tenant scripts: $NEW_REF (the harness stays this tree's)"
+fi
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
