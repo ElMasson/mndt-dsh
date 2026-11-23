@@ -14,11 +14,13 @@
 #     works without the list works with it, except the ones named as limits.
 #   sandbox-proof.sh <workbench image>
 set -u
+# Its own total, over what it says (OK/KO lines): the last line a reader goes by.
+proof_log=$(mktemp); exec > >(tee -a "$proof_log") 2>&1
 image=${1:?usage: sandbox-proof.sh <workbench image>}
 here=$(cd "$(dirname "$0")" && pwd)
 template="$here/../tenant/docker-compose.yml.template"
 roots=$(grep -o 'DSH_SANDBOX_READ_ROOTS: "[^"]*"' "$template" | cut -d'"' -f2)
-[ -n "$roots" ] || { echo "KO: no DSH_SANDBOX_READ_ROOTS in $template"; exit 1; }
+[ -n "$roots" ] || { echo "KO sandbox-roots  no DSH_SANDBOX_READ_ROOTS in $template"; exit 1; }
 # The probe's tools, read-only in the container; the output stays outside it.
 work=$(mktemp -d)
 out=$(mktemp)
@@ -159,4 +161,6 @@ if [ "${passed:-0}" = 3 ] && [ "$failed" = 0 ] && [ "$named" = 3 ]; then echo "O
 else echo "KO  e2e-in-image   read-allowlist.e2e.ts in the image: ${passed:-0} passed (3 expected), $named of 3 named, $failed failure line(s)"; echo "$e2e" | tail -15 | sed 's/^/      /'; ok=1; fi
 echo "$with" | grep '^ARGV-BYTES' | head -1
 echo "sandbox-proof exit $ok (docker $code)"
+sleep 0.5
+echo "TOTAL ok=$(grep -acE '^OK ' "$proof_log") ko=$(grep -acE '^KO ' "$proof_log")"
 exit $ok
