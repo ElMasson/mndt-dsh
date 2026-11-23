@@ -213,3 +213,10 @@ describe('authors only once the council is closed (#119)', () => {
     expect(answered.positions[0]?.agentId).toBe('agt_1')
   })
 })
+
+describe('a position skipped before the council is revealed', () => {
+  it('shows the generic reason as served', () => {
+    render(<CouncilThread turn={turn({})} council={read({ state: 'critiquing', options, positions: positions.slice(0, 2), critiques: [], skipped: [{ slot: 'C', reason: 'avis non obtenu' }] })} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('council-skipped').textContent).toBe('Position C non comptée : avis non obtenu')
+  })
+})

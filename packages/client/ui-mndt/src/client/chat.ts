@@ -193,6 +193,11 @@ export interface ChatFace {
   cards(): Promise<readonly ChatCard[]>
   /** The declared agents, with what they spent this month. */
   agents(): Promise<readonly ChatAgent[]>
+  /**
+   * This month's spend of councils closed without naming their members, for the whole space
+   * (`GET /agents` → `eurUnattributedThisMonth`, #119): never an agent's. Optional: the team page only.
+   */
+  unattributedEur?(): Promise<number | undefined>
   addAgents(
     channelId: string,
     agentIds: readonly string[],

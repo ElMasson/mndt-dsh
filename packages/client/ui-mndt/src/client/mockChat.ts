@@ -53,6 +53,8 @@ export interface MockSeed {
   /** The connectors mounted on the workbench; a channel may only hold an enabled one. */
   /** The open escalations; absent, `escalations()` answers 404 as an older core does. */
   readonly escalations?: readonly OpenEscalation[]
+  /** This month's spend of councils closed without naming their members, for the space. */
+  readonly unattributedEur?: number
   readonly mounted?: readonly MountedConnector[]
 }
 
@@ -201,6 +203,9 @@ export function createMockChat(
         messages.set(m.id, removed)
         return removed
       })
+    },
+    unattributedEur() {
+      return settle(() => seed.unattributedEur)
     },
     agents() {
       return settle(() => {

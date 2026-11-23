@@ -354,6 +354,7 @@ export const chatEn = {
   helpClosedUnreadWhy: 'closed without a reading: {why}',
   councilSynthChose: '{option} (synthesis by {who})',
   councilQuestionFor: 'A council asks you: {question}',
+  agentsMonthUnattributed: 'This month: {total}, of which {councils} of councils not named.',
 } as const
 
 /** One copy key. */
@@ -708,6 +709,7 @@ export const chatFr: Record<ChatKey, string> = {
   helpClosedUnreadWhy: 'close sans lecture : {why}',
   councilSynthChose: '{option} (synthèse par {who})',
   councilQuestionFor: 'Un conseil vous demande : {question}',
+  agentsMonthUnattributed: 'Ce mois-ci : {total}, dont {councils} de conseils non nommés.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -83,6 +83,10 @@ export function createHttpChat(
     cards: async () =>
       (await get<{ approvals: ChatCard[] }>('/approvals?state=all')).approvals,
     agents: async () => (await get<{ agents: ChatAgent[] }>('/agents')).agents,
+    unattributedEur: async () => {
+      const eur = (await get<{ eurUnattributedThisMonth?: unknown }>('/agents')).eurUnattributedThisMonth
+      return typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? eur : undefined
+    },
     addAgents: async (channelId, agentIds) =>
       (
         await post<{ channel: ChatChannel }>(
