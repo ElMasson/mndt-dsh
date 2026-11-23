@@ -142,8 +142,8 @@ export function monthStart(at: string): string {
  * @param messages - the messages of every channel.
  * @param agentId - the agent.
  * @param now - the clock.
- * @param served - for what is served (GET /agents): a council's costs only once it is over, in one
- * block. The ceiling reads everything (false, the default).
+ * @param served - for what is served (GET /agents): a council's costs only once its members are
+ * named, in one block. The ceiling reads everything (false, the default).
  * @returns the euros.
  */
 export function spentThisMonth(
@@ -158,11 +158,13 @@ export function spentThisMonth(
     for (const turn of message.turns ?? []) {
       if ((turn.finishedAt ?? message.createdAt) < since) continue
       // A council: each call counts for the member that made it. What is served
-      // adds a council's costs only once it is over, in one block: the counter
-      // rising call by call would tie a slot to an agent.
+      // per agent adds a council's costs only once its members are named, in one
+      // block: rising call by call, or for a council closed without naming them
+      // (a restart, a question answered without a decision), the counter would
+      // tie a slot to an agent. Those go to unattributedCouncilEur, for the space.
       const council = councilSpent(turn, agentId)
       if (council !== undefined) {
-        if (!served || (turn.council !== undefined && councilOver(turn.council))) eur += council
+        if (!served || (turn.council !== undefined && councilRevealed(turn.council))) eur += council
         continue
       }
       // A coordinated turn: each step counts for the agent that ran it.
@@ -797,6 +799,32 @@ export function councilSynthesisPrompt(
   ].join('\n')
 }
 
+/**
+ * What this month's councils cost that were closed without naming their members
+ * (a restart, a question answered without a decision): one sum for the whole
+ * space, never per agent, so nothing ties a slot to an agent. A council still
+ * running counts nowhere until it is over.
+ * @param messages - the messages of every channel.
+ * @param now - the clock.
+ * @returns the euros.
+ */
+export function unattributedCouncilEur(messages: readonly Message[], now: string): number {
+  const since = monthStart(now)
+  let eur = 0
+  for (const message of messages) {
+    for (const turn of message.turns ?? []) {
+      const council = turn.council
+      if (council === undefined || (turn.finishedAt ?? message.createdAt) < since) continue
+      if (!councilOver(council) || councilRevealed(council)) continue
+      eur += [
+        ...(council.framing === undefined ? [] : [council.framing]), ...council.positions, ...council.critiques,
+        ...(council.decision?.kind === 'synthesis' ? [council.decision] : []), ...council.skipped,
+      ].reduce((total, call) => total + (call.eur ?? 0), 0)
+    }
+  }
+  return Math.round(eur * 1_000_000) / 1_000_000
+}
+
 /** @param turn - a turn. @returns what its council's calls cost for this agent, or undefined when it ran none. */
 export function councilSpent(turn: Turn, agentId: string): number | undefined {
   const council = turn.council
@@ -860,7 +888,10 @@ function servedCouncil(council: TurnCouncil): TurnCouncil {
     ...(council.framing === undefined ? {} : { framing: strip(council.framing) }),
     positions: council.positions.map(strip),
     critiques: council.critiques.map(strip),
-    skipped: council.skipped.map(({ agentId: _a, eur: _e, reason, ...skip }) => ({ ...skip, reason: reasonKind(reason) })),
+    // A slot's reason, even by kind (« plafond », « borne »), would point at its agent: one word for all.
+    skipped: council.skipped.map(({ agentId: _a, eur: _e, reason, ...skip }) => ({
+      ...skip, reason: skip.slot === undefined ? reasonKind(reason) : 'avis non obtenu',
+    })),
     eur: Math.round(total * 1_000_000) / 1_000_000,
   }
 }

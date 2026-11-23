@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, servedMessage, WorkbenchService } from '../src/core/index.ts'
+import { MemoryStore, servedMessage, spentThisMonth, unattributedCouncilEur, WorkbenchService } from '../src/core/index.ts'
 import type { TurnCouncil, WorkbenchState } from '../src/core/index.ts'
 import { reconcileInterrupted } from '../src/reconcile.ts'
 
@@ -53,6 +53,17 @@ describe('a council left open by a previous process is closed at start', () => {
     const states = ((await service.snapshot()).messages ?? []).map(m => m.turns?.[0]?.council?.state)
     expect(states).toEqual(['done', 'deliberating'])
     expect(warned).toContain('mndt: 1 council(s) left open by a previous process were closed (« redémarrage »)')
+  })
+
+  it('closed at a restart: in no member\'s served counter, in the space\'s sum; the ceiling reads it', async () => {
+    const service = await left([council('critiquing', new Date().toISOString().slice(0, 7) + '-01T00:00:00.000Z')])
+    const now = new Date().toISOString()
+    await service.closeInterruptedCouncils(new Date(Date.now() + 1000).toISOString())
+    const messages = (await service.snapshot()).messages ?? []
+    expect(spentThisMonth(messages, 'agt_b', now, true)).toBe(0)
+    expect(spentThisMonth(messages, 'agt_a', now, true)).toBe(0)
+    expect(unattributedCouncilEur(messages, now)).toBeCloseTo(0.03, 9)
+    expect(spentThisMonth(messages, 'agt_b', now)).toBeCloseTo(0.02, 9)
   })
 
   it('a second start finds nothing: 0, and no write', async () => {

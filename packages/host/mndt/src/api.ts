@@ -34,7 +34,7 @@ import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
 import type { PageState } from './types.ts'
 import type { TurnScheduler } from './turns.ts'
-import { spentThisMonth } from './core/index.ts'
+import { spentThisMonth, unattributedCouncilEur } from './core/index.ts'
 import type { Channel } from './core/index.ts'
 
 /** One request as the handler sees it. */
@@ -358,7 +358,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const now = new Date().toISOString()
         const messages = (await service.snapshot()).messages ?? []
         const agents = await service.listAgents()
-        return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now, true) })) })
+        return respond(200, {
+          agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now, true) })),
+          // Councils closed without naming their members: one sum for the space, never per agent.
+          eurUnattributedThisMonth: unattributedCouncilEur(messages, now),
+        })
       }
       if (request.method === 'POST' && parts.length === 3 && parts[2] === 'retire') {
         // Retiring an agent is creating's mirror: owners and admins only.
