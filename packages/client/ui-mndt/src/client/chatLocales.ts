@@ -317,6 +317,8 @@ export const chatEn = {
   helpFromHelp: 'from a mutual help',
   helpOpenThread: 'Answer in {where}',
   helpClosedByWho: 'closed by {who}',
+  helpClosedUnread: 'closed without a reading',
+  helpClosedUnreadWhy: 'closed without a reading: {why}',
 } as const
 
 /** One copy key. */
@@ -634,6 +636,8 @@ export const chatFr: Record<ChatKey, string> = {
   helpFromHelp: 'd\'une entraide',
   helpOpenThread: 'Répondre dans {where}',
   helpClosedByWho: 'close par {who}',
+  helpClosedUnread: 'close sans lecture',
+  helpClosedUnreadWhy: 'close sans lecture : {why}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
