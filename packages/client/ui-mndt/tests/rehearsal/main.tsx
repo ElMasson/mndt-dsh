@@ -48,7 +48,7 @@ const chat = createMockChat({
         steps: [
           { role: 'author', agentId: 'agt_1', tokens: { input: 3100, output: 420 }, eur: 0.0021 },
           { role: 'verifier', agentId: 'agt_2', tokens: { input: 1200, output: 160 }, eur: 0.0018, verdict: 'issues', notes: ['Le montant ne correspond pas à FA2610-031 (1 640,00 €).'] },
-          { role: 'revision', agentId: 'agt_1', tokens: { input: 3500, output: 430 }, eur: 0.0023 },
+          { role: 'revision', agentId: 'agt_1', tokens: { input: 3500, output: 430 }, eur: 0.0023, replaced: true },
         ],
       }],
     },
