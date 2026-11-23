@@ -268,6 +268,9 @@ if page_ready 150; then echo "the page is ready (launch token published)"; else 
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
 MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+# A drive that dies prints no KO for the checks it never reached: say it, or
+# the TOTAL reads ko=0 over a run cut short.
+[ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"
 # The model.env canary is in the workbench's environment (env_file): the probe

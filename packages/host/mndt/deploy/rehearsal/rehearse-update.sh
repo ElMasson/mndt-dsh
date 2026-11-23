@@ -368,6 +368,9 @@ if page_ready 150; then echo "the page is ready (launch token published)"; else 
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
 MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+# A drive that dies prints no KO for the checks it never reached: say it, or
+# the TOTAL reads ko=0 over a run cut short.
+[ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
 [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?

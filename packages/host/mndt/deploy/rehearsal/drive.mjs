@@ -227,8 +227,6 @@ for (let index = 0; index < 4; index += 1) {
   await sleep(300)
   socket.resetAndDestroy()
 }
-await browser.close()
-await sleep(2000)
 // The coordination modes of a channel (#84, #85), end to end in the image. Both
 // routes answer from the fake model here (the rehearsal's copy of the routes),
 // with the price grid of the instance: a turn costs something.
@@ -279,6 +277,8 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
 } else {
   check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
 }
+await browser.close()
+await sleep(2000)
 
 const gatewayAfter = started('gateway')
 const unhandled = (logs('gateway').match(/Unhandled 'error' event/g) ?? []).length
