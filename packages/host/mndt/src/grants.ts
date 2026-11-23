@@ -12,12 +12,17 @@ import type { GrantSource, SkippedGrant } from './policy.ts'
 import { isPlainAscii } from './identity.ts'
 
 /** Ask the team authority for its grant table. */
-export function authorityGrants(options: { baseUrl: string; token: string }, warn: (message: string) => void = () => {}): GrantSource {
+export function authorityGrants(
+  options: { baseUrl: string; token: string; timeoutMs?: number },
+  warn: (message: string) => void = () => {},
+): GrantSource {
   return {
     async grants() {
       try {
+        // Bounded too: role changes read the table inside their one-at-a-time section.
         const response = await fetch(`${options.baseUrl.replace(/\/$/, '')}/governance/snapshot`, {
           headers: { authorization: `Bearer ${options.token}` },
+          signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
         })
         if (!response.ok) return { ok: false, reason: `authority answered ${response.status}` }
         const body: unknown = await response.json()

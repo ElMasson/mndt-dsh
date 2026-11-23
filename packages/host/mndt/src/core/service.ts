@@ -821,6 +821,27 @@ export class WorkbenchService {
     }))
   }
 
+  /**
+   * Journal a role change asked through the members routes: who, for whom,
+   * before, after, and whether it was applied.
+   * @param actor - who asked.
+   * @param subject - whose role.
+   * @param change - the roles before and after (undefined: none), and the outcome.
+   * @returns nothing.
+   */
+  async recordRoleChange(
+    actor: string,
+    subject: string,
+    change: { readonly before: string | undefined; readonly after: string | undefined; readonly outcome: string },
+  ): Promise<void> {
+    const detail = `${change.before ?? 'none'} -> ${change.after ?? 'none'}: ${change.outcome}`
+    await this.#write(state => ({
+      state,
+      event: { at: this.#at(), actor, action: 'member.role', subject, detail },
+      value: undefined,
+    }))
+  }
+
   // ---------------------------------------------------------------- agents
 
   /**

@@ -59,3 +59,48 @@ export interface GrantSource {
    */
   grants(): Promise<GrantTable>
 }
+
+/**
+ * Whether `actor` may move `subject` to `next` (undefined: revoke). The
+ * authority is called with this deployment's own token, so these rules are
+ * the product's, applied before anything is forwarded:
+ * - nobody changes their own role;
+ * - below an owner, one only touches roles strictly below one's own (an
+ *   admin neither grants admin or owner, nor changes another admin);
+ * - only an owner changes or removes an owner's role;
+ * - there is always at least one owner left.
+ * @param grants - the current table.
+ * @param actor - who asks.
+ * @param subject - whose role changes.
+ * @param next - the new role, or undefined to revoke.
+ * @returns the refusal and its status, or undefined when allowed.
+ */
+export function roleChangeRefusal(
+  grants: readonly Grant[],
+  actor: string,
+  subject: string,
+  next: Role | undefined,
+): { status: 403 | 409; reason: string } | undefined {
+  const actorRole = roleOf(grants, actor)
+  if (actorRole === undefined) return { status: 403, reason: `${actor} holds no role in this team` }
+  if (subject === actor) return { status: 403, reason: 'nobody changes their own role' }
+  const before = roleOf(grants, subject)
+  if (actorRole !== 'owner') {
+    if (next === 'owner') return { status: 403, reason: 'only an owner grants the owner role' }
+    // Below an owner, one only touches roles strictly below one's own: the role
+    // a person holds now, and the role they are given.
+    if (next !== undefined && compareRoles(next, actorRole) >= 0) {
+      return { status: 403, reason: `${actor} is ${actorRole} and grants only roles below ${actorRole}` }
+    }
+    if (before === 'owner') return { status: 403, reason: 'only an owner changes or removes an owner' }
+    if (before !== undefined && compareRoles(before, actorRole) >= 0) {
+      return { status: 403, reason: `${actor} is ${actorRole} and cannot change a ${before}` }
+    }
+  }
+  if (before === 'owner' && next !== 'owner') {
+    const owners = new Set(grants.filter(grant => grant.role === 'owner').map(grant => grant.subject))
+    owners.delete(subject)
+    if (owners.size === 0) return { status: 409, reason: 'the team must keep at least one owner' }
+  }
+  return undefined
+}

@@ -39,6 +39,13 @@ export interface PageState {
   readonly role?: string
   /** Whether this person may change the member table. */
   readonly canAdmin: boolean
+  /**
+   * Where roles are kept: « authority » when the members routes write to a team
+   * authority; « file » when they come from the tenant's role file (grants.json,
+   * written by hand: the routes answer 503); « local » for a solo workstation's
+   * single owner. Only « authority » makes roles editable from the page.
+   */
+  readonly rolesFrom: 'authority' | 'file' | 'local'
   /** Whether this person may share another person's work. */
   readonly canShare: boolean
   readonly you: string
