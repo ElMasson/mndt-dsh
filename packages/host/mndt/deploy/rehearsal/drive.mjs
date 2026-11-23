@@ -5,6 +5,7 @@
 //   node drive.mjs <playwright module> <project> <shots dir>
 import { execFileSync } from 'node:child_process'
 import { connect } from 'node:net'
+import { readFileSync } from 'node:fs'
 
 const [playwrightModule, project, shots] = process.argv.slice(2)
 const { chromium } = await import(playwrightModule)
@@ -89,8 +90,19 @@ if (qwen !== undefined && channel !== undefined) {
 // server's open tools and nothing else, though workbench_facts is mounted. A
 // mission of the owner on a team instance: every MCP tool, never the engine's.
 // A tool more or a tool less fails.
-// propose_agent since #82: an agent proposes the creation of another on a card.
-const APPROVALS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__propose_agent', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
+// The card tools a turn is offered: exactly the approvals server's « allow » in
+// the catalog this tenant was deployed with (MNDT_REHEARSAL_CATALOG), so the
+// same harness judges every version (three tools before #82, four after). And
+// that list must stay within the card tools this harness knows: a catalog that
+// opened another tool fails, rather than being taken as the expectation.
+const KNOWN_CARD_TOOLS = ['list_pending_approvals', 'propose_agent', 'read_approval', 'request_approval']
+const catalogPath = process.env.MNDT_REHEARSAL_CATALOG
+let deployedAllow = []
+try { deployedAllow = JSON.parse(readFileSync(catalogPath ?? '', 'utf8')).approvals?.allow ?? [] } catch { deployedAllow = [] }
+const unknownCardTools = deployedAllow.filter(tool => !KNOWN_CARD_TOOLS.includes(tool))
+check('turn-tools-catalog', deployedAllow.length > 0, `${catalogPath ?? 'no MNDT_REHEARSAL_CATALOG'}: approvals allow ${JSON.stringify(deployedAllow)}`)
+if (unknownCardTools.length > 0) check('turn-tools-unknown', false, `the deployed catalog opens card tools this harness does not know: ${JSON.stringify(unknownCardTools)}`)
+const APPROVALS = deployedAllow.filter(tool => KNOWN_CARD_TOOLS.includes(tool)).map(tool => `mcp__approvals__${tool}`).sort()
 const EXPECTED = { '-': APPROVALS, tour: APPROVALS, mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts'].sort() }
 const witness = () => docker('exec', `${project}-workbench`, 'sh', '-c', 'find /state /tmp -name policy-witness.txt 2>/dev/null | head -3')
 

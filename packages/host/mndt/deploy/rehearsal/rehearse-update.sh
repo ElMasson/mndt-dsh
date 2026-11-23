@@ -18,6 +18,11 @@
 # (47169065bf, the one of 14/11): no 13/11 breakage to reproduce; an automation briefing runs
 # on it first, so the update must stop serving that old shared brief to the
 # team. KEEP=1 leaves the containers running.
+# NEW_REF names the new version's tenant scripts (phase B: create-tenant.sh,
+# seed-team.sh, the tools copied to tools/, the patch checks), extracted from
+# that commit as OLD_REF's are; the harness (deploy/rehearsal) stays the
+# running tree's. Without it, phase B takes the running tree's scripts: a pass
+# for an older new image then mixes that image with newer tenant scripts.
 set -uo pipefail
 # A step that cannot go on says why, as a named KO, then stops.
 die() { echo "KO $1  $2"; exit 1; }
@@ -173,6 +178,12 @@ seed() { # <deploy dir>
 step "A1. the instance of 13/11: tenant scripts of $old_ref, image $old_image (root $root)"
 git -C "$repo" archive "$old_ref" packages/host/mndt/deploy | tar -x -C "$root/old" || die old-archive "cannot extract the tenant scripts of $old_ref"
 old=$root/old/packages/host/mndt/deploy
+if [ -n "${NEW_REF:-}" ]; then
+  mkdir -p "$root/new"
+  git -C "$repo" archive "$NEW_REF" packages/host/mndt/deploy | tar -x -C "$root/new" || die new-archive "cannot extract the tenant scripts of $NEW_REF"
+  deploy=$root/new/packages/host/mndt/deploy
+  echo "new tenant scripts: $NEW_REF (the harness stays this tree's)"
+fi
 printf 'secret' > "$root/root/entra_client_secret"
 tenant "$old" || die old-tenant "create-tenant.sh of $old_ref failed"
 cat > "$data/model.env" <<ENV
@@ -341,7 +352,7 @@ page=0
 if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO page-session  the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
-node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
 [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?
