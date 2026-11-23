@@ -244,6 +244,11 @@ export const chatEn = {
   laneWelcomePendingMany: '{n} cards wait for your decision',
   arrivalTitle: 'Welcome, {name}',
   arrivalText: 'You have no channel yet, not even your lane: an owner or an admin opens your access. This page updates by itself.',
+  coordIssuesLeft: 'reservations noted',
+  coordEmptyRevision: 'No correction ({handle}): draft published as is',
+  coordRevisionUnknown: 'Correction not confirmed: read this answer as not checked.',
+  coordNotMember: 'The agents chosen must all be active agents of this channel.',
+  coordMissingFields: 'Choose the agents of this mode first.',
 } as const
 
 /** One copy key. */
@@ -488,6 +493,11 @@ export const chatFr: Record<ChatKey, string> = {
   laneWelcomePendingMany: '{n} cartes attendent votre décision',
   arrivalTitle: 'Bienvenue, {name}',
   arrivalText: 'Vous n\'avez encore aucun canal, pas même votre lane : un owner ou un admin ouvre votre accès. Cette page se met à jour d\'elle-même.',
+  coordIssuesLeft: 'réserves signalées',
+  coordEmptyRevision: 'Pas de correction ({handle}) : brouillon publié tel quel',
+  coordRevisionUnknown: 'Correction non confirmée : lisez cette réponse comme non vérifiée.',
+  coordNotMember: 'Les agents choisis doivent tous être des agents actifs de ce canal.',
+  coordMissingFields: 'Choisissez d\'abord les agents de ce mode.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

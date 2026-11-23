@@ -16,7 +16,7 @@ import type {} from '@deepseek-ai/dsh-workflow'
 import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
-import { RESERVED_OUTPUT_TOKENS, TurnBudgetReached } from './turns.ts'
+import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
 import { eurOf } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
 import { channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
@@ -293,23 +293,32 @@ export class DshTurnRunner implements TurnEngine {
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-    // A step with a cost bound stops before a next message that would not fit:
-    // the next message reads at least what the last one read, and may write
-    // up to RESERVED_OUTPUT_TOKENS.
+    // A step with a cost bound stops before a next message that would not fit.
+    // The next message reads what the last one read, plus what it wrote, plus
+    // one tool result per tool it called (each kept inline up to
+    // RESERVED_TOOL_RESULT_TOKENS by spill-policy); it writes up to the model's
+    // own output cap (the routes' maxTokens, sent as max_completion_tokens).
     let overBudget = false
+    const outputCap = input.budget === undefined ? RESERVED_OUTPUT_TOKENS : await modelOutputCap(this.#ctx, input.agent)
     const stopEvents = this.#ctx.on('session/event', (session, event) => {
       if (session.header.id !== sessionId && session.header.parentSession !== sessionId) return
       if (event.type === 'assistant/message') {
         type StepUsage = { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
-        const step = (event as unknown as { data?: { usage?: StepUsage } }).data?.usage
+        type StepData = { usage?: StepUsage; message?: { content?: readonly { type?: string }[] } }
+        const data = (event as unknown as { data?: StepData }).data
+        const step = data?.usage
+        const toolCalls = (data?.message?.content ?? []).filter(block => block.type === 'tool-call').length
         if (step !== undefined) {
           usage.input += step.inputTokens ?? 0
           usage.output += step.outputTokens ?? 0
           usage.cacheRead += step.cacheReadTokens ?? 0
           usage.cacheWrite += step.cacheWriteTokens ?? 0
           const budget = input.budget
-          if (budget !== undefined && !overBudget) {
-            const next = eurOf({ input: step.inputTokens ?? 0, output: RESERVED_OUTPUT_TOKENS }, budget.price)
+          // A message that calls no tool ends the turn: no next message to fit,
+          // so its answer is never turned into an over-budget stop.
+          if (budget !== undefined && !overBudget && toolCalls > 0) {
+            const nextInput = (step.inputTokens ?? 0) + (step.outputTokens ?? 0) + toolCalls * RESERVED_TOOL_RESULT_TOKENS
+            const next = eurOf({ input: nextInput, output: outputCap }, budget.price)
             if (eurOf(usage, budget.price) + next > budget.eur) {
               overBudget = true
               void created.dispose()
@@ -406,4 +415,23 @@ export function titleOf(mission: Mission, text: string): string {
 /** @returns a fresh session identifier for a mission run. */
 export function sessionIdFor(): string {
   return randomUUID()
+}
+
+/**
+ * @param ctx - the host.
+ * @param agent - the step's agent.
+ * @returns the most one of its model messages may write: the model's
+ * configured cap (the routes' maxTokens), RESERVED_OUTPUT_TOKENS when the host
+ * cannot say. Never above RESERVED_OUTPUT_TOKENS, which the pre-call
+ * reservation uses (tests/turnBudgetReserve.spec.ts holds the routes to it).
+ */
+async function modelOutputCap(ctx: Context, agent: { readonly provider: string; readonly model: string }): Promise<number> {
+  type ModelInfoReader = { resolveModelInfo?: (provider: string, model: string) => Promise<{ defaultMaxTokens?: number }> }
+  try {
+    const llm = ctx.get('llm') as ModelInfoReader | undefined
+    const cap = (await llm?.resolveModelInfo?.(agent.provider, agent.model))?.defaultMaxTokens
+    return cap !== undefined && Number.isSafeInteger(cap) && cap > 0 ? Math.min(cap, RESERVED_OUTPUT_TOKENS) : RESERVED_OUTPUT_TOKENS
+  } catch {
+    return RESERVED_OUTPUT_TOKENS
+  }
 }

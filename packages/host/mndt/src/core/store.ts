@@ -33,6 +33,20 @@ export class MemoryStore implements WorkbenchStore {
   }
 }
 
+/**
+ * The state file cannot be read as a state. An internal fault, never a
+ * refusal: its message names no path (a caller may see it), the path is kept
+ * apart for the operator's log.
+ */
+export class StateFileError extends Error {
+  readonly path: string
+  constructor(message: string, path: string) {
+    super(message)
+    this.name = 'StateFileError'
+    this.path = path
+  }
+}
+
 /** A store backed by one JSON file. */
 export class JsonFileStore implements WorkbenchStore {
   readonly #path: string
@@ -51,9 +65,17 @@ export class JsonFileStore implements WorkbenchStore {
       if ((error as { code?: unknown }).code === 'ENOENT') return emptyState
       throw error
     }
-    const parsed: unknown = JSON.parse(text)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      // Node's message quotes the start of the text read: a team's messages.
+      // Only the position is kept.
+      const position = error instanceof SyntaxError ? /\bposition (\d+)/.exec(error.message)?.[1] : undefined
+      throw new StateFileError(`the workbench state is not JSON${position === undefined ? '' : ` (at position ${position})`}; refusing to overwrite it`, this.#path)
+    }
     if (typeof parsed !== 'object' || parsed === null || (parsed as { version?: unknown }).version !== 1) {
-      throw new Error(`workbench state at ${this.#path} is not a version 1 state; refusing to overwrite it`)
+      throw new StateFileError('the workbench state is not a version 1 state; refusing to overwrite it', this.#path)
     }
     return parsed as WorkbenchState
   }

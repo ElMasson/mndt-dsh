@@ -42,6 +42,15 @@ import type { ModelPrice, PriceGrid } from './core/index.ts'
  */
 export const RESERVED_OUTPUT_TOKENS = 8192
 
+/**
+ * The most a tool result may add to the next message's input, in estimated
+ * tokens: the base bundle's spill-policy keeps a result inline up to
+ * maxInlineTokens and spills the rest behind a reference
+ * (packages/bundle/base/cordis.patch.yml; tests/turnBudgetReserve.spec.ts
+ * fails if it moves). An estimate, not a count: the bound holds to it.
+ */
+export const RESERVED_TOOL_RESULT_TOKENS = 12_500
+
 /** @param text - a prompt. @returns a generous estimate of its input tokens. */
 export function estimatedTokens(text: string): number {
   return Math.ceil(text.length / 3)
@@ -514,12 +523,19 @@ export class TurnScheduler {
             // and could have written it into its remarks.
             const revisionMark = randomUUID().slice(0, 8)
             const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, revisionMark))
+            // Said positively: the published text is the revision, or the draft kept.
+            // An empty correction keeps the draft; one identical to the draft
+            // changes nothing: neither is « corrigé ».
+            const revisedText = revised.output.text.trim()
+            const unchanged = revisedText === first.output.text.trim()
+            const replaced = revisedText !== '' && !unchanged
             steps.push({
-              role: 'revision', agentId: agent.id,
+              role: 'revision', agentId: agent.id, replaced,
+              ...(replaced ? {} : { notes: [revisedText === '' ? 'correction vide, brouillon publié' : 'correction identique au brouillon'] }),
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
               ...(revised.eur === undefined ? {} : { eur: revised.eur }),
             })
-            if (revised.output.text.trim() !== '') output = revised.output
+            if (replaced) output = revised.output
           }
         }
       }

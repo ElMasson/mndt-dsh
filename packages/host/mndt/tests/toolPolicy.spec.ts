@@ -216,7 +216,9 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     readonly provider?: { readonly name?: string; readonly start?: () => void; readonly unregistered?: true } | 'unreadable'
     readonly agentDisposeThrows?: boolean
     /** Model messages the run reports, by their input tokens (each writes `output`). */
-    readonly messages?: readonly { readonly input: number; readonly output: number }[]
+    readonly messages?: readonly { readonly input: number; readonly output: number; readonly toolCalls?: number }[]
+    /** The output cap the host's llm reports for the model (defaultMaxTokens). */
+    readonly outputCap?: number
   }
 
   function fakeCtx(options: FakeOptions = {}) {
@@ -251,7 +253,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
           if (agentDisposed) break
           reported = index + 1
           for (const listener of sessionListeners) {
-            listener(seen.root!.session, { type: 'assistant/message', data: { usage: { inputTokens: message.input, outputTokens: message.output } } })
+            listener(seen.root!.session, { type: 'assistant/message', data: { usage: { inputTokens: message.input, outputTokens: message.output }, message: { content: Array.from({ length: message.toolCalls ?? 0 }, () => ({ type: 'tool-call' })) } } })
           }
         }
         return {
@@ -275,7 +277,10 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       logger: { warn: () => undefined },
       // As in production: this plugin does not inject `tools`, so reading it throws.
       get tools(): never { throw new Error('cannot get property "tools" without inject') },
-      get: (name: string) => ({ tools: host.tools, workflowEngine: engine, subagents } as Record<string, unknown>)[name],
+      get: (name: string) => ({
+        tools: host.tools, workflowEngine: engine, subagents,
+        ...(options.outputCap === undefined ? {} : { llm: { resolveModelInfo: async () => ({ defaultMaxTokens: options.outputCap }) } }),
+      } as Record<string, unknown>)[name],
       agents: {
         get: host.agents.get,
         create: async (create: { sessionId: string }) => {
@@ -326,15 +331,39 @@ describe('the runners scope it before the agent exists, and lift it after', () =
   })
 
   it('a step with a cost bound stops before a message that would not fit, and says what it used', async () => {
-    // 1 €/M in, 1 €/M out: each message reads 100 000 tokens (0.1 €) and may write 8192.
+    // 1 €/M in, 1 €/M out. Each message reads 100 000 tokens and writes 1000; a
+    // next message reserves that input, that output, 12 500 per tool called,
+    // and the model's output cap (8192 unless the host says less).
     const price = { input: 1, output: 1 }
-    const messages = [{ input: 100_000, output: 1000 }, { input: 100_000, output: 1000 }, { input: 100_000, output: 1000 }]
+    const call = { input: 100_000, output: 1000, toolCalls: 1 }
+    const messages = [call, call, { input: 100_000, output: 1000 }]
     const bounded = fakeCtx({ messages })
     const error = await new DshTurnRunner(bounded.ctx).run({ ...turn(), budget: { eur: 0.25, price } }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(TurnBudgetReached)
-    // After two messages (0.202 €), a third (≥ 0.108 €) would pass 0.25 €: the agent is stopped there.
+    // After two messages (0.202 €), a third (≥ 0.1217 €) would pass 0.25 €.
     expect(bounded.seen.messagesAtAgentDispose).toBe(2)
     expect((error as TurnBudgetReached).tokens).toMatchObject({ input: 200_000, output: 2000 })
+
+    // Each tool called adds a result to the next message's input.
+    const one = fakeCtx({ messages })
+    await new DshTurnRunner(one.ctx).run({ ...turn(), budget: { eur: 0.23, price } }).catch(() => undefined)
+    expect(one.seen.messagesAtAgentDispose).toBe(2)
+    const two = fakeCtx({ messages: [{ ...call, toolCalls: 2 }, ...messages.slice(1)] })
+    await new DshTurnRunner(two.ctx).run({ ...turn(), budget: { eur: 0.23, price } }).catch(() => undefined)
+    expect(two.seen.messagesAtAgentDispose).toBe(1)
+
+    // A model whose output cap is below the reserve lets the step go further.
+    const uncapped = fakeCtx({ messages })
+    await new DshTurnRunner(uncapped.ctx).run({ ...turn(), budget: { eur: 0.22, price } }).catch(() => undefined)
+    expect(uncapped.seen.messagesAtAgentDispose).toBe(1)
+    const capped = fakeCtx({ messages, outputCap: 1000 })
+    await new DshTurnRunner(capped.ctx).run({ ...turn(), budget: { eur: 0.22, price } }).catch(() => undefined)
+    expect(capped.seen.messagesAtAgentDispose).toBe(2)
+
+    // A message that calls no tool ends the turn: its answer is kept, even with no room left.
+    const answer = fakeCtx({ messages: [{ input: 100_000, output: 1000 }] })
+    expect((await new DshTurnRunner(answer.ctx).run({ ...turn(), budget: { eur: 0.15, price } })).tokens)
+      .toMatchObject({ input: 100_000, output: 1000 })
 
     const roomy = fakeCtx({ messages })
     const output = await new DshTurnRunner(roomy.ctx).run({ ...turn(), budget: { eur: 5, price } })

@@ -27,7 +27,10 @@ async function bodyOf<T>(response: Response): Promise<T> {
       typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error: string }).error
         : `the Host refused the call (${response.status})`
-    throw new ChatRefusal(reason, response.status)
+    const code = typeof body === 'object' && body !== null && typeof (body as { code?: unknown }).code === 'string'
+      ? (body as { code: string }).code
+      : undefined
+    throw new ChatRefusal(reason, response.status, code)
   }
   return body as T
 }

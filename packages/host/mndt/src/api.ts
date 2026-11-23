@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, CoordinationRefusal, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -21,6 +21,7 @@ import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
+import { errorShape, operatorLine } from './operator-log.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -96,6 +97,8 @@ export interface ModelChoice {
 
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
+  /** Where an unexpected error's detail is told to the operator (the web log); stderr by default. */
+  readonly warn?: (message: string) => void
   readonly authority?: {
     readonly baseUrl: string
     readonly token: string
@@ -325,12 +328,24 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     try {
       return await conversation(request, path, identity)
     } catch (error) {
+      // A refusal the product means (a plain Error, or a typed one named
+      // « …Refusal ») is served with its words. Anything else (a TypeError, a
+      // JSON error, a system error carrying a path) is an internal fault: the
+      // caller gets « internal error », the detail goes to the operator's log.
+      if (!isMeantRefusal(error)) {
+        warnInternal(`mndt: internal error on ${request.method} ${path}: ${internalDetail(error)}`)
+        return respond(500, { error: 'internal error' })
+      }
       const reason = messageOf(error)
+      if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
-      return respond(400, { error: reason })
+      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
     }
   }
+
+  /** The operator's log for an internal fault: the gateway's, or stderr on one clean line. */
+  const warnInternal = options.warn ?? ((message: string): void => { process.stderr.write(`${operatorLine(message)}\n`) })
 
   const conversation = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
     const parts = path.split('/').slice(1)
@@ -462,7 +477,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (input.mode === 'solo') return respond(200, { channel: await service.setCoordination(channel.id, undefined, identity) })
       if (input.mode === 'parallel-synthesis') {
         if (!Array.isArray(input.workers) || typeof input.synthesizer !== 'string') {
-          return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)' })
+          return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)', code: 'missing-fields' })
         }
         const updated = await service.setCoordination(channel.id, {
           mode: 'parallel-synthesis',
@@ -473,7 +488,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, { channel: updated })
       }
       if (input.mode !== 'author-verifier' || typeof input.author !== 'string' || typeof input.verifier !== 'string') {
-        return respond(400, { error: 'mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)' })
+        return respond(400, {
+          error: 'mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)',
+          code: input.mode === 'author-verifier' ? 'missing-fields' : 'unknown-mode',
+        })
       }
       const updated = await service.setCoordination(channel.id, { mode: 'author-verifier', authorId: input.author, verifierId: input.verifier }, identity)
       return respond(200, { channel: updated })
@@ -1534,4 +1552,30 @@ export function eventLine(event: WorkbenchEvent): string {
 /** @param brief - a produced brief. @returns its title. */
 export function briefTitle(brief: Brief): string {
   return brief.title
+}
+
+/**
+ * @param error - what a conversation route threw.
+ * @returns whether it is a refusal the product means: a plain Error (the
+ * service's « no channel … », « a channel keeps at least one person »…) or a
+ * typed refusal (a class named « …Refusal », with its code). A system error
+ * (syscall, errno: its message carries a path) and any other class are not.
+ */
+function isMeantRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if ('syscall' in error || 'errno' in error) return false
+  return error.constructor === Error || error.name.endsWith('Refusal')
+}
+
+/**
+ * @param error - an internal fault of a route.
+ * @returns what the operator's log says of it: a SyntaxError by its name and
+ * position only (Node's message quotes the text it read, a team's messages for
+ * the state); a state file error with its path, which callers never see; any
+ * other by its name and message.
+ */
+function internalDetail(error: unknown): string {
+  if (error instanceof SyntaxError) return errorShape(error)
+  if (error instanceof StateFileError) return `${error.name}: ${error.message} (${error.path})`
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

@@ -26,6 +26,20 @@ rm -f "$TOKEN_FILE"
 if [ "$TOKEN_FILE" != "/state/web-token" ]; then rm -f /state/web-token; fi
 if [ "$LOG" != "$STATE/web.log" ]; then rm -f "$STATE/web.log"; fi
 
+# The log of the previous start is kept once, as $LOG.1, before this start
+# empties $LOG: what the workbench said then (a role-file row set aside, a
+# mandate retired, a missing gateway secret) survives one restart. Its launch
+# tokens are replaced on the way: that process is gone, and a token never stays
+# in a log kept after it. One previous log only, never an endless append.
+if [ -s "$LOG" ]; then
+  if sed 's/token=[A-Za-z0-9_-]*/token=…/g' "$LOG" > "$LOG.1.tmp"; then
+    chmod --reference="$LOG" "$LOG.1.tmp" 2>/dev/null || true
+    mv -f "$LOG.1.tmp" "$LOG.1"
+  else
+    rm -f "$LOG.1.tmp"
+  fi
+fi
+
 node /app/apps/cli/lib/bin.js web \
   --host "$WEB_BIND" \
   --port 3111 \

@@ -24,6 +24,10 @@ const DRIVE_START = new Date().toISOString()
 const logs = (service) => execFileSync('docker', ['logs', '--since', DRIVE_START, `${project}-${service}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
 const gatewayBefore = started('gateway')
+// The workbench, likewise: Docker restarts it if dsh web falls (unless-stopped),
+// and a fall during a turn must not pass for a quiet run. The drive restarts
+// nothing itself; step 8 (grants-checks) does, and runs after it.
+const workbenchBefore = started('workbench')
 const browser = await chromium.launch()
 const owner = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': OWNER }, locale: 'en-US' })
 const page = await owner.newPage()
@@ -208,6 +212,8 @@ await sleep(2000)
 const gatewayAfter = started('gateway')
 const unhandled = (logs('gateway').match(/Unhandled 'error' event/g) ?? []).length
 check('gateway-alive', gatewayBefore === gatewayAfter && unhandled === 0, `before « ${gatewayBefore} », after « ${gatewayAfter} », unhandled errors ${unhandled}`)
+const workbenchAfter = started('workbench')
+check('workbench-alive', workbenchBefore === workbenchAfter, `before « ${workbenchBefore} », after « ${workbenchAfter} »`)
 const health = await fetch(`${BASE}/mndt-api/health`).then(r => r.status, () => 0)
 check('still-serves', health === 200, `health ${health}`)
 console.log(`\n${results.filter(r => r.ok).length} OK, ${results.filter(r => !r.ok).length} KO`)

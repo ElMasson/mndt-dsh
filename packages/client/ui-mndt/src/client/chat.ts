@@ -153,8 +153,9 @@ export class ChatRefusal extends Error {
   /**
    * @param message - the Host's `{ error }`.
    * @param status - the HTTP status.
+   * @param code - the Host's `{ code }`, when it serves one.
    */
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'ChatRefusal'
   }

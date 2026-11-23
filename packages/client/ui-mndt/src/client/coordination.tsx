@@ -29,6 +29,8 @@ export interface TurnStep {
   readonly agentId: string
   /** A worker's part, the only source of the parts (#85). */
   readonly text?: string
+  /** On a revision: whether the corrected text replaced the draft (false: it came back empty). */
+  readonly replaced?: boolean
   readonly tokens?: number
   readonly eur?: number
   readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
@@ -114,6 +116,7 @@ export function stepsOf(turn: ChatTurn): readonly TurnStep[] {
       role: s.role as TurnStep['role'],
       agentId,
       ...(text === undefined ? {} : { text }),
+      ...(typeof s.replaced === 'boolean' ? { replaced: s.replaced } : {}),
       ...(tokens === undefined ? {} : { tokens }),
       ...(eur === undefined ? {} : { eur }),
       ...(s.verdict === undefined ? {} : { verdict: s.verdict as NonNullable<TurnStep['verdict']> }),
@@ -457,18 +460,23 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
   const verifier = steps.find(s => s.role === 'verifier')
   if (author === undefined || verifier === undefined) return undefined
   const handle = (id: string): string => `@${agents.get(id)?.handle ?? id}`
-  // The four states, read from the steps, never from the published text (A1, #84):
-  // ok → checked; issues + revision without verdict → corrected; issues + revision « skipped » (or no
-  // revision at all) → reservations not corrected; verifier skipped or unreadable → not checked.
+  // The states, read from the steps, never from the published text (A1, #84):
+  // ok → checked; issues + a revision that replaced the draft → corrected; issues + a revision that
+  // came back empty → the draft published as is; issues + a revision « skipped » (or none) →
+  // reservations not corrected; a revision whose outcome is not served (an older core) → never
+  // « corrigé », said as not checked; verifier skipped or unreadable → not checked.
   const revision = steps.find(s => s.role === 'revision')
-  const revised = revision !== undefined && revision.verdict === undefined
-  const unchecked = verifier.verdict !== 'ok' && verifier.verdict !== 'issues'
-  const uncorrected = verifier.verdict === 'issues' && !revised
+  const revised = revision !== undefined && revision.verdict === undefined && revision.replaced === true
+  const emptyRevision = revision !== undefined && revision.verdict === undefined && revision.replaced === false
+  const unknownRevision = revision !== undefined && revision.verdict === undefined && revision.replaced === undefined
+  const unchecked = (verifier.verdict !== 'ok' && verifier.verdict !== 'issues') || (verifier.verdict === 'issues' && unknownRevision)
+  const uncorrected = verifier.verdict === 'issues' && !revised && !emptyRevision && !unknownRevision
   const outcome = unchecked || uncorrected ? undefined
     : revised ? t('coordRevised') : t('coordConfirmed')
   const parts = [
     t('coordWrittenBy', { handle: handle(author.agentId) }),
     unchecked ? undefined : t('coordCheckedBy', { handle: handle(verifier.agentId) }),
+    emptyRevision ? t('coordIssuesLeft') : undefined,
     outcome,
     turn.eur === undefined ? undefined : euros(turn.eur),
   ].filter((part): part is string => part !== undefined)
@@ -479,7 +487,18 @@ export function coordinatedTurn(turn: ChatTurn, agents: ReadonlyMap<string, Chat
         <span data-testid="chat-turn-cost">{parts.join(' · ')}</span>
       </p>
       {unchecked ? (
-        <p className="mw-turn-unchecked" role="note" data-testid="turn-unchecked">{t('coordUnchecked', { handle: handle(verifier.agentId) })}</p>
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-unchecked">
+          {unknownRevision && verifier.verdict === 'issues'
+            ? t('coordRevisionUnknown')
+            : t('coordUnchecked', { handle: handle(verifier.agentId) })}
+        </p>
+      ) : undefined}
+      {emptyRevision ? (
+        <p className="mw-turn-unchecked" role="note" data-testid="turn-empty-revision">
+          {/* Empty or identical to the draft: the core's note says which, as text, bounded. */}
+          {t('coordEmptyRevision', { handle: handle(author.agentId) })}
+          {revision.notes?.[0] === undefined ? '' : ` — ${revision.notes[0].length > 200 ? `${revision.notes[0].slice(0, 200)}…` : revision.notes[0]}`}
+        </p>
       ) : undefined}
       {uncorrected ? (
         <p className="mw-turn-unchecked" role="note" data-testid="turn-uncorrected">
