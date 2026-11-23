@@ -226,6 +226,21 @@ export function createMockChat(
         return next
       })
     },
+    setContext(channelId, change) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        const held = c.context as { readonly version?: number } | undefined
+        const version = typeof held?.version === 'number' ? held.version : 0
+        // As the core is asked to: a change since the version read is refused, the text bounded.
+        if (change.version !== version) throw new ChatRefusal('the context changed meanwhile', 409, 'context-changed')
+        const text = change.text.trim()
+        if (text.length > 4000) throw new ChatRefusal('a channel context is 4000 characters at most', 400, 'context-too-long')
+        const { context: _old, ...rest } = c
+        const next = text === '' ? rest : { ...rest, context: { text, version: version + 1, updatedBy: seed.you, updatedAt: now() } }
+        channels.set(c.id, next)
+        return next
+      })
+    },
     setCoordination(channelId, change) {
       return settle(() => {
         const c = channelOf(channelId)

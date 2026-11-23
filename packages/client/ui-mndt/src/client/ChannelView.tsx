@@ -336,6 +336,8 @@ export function ChannelThread(props: {
   readonly mounted?: readonly MountedConnector[] | undefined
   /** Whether the reader owns the team (the mndt-web look). */
   readonly isOwner?: boolean | undefined
+  /** A text to put in the composer from elsewhere (the panel's « Demander à @agent »). */
+  readonly seed?: { readonly text: string; readonly at: number } | undefined
   /** An empty lane's welcome (the mndt-web look): the team channels open to the person, the cards waiting. */
   readonly arrival?: LaneArrival | undefined
   /** The models the core offers, for a card that proposes an agent (the mndt-web look). */
@@ -419,6 +421,9 @@ export function ChannelThread(props: {
     }
   }
 
+  // The most recent of the welcome's seed and the panel's.
+  const latestSeed = props.seed !== undefined && (seed === undefined || props.seed.at > seed.at) ? props.seed : seed
+
   const cardsOf = (messageId: string): ThreadCard[] =>
     props.cards.filter(card => card.channelId === channel.id && card.messageId === messageId)
 
@@ -458,6 +463,7 @@ export function ChannelThread(props: {
                 mounted={props.mounted}
                 isOwner={props.isOwner}
                 offered={props.offered}
+                channel={channel}
                 t={t}
               />
             </div>
@@ -476,7 +482,7 @@ export function ChannelThread(props: {
           />
         ))}
       </div>
-      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} look={props.look} seed={seed} />
+      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} look={props.look} seed={latestSeed} />
     </section>
   )
 }
