@@ -7,7 +7,7 @@
  * core keeps it there), and a decision is approve or refuse with its reason, which is what the core
  * accepts; there is no « changes requested » to show.
  */
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatChannel, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
@@ -16,6 +16,7 @@ import type { DecideOptions } from './face.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
 import { ContextFrame, contextOf, contextProposalOf } from './channelContext.tsx'
+import { HelpThread, helpOf } from './help.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
@@ -152,6 +153,8 @@ export function WebCard(props: {
   readonly offered?: readonly OfferedModel[] | undefined
   /** The card's channel as the reader sees it, for a proposed context: its context now. */
   readonly channel?: ChatChannel | undefined
+  /** The card was asked for after the agent read its peers' help. */
+  readonly fromHelp?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -208,7 +211,10 @@ export function WebCard(props: {
         </p>
         <StatusBadge state={card.state} t={t} />
       </div>
-      <p className="mw-card-meta">{askedBy} · {when(card.requestedAt)}</p>
+      <p className="mw-card-meta">
+        {askedBy} · {when(card.requestedAt)}
+        {props.fromHelp === true ? <span className="mw-chip mw-help-chip" data-testid="card-from-help">{t('helpFromHelp')}</span> : undefined}
+      </p>
       {/* An agent proposes an agent: the whole sheet, read-only, so one click validates what was read. */}
       {proposal === undefined ? undefined : <AgentSheetView proposal={proposal} mounted={props.mounted ?? []} t={t} />}
       {contextProposal === undefined ? undefined : (
@@ -289,11 +295,17 @@ export function WebMessage(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly mounted?: readonly MountedConnector[] | undefined
   readonly isOwner?: boolean | undefined
+  /** Whether the reader's answer to an agent counts (workflows.write). */
+  readonly canAnswer?: boolean | undefined
+  /** Post a person's answer to an agent's question, as a reply to it. */
+  readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
   readonly channel?: ChatChannel | undefined
   readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { message: m, agents, t } = props
+  // The cards a turn of this message asked for after reading its peers' help.
+  const fromHelp = (m.turns ?? []).some(turn => helpOf(turn)?.reading?.verdict === 'card')
   const agent = m.author.kind === 'agent' ? agents.get(m.author.agentId) : undefined
   const name = m.author.kind === 'human'
     ? shownName(m.author.email, props.names)
@@ -336,7 +348,26 @@ export function WebMessage(props: {
       ) : (
         <p className="mw-message-body">{m.text}</p>
       )}
-      {(m.turns ?? []).map(turn => <WebTurn key={turn.id} turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />)}
+      {(m.turns ?? []).map((turn) => {
+        // A turn whose agent asked its peers: the help shows in place, under the turn's line.
+        const help = helpOf(turn)
+        return (
+          <Fragment key={turn.id}>
+            <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
+            {help === undefined ? undefined : (
+              <HelpThread
+                help={help}
+                agents={agents}
+                onAnswer={props.onAnswer}
+                originMessageId={m.id}
+                canAnswer={props.canAnswer}
+                names={props.names}
+                t={t}
+              />
+            )}
+          </Fragment>
+        )
+      })}
       {waiting === 0 || props.onPending === undefined ? undefined : (
         <p className="mw-waiting">
           <Icon name="Inbox" size={14} />
@@ -356,6 +387,7 @@ export function WebMessage(props: {
           isOwner={props.isOwner}
           offered={props.offered}
           channel={props.channel}
+          fromHelp={fromHelp}
           t={t}
         />
       ))}

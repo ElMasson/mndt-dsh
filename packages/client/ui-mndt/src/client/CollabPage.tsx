@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatKey, ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
@@ -234,8 +234,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // The thread's cards, decided ones included (who and when), read apart from the page state.
   const [chatCards, setChatCards] = useState<readonly ThreadCard[] | undefined>(undefined)
   const [cardsError, setCardsError] = useState<string | undefined>(undefined)
+  // The agents' open questions after their peers' help, across the reader's channels: À traiter.
+  const [escalations, setEscalations] = useState<readonly OpenEscalation[]>([])
   const loadCards = useCallback(async () => {
     if (chat === undefined) return
+    if (chat.escalations !== undefined) {
+      // An older core without the route: nothing listed, the question still shows in its channel.
+      void chat.escalations().then(setEscalations, () => { setEscalations([]) })
+    }
     try {
       setChatCards(await chat.cards())
       setCardsError(undefined)
@@ -853,7 +859,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           }
           setView(next)
         }}
-        pending={pendingCards.length}
+        pending={pendingCards.length + escalations.length}
         channels={(chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({
           id: c.id, label: c.title || c.name, active: view === 'chat' && c.id === chatId,
         }))}
@@ -1335,6 +1341,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   isOwner={state.role === 'owner'}
                   offered={offered}
                   seed={composerSeed}
+                  canAnswer={state.canWrite}
                   arrival={{
                     channels: (chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({ id: c.id, label: c.title || c.name })),
                     onChannel: (id) => { setChatId(id) },
@@ -1758,8 +1765,26 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <section className="mw-screen" data-testid="team-pending">
               <h1 className="mw-title">{t('shell.pending')}</h1>
               {cardsError === undefined ? undefined : <p role="alert" className="mw-alert">{t('shell.pending-unread', { reason: cardsError })}</p>}
+              {escalations.length === 0 ? undefined : (
+                <div className="mw-queue" data-testid="pending-questions">
+                  {escalations.map((e) => {
+                    const where = chatChannels?.find(c => c.id === e.channelId)
+                    return (
+                      <div key={e.turnId} className="mw-queue-item mw-turn-unchecked mw-help-question" data-testid="pending-question">
+                        <p className="mw-help-question-text">{tc('helpQuestionFor', { question: e.question })}</p>
+                        {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
+                        {where === undefined ? undefined : (
+                          <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
+                            {tc('helpOpenThread', { where: where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}` })}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {pendingCards.length === 0 ? (
-                <div className="mw-empty-state"><p>{t('shell.pending-none')}</p></div>
+                escalations.length === 0 ? <div className="mw-empty-state"><p>{t('shell.pending-none')}</p></div> : undefined
               ) : (
                 <>
                   <p className="mw-counts">{t('shell.pending-count', { count: pendingCards.length })}</p>

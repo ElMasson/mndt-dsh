@@ -8,7 +8,7 @@
  * system message), as the Host would between two reads.
  */
 import { ChatRefusal } from './chat.ts'
-import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 
 /**
  * A promise of what `work` returns, or of the error it throws: the double answers like the Host,
@@ -51,6 +51,8 @@ export interface MockSeed {
   /** The models offered to agents; absent, `models()` answers 404 as an older core does. */
   readonly models?: readonly OfferedModel[]
   /** The connectors mounted on the workbench; a channel may only hold an enabled one. */
+  /** The open escalations; absent, `escalations()` answers 404 as an older core does. */
+  readonly escalations?: readonly OpenEscalation[]
   readonly mounted?: readonly MountedConnector[]
 }
 
@@ -295,6 +297,12 @@ export function createMockChat(
       return settle(() => {
         if (seed.models === undefined) throw new ChatRefusal('no route', 404)
         return [...seed.models]
+      })
+    },
+    escalations() {
+      return settle(() => {
+        if (seed.escalations === undefined) throw new ChatRefusal('no route', 404)
+        return [...seed.escalations]
       })
     },
     mounted() {
