@@ -130,6 +130,20 @@ deposit() {
   echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
   [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
 }
+# The managed route answered by the fake model, in this rehearsal's copy of the
+# patch only: the coordinated turns need models of their own, priced as on the
+# instance. The tenant's own rendering keeps the real URL: checked below.
+fake_scaleway() {
+  sed -i 's#baseURL: https://api.scaleway.ai/[^ ]*#baseURL: http://fakellm:8000/v1#' "$data/home/cordis.patch.yml"
+  real=$(MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" --print | grep -c 'baseURL: https://api.scaleway.ai/') || real=0
+  copied=$(grep -c 'baseURL: http://fakellm:8000/v1' "$data/home/cordis.patch.yml") || copied=0
+  template=$(grep -c 'api.scaleway.ai' "$deploy/llm/routes.patch.yml.template") || template=0
+  if [ "$real" -ge 1 ] && [ "$template" -ge 1 ] && [ "$copied" -ge 2 ]; then
+    echo "OK  routes-real-scaleway  the tenant's rendering keeps https://api.scaleway.ai/ ($real), the rehearsal's copy alone points both routes at the fake model ($copied)"
+  else
+    echo "KO  routes-real-scaleway  rendering $real, template $template, rehearsal copy $copied: the fake URL must stay in the rehearsal's copy"
+  fi
+}
 step() { last_step=$*; printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
@@ -154,6 +168,7 @@ CANARY_SECRET_MODEL_ENV=CANARY_SECRET_model_env_value
 MNDT_PROBE_DSN=postgres://team:CANARY_SECRET_innocuous_live@db:5432/team
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || die routes "the LLM routes were not written"
+fake_scaleway
 # An admin who is not the owner: missions and automations stay closed to them.
 printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
