@@ -14,6 +14,8 @@
 # server: docker build -f packages/host/mndt/deploy/Dockerfile.workbench -t <image> .
 # KEEP=1 leaves the containers running for inspection.
 set -uo pipefail
+# A step that cannot go on says why, as a named KO, then stops.
+die() { echo "KO $1  $2"; exit 1; }
 image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
 deploy=$(cd "$here/.." && pwd)
@@ -32,7 +34,7 @@ case $root in
   "$tmp_base"/?*) ;;
   *) echo "refused: the rehearsal root must be under $tmp_base, not $root" >&2; exit 2 ;;
 esac
-mkdir -p "$root" || exit 1
+mkdir -p "$root" || die root-mkdir "cannot create the rehearsal root $root"
 if [ -n "$(ls -A "$root")" ]; then echo "refused: the rehearsal root $root is not empty" >&2; exit 2; fi
 touch "$root/.mndt-rehearsal"
 # Whatever the exit, the containers and their network go, unless KEEP=1: the
@@ -43,9 +45,13 @@ cleanup() {
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
   fi
+  # Stopped before its verdict (a die, a guard, a crash): said as a KO, with
+  # the last step it reached, so the total never reads « ko=0 » on a run cut short.
+  if [ -z "${verdict:-}" ]; then echo "KO aborted  stopped before the verdict, during « ${last_step:-the set-up} »"; fi
   # The total, counted by the script over everything it and its sub-scripts
-  # said: the one line a reader goes by. Any KO, or a failed step, fails it.
-  sleep 1
+  # said: the one line a reader goes by. The pipe to tee is closed and tee
+  # waited for first, so the count reads the whole log.
+  if [ -n "${tee_pid:-}" ]; then exec 1>&3 2>&4; wait "$tee_pid" 2>/dev/null; fi
   total_ok=$(grep -acE '^OK ' "$root/output.log" 2>/dev/null) || total_ok=0
   total_ko=$(grep -acE '^KO ' "$root/output.log" 2>/dev/null) || total_ko=0
   echo "TOTAL ok=$total_ok ko=$total_ko"
@@ -55,7 +61,9 @@ cleanup() {
 trap cleanup EXIT
 # Everything said goes to the screen and to output.log, which the total counts.
 : > "$root/output.log"
+exec 3>&1 4>&2
 exec > >(tee -a "$root/output.log") 2>&1
+tee_pid=$!
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
@@ -122,7 +130,7 @@ deposit() {
   echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
   [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
 }
-step() { printf '\n== %s\n' "$*"; }
+step() { last_step=$*; printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
     [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/mndt-api/health)" = 200 ] && return 0
@@ -135,7 +143,7 @@ workbench_log() { echo "--- last lines of the shell log (/run/mndt-launch/web.lo
 step "1. tenant, keys, routes, roles (root $root)"
 printf 'secret' > "$root/root/entra_client_secret"
 MNDT_ROOT=$root bash "$deploy/create-tenant.sh" datanalysis equipe.datanalysis.re --owner $owner \
-  --client-id 00000000-0000-0000-0000-000000000000 --client-secret-file /root/entra_client_secret --no-docker || exit 1
+  --client-id 00000000-0000-0000-0000-000000000000 --client-secret-file /root/entra_client_secret --no-docker || die tenant "create-tenant.sh failed"
 cat > "$data/model.env" <<ENV
 SCW_GENAPI_KEY=rehearsal
 VLLM_API_KEY=placeholder
@@ -145,7 +153,7 @@ VLLM_QWEN_MODEL=fake-qwen
 CANARY_SECRET_MODEL_ENV=CANARY_SECRET_model_env_value
 MNDT_PROBE_DSN=postgres://team:CANARY_SECRET_innocuous_live@db:5432/team
 ENV
-MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
+MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || die routes "the LLM routes were not written"
 # An admin who is not the owner: missions and automations stay closed to them.
 printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
@@ -193,14 +201,14 @@ caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/
 if [ "$caught" -ge 5 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line, sk-ant- key and private key are all found"
 else echo "KO  scan-witness   the scan missed a planted secret ($caught of 5 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
-node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
+node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || die up "up-run.mjs could not start the containers"
 if health 80; then echo "API answers through the gateway"; else echo "KO first-start-api  the API does not answer after the first start"; workbench_log; fi
 echo "--- profiles/web/cordis.patch.yml as DSH wrote it:"; cat "$data/home/profiles/web/cordis.patch.yml" 2>/dev/null || echo "(absent)"
 
 step "3. seed-team.sh, the production script (Compose calls through compose-shim.sh)"
 # The workbench writes its profile files as root; on the server seed-team.sh runs
 # as root too. Here it runs as this user, so hand the profile files over first.
-docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || exit 1
+docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || die profiles-chown "the profiles folder could not be given back to this user"
 # A second MCP server, mounted for the tool probe and never allowed in the
 # rehearsal's channel: the turn must neither see nor run it (seed-team.sh
 # restarts the workbench right after, which starts it).

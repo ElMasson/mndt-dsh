@@ -158,8 +158,15 @@ check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404
 const registry = (await api('GET', '/automations')).body.items ?? []
 const briefingItem = registry.find(item => item.id === 'auto_briefing')
 const missionsBefore = ((await api('GET', '/missions')).body.missions ?? []).filter(mission => mission.kind === 'briefing' && mission.createdAt >= DRIVE_START).length
-check('scheduler-first-pass', briefingItem?.enabled === false && /owner/.test(briefingItem?.lastOutcome ?? '') && missionsBefore === 0,
-  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} », briefing missions before any run: ${missionsBefore}`)
+// After an update from an installed instance, the owner may have run the old
+// briefing by hand (rehearse-update phase A2): its outcome is that run's
+// (« done »), and the automation stays switched off. Either way it must be off,
+// and nothing may have run during this drive.
+const allMissions = (await api('GET', '/missions')).body.missions ?? []
+const earlierRun = briefingItem?.lastMissionId !== undefined
+  && allMissions.some(mission => mission.id === briefingItem.lastMissionId && mission.createdAt < DRIVE_START)
+check('scheduler-first-pass', briefingItem?.enabled === false && (/owner/.test(briefingItem?.lastOutcome ?? '') || earlierRun) && missionsBefore === 0,
+  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} »${earlierRun ? ' (a run before this drive)' : ''}, briefing missions before any run: ${missionsBefore}`)
 // A briefing the owner runs is theirs and private: neither a member nor the admin reads it.
 const briefing = await api('POST', '/automations/auto_briefing/run', {}, owner, 180000)
   .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
