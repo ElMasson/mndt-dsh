@@ -175,3 +175,12 @@ describe('an unreadable choice keeps the council', () => {
     expect(screen.getByTestId('council-skipped').textContent).toContain('redémarrage')
   })
 })
+
+describe('a question waiting is never hidden by « clos sans décision »', () => {
+  it('ended with an unanswered escalation: « une question pour vous » and its field', () => {
+    const council = read({ state: 'done', options, positions, critiques, skipped: [{ reason: 'redémarrage' }], escalation: { question: 'Que retenir ?', messageId: 'msg_9' } })
+    render(<CouncilThread turn={turn({})} council={council} agents={byId} onAnswer={vi.fn()} canAnswer t={chatFrench} />)
+    expect(screen.getByTestId('council-outcome').textContent).toBe('une question pour vous')
+    expect(screen.getByRole('button', { name: 'Répondre et clore ce fil' })).toBeTruthy()
+  })
+})
