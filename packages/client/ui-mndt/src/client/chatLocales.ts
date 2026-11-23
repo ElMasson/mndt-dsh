@@ -263,6 +263,8 @@ export const chatEn = {
   sheetUnfold: 'Read all the instructions ({n} lines)',
   sheetFold: 'Fold',
   sheetOpen: 'See {name}',
+  sheetWrittenByPerson: 'Instructions written by a person',
+  sheetWrittenByAgent: 'Instructions written by @{handle}',
 } as const
 
 /** One copy key. */
@@ -526,6 +528,8 @@ export const chatFr: Record<ChatKey, string> = {
   sheetUnfold: 'Lire toute la consigne ({n} lignes)',
   sheetFold: 'Replier',
   sheetOpen: 'Voir {name}',
+  sheetWrittenByPerson: 'Consigne écrite par une personne',
+  sheetWrittenByAgent: 'Consigne écrite par @{handle}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -1834,6 +1834,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 <TeamAgentSheet
                   key={viewing.id}
                   agent={chatAgents.find(a => a.id === viewing.id) ?? viewing}
+                  agents={chatAgents}
                   channels={chatChannels ?? []}
                   mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                   names={team.names}

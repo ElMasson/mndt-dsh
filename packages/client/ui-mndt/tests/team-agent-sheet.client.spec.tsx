@@ -37,7 +37,10 @@ describe('an agent\'s readable sheet (lot 3)', () => {
     expect(sheet.textContent).toContain('par Stéphane Masson')
     expect(sheet.textContent).toContain('Rien seul : ce qu\'il propose devient une carte, décidée par une personne.')
     const text = screen.getByTestId('agent-instructions')
-    expect(text.querySelector('h2, h3, h4')?.textContent).toBe('Rôle')
+    // Inside the frame, a « ## Rôle » is bold text, never a heading that could pass for the sheet's.
+    expect(text.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull()
+    expect(text.querySelector('strong')?.textContent).toBe('Rôle')
+    expect(screen.getByTestId('agent-instructions-frame').textContent?.startsWith('Consigne écrite par une personne')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     expect(onEdit).toHaveBeenCalled()
   })
@@ -70,5 +73,18 @@ describe('an agent\'s readable sheet (lot 3)', () => {
     expect(screen.getByTestId('agent-instructions').textContent).toContain('Ligne 14')
     fireEvent.click(screen.getByRole('button', { name: 'Replier' }))
     expect(screen.getByTestId('agent-instructions').textContent).not.toContain('Ligne 11')
+  })
+})
+
+describe('who wrote the instructions, and the author\'s name (#67)', () => {
+  it('an agent that proposed it is named by its handle', () => {
+    const proposer = agent({ id: 'agt_9', handle: 'assistant', name: 'Assistant' })
+    render(<TeamAgentSheet agent={agent({ createdBy: 'agt_9' })} agents={[proposer]} channels={channels} onClose={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('agent-instructions-frame').textContent?.startsWith('Consigne écrite par @assistant')).toBe(true)
+  })
+
+  it('the author\'s name is read from the team\'s own entries only', () => {
+    render(<TeamAgentSheet agent={agent({ createdBy: 'constructor@datanalysis.re' })} channels={channels} names={{}} onClose={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('agent-sheet').textContent).toContain('par constructor,')
   })
 })

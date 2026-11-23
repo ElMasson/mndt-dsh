@@ -458,6 +458,10 @@ export const TEAM_CSS = `
 .mw-agent-sheet-title { margin: 0; font-size: 18px; font-weight: 600; }
 .mw-agent-sheet-actions { display: flex; gap: 8px; }
 .mw-agent-retired { margin: 4px 0 0; color: var(--mw-warning, #8A4B00); font-size: 13px; }
+.mw-quoted { border: 1px solid var(--mw-line); border-left: 3px solid var(--mw-slate); border-radius: 0 12px 12px 0; background: var(--mw-surface); }
+.mw-quoted-head { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--mw-line); color: var(--mw-slate); font-size: 12px; font-weight: 500; }
+.mw-quoted .mw-agent-text { padding: 8px 12px; }
+.mw-agent-text .md-heading { margin: 8px 0 2px; }
 .mw-agent-sheet-instructions { display: flex; flex-direction: column; gap: 6px; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }

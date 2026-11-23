@@ -12,6 +12,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import { euros, when } from './format.ts'
 import { renderBrief } from './markdown.tsx'
 import { modelLabel } from './TeamAgentForm.tsx'
+import { shownName } from './TeamFeed.tsx'
 
 /** Beyond this many lines the instructions are folded. */
 const FOLD_LINES = 10
@@ -19,6 +20,8 @@ const FOLD_LINES = 10
 /** What the sheet reads. */
 export interface TeamAgentSheetProps {
   readonly agent: ChatAgent
+  /** Every agent, to say when the instructions were written by one (a proposed agent). */
+  readonly agents?: readonly ChatAgent[] | undefined
   /** The channels the reader sees: the agent's are those that list it. */
   readonly channels: readonly ChatChannel[]
   /** The connectors mounted; undefined while unknown (no « non branché » is said then). */
@@ -41,7 +44,9 @@ export function TeamAgentSheet(props: TeamAgentSheetProps): ReactNode {
   const lines = instructions.split('\n')
   const folded = lines.length > FOLD_LINES && !unfolded
   const shown = folded ? lines.slice(0, FOLD_LINES).join('\n') : instructions
-  const author = props.names?.[a.createdBy.toLowerCase()] ?? a.createdBy
+  const author = shownName(a.createdBy, props.names)
+  // Who wrote the instructions: an agent (a proposed agent), by its handle; otherwise a person.
+  const writer = props.agents?.find(other => other.id === a.createdBy || other.handle === a.createdBy)
   const retired = a.retiredAt !== undefined
   return (
     <article className="mw-agent-sheet" data-testid="agent-sheet" aria-label={a.name}>
@@ -88,7 +93,11 @@ export function TeamAgentSheet(props: TeamAgentSheetProps): ReactNode {
         <h3 className="mw-ctx-title">{t('agentPurpose')}</h3>
         {instructions === '' ? <p className="mw-ctx-muted" data-testid="agent-no-instructions">{t('sheetNoInstructions')}</p> : (
           <>
-            <div className="mw-agent-text" data-testid="agent-instructions">{renderBrief(shown)}</div>
+            {/* A marked frame with a fixed header: the instructions cannot pass for a part of the sheet. */}
+            <div className="mw-quoted" data-testid="agent-instructions-frame">
+              <p className="mw-quoted-head">{writer === undefined ? t('sheetWrittenByPerson') : t('sheetWrittenByAgent', { handle: writer.handle })}</p>
+              <div className="mw-agent-text" data-testid="agent-instructions">{renderBrief(shown, { plainHeadings: true })}</div>
+            </div>
             {lines.length <= FOLD_LINES ? undefined : (
               <button type="button" className="mw-ctx-link" onClick={() => { setUnfolded(open => !open) }}>
                 {folded ? t('sheetUnfold', { n: lines.length }) : t('sheetFold')}
