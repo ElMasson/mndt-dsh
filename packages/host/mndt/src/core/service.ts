@@ -21,6 +21,8 @@ import type {
   BriefSource,
   Channel,
   ChannelContext,
+  HelpRequest,
+  TurnHelp,
   ContextProposal,
   MemoryKind,
   MemoryNote,
@@ -127,6 +129,40 @@ export const MAX_AGENT_NAME = 60
  * members must not file three cards for each of them.
  */
 export const MAX_PENDING_PROPOSALS = 3
+/** An open escalation, as the « À traiter » queue reads it. */
+export interface OpenEscalation {
+  readonly channelId: string
+  readonly turnId: string
+  /** The mentioning message of the turn that asked. */
+  readonly messageId: string
+  /** The asker's message that publishes the question: a reply to it answers. */
+  readonly questionMessageId?: string
+  readonly question: string
+  readonly summary: string
+  readonly at: string
+}
+
+/** The peers of one help request, at most. */
+export const MAX_HELP_PEERS = 2
+/** The help requests of one thread, at most: beyond, the asker puts its question to the people. */
+export const MAX_HELPS_PER_THREAD = 2
+/** What one help request may cost, advices and reading together, in euros (v1: a constant). */
+export const HELP_CAP_EUR = 0.2
+
+/** Why a help request is refused, by a code the agent and the screen read. */
+export type HelpRefusalCode =
+  | 'missing-fields' | 'not-running' | 'already-asked' | 'coordinated-channel'
+  | 'no-peer' | 'too-many-peers' | 'self' | 'thread-limit' | 'pair-already-asked'
+/** A refused help request. */
+export class HelpRefusal extends Error {
+  readonly code: HelpRefusalCode
+  constructor(code: HelpRefusalCode, message: string) {
+    super(message)
+    this.name = 'HelpRefusal'
+    this.code = code
+  }
+}
+
 /** The longest context of a channel, in characters once trimmed: it enters every turn of the channel. */
 export const MAX_CONTEXT_CHARS = 4000
 
@@ -1236,6 +1272,132 @@ export class WorkbenchService {
         value: next,
       }
     })
+  }
+
+  /**
+   * Record a help request on the running turn of its agent (ask_peers). It
+   * runs nothing: the turn's host script asks the peers once the agent ends.
+   * The peers are active agents of the channel, not the asker, two at most;
+   * one request per turn, two per thread, a pair asked once per thread; never
+   * in a coordinated channel (a turn there is already a host script).
+   * @param messageId - the mentioning message of the turn.
+   * @param turnId - the running turn.
+   * @param askerId - its agent.
+   * @param request - the request, its fields checked.
+   * @param peerIds - the peers the agent chose.
+   * @returns the help recorded.
+   */
+  askPeers(messageId: string, turnId: string, askerId: string, request: HelpRequest, peerIds: readonly string[]): Promise<TurnHelp> {
+    const text = (value: unknown): boolean => typeof value === 'string' && value.trim() !== ''
+    if (!text(request.task) || !text(request.tried) || !text(request.blocker)
+      || !Array.isArray(request.options) || request.options.length === 0 || !request.options.every(text)
+      || !['fact', 'opinion', 'check', 'choice'].includes(request.need)) {
+      return Promise.reject(new HelpRefusal('missing-fields', 'a help request needs task, tried, blocker, options (one at least) and need (fact, opinion, check or choice)'))
+    }
+    const peers = [...new Set(peerIds)]
+    if (peers.length === 0) return Promise.reject(new HelpRefusal('no-peer', 'name one or two peers among the agents of this channel'))
+    if (peers.length > MAX_HELP_PEERS) return Promise.reject(new HelpRefusal('too-many-peers', `${MAX_HELP_PEERS} peers at most`))
+    if (peers.includes(askerId)) return Promise.reject(new HelpRefusal('self', 'an agent does not ask itself'))
+    return this.#write((state) => {
+      const messages = state.messages ?? []
+      const message = messages.find(candidate => candidate.id === messageId)
+      const turn = message?.turns?.find(candidate => candidate.id === turnId)
+      if (message === undefined || turn === undefined || turn.agentId !== askerId || turn.status !== 'running') {
+        throw new HelpRefusal('not-running', 'a help is asked during the asking agent\'s own turn')
+      }
+      if (turn.help !== undefined) throw new HelpRefusal('already-asked', 'one help request per turn')
+      const channel = (state.channels ?? []).find(candidate => candidate.id === message.channelId)
+      if (channel === undefined) throw new Error(`no channel ${message.channelId}`)
+      if (channel.coordination !== undefined) throw new HelpRefusal('coordinated-channel', 'this channel\'s turns are coordinated: no help request inside them')
+      const active = (agentId: string): boolean =>
+        (state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
+      const unknown = peers.filter(peer => !active(peer))
+      if (unknown.length > 0) throw new HelpRefusal('no-peer', `not an active agent of this channel: ${unknown.join(', ')}`)
+      // The thread: the message's root, and every message under it.
+      const rootOf = (id: string): string => {
+        let current = messages.find(candidate => candidate.id === id)
+        for (let depth = 0; current?.replyTo !== undefined && depth < 20; depth += 1) {
+          const parent = messages.find(candidate => candidate.id === current?.replyTo)
+          if (parent === undefined) break
+          current = parent
+        }
+        return current?.id ?? id
+      }
+      const root = rootOf(message.id)
+      const helps = messages.filter(candidate => rootOf(candidate.id) === root)
+        .flatMap(candidate => (candidate.turns ?? []).flatMap(t => (t.help === undefined ? [] : [{ asker: t.agentId, help: t.help }])))
+      if (helps.length >= MAX_HELPS_PER_THREAD) {
+        throw new HelpRefusal('thread-limit', `${MAX_HELPS_PER_THREAD} help requests already in this thread: put your question to the people of the channel`)
+      }
+      const asked = peers.filter(peer => helps.some(previous => previous.asker === askerId && previous.help.peerIds.includes(peer)))
+      if (asked.length > 0) throw new HelpRefusal('pair-already-asked', `already asked in this thread: ${asked.join(', ')}`)
+      const help: TurnHelp = { state: 'asked', request: { ...request, options: [...request.options] }, peerIds: peers, advices: [], capEur: HELP_CAP_EUR, skipped: [], askedAt: this.#at() }
+      const updated = { ...message, turns: (message.turns ?? []).map(t => (t.id === turnId ? { ...t, help } : t)), updatedAt: this.#at() }
+      return {
+        state: { ...state, messages: messages.map(candidate => (candidate.id === messageId ? updated : candidate)) },
+        event: { at: help.askedAt, actor: 'mndt', action: 'turn.help-asked', subject: turnId, detail: `${peers.length} peer(s), need ${request.need}` },
+        value: help,
+      }
+    })
+  }
+
+  /**
+   * A person's reply to an agent's escalated question: answered, and the asker
+   * gets a turn on that reply (it has the hand again).
+   * @param reply - the person's message, replying to the agent's question.
+   * @param actor - its author, a member who may write.
+   * @returns the reply with the asker's turn, or undefined when it answers no open escalation.
+   */
+  async answerEscalation(reply: Message, actor: string): Promise<Message | undefined> {
+    // Most replies answer no escalation: read first, write only when one does.
+    const seen = await this.snapshot()
+    const target = (seen.messages ?? []).find(candidate => candidate.id === reply.replyTo)
+    if (target === undefined || target.author.kind !== 'agent') return undefined
+    return this.#write((state) => {
+      const messages = state.messages ?? []
+      const question = messages.find(candidate => candidate.id === reply.replyTo)
+      if (question === undefined || question.author.kind !== 'agent') return { state, event: [], value: undefined }
+      const askerId = question.author.agentId
+      const origin = messages.find(candidate => candidate.id === question.replyTo)
+      // The escalation this reply answers: the one its question message names
+      // (or, for a help recorded before messageId existed, the asker's open one).
+      const turn = origin?.turns?.find(t => t.agentId === askerId && t.help?.escalation !== undefined
+        && t.help.escalation.answeredAt === undefined && (t.help.escalation.messageId ?? question.id) === question.id)
+      if (origin === undefined || turn?.help?.escalation === undefined) return { state, event: [], value: undefined }
+      const at = this.#at()
+      const answered = { ...turn, help: { ...turn.help, escalation: { ...turn.help.escalation, answeredAt: at, answeredBy: actor } } }
+      const nextOrigin = { ...origin, turns: (origin.turns ?? []).map(t => (t.id === turn.id ? answered : t)), updatedAt: at }
+      const current = messages.find(candidate => candidate.id === reply.id) ?? reply
+      const relaunched = (current.turns ?? []).some(t => t.agentId === askerId)
+        ? current
+        : { ...current, turns: [...(current.turns ?? []), { id: this.#id('trn'), agentId: askerId, status: 'queued' as const }], updatedAt: at }
+      return {
+        state: {
+          ...state,
+          messages: messages.map(candidate => (candidate.id === origin.id
+            ? nextOrigin
+            : candidate.id === reply.id ? relaunched : candidate)),
+        },
+        event: { at, actor, action: 'turn.help-answered', subject: turn.id, detail: reply.id },
+        value: relaunched,
+      }
+    })
+  }
+
+  /**
+   * @param identity - who asks.
+   * @returns the open escalations of the channels this person is a member of.
+   */
+  async openEscalations(identity: string): Promise<OpenEscalation[]> {
+    const state = await this.snapshot()
+    const mine = new Set((state.channels ?? []).filter(channel => channel.members.includes(identity)).map(channel => channel.id))
+    return (state.messages ?? []).filter(message => mine.has(message.channelId)).flatMap(message => (message.turns ?? [])
+      .filter(turn => turn.help?.escalation !== undefined && turn.help.escalation.answeredAt === undefined)
+      .map(turn => ({
+        channelId: message.channelId, turnId: turn.id, messageId: message.id,
+        ...(turn.help?.escalation?.messageId === undefined ? {} : { questionMessageId: turn.help.escalation.messageId }),
+        question: turn.help?.escalation?.question ?? '', summary: turn.help?.escalation?.summary ?? '', at: turn.help?.escalation?.at ?? '',
+      })))
   }
 
   /**

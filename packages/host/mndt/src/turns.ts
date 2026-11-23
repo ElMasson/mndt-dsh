@@ -17,6 +17,7 @@ import type {
   Mission,
   ParallelSynthesis,
   Turn,
+  TurnHelp,
   TurnStep,
   WorkbenchService,
   WorkerPart,
@@ -24,6 +25,9 @@ import type {
 import {
   ceilingRefusal,
   eurOf,
+  helpPeerPrompt,
+  helpReadingPrompt,
+  parseHelpReading,
   parseVerdict,
   priceOf,
   revisionPrompt,
@@ -338,6 +342,169 @@ export class TurnScheduler {
     }
   }
 
+  /**
+   * The help an agent asked its peers during its turn (ask_peers), run by the
+   * host once the agent ended: each peer answers alone, with NO tool, from its
+   * own framing, the channel's context and the request (never the discussion
+   * nor the other advice); the asker then reads the advices without their
+   * authors, with its usual tools, and closes on a verdict. A second round, on
+   * a fact still disputed, at most. Everything counts for the asker, under the
+   * help's own cost bound, reserved before each call. A person who answers in
+   * the thread meanwhile ends it there.
+   * @param input - the turn, its asker, and the recorded help.
+   * @returns the text to publish and what the help cost.
+   */
+  async #help(input: {
+    readonly messageId: string
+    readonly turnId: string
+    readonly asker: Agent
+    readonly channel: Channel
+    readonly prompt: string
+    readonly first: string
+    readonly agents: readonly Agent[]
+    readonly asked: TurnHelp
+    readonly signal: AbortSignal
+    readonly call: (
+      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
+    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+  }): Promise<{ text: string; eur: number }> {
+    const { messageId, turnId, asker, channel, prompt, first, agents, asked, signal, call } = input
+    const { service, prices } = this.#options
+    let help: TurnHelp = { ...asked, state: 'advising' }
+    let other = 0
+    const save = async (): Promise<void> => { await service.updateTurn(messageId, turnId, { help }) }
+    const spent = (): number => help.advices.reduce((total, advice) => total + (advice.eur ?? 0), 0) + other
+    const overCap = (who: Agent, text: string): string | undefined => {
+      const price = priceOf(prices, who)
+      const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
+      return spent() + reserved > help.capEur ? `le coût de l’entraide atteindrait sa borne (${help.capEur} €)` : undefined
+    }
+    // Every call of the help is the asker's: its own ceiling, with what the help already spent.
+    const askerCeiling = async (): Promise<string | undefined> =>
+      ceilingRefusal(asker, prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
+    const closedBy = async (): Promise<{ by: string; at: string } | undefined> => {
+      const reply = ((await service.snapshot()).messages ?? []).find(candidate =>
+        candidate.channelId === channel.id && candidate.replyTo === messageId && candidate.author.kind === 'human'
+        && candidate.deletedAt === undefined && candidate.createdAt >= help.askedAt)
+      return reply?.author.kind === 'human' ? { by: reply.author.email, at: reply.createdAt } : undefined
+    }
+    const stopped = (error: unknown): boolean => signal.aborted || (error instanceof Error && error.message === 'turn stopped')
+    // The slots, in an order drawn here: A is not « the first one named ».
+    const named = randomUUID().charCodeAt(0) % 2 === 0 ? [...help.peerIds] : [...help.peerIds].reverse()
+    const slots = named.map((peerId, index) => ({ slot: (index === 0 ? 'A' : 'B') as 'A' | 'B', peerId }))
+    const close = async (by: { by: string; at: string }): Promise<{ text: string; eur: number }> => {
+      help = { ...help, state: 'done', closedBy: by, eur: spent() }
+      await save()
+      return { text: `${first}\n\nEntraide close : ${by.by} a répondu dans le fil.`, eur: spent() }
+    }
+    /** One round of advices. @returns a person who closed the help meanwhile, if any. */
+    const round = async (index: 1 | 2, disputed?: string): Promise<{ by: string; at: string } | undefined> => {
+      await save()
+      for (const { slot, peerId } of slots) {
+        const by = await closedBy()
+        if (by !== undefined) return by
+        const peer = agents.find(candidate =>
+          candidate.id === peerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
+        if (peer === undefined) {
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal' }] }
+          continue
+        }
+        const text = helpPeerPrompt(peer, channel, help.request, disputed)
+        const why = await askerCeiling() ?? overCap(peer, text)
+        if (why !== undefined) {
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why }] }
+          continue
+        }
+        try {
+          const answered = await call(peer, `h${index}${slot.toLowerCase()}`, text, 'none', help.capEur - spent())
+          const said = answered.output.text.trim()
+          if (said === '') {
+            other += answered.eur ?? 0
+            help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'aucun texte' }] }
+          } else {
+            help = {
+              ...help,
+              advices: [...help.advices, {
+                slot, round: index, text: said, agentId: peer.id, model: `${peer.provider}/${peer.model}`,
+                ...(answered.eur === undefined ? {} : { eur: answered.eur }),
+                ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
+              }],
+            }
+          }
+        } catch (error) {
+          if (stopped(error)) {
+            help = { ...help, state: 'done', skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'tour arrêté' }], eur: spent() }
+            await save()
+            throw error
+          }
+          const price = priceOf(prices, peer)
+          if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
+          const reason = error instanceof Error ? error.message : String(error)
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason }] }
+        }
+        await save()
+      }
+      return undefined
+    }
+    const escalate = async (question: string, body: string, disputed?: string): Promise<{ text: string; eur: number }> => {
+      const reasons = help.skipped.map(skip => skip.reason)
+      const summary = [
+        `Blocage : ${help.request.blocker}.`,
+        `Avis reçus : ${help.advices.length}.`,
+        ...(reasons.length === 0 ? [] : [`Sans avis : ${reasons.join(' ; ')}.`]),
+        ...(disputed === undefined ? [] : [`Désaccord restant : ${disputed}.`]),
+      ].join(' ')
+      help = { ...help, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
+      await save()
+      return { text: `${body}\n\nQuestion à l’équipe : ${question}`, eur: spent() }
+    }
+    const firstClose = await round(1)
+    if (firstClose !== undefined) return close(firstClose)
+    if (help.advices.length === 0) return escalate(help.request.blocker, `${first}\n\nAucun avis n’a abouti.`)
+    /** The asker's reading of the advices so far. */
+    const read = async (index: 1 | 2): Promise<ReturnType<typeof parseHelpReading> | { refused: string }> => {
+      help = { ...help, state: 'reading' }
+      await save()
+      const text = helpReadingPrompt(prompt, help.request, help.advices,
+        index === 1 && help.request.need === 'fact' && help.advices.length === 2)
+      const why = await askerCeiling() ?? overCap(asker, text)
+      if (why !== undefined) return { refused: why }
+      try {
+        const read = await call(asker, `hr${index}`, text, 'all', help.capEur - spent())
+        other += read.eur ?? 0
+        return parseHelpReading(read.output.text)
+      } catch (error) {
+        if (stopped(error)) throw error
+        const price = priceOf(prices, asker)
+        if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
+        return { refused: error instanceof Error ? error.message : String(error) }
+      }
+    }
+    let parsed = await read(1)
+    if ('refused' in parsed) return escalate(help.request.blocker, `${first}\n\nLecture des avis impossible : ${parsed.refused}.`)
+    if (parsed.disputed !== undefined && help.request.need === 'fact' && help.advices.length === 2) {
+      const disputed = parsed.disputed
+      const secondClose = await round(2, disputed)
+      if (secondClose !== undefined) return close(secondClose)
+      const again = await read(2)
+      if ('refused' in again) return escalate(help.request.blocker, parsed.body, disputed)
+      parsed = again
+    }
+    let reading = parsed.reading
+    // « card » is checked, never taken on trust: a card of this asker, in this
+    // thread, since the help was asked.
+    if (reading.verdict === 'card') {
+      const filed = (await service.snapshot()).approvals.some(card =>
+        card.messageId === messageId && card.requestedByAgent?.id === asker.id && card.requestedAt >= help.askedAt)
+      if (!filed) reading = { ...reading, verdict: 'escalate', why: `${reading.why} (aucune carte posée)`.trim() }
+    }
+    help = { ...help, reading }
+    if (reading.verdict === 'escalate') return escalate(parsed.question ?? help.request.blocker, parsed.body, parsed.disputed)
+    help = { ...help, state: 'done', eur: spent() }
+    await save()
+    return { text: parsed.body, eur: spent() }
+  }
+
   /** @returns once every queued turn has settled (for tests and shutdown). */
   async settled(): Promise<void> {
     while (this.#pending.size > 0) await Promise.all([...this.#pending])
@@ -486,6 +653,17 @@ export class TurnScheduler {
       // at most three calls, each step priced for its own agent and bounded by
       // its own ceiling. A check that cannot happen says why; the draft goes out.
       let output = first.output
+      let helpEur: number | undefined
+      // A help the agent asked its peers during this call (ask_peers): run now, by the host.
+      const asked = parallel === undefined ? (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help : undefined
+      if (asked?.state === 'asked') {
+        const helped = await this.#help({
+          messageId, turnId: turn.id, asker: agent, channel, prompt, first: first.output.text.trim(), agents, asked,
+          signal: controller.signal, call,
+        })
+        output = { ...first.output, text: helped.text }
+        helpEur = helped.eur
+      }
       let steps: TurnStep[] | undefined = parallel === undefined ? undefined : parallelSteps
       const coordination = channel.coordination
       if (coordination?.mode === 'author-verifier' && coordination.authorId === agent.id) {
@@ -544,7 +722,9 @@ export class TurnScheduler {
         await cancel(after.reason ?? 'Tour arrêté.')
         return
       }
-      const eur = steps === undefined ? first.eur : sumEur(steps)
+      const eur = steps === undefined
+        ? (helpEur === undefined ? first.eur : (first.eur ?? 0) + helpEur)
+        : sumEur(steps)
       const tokens = steps === undefined ? output.tokens : sumTokens(steps)
       // A check that did not happen, or could not be read, is said in the text itself.
       const unchecked = steps?.find(step => step.role === 'verifier' && (step.verdict === 'skipped' || step.verdict === 'unreadable'))
@@ -558,12 +738,18 @@ export class TurnScheduler {
           : uncorrected !== undefined
             ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
             : output.text
-      await service.reply(
+      const answer = await service.reply(
         channel.id,
         messageId,
         { kind: 'agent', agentId: agent.id },
         published,
       )
+      // An escalated question names the message that publishes it: a person answers it there.
+      const escalated = (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help
+      if (escalated?.escalation !== undefined) {
+        const escalation = { ...escalated.escalation, messageId: answer.id }
+        await service.updateTurn(messageId, turn.id, { help: { ...escalated, escalation } })
+      }
       await service.updateTurn(messageId, turn.id, {
         status: 'done',
         finishedAt: new Date().toISOString(),

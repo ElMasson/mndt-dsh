@@ -1,0 +1,264 @@
+import { describe, expect, it } from 'vitest'
+import { MemoryStore, spentThisMonth, WorkbenchService } from '../src/core/index.ts'
+import type { Message, PriceGrid, Turn } from '../src/core/index.ts'
+import { createMndtApi } from '../src/api.ts'
+import type { MissionRunner } from '../src/api.ts'
+import { TurnScheduler } from '../src/turns.ts'
+import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
+
+const owner = 'duke@datanalysis.re'
+const operator = 'operateur@datanalysis.re'
+const admin = 'jadmin@datanalysis.re'
+const PRICES: PriceGrid = { 'route-a/*': { input: 1, output: 2 }, 'route-b/*': { input: 3, output: 4 } }
+const noMissions: MissionRunner = { run: async () => ({ title: 't', markdown: 'm', sources: [] }) }
+type Call = (
+  method: string, path: string, who: string, body?: unknown, headers?: Record<string, string>,
+) => Promise<{ status: number; body: Record<string, unknown> }>
+
+/**
+ * The asker's first call asks for help through the API, as the approvals
+ * connector does (x-mndt-run); peers answer « avis de <handle> »; the reading
+ * answers what `reading` says.
+ */
+class HelpEngine implements TurnEngine {
+  readonly seen: TurnInput[] = []
+  call?: Call
+  helpBody: Record<string, unknown> = {}
+  helpAnswer?: { status: number; body: Record<string, unknown> }
+  reading = 'Je retiens l’avis A : le montant est HT.\n{"retained": "A", "why": "il cite la facture", "verdict": "unblocked"}'
+  tokens = { input: 1000, output: 100 }
+  before?: (input: TurnInput) => Promise<void> | void
+  async run(input: TurnInput): Promise<TurnOutput> {
+    this.seen.push(input)
+    await this.before?.(input)
+    if (input.turnId === input.runId && input.agent.handle === 'alpha' && this.call !== undefined) {
+      this.helpAnswer = await this.call('POST', '/help', 'owner', this.helpBody, { 'x-mndt-run': input.runId })
+      return { text: 'J’ai demandé l’avis de deux agents.', tokens: this.tokens }
+    }
+    if (/-hr\d$/.test(input.turnId)) return { text: this.reading, tokens: this.tokens }
+    if (/-h\d[ab]$/.test(input.turnId)) return { text: `avis de ${input.agent.handle}`, tokens: this.tokens }
+    return { text: `réponse de ${input.agent.handle}`, tokens: this.tokens }
+  }
+}
+
+function bench() {
+  const service = new WorkbenchService({ store: new MemoryStore() })
+  const engine = new HelpEngine()
+  const turns = new TurnScheduler({ service, engine, prices: PRICES, dataDir: '/data/mndt' })
+  const api = createMndtApi({
+    service, runner: noMissions, turns,
+    identity: { tokens: { owner: { user: owner }, operator: { user: operator }, admin: { user: admin } } },
+    grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }, { subject: operator, role: 'operator' }, { subject: admin, role: 'admin' }] }) },
+  })
+  const call: Call = async (method, path, who, body, headers) => {
+    const answer = await api({
+      method, path, authorization: `Bearer ${who}`,
+      ...(headers === undefined ? {} : { headers }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    return { status: answer.status, body: answer.body as Record<string, unknown> }
+  }
+  engine.call = call
+  return { service, engine, turns, call }
+}
+
+/** @returns a channel of three agents: alpha asks, beta and gamma (another model) advise. */
+async function team(b: ReturnType<typeof bench>) {
+  const agent = async (handle: string, provider: string) =>
+    ((await b.call('POST', '/agents', 'owner', { handle, name: handle, provider, model: 'm', eurPerMonth: 5 })).body.agent as { id: string }).id
+  const alpha = await agent('alpha', 'route-a')
+  const beta = await agent('beta', 'route-b')
+  const gamma = await agent('gamma', 'route-b')
+  const outsider = await agent('dehors', 'route-a')
+  const channel = ((await b.call('POST', '/channels', 'owner', { name: 'compta', agents: [alpha, beta, gamma], members: [operator] })).body.channel as { id: string }).id
+  const request = { task: 'Le point du trimestre', tried: 'La facture 42', blocker: 'HT ou TTC ?', options: ['HT', 'TTC'], need: 'fact', peers: [beta, gamma] }
+  b.engine.helpBody = request
+  return { alpha, beta, gamma, outsider, channel, request }
+}
+
+async function ask(b: ReturnType<typeof bench>, channel: string, text: string, who = 'owner') {
+  const posted = await b.call('POST', `/channels/${channel}/messages`, who, { text })
+  await b.turns.settled()
+  const messages = (await b.service.messages(channel)) as readonly Message[]
+  const asked = messages.find(m => m.id === (posted.body.message as { id: string }).id)
+  return { asked, turn: asked?.turns?.[0] as Turn, replies: messages.filter(m => m.author.kind === 'agent' && m.replyTo === asked?.id) }
+}
+
+describe('ask_peers: two peers, alone and without tools, then the asker reads them without their names', () => {
+  it('unblocks: the advices, the reading, the published answer, and the cost on the asker only', async () => {
+    const b = bench()
+    const t = await team(b)
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point HT ou TTC ? (fil secret 7731)')
+    expect(b.engine.helpAnswer?.status).toBe(201)
+    expect(turn.status).toBe('done')
+    expect(turn.help?.state).toBe('done')
+    expect(turn.help?.reading).toEqual({ retained: 'A', why: 'il cite la facture', verdict: 'unblocked' })
+    expect(turn.help?.advices.map(advice => advice.slot).sort()).toEqual(['A', 'B'])
+    // After the reading, each advice names its agent and its model.
+    expect(turn.help?.advices.every(advice => advice.agentId !== undefined && advice.model === 'route-b/m')).toBe(true)
+    expect(replies.at(-1)?.text).toBe('Je retiens l’avis A : le montant est HT.')
+    // Peers: no tool, no server, no discussion of the channel, not the other advice.
+    const peers = b.engine.seen.filter(input => /-h1[ab]$/.test(input.turnId))
+    expect(peers).toHaveLength(2)
+    expect(peers.every(input => input.servers.length === 0 && input.tools === 'none')).toBe(true)
+    expect(peers.every(input => !input.prompt.includes('fil secret 7731') && !input.prompt.includes('avis de'))).toBe(true)
+    expect(peers.every(input => input.prompt.includes('Blocage : HT ou TTC ?'))).toBe(true)
+    // The reading: anonymous advices, the asker's usual tools.
+    const reading = b.engine.seen.find(input => input.turnId.endsWith('-hr1'))
+    expect(reading?.prompt).toContain('Avis A')
+    // The advice blocks carry no author (the channel's agents are named elsewhere, to choose from).
+    const blocks = [...(reading?.prompt ?? '').matchAll(/Avis [AB] \[[^\]]+\] :\n([\s\S]*?)\nFin de l'avis/g)].map(m => m[1])
+    expect(blocks).toHaveLength(2)
+    expect(blocks.every(block => !/@|agt_/.test(block ?? ''))).toBe(true)
+    expect(reading?.tools).toBeUndefined()
+    // Five calls (ask, two peers, reading): all counted for alpha, nothing for its peers.
+    const all = (await b.service.snapshot()).messages ?? []
+    const now = new Date().toISOString()
+    expect(spentThisMonth(all, t.beta, now)).toBe(0)
+    expect(spentThisMonth(all, t.alpha, now)).toBeCloseTo(turn.eur ?? 0, 6)
+    expect(turn.help?.eur).toBeGreaterThan(0)
+    expect(turn.eur).toBeGreaterThan(turn.help?.eur ?? 0)
+  })
+
+  it('serves the advices without their authors while the asker has not read them', async () => {
+    const b = bench()
+    const t = await team(b)
+    let served: Turn | undefined
+    b.engine.before = async (input) => {
+      if (!input.turnId.endsWith('-hr1')) return
+      const page = await b.call('GET', `/channels/${t.channel}/messages`, 'operator')
+      served = ((page.body.messages as Message[]).find(m => m.turns?.[0]?.help !== undefined))?.turns?.[0]
+    }
+    await ask(b, t.channel, '@alpha le point ?')
+    expect(served?.help?.state).toBe('reading')
+    expect(served?.help?.advices).toHaveLength(2)
+    expect(served?.help?.peerIds).toEqual([])
+    expect(served?.help?.advices.every(advice => advice.agentId === undefined && advice.model === undefined)).toBe(true)
+    expect(JSON.stringify(served)).not.toContain(t.beta)
+  })
+})
+
+describe('ask_peers: what the core refuses', () => {
+  it('a missing field, the asker itself, a non-member, three peers, a second request in the same turn', async () => {
+    const b = bench()
+    const t = await team(b)
+    const tries: Record<string, unknown>[] = [
+      { ...t.request, blocker: '' },
+      { ...t.request, need: 'vote' },
+      { ...t.request, peers: [t.alpha] },
+      { ...t.request, peers: [t.outsider] },
+      { ...t.request, peers: [t.beta, t.gamma, t.outsider] },
+    ]
+    const codes: unknown[] = []
+    for (const body of tries) {
+      b.engine.helpBody = body
+      const { turn } = await ask(b, t.channel, '@alpha le point ?')
+      codes.push(b.engine.helpAnswer?.body.code)
+      expect(turn.help).toBeUndefined()
+    }
+    expect(codes).toEqual(['missing-fields', 'missing-fields', 'self', 'no-peer', 'too-many-peers'])
+  })
+
+  it('outside a turn: 400 not-running', async () => {
+    const b = bench()
+    const t = await team(b)
+    expect((await b.call('POST', '/help', 'owner', t.request, { 'x-mndt-run': 'trn_none' })).body.code).toBe('not-running')
+  })
+
+  it('not in a coordinated channel', async () => {
+    const b = bench()
+    const t = await team(b)
+    await b.call('POST', `/channels/${t.channel}/coordination`, 'owner', { mode: 'author-verifier', author: t.beta, verifier: t.alpha })
+    await ask(b, t.channel, '@alpha le point ?')
+    expect(b.engine.helpAnswer?.body.code).toBe('coordinated-channel')
+  })
+})
+
+describe('ask_peers: escalation, answered by a member', () => {
+  it('a question to the people: listed for the channel\'s members only, answered by a reply, the asker relaunched', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "La facture 42 est-elle HT ?"}'
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(turn.help?.escalation).toMatchObject({ question: 'La facture 42 est-elle HT ?' })
+    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ?.')
+    const question = replies.at(-1) as Message
+    expect(question.text).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
+    const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { turnId: string; question: string }[]
+    expect(turn.help?.escalation?.messageId).toBe(question.id)
+    expect(listed).toEqual([expect.objectContaining({
+      turnId: turn.id, question: 'La facture 42 est-elle HT ?', channelId: t.channel, messageId: question.replyTo, questionMessageId: question.id,
+    })])
+    // An admin who is not a member sees nothing.
+    expect((await b.call('GET', '/escalations', 'admin')).body.escalations).toEqual([])
+    // A member's reply answers it and gives alpha a turn on that reply.
+    b.engine.helpBody = {}
+    const reply = await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'Oui, HT.', replyTo: question.id })
+    await b.turns.settled()
+    const answered = (await b.service.message(turn.id === '' ? '' : (question.replyTo as string)))?.turns?.[0]
+    expect(answered?.help?.escalation).toMatchObject({ answeredBy: operator })
+    const relaunched = (await b.service.message((reply.body.message as { id: string }).id))?.turns ?? []
+    expect(relaunched.map(r => r.agentId)).toEqual([t.alpha])
+    expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+  })
+
+  it('« card » without a card is an escalation', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Il faut valider.\n{"retained": "B", "why": "il faut une validation", "verdict": "card"}'
+    const { turn } = await ask(b, t.channel, '@alpha le point ?')
+    expect(turn.help?.reading?.verdict).toBe('escalate')
+    expect(turn.help?.reading?.why).toContain('aucune carte posée')
+  })
+
+  it('an unreadable verdict is an escalation, never a guess', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Je pense que c’est HT.'
+    const { turn } = await ask(b, t.channel, '@alpha le point ?')
+    expect(turn.help?.reading).toMatchObject({ verdict: 'escalate', why: 'verdict illisible' })
+  })
+})
+
+describe('ask_peers: bounds', () => {
+  it('a person who answers in the thread meanwhile ends the help, without reading', async () => {
+    const b = bench()
+    const t = await team(b)
+    let origin = ''
+    b.engine.before = async (input) => {
+      if (input.turnId === input.runId) origin = (await b.service.snapshot()).messages?.at(-1)?.id ?? ''
+      if (input.turnId.endsWith('-h1a') || input.turnId.endsWith('-h1b')) {
+        if ((await b.service.snapshot()).messages?.some(m => m.replyTo === origin && m.author.kind === 'human')) return
+        await b.service.postMessage(t.channel, operator, 'Je réponds : HT.', origin)
+      }
+    }
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(turn.help?.state).toBe('done')
+    expect(turn.help?.closedBy).toMatchObject({ by: operator })
+    expect(turn.help?.reading).toBeUndefined()
+    expect(turn.help?.advices).toHaveLength(1)
+    expect(replies.at(-1)?.text).toContain('Entraide close')
+  })
+
+  it('the cost bound: a peer that would pass it is skipped with the reason, and no advice escalates', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.tokens = { input: 100_000, output: 0 }
+    const { turn } = await ask(b, t.channel, '@alpha le point ?')
+    // 100 000 tokens at 3 €/M = 0.30 €: the first advice passes the 0.20 € bound.
+    expect(turn.help?.skipped.some(skip => /borne \(0\.2 €\)/.test(skip.reason))).toBe(true)
+    expect(turn.help?.escalation).toBeDefined()
+  })
+
+  it('two requests per thread at most, and a peer asked once per thread by the same asker', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.helpBody = { ...t.request, peers: [t.beta] }
+    const first = await ask(b, t.channel, '@alpha le point ?')
+    const question = first.replies.at(-1) as Message
+    b.engine.helpBody = { ...t.request, peers: [t.beta] }
+    await b.call('POST', `/channels/${t.channel}/messages`, 'owner', { text: '@alpha et maintenant ?', replyTo: question.id })
+    await b.turns.settled()
+    expect(b.engine.helpAnswer?.body.code).toBe('pair-already-asked')
+  })
+})

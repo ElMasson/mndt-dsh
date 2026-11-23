@@ -95,7 +95,7 @@ if (qwen !== undefined && channel !== undefined) {
 // same harness judges every version (three tools before #82, four after). And
 // that list must stay within the card tools this harness knows: a catalog that
 // opened another tool fails, rather than being taken as the expectation.
-const KNOWN_CARD_TOOLS = ['list_pending_approvals', 'propose_agent', 'propose_context', 'read_approval', 'request_approval']
+const KNOWN_CARD_TOOLS = ['ask_peers', 'list_pending_approvals', 'propose_agent', 'propose_context', 'read_approval', 'request_approval']
 const catalogPath = process.env.MNDT_REHEARSAL_CATALOG
 let deployedAllow = []
 try { deployedAllow = JSON.parse(readFileSync(catalogPath ?? '', 'utf8')).approvals?.allow ?? [] } catch { deployedAllow = [] }
