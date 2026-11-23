@@ -15,9 +15,11 @@ import type {
   Channel,
   Message,
   Mission,
+  ParallelSynthesis,
   Turn,
   TurnStep,
   WorkbenchService,
+  WorkerPart,
 } from './core/index.ts'
 import {
   ceilingRefusal,
@@ -26,11 +28,41 @@ import {
   priceOf,
   revisionPrompt,
   spentThisMonth,
+  synthesisPrompt,
   turnPrompt,
   turnServers,
   verifierPrompt,
 } from './core/index.ts'
-import type { PriceGrid } from './core/index.ts'
+import type { ModelPrice, PriceGrid } from './core/index.ts'
+
+/**
+ * The output tokens reserved for one model message when a turn has a cost
+ * bound: a step starts, and a running step goes on to its next message, only
+ * if this much still fits under the bound.
+ */
+export const RESERVED_OUTPUT_TOKENS = 8192
+
+/** @param text - a prompt. @returns a generous estimate of its input tokens. */
+export function estimatedTokens(text: string): number {
+  return Math.ceil(text.length / 3)
+}
+
+/** What a step of a turn may use: everything, nothing, or its connectors without the cards. */
+type StepTools = 'all' | 'none' | 'no-cards'
+
+/** What a worker of « en parallèle puis synthèse » is told of its role. */
+const WORKER_FRAME = 'Dans ce tour, tu rassembles ce qui répond à la demande, pour une synthèse faite ensuite par un autre agent. '
+  + 'Tu ne demandes aucune action et aucune carte : une action se demande ensuite en mentionnant un agent seul.'
+
+/** A step stopped by its cost bound, with what it had already used. */
+export class TurnBudgetReached extends Error {
+  readonly tokens: NonNullable<Mission['tokens']>
+  constructor(tokens: NonNullable<Mission['tokens']>) {
+    super('le coût du tour a atteint sa borne pendant l’appel')
+    this.name = 'TurnBudgetReached'
+    this.tokens = tokens
+  }
+}
 
 /** Everything one turn gives the engine. */
 export interface TurnInput {
@@ -44,8 +76,18 @@ export interface TurnInput {
   readonly cwd: string
   /** The MCP servers the turn may use: the agent's that the channel allows. */
   readonly servers: readonly string[]
-  /** « none »: a step that only reads what it is given (a verifier): no server, no tool. */
-  readonly tools?: 'none'
+  /**
+   * « none »: a step that only reads what it is given (a verifier, a synthesis):
+   * no server, no tool. « no-cards »: its connectors, without the approvals
+   * (a worker of « en parallèle puis synthèse »).
+   */
+  readonly tools?: 'none' | 'no-cards'
+  /**
+   * The most this step may cost, in euros, priced at `price`: the engine stops
+   * before a model message that would not fit (RESERVED_OUTPUT_TOKENS) and
+   * throws TurnBudgetReached.
+   */
+  readonly budget?: { readonly eur: number; readonly price: ModelPrice }
   /**
    * The turn a step belongs to: a card asked during a step is filed in that
    * turn's thread (x-mndt-run), not outside any channel.
@@ -165,6 +207,128 @@ export class TurnScheduler {
     }
   }
 
+  /**
+   * A « en parallèle puis synthèse » turn: each worker in order (one engine at a
+   * time), then the synthesis. Workers keep their connectors but not the cards
+   * (« no-cards »): this mode gathers; an action is asked afterwards of one
+   * agent. Before every call, its largest estimated cost is reserved against
+   * the turn's bound, and the call itself is stopped at that bound, so a turn
+   * costs at most maxEurPerTurn. A worker that cannot run is a skipped step,
+   * named to the synthesis as a missing part. The synthesis reads the parts
+   * as data, with no tool. Without a synthesis, the published text says so and
+   * the parts stay in the steps, for the screen to present under each agent.
+   * @param input - the turn, and the steps array it records into (kept by the
+   * caller, so a stopped or failed turn still counts what it spent).
+   */
+  async #parallel(input: {
+    readonly coordination: ParallelSynthesis
+    readonly synthesizer: Agent
+    readonly channel: Channel
+    readonly message: Message
+    readonly history: readonly Message[]
+    readonly agents: readonly Agent[]
+    readonly steps: TurnStep[]
+    readonly signal: AbortSignal
+    readonly call: (
+      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
+    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+  }): Promise<{ output: TurnOutput; note?: string }> {
+    const { coordination, synthesizer, channel, message, history, agents, steps, signal, call } = input
+    const { service, prices } = this.#options
+    const bound = coordination.maxEurPerTurn
+    const parts: WorkerPart[] = []
+    const missing: string[] = []
+    const spent = (): number => steps.reduce((total, step) => total + (step.eur ?? 0), 0)
+    /** @returns why a call of `who` with `prompt` would not fit under the bound, or undefined. */
+    const overBound = (who: Agent, prompt: string): string | undefined => {
+      const price = priceOf(prices, who)
+      const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(prompt), output: RESERVED_OUTPUT_TOKENS }, price)
+      return spent() + reserved > bound ? `le coût du tour atteindrait sa borne (${bound} €)` : undefined
+    }
+    const stopped = (error: unknown): boolean => signal.aborted || (error instanceof Error && error.message === 'turn stopped')
+    for (const [index, workerId] of coordination.workerIds.entries()) {
+      const worker = agents.find(candidate =>
+        candidate.id === workerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
+      const name = worker === undefined ? workerId : `@${worker.handle}`
+      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents)}\n\n${WORKER_FRAME}`
+      const why = worker === undefined
+        ? 'n’est plus un agent actif de ce canal'
+        : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
+          ?? overBound(worker, prompt)
+      if (worker === undefined || why !== undefined) {
+        steps.push({ role: 'worker', agentId: workerId, verdict: 'skipped', notes: [why ?? 'indisponible'] })
+        missing.push(`${name} (${why ?? 'indisponible'})`)
+        continue
+      }
+      try {
+        const answered = await call(worker, `w${index + 1}`, prompt, 'no-cards', bound - spent())
+        const text = answered.output.text.trim()
+        steps.push({
+          role: 'worker', agentId: worker.id,
+          ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
+          ...(answered.eur === undefined ? {} : { eur: answered.eur }),
+          ...(text === '' ? { verdict: 'skipped' as const, notes: ['aucun texte'] } : { text: answered.output.text }),
+        })
+        if (text === '') missing.push(`${name} (aucun texte)`)
+        else parts.push({ handle: worker.handle, text: answered.output.text })
+      } catch (error) {
+        // A stop is not the worker's failure: the step says the turn was stopped.
+        if (stopped(error)) {
+          steps.push({ role: 'worker', agentId: worker.id, verdict: 'skipped', notes: ['tour arrêté'] })
+          throw error
+        }
+        const reason = error instanceof TurnBudgetReached
+          ? error.message
+          : error instanceof Error ? error.message : String(error)
+        const price = priceOf(prices, worker)
+        steps.push({
+          role: 'worker', agentId: worker.id, verdict: 'skipped', notes: [reason],
+          // A call stopped at the bound still cost what it used.
+          ...(error instanceof TurnBudgetReached
+            ? { tokens: error.tokens, ...(price === undefined ? {} : { eur: eurOf(error.tokens, price) }) }
+            : {}),
+        })
+        missing.push(`${name} (${reason})`)
+      }
+    }
+    if (parts.length === 0) return { output: { text: `Aucune part n’a abouti : ${missing.join(' ; ')}.` } }
+    const asIs = (reason: string): { output: TurnOutput; note: string } => ({
+      output: { text: `Non synthétisé : ${reason}.` },
+      note: `Les parts de ${parts.map(part => `@${part.handle}`).join(', ')} sont dans le détail du tour.`,
+    })
+    const mark = randomUUID().slice(0, 8)
+    const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark)
+    const refusal = ceilingRefusal(synthesizer, prices,
+      spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
+      ?? overBound(synthesizer, prompt)
+    if (refusal !== undefined) {
+      steps.push({ role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [refusal] })
+      return asIs(refusal)
+    }
+    try {
+      const synthesis = await call(synthesizer, 's', prompt, 'none', bound - spent())
+      steps.push({
+        role: 'synthesis', agentId: synthesizer.id,
+        ...(synthesis.output.tokens === undefined ? {} : { tokens: synthesis.output.tokens }),
+        ...(synthesis.eur === undefined ? {} : { eur: synthesis.eur }),
+      })
+      if (synthesis.output.text.trim() === '') return asIs('la synthèse n’a produit aucun texte')
+      return { output: synthesis.output }
+    } catch (error) {
+      if (stopped(error)) {
+        steps.push({ role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: ['tour arrêté'] })
+        throw error
+      }
+      if (!(error instanceof TurnBudgetReached)) throw error
+      const price = priceOf(prices, synthesizer)
+      steps.push({
+        role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [error.message],
+        tokens: error.tokens, ...(price === undefined ? {} : { eur: eurOf(error.tokens, price) }),
+      })
+      return asIs(error.message)
+    }
+  }
+
   /** @returns once every queued turn has settled (for tests and shutdown). */
   async settled(): Promise<void> {
     while (this.#pending.size > 0) await Promise.all([...this.#pending])
@@ -198,11 +362,21 @@ export class TurnScheduler {
    */
   async #run(messageId: string, turn: Turn): Promise<void> {
     const { service, engine, prices, dataDir } = this.#options
+    // The steps of a coordinated turn as they are done: a turn stopped or failed
+    // midway still records them, and what they cost counts on each agent's ceiling.
+    let live: TurnStep[] | undefined
+    const spentSoFar = (): Partial<Pick<Turn, 'steps' | 'eur' | 'tokens'>> => {
+      if (live === undefined || live.length === 0) return {}
+      const eur = sumEur(live)
+      const tokens = sumTokens(live)
+      return { steps: [...live], ...(eur === undefined ? {} : { eur }), ...(tokens === undefined ? {} : { tokens }) }
+    }
     const cancel = async (reason: string): Promise<void> => {
       await service.updateTurn(messageId, turn.id, {
         status: 'cancelled',
         reason,
         finishedAt: new Date().toISOString(),
+        ...spentSoFar(),
       })
     }
     const before = await this.#stale(messageId, turn.agentId)
@@ -262,9 +436,11 @@ export class TurnScheduler {
         who: Agent,
         suffix: string,
         text: string,
-        reading = false,
+        tools: StepTools = 'all',
+        budgetEur?: number,
       ): Promise<{ output: TurnOutput; eur: number | undefined }> => {
         if (controller.signal.aborted) throw new Error('turn stopped')
+        const price = priceOf(prices, who)
         const output = await engine.run({
           turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
           runId: turn.id,
@@ -273,14 +449,27 @@ export class TurnScheduler {
           actor,
           prompt: text,
           cwd: channelFolder(dataDir, channel.id),
-          servers: reading ? [] : turnServers(who, channel),
-          ...(reading ? { tools: 'none' as const } : {}),
+          servers: tools === 'none' ? [] : turnServers(who, channel),
+          ...(tools === 'all' ? {} : { tools }),
+          ...(budgetEur === undefined || price === undefined ? {} : { budget: { eur: budgetEur, price } }),
           signal: controller.signal,
         })
-        const price = priceOf(prices, who)
         return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price) }
       }
-      const first = await call(agent, '', prompt)
+      // « En parallèle puis synthèse »: a turn of the channel's synthesizer has each
+      // worker answer on its own (its own connectors, its own ceiling), then the
+      // synthesizer assembles their parts with NO tool. Bounded: 2 to 4 workers,
+      // workers + 1 calls, and the channel's cost bound for the whole turn.
+      const parallelMode = channel.coordination?.mode === 'parallel-synthesis' && channel.coordination.synthesizerId === agent.id
+        ? channel.coordination
+        : undefined
+      const parallelSteps: TurnStep[] = []
+      if (parallelMode !== undefined) live = parallelSteps
+      const parallel = parallelMode === undefined ? undefined : await this.#parallel({
+        coordination: parallelMode, synthesizer: agent, channel, message, history, agents,
+        steps: parallelSteps, signal: controller.signal, call,
+      })
+      const first = parallel === undefined ? await call(agent, '', prompt) : { output: parallel.output, eur: undefined }
       if (first.output.text.trim() === '')
         throw new Error('l’agent n’a produit aucun texte')
       // « Auteur puis vérificateur »: a turn of the channel's author is checked by
@@ -288,10 +477,11 @@ export class TurnScheduler {
       // at most three calls, each step priced for its own agent and bounded by
       // its own ceiling. A check that cannot happen says why; the draft goes out.
       let output = first.output
-      let steps: TurnStep[] | undefined
+      let steps: TurnStep[] | undefined = parallel === undefined ? undefined : parallelSteps
       const coordination = channel.coordination
       if (coordination?.mode === 'author-verifier' && coordination.authorId === agent.id) {
         steps = [{ role: 'author', agentId: agent.id, ...(first.output.tokens === undefined ? {} : { tokens: first.output.tokens }), ...(first.eur === undefined ? {} : { eur: first.eur }) }]
+        live = steps
         const verifier = agents.find(candidate =>
           candidate.id === coordination.verifierId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
         const spent = verifier === undefined
@@ -304,7 +494,7 @@ export class TurnScheduler {
           steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
         } else {
           const mark = randomUUID().slice(0, 8)
-          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark), true)
+          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark), 'none')
           const verdict = parseVerdict(checked.output.text)
           steps.push({
             role: 'verifier', agentId: verifier.id, verdict: verdict.kind,
@@ -345,11 +535,13 @@ export class TurnScheduler {
       // Remarks found but not corrected (the author's ceiling): said in the text too.
       const uncorrected = steps?.find(step => step.role === 'revision' && step.verdict === 'skipped')
       const remarks = steps?.find(step => step.role === 'verifier' && step.verdict === 'issues')?.notes ?? []
-      const published = unchecked !== undefined
-        ? `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
-        : uncorrected !== undefined
-          ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
-          : output.text
+      const published = parallel?.note !== undefined
+        ? `${output.text}\n\n${parallel.note}`
+        : unchecked !== undefined
+          ? `${output.text}\n\nNon vérifié : ${unchecked.verdict === 'unreadable' ? 'la vérification n’a pas donné de verdict lisible' : (unchecked.notes?.[0] ?? 'la vérification n’a pas eu lieu')}.`
+          : uncorrected !== undefined
+            ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
+            : output.text
       await service.reply(
         channel.id,
         messageId,
@@ -376,6 +568,7 @@ export class TurnScheduler {
         status: 'failed',
         reason: error instanceof Error ? error.message : String(error),
         finishedAt: new Date().toISOString(),
+        ...spentSoFar(),
       })
     } finally {
       this.#running.delete(turn.id)

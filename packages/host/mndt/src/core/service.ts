@@ -8,7 +8,7 @@
  * decision.
  */
 import { randomUUID } from 'node:crypto'
-import { emptyState, isMissionKind, needsApproval } from './types.ts'
+import { coordinationAgents, emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
   AgentProposal,
@@ -119,6 +119,13 @@ export const MAX_INSTRUCTIONS = 2000
 export const MAX_AGENT_NAME = 60
 /** The propose_agent cards one requester may have pending at once. */
 export const MAX_PENDING_PROPOSALS = 3
+/** The workers of a « en parallèle puis synthèse » turn. */
+export const MIN_WORKERS = 2
+export const MAX_WORKERS = 4
+/** The most a coordinated turn may be allowed to cost, in euros. */
+export const MAX_EUR_PER_COORDINATED_TURN = 5
+/** The default cost bound of a parallel turn, in euros. */
+export const DEFAULT_EUR_PER_PARALLEL_TURN = 1
 
 /** An MCP server name, as the MCP client accepts it. */
 const SERVER = /^[A-Za-z0-9_-]{1,32}$/
@@ -1051,7 +1058,7 @@ export class WorkbenchService {
       // A coordination whose author or verifier leaves the channel ends with it.
       const { coordination, ...base } = channel
       const ended = coordination !== undefined
-        && [coordination.authorId, coordination.verifierId].some(agentId => (change.removeAgents ?? []).includes(agentId))
+        && coordinationAgents(coordination).some(agentId => (change.removeAgents ?? []).includes(agentId))
       const next: Channel = {
         ...base,
         ...(coordination === undefined || ended ? {} : { coordination }),
@@ -1087,30 +1094,42 @@ export class WorkbenchService {
     return this.#write((state) => {
       const channel = (state.channels ?? []).find(candidate => candidate.id === id)
       if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
-      if (coordination !== undefined) {
-        if (coordination.mode !== 'author-verifier') throw new Error(`unknown coordination mode: ${String(coordination.mode)}`)
-        const active = (agentId: string): Agent | undefined =>
-          (state.agents ?? []).find(agent => agent.id === agentId && agent.retiredAt === undefined)
+      const active = (agentId: string): Agent | undefined =>
+        (state.agents ?? []).find(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
+      let recorded: Coordination | undefined
+      if (coordination?.mode === 'author-verifier') {
         const author = active(coordination.authorId)
         const verifier = active(coordination.verifierId)
-        if (author === undefined || verifier === undefined) throw new Error('the author and the verifier must be active agents')
-        if (!channel.agents.includes(author.id) || !channel.agents.includes(verifier.id)) {
-          throw new Error('the author and the verifier must both be agents of this channel')
-        }
+        if (author === undefined || verifier === undefined) throw new Error('the author and the verifier must both be active agents of this channel')
         if (author.id === verifier.id) throw new Error('the author and the verifier must be two agents')
         if (author.provider === verifier.provider && author.model === verifier.model) {
           throw new Error(`the verifier must run another model than the author (both are ${author.provider}/${author.model})`)
         }
+        recorded = { mode: 'author-verifier', authorId: author.id, verifierId: verifier.id }
+      } else if (coordination?.mode === 'parallel-synthesis') {
+        const workers = [...new Set(coordination.workerIds)]
+        if (workers.length < MIN_WORKERS || workers.length > MAX_WORKERS) {
+          throw new Error(`a parallel turn has ${MIN_WORKERS} to ${MAX_WORKERS} distinct workers`)
+        }
+        if (workers.some(agentId => active(agentId) === undefined) || active(coordination.synthesizerId) === undefined) {
+          throw new Error('the workers and the synthesizer must all be active agents of this channel')
+        }
+        if (workers.includes(coordination.synthesizerId)) throw new Error('the synthesizer is not one of the workers')
+        const cap = coordination.maxEurPerTurn
+        if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0 || cap > MAX_EUR_PER_COORDINATED_TURN) {
+          throw new Error(`a parallel turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
+        }
+        recorded = { mode: 'parallel-synthesis', workerIds: workers, synthesizerId: coordination.synthesizerId, maxEurPerTurn: cap }
+      } else if (coordination !== undefined) {
+        throw new Error(`unknown coordination mode: ${String((coordination as { mode?: unknown }).mode)}`)
       }
       const { coordination: _previous, ...rest } = channel
-      const next: Channel = coordination === undefined
-        ? rest
-        : { ...rest, coordination: { mode: coordination.mode, authorId: coordination.authorId, verifierId: coordination.verifierId } }
+      const next: Channel = recorded === undefined ? rest : { ...rest, coordination: recorded }
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: {
           at: this.#at(), actor, action: 'channel.coordination', subject: id,
-          detail: coordination === undefined ? 'solo' : `author-verifier ${coordination.authorId} ${coordination.verifierId}`,
+          detail: recorded === undefined ? 'solo' : `${recorded.mode} ${coordinationAgents(recorded).join(' ')}`,
         },
         value: next,
       }

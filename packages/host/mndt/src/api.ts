@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { isMissionKind } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -442,8 +442,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const denied = await authorise(identity, 'rights.write')
       if (denied !== undefined) return denied
       if (input.mode === 'solo') return respond(200, { channel: await service.setCoordination(channel.id, undefined, identity) })
+      if (input.mode === 'parallel-synthesis') {
+        if (!Array.isArray(input.workers) || typeof input.synthesizer !== 'string') {
+          return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)' })
+        }
+        const updated = await service.setCoordination(channel.id, {
+          mode: 'parallel-synthesis',
+          workerIds: strings(input.workers),
+          synthesizerId: input.synthesizer,
+          maxEurPerTurn: typeof input.maxEurPerTurn === 'number' ? input.maxEurPerTurn : DEFAULT_EUR_PER_PARALLEL_TURN,
+        }, identity)
+        return respond(200, { channel: updated })
+      }
       if (input.mode !== 'author-verifier' || typeof input.author !== 'string' || typeof input.verifier !== 'string') {
-        return respond(400, { error: 'mode is solo, or author-verifier with an author and a verifier (agent ids)' })
+        return respond(400, { error: 'mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)' })
       }
       const updated = await service.setCoordination(channel.id, { mode: 'author-verifier', authorId: input.author, verifierId: input.verifier }, identity)
       return respond(200, { channel: updated })

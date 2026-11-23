@@ -25,8 +25,11 @@ const noMissions: MissionRunner = {
 class ScriptedEngine implements TurnEngine {
   readonly seen: TurnInput[] = []
   verdict = '{"ok": true}'
+  /** Called before answering: to stop the turn. */
+  before?: (input: TurnInput) => void
   async run(input: TurnInput): Promise<TurnOutput> {
     this.seen.push(input)
+    this.before?.(input)
     const role = input.turnId.endsWith('-v')
       ? 'verifier'
       : input.turnId.endsWith('-r')
@@ -339,6 +342,25 @@ describe('what each step may do (review of #84)', () => {
     expect(asked?.turns?.[0]?.steps?.[2]).toMatchObject({ role: 'revision', verdict: 'skipped' })
     expect(replies.at(-1)?.text).toBe('premier brouillon\n\nVérifié, remarques non corrigées (plafond atteint) : ajoute la date.')
     expect(b.engine.seen).toHaveLength(2)
+  })
+})
+
+describe('a coordinated turn stopped midway', () => {
+  it('keeps the steps already done and what they cost', async () => {
+    const b = bench()
+    const { author, verifier, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'author-verifier', author, verifier })
+    b.engine.before = (input) => {
+      if (!input.turnId.endsWith('-v')) return
+      b.turns.stop({ channelId: channel, agentId: author })
+      throw new Error('turn stopped')
+    }
+    const { asked } = await ask(b, channel, '@auteur fais le point')
+    const turn = asked?.turns?.[0]
+    expect(turn?.status).toBe('cancelled')
+    expect(turn?.steps?.map(step => step.role)).toEqual(['author'])
+    expect(turn?.eur).toBe(1)
+    expect(spentThisMonth((await b.service.snapshot()).messages ?? [], author, new Date().toISOString())).toBe(1)
   })
 })
 
