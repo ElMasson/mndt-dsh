@@ -324,7 +324,7 @@ describe('« corrigé » only when the draft was replaced (#99)', () => {
 
   it('replaced absent (an older core): said as not checked, never « corrigé »', () => {
     render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1' }]), byId, chatFrench)}</>)
-    expect(screen.getByTestId('turn-unchecked').textContent).toBe('Correction non confirmée par cet espace : lisez cette réponse comme non vérifiée.')
+    expect(screen.getByTestId('turn-unchecked').textContent).toBe('Correction non confirmée : lisez cette réponse comme non vérifiée.')
     const line = screen.getByTestId('chat-turn-cost').textContent
     expect(line).not.toContain('corrigé')
     expect(line).not.toContain('vérifié par')

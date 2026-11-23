@@ -246,7 +246,7 @@ export const chatEn = {
   arrivalText: 'You have no channel yet, not even your lane: an owner or an admin opens your access. This page updates by itself.',
   coordIssuesLeft: 'reservations noted',
   coordEmptyRevision: 'Empty correction ({handle}): draft published as is, the remarks not taken into account.',
-  coordRevisionUnknown: 'Correction not confirmed by this workspace: read this answer as not checked.',
+  coordRevisionUnknown: 'Correction not confirmed: read this answer as not checked.',
 } as const
 
 /** One copy key. */
@@ -493,7 +493,7 @@ export const chatFr: Record<ChatKey, string> = {
   arrivalText: 'Vous n\'avez encore aucun canal, pas même votre lane : un owner ou un admin ouvre votre accès. Cette page se met à jour d\'elle-même.',
   coordIssuesLeft: 'réserves signalées',
   coordEmptyRevision: 'Correction vide ({handle}) : brouillon publié tel quel, remarques non prises en compte.',
-  coordRevisionUnknown: 'Correction non confirmée par cet espace : lisez cette réponse comme non vérifiée.',
+  coordRevisionUnknown: 'Correction non confirmée : lisez cette réponse comme non vérifiée.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
