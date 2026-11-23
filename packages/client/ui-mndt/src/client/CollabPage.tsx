@@ -1245,7 +1245,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   isOwner={state.role === 'owner'}
                   offered={offered}
                   arrival={{
-                    channels: chatChannels.filter(c => c.kind !== 'solo').map(c => ({ id: c.id, label: c.title || c.name })),
+                    channels: (chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({ id: c.id, label: c.title || c.name })),
                     onChannel: (id) => { setChatId(id) },
                     pending: pendingCards.length,
                     onPending: () => { setView('pending') },
