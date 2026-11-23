@@ -508,7 +508,7 @@ export class TurnScheduler {
     }
     let parsed = await read(1)
     if ('closed' in parsed) return close(parsed.closed)
-    if ('refused' in parsed) return escalate(help.request.blocker, `${first}\n\nLecture des avis impossible : ${parsed.refused}.`)
+    if ('refused' in parsed) return escalate(help.request.blocker, `${first}\n\nLecture des avis impossible (${reasonKind(parsed.refused)}).`)
     if (parsed.disputed !== undefined && help.request.need === 'fact' && help.advices.length === 2) {
       const disputed = parsed.disputed
       const secondClose = await round(2, disputed)

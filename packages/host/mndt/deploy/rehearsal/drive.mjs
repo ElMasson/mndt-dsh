@@ -305,7 +305,8 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
     const body = (await api('GET', '/agents')).body
     return { ...Object.fromEntries((body.agents ?? []).map(a => [a.handle, a.eurThisMonth])), space: body.eurUnattributedThisMonth }
   }
-  const same = (a, b, keys) => keys.every(k => a[k] === b[k])
+  // A counter missing on either side is not « unchanged »: it fails, never passes by undefined === undefined.
+  const same = (a, b, keys) => keys.every(k => typeof a[k] === 'number' && typeof b[k] === 'number' && a[k] === b[k])
   /** @param turn - a served turn. @returns whether its help or council carries any identity, model or cost per call. */
   // The help's and the council's own totals are served on purpose: only what is per call counts here.
   const names = turn => JSON.stringify({ help: turn?.help && { ...turn.help, eur: undefined }, council: turn?.council && { ...turn.council, eur: undefined } })
