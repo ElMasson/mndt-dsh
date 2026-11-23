@@ -99,7 +99,7 @@ describe('a coordinated turn in the feed (#84)', () => {
     render(<>{coordinatedTurn(turn([
       { role: 'author', agentId: 'agt_1', tokens: 900, eur: 0.004 },
       { role: 'verifier', agentId: 'agt_2', eur: 0.002, verdict: 'issues', notes: ['Le montant de mars est faux.'] },
-      { role: 'revision', agentId: 'agt_1', eur: 0.006 },
+      { role: 'revision', agentId: 'agt_1', eur: 0.006, replaced: true },
     ]), byId, chatFrench)}</>)
     expect(screen.getByTestId('chat-turn-cost').textContent).toMatch(/^Rédigé par @redacteur · vérifié par @relecteur · corrigé · /u)
     const steps = screen.getByTestId('turn-steps')
@@ -311,5 +311,28 @@ describe('a step\'s tokens as the core serves them (#84)', () => {
       { role: 'verifier', agentId: 'agt_2', verdict: 'ok' },
     ]), byId, chatFrench)}</>)
     expect(screen.getByTestId('turn-steps').textContent).toContain('1\u202f234 jetons')
+  })
+})
+
+describe('« corrigé » only when the draft was replaced (#99)', () => {
+  const issues = { role: 'verifier', agentId: 'agt_2', verdict: 'issues', notes: ['Montant faux.'] }
+  it('replaced: false is an empty correction, the draft published as is, never « corrigé »', () => {
+    render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1', replaced: false }]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-empty-revision').textContent).toBe('Correction vide (@redacteur) : brouillon publié tel quel, remarques non prises en compte.')
+    expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('corrigé')
+  })
+
+  it('replaced absent (an older core): said as not checked, never « corrigé »', () => {
+    render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1' }]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-unchecked').textContent).toBe('Correction non confirmée par cet espace : lisez cette réponse comme non vérifiée.')
+    const line = screen.getByTestId('chat-turn-cost').textContent
+    expect(line).not.toContain('corrigé')
+    expect(line).not.toContain('vérifié par')
+  })
+
+  it('replaced: true is « corrigé »', () => {
+    render(<>{coordinatedTurn(turn([{ role: 'author', agentId: 'agt_1' }, issues, { role: 'revision', agentId: 'agt_1', replaced: true }]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('chat-turn-cost').textContent).toContain('corrigé')
+    expect(screen.queryByTestId('turn-unchecked')).toBeNull()
   })
 })
