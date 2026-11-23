@@ -39,6 +39,8 @@ export interface ChatChannel {
   readonly connectors: readonly string[]
   readonly createdBy: string
   readonly createdAt: string
+  /** « Auteur puis vérificateur » (#84), read through `coordinationOf`, never trusted as is. */
+  readonly coordination?: unknown
 }
 
 /** Who wrote a message. */
@@ -46,6 +48,17 @@ export type ChatAuthor =
   | { readonly kind: 'human'; readonly email: string }
   | { readonly kind: 'agent'; readonly agentId: string }
   | { readonly kind: 'system' }
+
+/** What a channel's coordination is set to: alone, or an author then a verifier. */
+export type CoordinationChange =
+  | { readonly mode: 'solo' }
+  | { readonly mode: 'author-verifier'; readonly author: string; readonly verifier: string }
+  | {
+    readonly mode: 'parallel-synthesis'
+    readonly workers: readonly string[]
+    readonly synthesizer: string
+    readonly maxEurPerTurn?: number
+  }
 
 /** One agent turn started by a mention. */
 export interface ChatTurn {
@@ -66,6 +79,8 @@ export interface ChatTurn {
   readonly reason?: string
   readonly startedAt?: string
   readonly finishedAt?: string
+  /** The steps of a coordinated turn (#84), read through `stepsOf`, never trusted as is. */
+  readonly steps?: unknown
 }
 
 /** One message of a channel. */
@@ -138,8 +153,9 @@ export class ChatRefusal extends Error {
   /**
    * @param message - the Host's `{ error }`.
    * @param status - the HTTP status.
+   * @param code - the Host's `{ code }`, when it serves one.
    */
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'ChatRefusal'
   }
@@ -169,6 +185,11 @@ export interface ChatFace {
   removeAgents?(channelId: string, agentIds: readonly string[]): Promise<ChatChannel>
   /** Set a channel's connectors, the whole list. Optional: the team page only. */
   setConnectors?(channelId: string, servers: readonly string[]): Promise<ChatChannel>
+  /**
+   * Set a channel's coordination (`POST /channels/:id/coordination`, #84): alone, or an author
+   * then a verifier of another model. Optional: the team page only.
+   */
+  setCoordination?(channelId: string, change: CoordinationChange): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
   /** The models offered to agents (`GET /models`, #82). Optional: the team page only. */

@@ -5,7 +5,8 @@
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatChannel, MountedConnector } from './chat.ts'
+import type { ChatAgent, ChatChannel, CoordinationChange, MountedConnector } from './chat.ts'
+import { CoordinationSection, coordinationOf } from './coordination.tsx'
 import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
@@ -52,6 +53,10 @@ export interface TeamContextProps {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The documents route; without it the section says « Bientôt ». */
   readonly documents?: DocumentsFace | undefined
+  /** Set the channel's coordination (#84); absent, the section is not shown. */
+  readonly onCoordination?: ((change: CoordinationChange) => Promise<string | undefined>) | undefined
+  /** Whether the reader may set it: owners and admins. */
+  readonly canCoordinate?: boolean | undefined
 }
 
 /** @param props - the channel and its agents. @returns the context card's sections. */
@@ -136,6 +141,17 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         )}
         {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
       </Section>
+      {props.onCoordination === undefined && coordinationOf(channel) === undefined ? undefined : (
+        <Section title={t('coordTitle')}>
+          <CoordinationSection
+            channel={channel}
+            agents={props.agents}
+            canManage={props.canCoordinate === true}
+            onChange={props.onCoordination}
+            t={t}
+          />
+        </Section>
+      )}
       <Section title={t('ctxConnectors')}>
         {props.mountedError !== undefined ? <p className="mw-ctx-muted" role="alert">{t('connUnreadable', { reason: props.mountedError })}</p> : undefined}
         {props.mounted === undefined && props.mountedError === undefined ? <p className="mw-ctx-muted">{t('docLoading')}</p> : undefined}

@@ -397,6 +397,19 @@ export const TEAM_CSS = `
 @media (max-width: 767px) { .mw-app .mw-pill { min-height: 36px; padding: 6px 12px; } }
 .mw-pill-note { font-size: 11px; opacity: 0.8; }
 
+.mw-turn-coord { display: flex; flex-direction: column; gap: 4px; }
+.mw-turn-coord-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.mw-turn-unchecked {
+  margin: 0; padding: 6px 10px; border: 1px solid rgba(138, 75, 0, 0.45); border-radius: 10px;
+  background: #FDF3E2; color: var(--mw-warning, #8A4B00); font-size: 13px; font-weight: 500;
+}
+.mw-turn-steps summary { cursor: pointer; color: var(--mw-slate); font-size: 12.5px; }
+.mw-turn-steps ol { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.mw-turn-part {
+  margin: 4px 0 6px; padding: 8px 10px; border-left: 2px solid var(--mw-line); background: var(--mw-surface);
+  border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px;
+}
+.mw-turn-notes { margin: 2px 0 4px; padding-left: 16px; color: var(--mw-slate); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The agent sheet (lot 1a): short, buttons rather than lists. */
 .mw-screen-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .mw-agent-form {
