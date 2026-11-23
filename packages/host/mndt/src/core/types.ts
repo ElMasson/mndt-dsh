@@ -343,8 +343,74 @@ export interface Turn {
   readonly reason?: string
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
   readonly steps?: readonly TurnStep[]
+  /**
+   * A help its agent asked its peers during this turn (ask_peers): the peers'
+   * advices, then its reading. Its cost counts in this turn's eur, for the
+   * agent that asked. Served without the peers' identities until `reading`.
+   */
+  readonly help?: TurnHelp
   readonly startedAt?: string
   readonly finishedAt?: string
+}
+
+/** What a blocked agent needs from its peers. */
+export type HelpNeed = 'fact' | 'opinion' | 'check' | 'choice'
+
+/** A help request, structured: refused when a field is missing. */
+export interface HelpRequest {
+  readonly task: string
+  readonly tried: string
+  readonly blocker: string
+  readonly options: readonly string[]
+  readonly need: HelpNeed
+}
+
+/** One peer's advice. `agentId` and `model` are served only once the asker has read them. */
+export interface HelpAdvice {
+  readonly slot: 'A' | 'B'
+  readonly round: 1 | 2
+  readonly text: string
+  readonly eur?: number
+  readonly tokens?: Mission['tokens']
+  readonly agentId?: string
+  readonly model?: string
+}
+
+/** What the asker made of the advices. */
+export interface HelpReading {
+  /** The slots retained (« A », « B », « A+B ») or « aucun ». */
+  readonly retained: string
+  readonly why: string
+  readonly verdict: 'unblocked' | 'card' | 'escalate'
+}
+
+/** A question put to the channel's people when the peers did not unblock the asker. */
+export interface HelpEscalation {
+  readonly question: string
+  readonly summary: string
+  readonly at: string
+  /** The asker's message that publishes the question: a person answers it by replying to it. */
+  readonly messageId?: string
+  readonly answeredAt?: string
+  readonly answeredBy?: string
+}
+
+/** A help asked during a turn, and where it stands. */
+export interface TurnHelp {
+  readonly state: 'asked' | 'advising' | 'reading' | 'done'
+  readonly request: HelpRequest
+  /** The peers asked, slot A first: served only once `reading` is set. */
+  readonly peerIds: readonly string[]
+  readonly advices: readonly HelpAdvice[]
+  readonly reading?: HelpReading
+  readonly escalation?: HelpEscalation
+  /** A person who answered in the thread while the help ran: it ended there, without reading. */
+  readonly closedBy?: { readonly by: string; readonly at: string }
+  /** What the help cost (advices and reading), counted for the asker. */
+  readonly eur?: number
+  readonly capEur: number
+  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string }[]
+  readonly askedAt: string
 }
 
 /** One message of a channel. */

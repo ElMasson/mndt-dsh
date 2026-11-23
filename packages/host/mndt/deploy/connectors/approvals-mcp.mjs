@@ -135,6 +135,22 @@ const tools = [
     },
   },
   {
+    name: 'ask_peers',
+    description: 'Ask one or two other agents of this channel for advice when you are blocked or unsure. Nothing runs during this call: the request is recorded, you end your turn in one sentence, and you are run again with their advices (anonymous). Every field is required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'What you are doing, in one sentence' },
+        tried: { type: 'string', description: 'What you already tried' },
+        blocker: { type: 'string', description: 'The precise blocker' },
+        options: { type: 'array', items: { type: 'string' }, description: 'The options you see (one at least)' },
+        need: { type: 'string', enum: ['fact', 'opinion', 'check', 'choice'], description: 'What you need: a fact, an opinion, a check or a choice' },
+        peers: { type: 'array', items: { type: 'string' }, description: 'The ids of one or two other agents of this channel, from your instructions' },
+      },
+      required: ['task', 'tried', 'blocker', 'options', 'need', 'peers'],
+    },
+  },
+  {
     name: 'list_pending_approvals',
     description: 'List the decisions currently waiting for a person.',
     inputSchema: { type: 'object', properties: {} },
@@ -192,6 +208,13 @@ async function run(name, args) {
       body: JSON.stringify({ kind: 'propose_context', payload: {}, contextProposal: { text: args.text, baseVersion: args.baseVersion } }),
     })
     return `pending approval ${body.approval.id} (propose_context): ${body.approval.title}. An owner or an admin must approve it; the context did not change.`
+  }
+  if (name === 'ask_peers') {
+    const body = await call('/help', {
+      method: 'POST',
+      body: JSON.stringify({ task: args.task, tried: args.tried, blocker: args.blocker, options: args.options, need: args.need, peers: args.peers }),
+    })
+    return `help request recorded (${body.help.peers} peer(s)). End your turn now, in one sentence: you will be run again with their advices.`
   }
   if (name === 'list_pending_approvals') {
     const body = await call('/approvals?state=pending')
