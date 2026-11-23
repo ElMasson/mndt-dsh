@@ -556,13 +556,18 @@ function Composer(props: {
     const seed = props.seed
     if (seed === undefined || seed.at === seededAt.current) return
     seededAt.current = seed.at
-    setText(seed.text)
-    setCaret(seed.text.length)
+    // A draft already begun is kept: the mention goes in front of it, never twice.
+    const mention = seed.text.trim()
+    const already = text.split(/\s+/u).includes(mention)
+    const next = already ? text : `${seed.text}${text}`
+    const at = already ? next.length : seed.text.length
+    setText(next)
+    setCaret(at)
     requestAnimationFrame(() => {
       box.current?.focus()
-      box.current?.setSelectionRange(seed.text.length, seed.text.length)
+      box.current?.setSelectionRange(at, at)
     })
-  }, [props.seed])
+  }, [props.seed, text])
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
   const [busy, setBusy] = useState(false)
