@@ -43,9 +43,19 @@ cleanup() {
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
   fi
+  # The total, counted by the script over everything it and its sub-scripts
+  # said: the one line a reader goes by. Any KO, or a failed step, fails it.
+  sleep 1
+  total_ok=$(grep -acE '^OK ' "$root/output.log" 2>/dev/null) || total_ok=0
+  total_ko=$(grep -acE '^KO ' "$root/output.log" 2>/dev/null) || total_ko=0
+  echo "TOTAL ok=$total_ok ko=$total_ko"
   echo "rehearsal root: $root"
+  if [ "$total_ko" -gt 0 ] || [ "${verdict:-1}" != 0 ]; then exit 1; fi
 }
 trap cleanup EXIT
+# Everything said goes to the screen and to output.log, which the total counts.
+: > "$root/output.log"
+exec > >(tee -a "$root/output.log") 2>&1
 owner=duke@datanalysis.re; viewer=smarion@datanalysis.re; admin=jadmin@datanalysis.re
 app=$root/opt/mndt/datanalysis; data=$root/data/mndt/datanalysis/live
 mkdir -p "$root/root" "$root/shots"
@@ -184,7 +194,7 @@ if [ "$caught" -ge 5 ]; then echo "OK  scan-witness   the planted .git, .env, PA
 else echo "KO  scan-witness   the scan missed a planted secret ($caught of 5 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
-if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
+if health 80; then echo "API answers through the gateway"; else echo "KO first-start-api  the API does not answer after the first start"; workbench_log; fi
 echo "--- profiles/web/cordis.patch.yml as DSH wrote it:"; cat "$data/home/profiles/web/cordis.patch.yml" 2>/dev/null || echo "(absent)"
 
 step "3. seed-team.sh, the production script (Compose calls through compose-shim.sh)"
@@ -198,7 +208,7 @@ mkdir -p "$data/tools"
 cp "$deploy/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs"
 printf 'Faits de repetition.\n' > "$data/tools/facts.md"
 MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
-  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO: the facts server was not mounted"
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
@@ -206,7 +216,7 @@ echo "seed-team.sh exit $seeded"
 echo "--- profiles/web/cordis.patch.yml after the mount:"; cat "$data/home/profiles/web/cordis.patch.yml"
 
 step "4. after the restart"
-if health 60; then echo "the workbench came back"; else echo "KO: the workbench does not come back after seed-team.sh"; docker ps -a --filter name=$project --format '{{.Names}} {{.Status}}'; workbench_log; fi
+if health 60; then echo "the workbench came back"; else echo "KO workbench-back  the workbench does not come back after seed-team.sh"; docker ps -a --filter name=$project --format '{{.Names}} {{.Status}}'; workbench_log; fi
 
 step "4 bis. both patch files, then the connectors without any model"
 checked=0
@@ -231,9 +241,9 @@ deposit; deposited=$?
 
 step "5. the page, the turn, the resets"
 page=0
-if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO: the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
+if page_ready 150; then echo "the page is ready (launch token published)"; else page=1; echo "KO page-session  the gateway opens no session after 450 s (no launch token)"; docker logs --tail 5 $project-workbench 2>&1; fi
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
-if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
+if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"
@@ -284,3 +294,4 @@ step "8. the role file row by row (#75), through the gateway"
 bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
 
 [ "$granted" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
+verdict=$?

@@ -7,7 +7,7 @@
 set -uo pipefail
 data=${1:?data folder}; project=${2:?project}; owner=${3:?owner}; viewer=${4:?viewer}
 base=http://127.0.0.1:18080/mndt-api
-ko=0
+ko=0; okc=0
 saved=$(mktemp); cp "$data/grants.json" "$saved"
 state_saved=$(mktemp); cp "$data/state.json" "$state_saved"
 # What the restore must give back: the content, the owner and the mode.
@@ -39,7 +39,7 @@ PY
   rm -f "$saved" "$state_saved"
 }
 trap restore EXIT
-check() { if [ "$2" = 1 ]; then echo "OK  $1  $3"; else echo "KO  $1  $3"; ko=$((ko + 1)); fi; }
+check() { if [ "$2" = 1 ]; then echo "OK  $1  $3"; okc=$((okc + 1)); else echo "KO  $1  $3"; ko=$((ko + 1)); fi; }
 # GET as a person; extra headers as forged by a browser. Prints "<status> <body>".
 get() { local who=$1 path=$2; shift 2; curl -s -w '\n%{http_code}' -H "x-forwarded-email: $who" "$@" "$base$path" | { body=$(cat); echo "$(echo "$body" | tail -1) $(echo "$body" | sed '$d' | tr -d '\n')"; }; }
 status() { get "$@" | cut -d' ' -f1; }
@@ -129,4 +129,5 @@ check mandate-self-retired "$(grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"re
   "$(echo "$mandates" | grep -o '"id":"mnd_rehearsal_self"[^}]*"state":"[a-z]*"' | grep -o '"state":"[a-z]*"' | head -1), said in the log"
 
 echo "grants-checks exit $ko"
+echo "TOTAL ok=$okc ko=$ko"
 exit $ko
