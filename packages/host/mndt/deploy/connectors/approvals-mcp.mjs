@@ -111,7 +111,10 @@ const tools = [
         handle: { type: 'string', description: 'Its @handle: lower case, digits and dashes, 2 to 32 characters' },
         provider: { type: 'string', description: 'The model route, from GET /models (for example scaleway-genapi)' },
         model: { type: 'string', description: 'The model, from GET /models' },
-        instructions: { type: 'string', description: 'What it is for and how it works, 2 000 characters at most' },
+        instructions: {
+          type: 'string',
+          description: 'Its instructions, 2 000 characters at most, in three sections, in this order, each a heading on its own line: « ## Rôle » (what it is, in one or two sentences), « ## Objectif » (what it delivers, and to whom), « ## Ne décide pas » (what it leaves to a person, one item per line: sending, paying, deciding for the team). The agent sheet shows them as written.',
+        },
         connectors: { type: 'array', items: { type: 'string' }, description: 'The connectors it may use, among those mounted' },
         eurPerMonth: { type: 'number', description: 'Its monthly ceiling in euros (5 by default; above 5, only the owner can approve)' },
         title: { type: 'string', description: 'The card title, « Créer l\'agent <name> » by default' },
