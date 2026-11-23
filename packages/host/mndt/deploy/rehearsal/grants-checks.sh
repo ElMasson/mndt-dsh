@@ -10,6 +10,8 @@ base=http://127.0.0.1:18080/mndt-api
 ko=0
 saved=$(mktemp); cp "$data/grants.json" "$saved"
 state_saved=$(mktemp); cp "$data/state.json" "$state_saved"
+# What the restore must give back: the content, the owner and the mode.
+state_was="$(stat -c '%u:%g %a' "$data/state.json") $(sha256sum < "$data/state.json" | cut -c1-16)"
 # state.json belongs to the workbench's user, not to the one running this
 # script (a write from here is « Permission denied », 23/11): it is changed
 # from a throwaway container of the same image, as root on the data folder,
@@ -31,6 +33,9 @@ shutil.copyfile("/saved", path); os.chown(path, st.st_uid, st.st_gid); os.chmod(
 PY
   docker start $project-workbench >/dev/null
   for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/health")" = 200 ] && break; sleep 2; done
+  state_is="$(stat -c '%u:%g %a' "$data/state.json") $(sha256sum < "$data/state.json" | cut -c1-16)"
+  if [ "$state_is" = "$state_was" ]; then echo "OK  state-restored  state.json back as it was: owner:group mode sha $state_is"
+  else echo "KO  state-restored  state.json was « $state_was », is « $state_is »"; fi
   rm -f "$saved" "$state_saved"
 }
 trap restore EXIT
