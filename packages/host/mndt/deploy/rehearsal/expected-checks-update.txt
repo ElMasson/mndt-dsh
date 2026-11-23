@@ -1,0 +1,42 @@
+# The checks a full rehearse-update.sh run makes (departure « installed »), one
+# name per line: each must print exactly one OK or KO line (the exit trap
+# compares). Change it with the checks.
+admin-no-mission
+admin-no-owner-brief
+agent-turn
+briefing-private
+channel
+coord-author-verifier
+coord-bound
+coord-parallel
+french
+gateway-alive
+landing-text
+llm-called
+member-no-mission
+mission-facts
+mission-no-bash
+mission-run
+no-modal
+old-brief-private
+page
+probe-turn
+routes-real-scaleway
+scheduler-first-pass
+seed-restart
+seeded
+shell-ws
+still-serves
+team-no-mux
+team-page
+turn-card
+turn-no-bash
+turn-no-facts
+turn-tools
+turn-tools-catalog
+viewer-403
+viewer-no-shell
+viewer-team
+web-log-gone
+web-token-gone
+workbench-alive
