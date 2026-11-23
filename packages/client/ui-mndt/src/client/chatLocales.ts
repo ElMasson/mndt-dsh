@@ -179,6 +179,17 @@ export const chatEn = {
   proposeAgentUnreadable: 'This proposal cannot be read in full: it can only be refused.',
   proposeAgentModelGone: 'This model is no longer offered ({model}): this card can only be refused.',
   proposeAgentUnmounted: 'Not mounted any more: {names}. This card can only be refused.',
+  laneWelcomeTitle: 'Your lane',
+  laneWelcomeText: 'Only you read it. Ask your agents here: what they propose becomes a card you decide.',
+  laneWelcomeAsk: 'Ask an agent',
+  laneWelcomeAskOne: 'Write to @{handle}',
+  laneWelcomeNoAgent: 'No agent reads your lane yet: an owner or an admin adds one.',
+  laneWelcomeChannels: 'Your team channels',
+  laneWelcomeNoChannel: 'You are in no team channel yet: an owner or an admin adds you.',
+  laneWelcomePendingOne: '1 card waits for your decision',
+  laneWelcomePendingMany: '{n} cards wait for your decision',
+  arrivalTitle: 'Welcome, {name}',
+  arrivalText: 'You have no channel yet, not even your lane: an owner or an admin opens your access. This page updates by itself.',
 } as const
 
 /** One copy key. */
@@ -358,6 +369,17 @@ export const chatFr: Record<ChatKey, string> = {
   proposeAgentUnreadable: 'Cette proposition ne peut pas être lue en entier : elle ne peut qu\'être refusée.',
   proposeAgentModelGone: 'Ce modèle n\'est plus proposé ({model}) : cette carte ne peut qu\'être refusée.',
   proposeAgentUnmounted: 'Plus branché : {names}. Cette carte ne peut qu\'être refusée.',
+  laneWelcomeTitle: 'Votre lane',
+  laneWelcomeText: 'Vous seul la lisez. Demandez ici à vos agents : ce qu\'ils proposent devient une carte que vous décidez.',
+  laneWelcomeAsk: 'Demander à un agent',
+  laneWelcomeAskOne: 'Écrire à @{handle}',
+  laneWelcomeNoAgent: 'Aucun agent ne lit encore votre lane : un owner ou un admin en ajoute un.',
+  laneWelcomeChannels: 'Vos canaux d\'équipe',
+  laneWelcomeNoChannel: 'Vous n\'êtes encore dans aucun canal d\'équipe : un owner ou un admin vous y ajoute.',
+  laneWelcomePendingOne: '1 carte attend votre décision',
+  laneWelcomePendingMany: '{n} cartes attendent votre décision',
+  arrivalTitle: 'Bienvenue, {name}',
+  arrivalText: 'Vous n\'avez encore aucun canal, pas même votre lane : un owner ou un admin ouvre votre accès. Cette page se met à jour d\'elle-même.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
