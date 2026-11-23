@@ -373,3 +373,17 @@ describe('« conseil » closed without naming its members: never per agent, one 
     expect(JSON.stringify(served?.skipped)).not.toMatch(/borne|plafond|coût/)
   })
 })
+
+describe('« conseil »: an escalation\'s summary names no one', () => {
+  it('a framing refused by the bound: the reason by kind, no handle, model nor €', async () => {
+    const b = bench()
+    const t = await team(b, { maxEurPerTurn: 0.0001 })
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const summary = turn.council?.escalation?.summary ?? ''
+    expect(summary).toContain('cadrage impossible (avis non obtenu : borne)')
+    expect(summary).not.toMatch(/@|€|agt_|route-/)
+    const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { question: string; summary: string }[]
+    expect(listed.length).toBe(1)
+    expect(listed.every(e => !/@|€|agt_|route-/.test(e.summary))).toBe(true)
+  })
+})

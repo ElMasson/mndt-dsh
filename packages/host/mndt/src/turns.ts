@@ -40,6 +40,7 @@ import {
   helpReadingPrompt,
   parseHelpReading,
   parseVerdict,
+  reasonKind,
   priceOf,
   revisionPrompt,
   spentThisMonth,
@@ -468,7 +469,8 @@ export class TurnScheduler {
     const escalate = async (question: string, body: string, disputed?: string): Promise<{ text?: string; eur: number }> => {
       const by = await closedBy()
       if (by !== undefined) return close(by)
-      const reasons = help.skipped.map(skip => skip.reason)
+      // By kind: a raw reason (« Plafond mensuel atteint pour @x : … € ») would name a peer while the question waits.
+      const reasons = help.skipped.map(skip => reasonKind(skip.reason))
       const summary = [
         `Blocage : ${help.request.blocker}.`,
         `Avis reçus : ${help.advices.length}.`,
@@ -625,11 +627,11 @@ export class TurnScheduler {
     const framed = await run(chair, 'cf', councilFramingPrompt(chair, channel, message))
     if ('refused' in framed) {
       skip(chair, framed)
-      return escalate(message.text, `cadrage impossible : ${framed.refused}`, 'Le conseil n’a pas pu être cadré.')
+      return escalate(withoutMentions(message.text), `cadrage impossible (${reasonKind(framed.refused)})`, 'Le conseil n’a pas pu être cadré.')
     }
     const frame = parseFraming(framed.text)
     council = { ...council, framing: { text: framed.text, ...framed.cost } }
-    if (frame === undefined) return escalate(message.text, 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
+    if (frame === undefined) return escalate(withoutMentions(message.text), 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
     council = { ...council, question: frame.question, options: [...frame.options, NONE_OF_THESE] }
     await save()
     // 2. The members, in slots drawn here: A is not necessarily the chair.
@@ -726,7 +728,7 @@ export class TurnScheduler {
       council.positions.map(p => ({ slot: p.slot, text: p.text })), council.critiques.map(c => ({ slot: c.slot, text: c.text }))))
     if ('refused' in decided) {
       skip(synthesizer, decided)
-      return escalate(council.question, `synthèse impossible : ${decided.refused}`, 'Le conseil n’a pas pu trancher.')
+      return escalate(council.question, `synthèse impossible (${reasonKind(decided.refused)})`, 'Le conseil n’a pas pu trancher.')
     }
     const parsed = lastJsonLine(decided.text)
     const chosen = valid(parsed?.value.chosen)
@@ -1041,6 +1043,14 @@ export class TurnScheduler {
       this.#running.delete(turn.id)
     }
   }
+}
+
+/**
+ * @param text - a person's message.
+ * @returns it without its @mentions: a question put back to the people names no agent.
+ */
+function withoutMentions(text: string): string {
+  return text.replace(/(^|\s)@[a-z0-9-]+/g, '$1').replace(/\s{2,}/g, ' ').trim()
 }
 
 /** @param steps - a coordinated turn's steps. @returns their total cost, or undefined when none is priced. */
