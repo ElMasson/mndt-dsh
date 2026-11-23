@@ -8,7 +8,11 @@ FROM node:22-bookworm AS build
 # workbench has no sandbox backend and every agent turn fails closed.
 RUN apt-get update -qq && apt-get install -y -qq git musl-tools >/dev/null
 WORKDIR /src
-RUN npm install -g pnpm@11.28.5 >/dev/null 2>&1
+# pnpm itself, with the same patience as the packages below. Its errors stay
+# visible: on 23/11 this step failed with code 155 and nothing else, its output
+# thrown away (only stdout is silenced now, warnings and errors are not).
+RUN npm install -g pnpm@11.28.5 --no-fund --no-audit --loglevel=warn \
+      --fetch-timeout=600000 --fetch-retries=6 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=120000 >/dev/null
 # The downloads come first, from the lockfile alone, in a layer of their own:
 # a rebuild with the same lockfile takes it from the cache and downloads
 # nothing (the first build on a machine stays long, the registry being what it
