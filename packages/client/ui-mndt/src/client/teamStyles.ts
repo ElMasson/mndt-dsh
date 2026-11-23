@@ -424,6 +424,22 @@ export const TEAM_CSS = `
 .mw-model-tech { font-size: 11px; color: var(--mw-slate); }
 @media (max-width: 767px) { .mw-app .mw-model { min-height: 44px; } }
 
+.mw-sheet-view { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 14px; }
+.mw-sheet-view dt { color: var(--mw-slate); font-size: 13px; }
+.mw-sheet-view dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mw-sheet-purpose { white-space: pre-wrap; }
+/* On a phone the proposed sheet reads label above value, not in two cramped columns. */
+@media (max-width: 639px) {
+  .mw-sheet-view { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .mw-sheet-view dd { margin-bottom: 8px; }
+}
+.mw-app .mw-pill-static { cursor: default; }
+
+.mw-welcome { display: flex; flex-direction: column; gap: 10px; max-width: 560px; margin: 24px auto; padding: 20px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card); }
+.mw-welcome-title { margin: 0; font-family: var(--mw-display, inherit); font-size: 18px; font-weight: 600; }
+.mw-welcome-text { margin: 0; color: var(--mw-slate); font-size: 14px; line-height: 20px; }
+.mw-arrival { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }
 @media (min-width: 768px) {

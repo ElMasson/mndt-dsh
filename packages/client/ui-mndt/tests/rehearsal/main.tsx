@@ -42,7 +42,14 @@ const chat = createMockChat({
     { module: 'qonto', server: 'qonto', enabled: true },
     { module: 'dolibarr', server: 'dolibarr', enabled: false },
   ],
-  cards: [{ id: 'apr_1', kind: 'send-email', title: 'Envoyer la relance de la facture FA2610-031 à la comptabilité de Sodiac', requestedBy: 'assistant', requestedAt: at(4), channelId: 'chn_1', messageId: 'msg_2', state: 'pending' }],
+  cards: [{
+    id: 'apr_2', kind: 'propose_agent', title: 'propose_agent', requestedBy: you, requestedByAgent: { id: 'agt_1', handle: 'assistant' },
+    requestedAt: at(6), channelId: 'chn_1', messageId: 'msg_3', state: 'pending', canDecide: true,
+    proposal: {
+      name: 'Recouvrement', handle: 'recouvrement', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash',
+      instructions: 'Suit les factures impayées de plus de 30 jours et prépare les relances, sans rien envoyer.', connectors: ['qonto'], eurPerMonth: 3,
+    },
+  }, { id: 'apr_1', kind: 'send-email', title: 'Envoyer la relance de la facture FA2610-031 à la comptabilité de Sodiac', requestedBy: 'assistant', requestedAt: at(4), channelId: 'chn_1', messageId: 'msg_2', state: 'pending' }],
 }, () => t0 + 10 * 60000)
 
 const page: PageStateRow = {

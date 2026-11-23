@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
+import { freePort } from './support/freePort.ts'
 
 const gatewayScript = join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')
 const running: (ChildProcess | Server)[] = []
@@ -32,7 +33,7 @@ async function api(): Promise<{ url: string; seen: IncomingHttpHeaders[] }> {
 
 /** @param apiUrl - where the API listens. @returns the gateway base URL, once it listens. */
 async function gateway(apiUrl: string): Promise<string> {
-  const port = 20000 + Math.floor(Math.random() * 20000)
+  const port = await freePort()
   const child = spawn(process.execPath, [gatewayScript], {
     env: { ...process.env, PORT: String(port), API: apiUrl, WORKBENCH: apiUrl, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile() },
     stdio: 'ignore',

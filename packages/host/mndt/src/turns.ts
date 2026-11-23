@@ -74,6 +74,8 @@ interface Running {
   readonly messageId: string
   readonly channelId: string
   readonly agentId: string
+  /** The agent's handle as the turn started, for the cards it asks. */
+  readonly agentHandle: string
   readonly controller: AbortController
 }
 
@@ -95,6 +97,8 @@ export class TurnScheduler {
       readonly turnId: string
       readonly messageId: string
       readonly channelId: string
+      /** The agent whose turn it is. */
+      readonly agent: { readonly id: string; readonly handle: string }
     }
     | undefined {
     const [entry] = this.#running.entries()
@@ -104,6 +108,7 @@ export class TurnScheduler {
         turnId: entry[0],
         messageId: entry[1].messageId,
         channelId: entry[1].channelId,
+        agent: { id: entry[1].agentId, handle: entry[1].agentHandle },
       }
   }
 
@@ -126,21 +131,24 @@ export class TurnScheduler {
   }
 
   /**
-   * Stop the turns of a message (it was deleted) or of an agent in a channel
-   * (it left): a running one is aborted, a queued one will not start.
-   * @param filter - the message, or the channel and the agent.
+   * Stop the turns of a message (it was deleted), of an agent in a channel
+   * (it left) or of an agent everywhere (it was retired): a running one is
+   * aborted, a queued one will not start.
+   * @param filter - the message, the channel and the agent, or the agent alone.
    */
   stop(
     filter:
       | { readonly messageId: string }
-      | { readonly channelId: string; readonly agentId: string },
+      | { readonly channelId: string; readonly agentId: string }
+      | { readonly agentId: string },
   ): void {
     for (const running of this.#running.values()) {
       const matches =
         'messageId' in filter
           ? running.messageId === filter.messageId
-          : running.channelId === filter.channelId &&
-            running.agentId === filter.agentId
+          : 'channelId' in filter
+            ? running.channelId === filter.channelId && running.agentId === filter.agentId
+            : running.agentId === filter.agentId
       if (matches) running.controller.abort()
     }
   }
@@ -221,6 +229,7 @@ export class TurnScheduler {
       messageId,
       channelId: channel.id,
       agentId: agent.id,
+      agentHandle: agent.handle,
       controller,
     })
     await service.updateTurn(messageId, turn.id, {

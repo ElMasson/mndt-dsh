@@ -185,7 +185,7 @@ describe('who may change whose role (members routes)', () => {
     // The Kelvin sign folds onto k under toLowerCase().
     const answer = await b.call('/members/grant', owner, { subject: 'admin@\u212Aey.re', role: 'viewer' })
     expect(answer.status).toBe(400)
-    expect(answer.body.error).toBe('the subject is not a plain ASCII e-mail')
+    expect(answer.body.error).toBe('subject must be a plain ASCII e-mail')
     expect(b.forwarded).toHaveLength(0)
   })
 

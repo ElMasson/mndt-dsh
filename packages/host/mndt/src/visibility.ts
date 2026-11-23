@@ -115,12 +115,7 @@ export function canReadEvent(
       const mandate = state.mandates.find(
         candidate => candidate.id === event.subject,
       )
-      return (
-        mandate !== undefined &&
-        (reader.decider ||
-          mandate.delegant === reader.identity ||
-          mandate.delegataire === reader.identity)
-      )
+      return mandate !== undefined && canReadMandate(reader.identity, reader.decider, mandate)
     }
     case 'agent':
       return true
@@ -130,4 +125,17 @@ export function canReadEvent(
     default:
       return false
   }
+}
+
+/**
+ * A mandate: its two parties, and those who administer rights.
+ * @param identity - the reader's e-mail (lower-case). @param canAdmin - whether they hold `rights.write`.
+ * @param mandate - its parties. @returns whether the reader may see it.
+ */
+export function canReadMandate(
+  identity: string,
+  canAdmin: boolean,
+  mandate: { readonly delegant: string; readonly delegataire: string },
+): boolean {
+  return canAdmin || mandate.delegataire === identity || mandate.delegant === identity
 }

@@ -20,13 +20,14 @@ import type {
 import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
+import { isPlainAscii } from './core/address.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMission } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -80,6 +81,19 @@ interface UsageTotals {
   cacheWrite: number
 }
 
+/**
+ * One model an agent may be given: a priced route of the price grid. `kind`
+ * gives the screen its three buttons (rapide, analyse, local), `eur` its price
+ * per million tokens (null when to be provided: such a model is refused for a turn).
+ */
+export interface ModelChoice {
+  readonly provider: string
+  readonly model: string
+  readonly label: string
+  readonly kind: 'rapide' | 'analyse' | 'local' | 'other'
+  readonly eur: { readonly input: number; readonly output: number } | null
+}
+
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
   readonly authority?: {
@@ -102,6 +116,8 @@ export interface MndtApiOptions {
   readonly grants: GrantSource
   /** Mounted connectors, when the host can enumerate them. */
   readonly connectors?: () => Promise<readonly ConnectorInfo[]>
+  /** The models an agent may be given (the priced routes), for the agent form. */
+  readonly models?: () => Promise<readonly ModelChoice[]>
   /** Agent turns of mentions; without it, a mention queues a turn nobody runs. */
   readonly turns?: TurnScheduler
   /** The organisation the top bar names: its name, its slug and, when declared, its environment (prod, preprod). */
@@ -280,6 +296,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    * @param servers - MCP server names asked for.
    * @returns a 400 naming those not mounted, when the host can say which are.
    */
+  /**
+   * @param provider - an agent's route. @param model - its model.
+   * @returns a 400 when the host lists its models (GET /models) and this one is not among them.
+   */
+  const unlistedModel = async (provider: string, model: string): Promise<MndtApiResponse | undefined> => {
+    if (options.models === undefined) return undefined
+    const listed = await options.models()
+    if (listed.some(choice => choice.provider === provider.trim() && choice.model === model.trim())) return undefined
+    return respond(400, { error: `model not offered: ${provider}/${model} (see GET /models)` })
+  }
+
   const unmounted = async (servers: readonly string[]): Promise<MndtApiResponse | undefined> => {
     if (options.connectors === undefined || servers.length === 0) return undefined
     const mounted = new Set((await options.connectors()).filter(c => c.enabled).map(c => c.server))
@@ -300,7 +327,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     } catch (error) {
       const reason = messageOf(error)
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
-      if (/taken|exists/.test(reason)) return respond(409, { error: reason })
+      if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason })
     }
   }
@@ -317,15 +344,34 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const agents = await service.listAgents()
         return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now) })) })
       }
+      if (request.method === 'POST' && parts.length === 3 && parts[2] === 'retire') {
+        // Retiring an agent is creating's mirror: owners and admins only.
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const agent = await service.retireAgent(parts[1] ?? '', identity)
+        // A retired agent stops answering, a turn already running included.
+        options.turns?.stop({ agentId: agent.id })
+        return respond(200, { agent })
+      }
       if (request.method === 'POST' && parts.length <= 2) {
-        const denied = await authorise(identity, 'agents.write')
+        // Creating and changing an agent (its instructions, model, connectors,
+        // ceiling): owners and admins only (rights.write), decided by Stephane on
+        // 15/11. agents.write alone would let every operator do it.
+        const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const connectors = input.connectors === undefined ? undefined : strings(input.connectors)
         const missing = await unmounted(connectors ?? [])
         if (missing !== undefined) return missing
         const eurPerMonth = typeof input.eurPerMonth === 'number' ? input.eurPerMonth : undefined
         const text = (key: string): string | undefined => (typeof input[key] === 'string' ? input[key] : undefined)
+        if (parts.length === 1 || text('provider') !== undefined || text('model') !== undefined) {
+          const current = parts.length === 2 ? await service.agent(parts[1] ?? '') : undefined
+          const offered = await unlistedModel(text('provider') ?? current?.provider ?? '', text('model') ?? current?.model ?? '')
+          if (offered !== undefined) return offered
+        }
         if (parts.length === 1) {
+          const table = await grants.grants()
+          const creatorRole = table.ok ? roleOf(table.grants, identity) : undefined
           const agent = await service.createAgent({
             handle: text('handle') ?? '',
             name: text('name') ?? '',
@@ -334,7 +380,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
             ...(connectors === undefined ? {} : { connectors }),
             ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
-          }, identity)
+          }, identity, creatorRole)
           return respond(201, { agent })
         }
         const table = await grants.grants()
@@ -409,11 +455,25 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     }
 
     if (request.method === 'POST' && parts.length === 3 && ['members', 'agents', 'connectors'].includes(parts[2] ?? '')) {
-      const denied = await authorise(identity, 'workflows.write')
+      // A channel's connectors give its agents access to data (Qonto, Dolibarr,
+      // Office 365): owners and admins only (rights.write), not every operator
+      // (decision taken in autonomy on 21/11, to be confirmed by Stephane).
+      const denied = await authorise(identity, parts[2] === 'connectors' ? 'rights.write' : 'workflows.write')
       if (denied !== undefined) return denied
       if (parts[2] === 'connectors') {
+        // `{ add, remove }` (preferred: applied on the server's current list, in one
+        // write, so two pages never undo each other) or `{ connectors }` (the whole
+        // list). Only what is ADDED must be mounted: a connector already on the
+        // channel and since unmounted never blocks a change.
+        if (Array.isArray(input.add) || Array.isArray(input.remove)) {
+          const add = strings(input.add)
+          const missing = await unmounted(add.filter(server => !(channel.connectors ?? []).includes(server)))
+          if (missing !== undefined) return missing
+          const updated = await service.updateChannel(channel.id, { addConnectors: add, removeConnectors: strings(input.remove) }, identity)
+          return respond(200, { channel: updated })
+        }
         const connectors = strings(input.connectors)
-        const missing = await unmounted(connectors)
+        const missing = await unmounted(connectors.filter(server => !(channel.connectors ?? []).includes(server)))
         if (missing !== undefined) return missing
         return respond(200, { channel: await service.updateChannel(channel.id, { connectors }, identity) })
       }
@@ -442,6 +502,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     const identity = identityOf(request, options.identity)
     if (identity === undefined) return respond(401, { error: 'a bearer token or an authenticated proxy is required' })
 
+    // On a team instance a person the role table does not name is served nothing
+    // but who they are (/me, /org: the page says so): proven by the sign-on, not
+    // part of the team. A role taken off grants.json applies on the next request.
+    if (teamInstance && path !== '/me' && path !== '/org') {
+      const table = await grants.grants()
+      if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+      if (roleOf(table.grants, identity) === undefined) return respond(403, { error: 'no role on this team: ask its owner' })
+    }
+
     try {
       if (request.method === 'GET' && path === '/me') {
         // Who the person is for the screen: their e-mail, their role and the name the role file gives them.
@@ -453,7 +522,21 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // a second owner of the role file does not get it. Solo: the person at the
         // workstation has it.
         const shell = !teamInstance || request.headers?.['x-mndt-shell'] === '1'
-        return respond(200, { you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell })
+        // The rows of the role file set aside (#75): told to whoever may change the
+        // roles (owners and admins, rights.write), and to the tenant's owner as the
+        // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
+        // A role file that cannot be read refuses everyone (503): its reason is told
+        // to the tenant's owner as the gateway knows it, who can fix it (#75 review).
+        const grantsError = !table.ok && teamInstance && shell ? table.reason : undefined
+        const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
+          && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
+          ? table.skipped
+          : undefined
+        return respond(200, {
+          you: identity, ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }), shell,
+          ...(skipped === undefined ? {} : { grantsSkipped: skipped }),
+          ...(grantsError === undefined ? {} : { grantsError }),
+        })
       }
 
       if (request.method === 'GET' && path === '/org') {
@@ -489,28 +572,45 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/metrics') {
         const snapshot = await service.snapshot()
         const now = Date.now()
-        const count = (status: MissionStatus): number => snapshot.missions.filter(mission => mission.status === status).length
-        const pending = snapshot.approvals.filter(approval => approval.state === 'pending')
+        // On a team instance the counts are of what the reader may read: a count of
+        // the owner's private missions or of cards they cannot see says too much.
+        const reader = teamInstance ? await readerOf(identity) : undefined
+        const missions = reader === undefined ? snapshot.missions : snapshot.missions.filter(mission => canReadMission(reader, mission))
+        const briefs = reader === undefined ? snapshot.briefs : snapshot.briefs.filter(brief => canReadMission(reader, brief))
+        const count = (status: MissionStatus): number => missions.filter(mission => mission.status === status).length
+        const pending = snapshot.approvals.filter(approval => approval.state === 'pending' && (reader === undefined || canReadApproval(reader, approval)))
         const ages = pending
           .map(approval => (now - Date.parse(approval.requestedAt)) / 3_600_000)
           .filter(hours => Number.isFinite(hours))
         let automationsEnabled = 0
-        if (options.automationsPath !== undefined) {
+        if (options.automationsPath !== undefined && (reader === undefined || reader.missionRole === 'owner')) {
           const items = await readAutomations(options.automationsPath).catch(() => [])
           automationsEnabled = items.filter(item => item.enabled).length
         }
         const todayDate = today()
-        const activeMandates = snapshot.mandates.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        // The mandates and the last event the reader may read, as /mandates and
+        // /events filter them: a count or a timestamp of what they cannot see tells
+        // the activity of private channels and of the owner's missions (#75 review).
+        let mandatesSeen = snapshot.mandates
+        if (reader !== undefined) {
+          const table = await grants.grants()
+          const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
+          mandatesSeen = mandatesSeen.filter(mandate => canReadMandate(identity, canAdmin, mandate))
+        }
+        const activeMandates = mandatesSeen.filter(mandate => mandateState(mandate, todayDate) === 'active').length
+        const lastEvent = reader === undefined
+          ? snapshot.events.at(-1)
+          : snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
         return respond(200, {
           up: 1,
           uptimeSeconds: Math.round(process.uptime()),
           missions: { queued: count('queued'), running: count('running'), done: count('done'), failed: count('failed') },
-          briefs: snapshot.briefs.length,
+          briefs: briefs.length,
           approvalsPending: pending.length,
           oldestApprovalHours: ages.length === 0 ? 0 : Math.round(Math.max(...ages)),
           activeMandates,
           automationsEnabled,
-          lastEventAt: snapshot.events.at(-1)?.at ?? null,
+          lastEventAt: lastEvent?.at ?? null,
         })
       }
       if (request.method === 'GET' && path === '/state') {
@@ -536,7 +636,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
           events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
           mandates: snapshot.mandates
-            .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+            .filter(mandate => canReadMandate(identity, canAdmin, mandate))
             .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
         }
         return respond(200, { page })
@@ -546,7 +646,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const mandates = (await service.mandates())
-          .filter(mandate => canAdmin || mandate.delegataire === identity || mandate.delegant === identity)
+          .filter(mandate => canReadMandate(identity, canAdmin, mandate))
           .map(mandate => ({ ...mandate, state: mandateState(mandate, today()) }))
         return respond(200, { mandates })
       }
@@ -761,23 +861,55 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
         const kind = input.kind
-        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete') {
+        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent') {
           return respond(400, { error: `unknown approval kind: ${String(kind)}` })
+        }
+        // A propose_agent card carries the agent to create: the fields of POST /agents,
+        // checked now as POST /agents checks them (the connectors must be mounted).
+        const raw = typeof input.proposal === 'object' && input.proposal !== null ? input.proposal as Record<string, unknown> : undefined
+        const field = (key: string): string | undefined => (typeof raw?.[key] === 'string' ? raw[key] as string : undefined)
+        const proposal = kind !== 'propose_agent' || raw === undefined
+          ? undefined
+          : {
+            handle: field('handle') ?? '',
+            name: field('name') ?? '',
+            provider: field('provider') ?? '',
+            model: field('model') ?? '',
+            ...(field('instructions') === undefined ? {} : { instructions: field('instructions') as string }),
+            ...(raw.connectors === undefined ? {} : { connectors: Array.isArray(raw.connectors) ? raw.connectors.filter((server): server is string => typeof server === 'string') : [] }),
+            ...(typeof raw.eurPerMonth === 'number' ? { eurPerMonth: raw.eurPerMonth } : {}),
+          }
+        if (proposal?.connectors !== undefined) {
+          const missing = await unmounted(proposal.connectors)
+          if (missing !== undefined) return missing
+        }
+        if (proposal !== undefined) {
+          const offered = await unlistedModel(proposal.provider, proposal.model)
+          if (offered !== undefined) return offered
         }
         // A card asked during an agent turn belongs to that turn's thread: the
         // approvals connector names the run it acts for (x-mndt-run).
         const run = request.headers?.['x-mndt-run']
         const turn = options.turns?.current()
         const thread = turn !== undefined && run !== undefined && run === turn.turnId ? turn : undefined
-        const approval = await service.requestApproval({
+        const asked = service.requestApproval({
           kind,
-          title: typeof input.title === 'string' ? input.title : '',
+          title: typeof input.title === 'string' && input.title.trim() !== ''
+            ? input.title
+            : proposal === undefined ? '' : `Créer l'agent ${proposal.name}`,
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
-          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId }),
+          // The turn's agent, from the running turn itself: never what a request says.
+          ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId, requestedByAgent: thread.agent }),
+          ...(proposal === undefined ? {} : { proposal }),
         })
-        return respond(201, { approval })
+        // A card refused as asked (an invalid proposal, no title) is the caller's mistake.
+        try {
+          return respond(201, { approval: await asked })
+        } catch (error) {
+          return respond(400, { error: messageOf(error) })
+        }
       }
 
       if (request.method === 'POST' && /^\/approvals\/[^/]+\/decide$/.test(path)) {
@@ -792,6 +924,29 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const decision = input.decision
         if (decision !== 'approved' && decision !== 'rejected') {
           return respond(400, { error: 'decision must be approved or rejected' })
+        }
+        if (card.kind === 'propose_agent' && decision === 'approved') {
+          // An agent wrote this proposal: it is approved only from a screen that shows
+          // all of it (name, model, connectors, ceiling, instructions), which says so.
+          // A screen guard, NOT a security barrier: any client can send the header.
+          // What protects the decision is rights.write above and, at creation, the
+          // owner alone above the default ceiling (approveAgentProposal).
+          if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
+            return respond(409, { error: 'this card proposes an agent: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
+          }
+          // The agent is created from the proposal recorded on the card, by whoever
+          // approves it (an owner or an admin, rights.write above), with their role.
+          const missing = await unmounted(card.proposal?.connectors ?? [])
+          if (missing !== undefined) return missing
+          const offered = await unlistedModel(card.proposal?.provider ?? '', card.proposal?.model ?? '')
+          if (offered !== undefined) return offered
+          const table = await grants.grants()
+          const role = table.ok ? roleOf(table.grants, identity) : undefined
+          try {
+            return respond(200, await service.approveAgentProposal(id, identity, role))
+          } catch (error) {
+            return respond(400, { error: messageOf(error) })
+          }
         }
         const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined)
         return respond(200, { approval })
@@ -817,7 +972,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.split('/')[2] ?? ''
         const notes = await service.recall({ limit: 500 })
         const note = notes.find(candidate => candidate.id === id)
-        if (note === undefined) return respond(404, { error: `no memory ${id}` })
+        // A note the caller may not read is absent to them: holding sharing.write
+        // lets a person share what they read, never publish another's private note.
+        if (note === undefined || (note.scope !== 'team' && note.createdBy !== identity)) return respond(404, { error: `no memory ${id}` })
         if (note.createdBy !== identity) {
           const denied = await authorise(identity, 'sharing.write')
           if (denied !== undefined) return denied
@@ -1185,13 +1342,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(503, { code: 'no-authority', error: 'this deployment has no team authority to write to' })
         }
         const input = parseBody(request.body)
-        const raw = typeof input.subject === 'string' ? input.subject : ''
-        // Printable ASCII only, as for a proven identity (isPlainAscii in #75):
-        // toLowerCase() folds a few Unicode characters onto ASCII ones.
-        if (raw.trim() !== '' && !/^[\x21-\x7e]+$/.test(raw.trim())) {
-          return respond(400, { error: 'the subject is not a plain ASCII e-mail' })
+        // Printable ASCII only, as for a proven identity: toLowerCase() folds a few
+        // Unicode characters onto ASCII ones (the Kelvin sign becomes k).
+        if (typeof input.subject === 'string' && input.subject.trim() !== '' && !isPlainAscii(input.subject)) {
+          return respond(400, { error: 'subject must be a plain ASCII e-mail' })
         }
-        const subject = raw.trim().toLowerCase()
+        const subject = typeof input.subject === 'string' ? input.subject.trim().toLowerCase() : ''
         if (subject === '') return respond(400, { error: 'subject is required' })
         const body: Record<string, unknown> = { subject }
         let next: 'viewer' | 'operator' | 'admin' | 'owner' | undefined
@@ -1247,6 +1403,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           })
           return respond(answer.status, answer.body)
         })
+      }
+
+      if (request.method === 'GET' && path === '/models') {
+        // The models an agent may be given, for the agent form: the priced routes only.
+        return respond(200, { models: options.models === undefined ? [] : await options.models() })
       }
 
       if (request.method === 'GET' && path === '/connectors') {

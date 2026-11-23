@@ -91,7 +91,7 @@ export interface MemoryNote {
 }
 
 /** An action that touches the outside world, so a person must decide it. */
-export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete'
+export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent'
 
 /** Where an approval stands. */
 export type ApprovalState = 'pending' | 'approved' | 'rejected'
@@ -116,12 +116,37 @@ export interface Approval {
   readonly kind: ApprovalAction
   readonly title: string
   readonly payload: ApprovalPayload
+  /**
+   * The person the card is asked for (rights and reading rest on them): for a
+   * card an agent's turn asked, the person who mentioned the agent.
+   */
   readonly requestedBy: string
+  /** The agent whose turn asked the card, when a turn did; absent for a person or a mission. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
   readonly requestedAt: string
   readonly state: ApprovalState
   readonly decidedBy?: string
   readonly decidedAt?: string
   readonly reason?: string
+  /**
+   * A propose_agent card: the agent to create, exactly the body of POST /agents.
+   * The server creates it from THIS proposal when an owner or an admin approves
+   * the card, never from what a page sends.
+   */
+  readonly proposal?: AgentProposal
+  /** The agent the approval created. */
+  readonly agentId?: string
+}
+
+/** An agent proposed on a card (lot 1b): the fields of POST /agents. */
+export interface AgentProposal {
+  readonly handle: string
+  readonly name: string
+  readonly provider: string
+  readonly model: string
+  readonly instructions?: string
+  readonly connectors?: readonly string[]
+  readonly eurPerMonth?: number
 }
 
 /** One line of the product's own history. */
@@ -178,6 +203,8 @@ export interface Agent {
   readonly createdBy: string
   readonly createdAt: string
   readonly retiredAt?: string
+  /** Who retired it. */
+  readonly retiredBy?: string
 }
 
 /** A team channel, or one person's own lane. */
@@ -286,5 +313,5 @@ export function isMissionStatus(value: unknown): value is MissionStatus {
 
 /** @param value - the candidate action. @returns true when it leaves the building. */
 export function needsApproval(value: string): value is ApprovalAction {
-  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete'
+  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent'
 }
