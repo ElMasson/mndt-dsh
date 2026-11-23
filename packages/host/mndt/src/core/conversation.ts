@@ -627,6 +627,7 @@ function reasonKind(reason: string): string {
   if (/borne/.test(reason)) return 'avis non obtenu : borne'
   if (/^Plafond mensuel|^Prix du modèle/.test(reason)) return 'avis non obtenu : plafond'
   if (reason === 'tour arrêté') return 'avis non obtenu : tour arrêté'
+  if (reason === 'redémarrage') return 'avis non obtenu : redémarrage'
   if (reason === 'aucun texte') return 'avis non obtenu : aucun texte'
   if (/plus un agent actif/.test(reason)) return 'avis non obtenu : pair indisponible'
   return 'avis non obtenu : erreur'
