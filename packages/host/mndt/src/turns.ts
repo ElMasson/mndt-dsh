@@ -15,8 +15,12 @@ import type {
   Channel,
   Message,
   Mission,
+  Council,
+  CouncilCost,
+  CouncilSlot,
   ParallelSynthesis,
   Turn,
+  TurnCouncil,
   TurnHelp,
   TurnStep,
   WorkbenchService,
@@ -24,7 +28,14 @@ import type {
 } from './core/index.ts'
 import {
   ceilingRefusal,
+  councilCritiquePrompt,
+  councilFramingPrompt,
+  councilPositionPrompt,
+  councilSynthesisPrompt,
   eurOf,
+  lastJsonLine,
+  NONE_OF_THESE,
+  parseFraming,
   helpPeerPrompt,
   helpReadingPrompt,
   parseHelpReading,
@@ -522,6 +533,200 @@ export class TurnScheduler {
     return done
   }
 
+  /**
+   * A « conseil » turn (its chair's): the chair frames a question and options
+   * (the host adds « aucune de ces options »); each member takes a position
+   * ALONE; each critiques the others without their names and gives a final
+   * choice; then a vote on the options' indexes, or a synthesizer (not a
+   * member) decides. No member has a tool. A tie, a lost quorum (fewer than
+   * two positions counted), « none of these » or a synthesis that cannot
+   * decide escalates to the people. Each call counts for the agent who made
+   * it, under the turn's cost bound, reserved before each call.
+   * @param input - the turn, its coordination and the chair.
+   * @returns the text to publish and what the council cost.
+   */
+  async #council(input: {
+    readonly messageId: string
+    readonly turnId: string
+    readonly coordination: Council
+    readonly chair: Agent
+    readonly channel: Channel
+    readonly message: Message
+    readonly agents: readonly Agent[]
+    readonly signal: AbortSignal
+    readonly call: (
+      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
+    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+  }): Promise<{ text: string; eur: number }> {
+    const { messageId, turnId, coordination, chair, channel, message, agents, signal, call } = input
+    const { service, prices } = this.#options
+    let council: TurnCouncil = {
+      state: 'deliberating', question: '', options: [], positions: [], critiques: [], dissent: [],
+      capEur: coordination.maxEurPerTurn, skipped: [], startedAt: new Date().toISOString(),
+    }
+    let lost = 0
+    const save = async (): Promise<void> => { await service.updateTurn(messageId, turnId, { council }) }
+    const spent = (): number => [
+      ...(council.framing === undefined ? [] : [council.framing]), ...council.positions, ...council.critiques,
+      ...(council.decision?.kind === 'synthesis' ? [council.decision] : []),
+    ].reduce((total, entry) => total + (entry.eur ?? 0), 0) + lost
+    const stopped = (error: unknown): boolean => signal.aborted || (error instanceof Error && error.message === 'turn stopped')
+    /** One call with no tool, bounded. @returns its text and cost, or why it could not be made. */
+    const run = async (who: Agent, suffix: string, text: string): Promise<{ text: string; cost: CouncilCost } | { refused: string }> => {
+      const price = priceOf(prices, who)
+      const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
+      if (spent() + reserved > council.capEur) return { refused: `le coût du tour atteindrait sa borne (${council.capEur} €)` }
+      const monthly = spentThisMonth((await service.snapshot()).messages ?? [], who.id, new Date().toISOString())
+      const ceiling = ceilingRefusal(who, prices, monthly)
+      if (ceiling !== undefined) return { refused: ceiling }
+      try {
+        const answered = await call(who, suffix, text, 'none', council.capEur - spent())
+        return {
+          text: answered.output.text.trim(),
+          cost: {
+            agentId: who.id, model: `${who.provider}/${who.model}`,
+            ...(answered.eur === undefined ? {} : { eur: answered.eur }),
+            ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
+          },
+        }
+      } catch (error) {
+        if (stopped(error)) throw error
+        if (error instanceof TurnBudgetReached && price !== undefined) lost += eurOf(error.tokens, price)
+        return { refused: error instanceof Error ? error.message : String(error) }
+      }
+    }
+    const escalate = async (question: string, why: string, body: string): Promise<{ text: string; eur: number }> => {
+      const summary = [
+        `Question : ${council.question === '' ? question : council.question}.`,
+        `Pourquoi : ${why}.`,
+        `Positions comptées : ${council.positions.filter(p => p.choice !== undefined).length}.`,
+        ...(council.decision?.kind === 'vote' ? [`Décompte : ${Object.entries(council.decision.tally).map(([k, n]) => `option ${k} : ${n}`).join(', ')}.`] : []),
+        ...(council.critiques.length === 0 ? [] : [`Critiques : ${council.critiques.map(c => `${c.slot} : ${c.text.replace(/\s+/g, ' ').slice(0, 200)}`).join(' / ')}.`]),
+      ].join(' ')
+      council = { ...council, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
+      await save()
+      return { text: `${body}\n\nQuestion à l’équipe : ${question}`, eur: spent() }
+    }
+    // 1. The chair frames the question; the host adds « none of these ».
+    await save()
+    const framed = await run(chair, 'cf', councilFramingPrompt(chair, channel, message))
+    if ('refused' in framed) return escalate(message.text, `cadrage impossible : ${framed.refused}`, 'Le conseil n’a pas pu être cadré.')
+    const frame = parseFraming(framed.text)
+    council = { ...council, framing: { text: framed.text, ...framed.cost } }
+    if (frame === undefined) return escalate(message.text, 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
+    council = { ...council, question: frame.question, options: [...frame.options, NONE_OF_THESE] }
+    await save()
+    // 2. The members, in slots drawn here (A is not the chair).
+    const active = coordination.memberIds.flatMap((memberId) => {
+      const member = agents.find(a => a.id === memberId && a.retiredAt === undefined && channel.agents.includes(a.id))
+      if (member === undefined) council = { ...council, skipped: [...council.skipped, { agentId: memberId, reason: 'n’est plus un agent actif de ce canal' }] }
+      return member === undefined ? [] : [member]
+    })
+    const order = active.map(member => ({ member, key: randomUUID() }))
+      .sort((a, b) => a.key.localeCompare(b.key)).map(entry => entry.member)
+    const slots = order.map((member, index) => ({ slot: (['A', 'B', 'C', 'D'] as const)[index] as CouncilSlot, member }))
+    const valid = (choice: unknown): number | undefined =>
+      typeof choice === 'number' && Number.isInteger(choice) && choice >= 1 && choice <= council.options.length ? choice : undefined
+    for (const { slot, member } of slots) {
+      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options))
+      if ('refused' in positioned) {
+        council = { ...council, skipped: [...council.skipped, { slot, agentId: member.id, reason: positioned.refused }] }
+      } else {
+        const parsed = lastJsonLine(positioned.text)
+        const choice = valid(parsed?.value.choice)
+        council = {
+          ...council,
+          positions: [...council.positions, {
+            slot, text: parsed?.body || positioned.text, ...(choice === undefined ? {} : { choice }), ...positioned.cost,
+          }],
+          ...(choice === undefined ? { skipped: [...council.skipped, { slot, agentId: member.id, reason: 'choix illisible' }] } : {}),
+        }
+      }
+      await save()
+    }
+    const counted = council.positions.filter(position => position.choice !== undefined)
+    if (counted.length < 2) return escalate(council.question, 'quorum manqué (moins de deux positions comptées)', 'Le conseil n’a pas réuni assez de positions.')
+    // 3. Each counted member critiques the others, without their names, and chooses again.
+    council = { ...council, state: 'critiquing' }
+    await save()
+    for (const own of counted) {
+      const member = slots.find(entry => entry.slot === own.slot)?.member
+      if (member === undefined) continue
+      const others = counted.filter(other => other.slot !== own.slot).map(other => ({ slot: other.slot, text: other.text }))
+      const critiqued = await run(member, `cc${own.slot.toLowerCase()}`, councilCritiquePrompt(member, channel, council.question, council.options, own, others))
+      if ('refused' in critiqued) {
+        council = { ...council, skipped: [...council.skipped, { slot: own.slot, agentId: member.id, reason: critiqued.refused }] }
+      } else {
+        const parsed = lastJsonLine(critiqued.text)
+        const about = Array.isArray(parsed?.value.about)
+          ? (parsed.value.about as unknown[]).filter((s): s is CouncilSlot => others.some(o => o.slot === s))
+          : []
+        const choice = valid(parsed?.value.choice)
+        council = {
+          ...council,
+          critiques: [...council.critiques, {
+            slot: own.slot, about: about.length === 0 ? others.map(o => o.slot) : about, text: parsed?.body || critiqued.text,
+            ...(choice === undefined ? {} : { choice }), ...critiqued.cost,
+          }],
+        }
+      }
+      await save()
+    }
+    // 4. The decision. A member's final choice is its critique's, else its position's.
+    council = { ...council, state: 'deciding' }
+    await save()
+    const finalOf = (slot: CouncilSlot): number | undefined =>
+      council.critiques.find(c => c.slot === slot)?.choice ?? council.positions.find(p => p.slot === slot)?.choice
+    const none = council.options.length
+    if (coordination.decision === 'vote') {
+      const tally: Record<string, number> = {}
+      for (const position of counted) {
+        const choice = finalOf(position.slot)
+        if (choice !== undefined) tally[String(choice)] = (tally[String(choice)] ?? 0) + 1
+      }
+      const top = Math.max(...Object.values(tally))
+      const leaders = Object.entries(tally).filter(([, n]) => n === top).map(([k]) => Number(k))
+      if (leaders.length !== 1) {
+        council = { ...council, decision: { kind: 'vote', tally } }
+        return escalate(council.question, 'égalité', 'Le conseil est partagé.')
+      }
+      const chosen = leaders[0] as number
+      council = { ...council, decision: { kind: 'vote', tally, chosen } }
+      if (chosen === none) return escalate(council.question, `vote majoritaire sur « ${NONE_OF_THESE} »`, 'Aucune option ne convient au conseil.')
+      const dissent = counted.filter(p => finalOf(p.slot) !== chosen).map(p => ({ slot: p.slot }))
+      council = { ...council, dissent, state: 'done', eur: spent() }
+      await save()
+      const count = Object.entries(tally).map(([k, n]) => `option ${k} : ${n}`).join(', ')
+      return {
+        text: `Décision du conseil (vote) : option ${chosen}, « ${council.options[chosen - 1] ?? ''} ». Décompte : ${count}. ${dissent.length === 0 ? 'Unanime.' : `Ne suivent pas : ${dissent.map(d => d.slot).join(', ')}.`}`,
+        eur: spent(),
+      }
+    }
+    const synthesizer = agents.find(a => a.id === coordination.synthesizerId && a.retiredAt === undefined && channel.agents.includes(a.id))
+    if (synthesizer === undefined) return escalate(council.question, 'le synthétiseur n’est plus un agent actif de ce canal', 'Le conseil n’a pas pu trancher.')
+    const decided = await run(synthesizer, 'cs', councilSynthesisPrompt(synthesizer, channel, council.question, council.options,
+      council.positions.map(p => ({ slot: p.slot, text: p.text })), council.critiques.map(c => ({ slot: c.slot, text: c.text }))))
+    if ('refused' in decided) return escalate(council.question, `synthèse impossible : ${decided.refused}`, 'Le conseil n’a pas pu trancher.')
+    const parsed = lastJsonLine(decided.text)
+    const chosen = valid(parsed?.value.chosen)
+    const body = parsed?.body || decided.text
+    council = { ...council, decision: { kind: 'synthesis', text: body, ...(chosen === undefined ? {} : { chosen }), ...decided.cost } }
+    if (chosen === undefined) return escalate(council.question, 'la synthèse ne tranche pas', body)
+    if (chosen === none) return escalate(council.question, `synthèse sur « ${NONE_OF_THESE} »`, body)
+    // The dissent the synthesizer names, kept to the slots that exist.
+    const dissent = Array.isArray(parsed?.value.dissent)
+      ? (parsed.value.dissent as unknown[]).flatMap((entry) => {
+        const item = entry as { slot?: unknown; why?: unknown }
+        return counted.some(p => p.slot === item.slot)
+          ? [{ slot: item.slot as CouncilSlot, ...(typeof item.why === 'string' && item.why.trim() !== '' ? { why: item.why.trim() } : {}) }]
+          : []
+      })
+      : []
+    council = { ...council, dissent, state: 'done', eur: spent() }
+    await save()
+    return { text: body, eur: spent() }
+  }
+
   /** @returns once every queued turn has settled (for tests and shutdown). */
   async settled(): Promise<void> {
     while (this.#pending.size > 0) await Promise.all([...this.#pending])
@@ -658,11 +863,20 @@ export class TurnScheduler {
         : undefined
       const parallelSteps: TurnStep[] = []
       if (parallelMode !== undefined) live = parallelSteps
+      const councilMode = channel.coordination?.mode === 'council' && channel.coordination.memberIds[0] === agent.id
+        ? channel.coordination
+        : undefined
+      const councilled = councilMode === undefined ? undefined : await this.#council({
+        messageId, turnId: turn.id, coordination: councilMode, chair: agent, channel, message, agents,
+        signal: controller.signal, call,
+      })
       const parallel = parallelMode === undefined ? undefined : await this.#parallel({
         coordination: parallelMode, synthesizer: agent, channel, message, history, agents,
         steps: parallelSteps, signal: controller.signal, call,
       })
-      const first = parallel === undefined ? await call(agent, '', prompt) : { output: parallel.output, eur: undefined }
+      const first = councilled !== undefined
+        ? { output: { text: councilled.text }, eur: councilled.eur }
+        : parallel === undefined ? await call(agent, '', prompt) : { output: parallel.output, eur: undefined }
       if (first.output.text.trim() === '')
         throw new Error('l’agent n’a produit aucun texte')
       // « Auteur puis vérificateur »: a turn of the channel's author is checked by
@@ -673,7 +887,9 @@ export class TurnScheduler {
       let helpEur: number | undefined
       let helpClosed = false
       // A help the agent asked its peers during this call (ask_peers): run now, by the host.
-      const asked = parallel === undefined ? (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help : undefined
+      const asked = parallel === undefined && councilled === undefined
+        ? (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help
+        : undefined
       if (asked?.state === 'asked') {
         const helped = await this.#help({
           messageId, turnId: turn.id, asker: agent, channel, prompt, first: first.output.text.trim(), agents, asked,
@@ -767,10 +983,16 @@ export class TurnScheduler {
           published,
         )
       // An escalated question names the message that publishes it: a person answers it there.
-      const escalated = (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help
+      const settledTurn = (await service.message(messageId))?.turns?.find(t => t.id === turn.id)
+      const escalated = settledTurn?.help
       if (answer !== undefined && escalated?.escalation !== undefined) {
         const escalation = { ...escalated.escalation, messageId: answer.id }
         await service.updateTurn(messageId, turn.id, { help: { ...escalated, escalation } })
+      }
+      const convened = settledTurn?.council
+      if (answer !== undefined && convened?.escalation !== undefined) {
+        const escalation = { ...convened.escalation, messageId: answer.id }
+        await service.updateTurn(messageId, turn.id, { council: { ...convened, escalation } })
       }
       await service.updateTurn(messageId, turn.id, {
         status: 'done',

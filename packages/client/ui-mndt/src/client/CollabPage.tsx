@@ -1775,7 +1775,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     const where = chatChannels?.find(c => c.id === e.channelId)
                     return (
                       <div key={e.turnId} className="mw-queue-item mw-turn-unchecked mw-help-question" data-testid="pending-question">
-                        <p className="mw-help-question-text">{tc('helpQuestionFor', { question: e.question })}</p>
+                        <p className="mw-help-question-text">
+                          {tc(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
+                        </p>
                         {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
                         {where === undefined ? undefined : (
                           <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>

@@ -21,6 +21,7 @@ import type {
   BriefSource,
   Channel,
   ChannelContext,
+  HelpEscalation,
   HelpRequest,
   TurnHelp,
   ContextProposal,
@@ -129,8 +130,20 @@ export const MAX_AGENT_NAME = 60
  * members must not file three cards for each of them.
  */
 export const MAX_PENDING_PROPOSALS = 3
+/**
+ * @param turn - a turn.
+ * @returns its help's or its council's escalation, when one waits for an answer.
+ */
+function openEscalationOf(turn: Turn): { kind: 'help' | 'council'; escalation: HelpEscalation } | undefined {
+  if (turn.help?.escalation !== undefined && turn.help.escalation.answeredAt === undefined) return { kind: 'help', escalation: turn.help.escalation }
+  if (turn.council?.escalation !== undefined && turn.council.escalation.answeredAt === undefined) return { kind: 'council', escalation: turn.council.escalation }
+  return undefined
+}
+
 /** An open escalation, as the « À traiter » queue reads it. */
 export interface OpenEscalation {
+  /** What escalated: a help (the asker gets the hand again) or a council (the answer is the decision). */
+  readonly kind: 'help' | 'council'
   readonly channelId: string
   readonly turnId: string
   /** The mentioning message of the turn that asked. */
@@ -204,6 +217,7 @@ function withContext(channel: Channel, text: string, baseVersion: number, actor:
 export type CoordinationRefusalCode =
   | 'not-member' | 'same-agent' | 'same-model' | 'too-few-workers' | 'too-many-workers'
   | 'synthesizer-is-worker' | 'budget-out-of-range' | 'unknown-mode' | 'missing-fields'
+  | 'too-few-members' | 'too-many-members' | 'synthesizer-is-member' | 'unknown-decision'
 
 /** A refused coordination: its message for people, its code for the screen. */
 export class CoordinationRefusal extends Error {
@@ -214,6 +228,11 @@ export class CoordinationRefusal extends Error {
     this.code = code
   }
 }
+/** The members of a « conseil ». */
+export const MIN_COUNCIL_MEMBERS = 2
+export const MAX_COUNCIL_MEMBERS = 4
+/** What a council turn costs at most when the channel says nothing, in euros. */
+export const DEFAULT_EUR_PER_COUNCIL_TURN = 1
 /** The workers of a « en parallèle puis synthèse » turn. */
 export const MIN_WORKERS = 2
 export const MAX_WORKERS = 4
@@ -1342,6 +1361,93 @@ export class WorkbenchService {
   }
 
   /**
+   * Cancel the turns a previous process left running or queued: nothing will
+   * run them, and a request minutes old must not leave alone after an update.
+   * A running turn says « interrompu par un redémarrage », a queued one « non
+   * lancé : redémarrage »; each keeps what it already cost (its own eur, or
+   * what its recorded steps and help spent). No message in the thread: the
+   * screen shows the status and the reason, the person asks again if they want.
+   * Only what predates this process: a mention posted since it started is never touched.
+   * @param before - when this process started (ISO).
+   * @returns how many running and queued turns were cancelled.
+   */
+  async cancelInterruptedTurns(before: string): Promise<{ running: number; queued: number }> {
+    const old = (message: Message, turn: Turn): boolean =>
+      message.createdAt < before && (turn.startedAt === undefined || turn.startedAt < before)
+    const unsettledIn = (message: Message) => (turn: Turn): boolean => (turn.status === 'running' || turn.status === 'queued') && old(message, turn)
+    const any = ((await this.snapshot()).messages ?? []).some(message => (message.turns ?? []).some(unsettledIn(message)))
+    if (!any) return { running: 0, queued: 0 }
+    return this.#write((state) => {
+      const at = this.#at()
+      let running = 0
+      let queued = 0
+      const messages = (state.messages ?? []).map((message) => {
+        const unsettled = unsettledIn(message)
+        if (!(message.turns ?? []).some(unsettled)) return message
+        return {
+          ...message,
+          updatedAt: at,
+          turns: (message.turns ?? []).map((turn): Turn => {
+            if (!unsettled(turn)) return turn
+            if (turn.status === 'running') running += 1
+            else queued += 1
+            const spent = turn.eur
+              ?? ((turn.steps ?? []).reduce((total, step) => total + (step.eur ?? 0), 0)
+                + (turn.help?.advices ?? []).reduce((total, advice) => total + (advice.eur ?? 0), 0))
+            return {
+              ...turn,
+              status: 'cancelled',
+              reason: turn.status === 'running' ? 'interrompu par un redémarrage' : 'non lancé : redémarrage',
+              finishedAt: at,
+              ...(spent > 0 ? { eur: Math.round(spent * 1_000_000) / 1_000_000 } : {}),
+            }
+          }),
+        }
+      })
+      return {
+        state: { ...state, messages },
+        event: { at, actor: 'mndt', action: 'turn.cancelled', subject: 'restart', detail: `${running} running, ${queued} queued, left by a previous process` },
+        value: { running, queued },
+      }
+    })
+  }
+
+  /**
+   * Close the helps a previous process left open (asked, advising, reading):
+   * nothing will ever run them. Each is done, with a skipped entry
+   * « redémarrage », and no reading, so no peer is ever named for it.
+   * Only what predates this process: a help asked since it started is never touched.
+   * @param before - when this process started (ISO).
+   * @returns how many were closed.
+   */
+  async closeInterruptedHelps(before: string): Promise<number> {
+    const stale = (turn: Turn): boolean => turn.help !== undefined && turn.help.state !== 'done' && turn.help.askedAt < before
+    const open = ((await this.snapshot()).messages ?? []).some(message => (message.turns ?? []).some(stale))
+    if (!open) return 0
+    return this.#write((state) => {
+      let closed = 0
+      const at = this.#at()
+      const messages = (state.messages ?? []).map((message) => {
+        if (!(message.turns ?? []).some(stale)) return message
+        return {
+          ...message,
+          updatedAt: at,
+          turns: (message.turns ?? []).map((turn) => {
+            if (turn.help === undefined || !stale(turn)) return turn
+            closed += 1
+            return { ...turn, help: { ...turn.help, state: 'done' as const, skipped: [...turn.help.skipped, { reason: 'redémarrage' }] } }
+          }),
+        }
+      })
+      return {
+        state: { ...state, messages },
+        event: { at, actor: 'mndt', action: 'turn.help-closed', subject: 'restart', detail: `${closed} help(s) left open by a previous process` },
+        value: closed,
+      }
+    })
+  }
+
+  /**
    * A person's reply to an agent's escalated question: answered, and the asker
    * gets a turn on that reply (it has the hand again).
    * @param reply - the person's message, replying to the agent's question.
@@ -1361,14 +1467,22 @@ export class WorkbenchService {
       const origin = messages.find(candidate => candidate.id === question.replyTo)
       // The escalation this reply answers: the one its question message names
       // (or, for a help recorded before messageId existed, the asker's open one).
-      const turn = origin?.turns?.find(t => t.agentId === askerId && t.help?.escalation !== undefined
-        && t.help.escalation.answeredAt === undefined && (t.help.escalation.messageId ?? question.id) === question.id)
-      if (origin === undefined || turn?.help?.escalation === undefined) return { state, event: [], value: undefined }
+      const turn = origin?.turns?.find((t) => {
+        const open = openEscalationOf(t)
+        return t.agentId === askerId && open !== undefined && (open.escalation.messageId ?? question.id) === question.id
+      })
+      const open = turn === undefined ? undefined : openEscalationOf(turn)
+      if (origin === undefined || turn === undefined || open === undefined) return { state, event: [], value: undefined }
       const at = this.#at()
-      const answered = { ...turn, help: { ...turn.help, escalation: { ...turn.help.escalation, answeredAt: at, answeredBy: actor } } }
+      const escalation = { ...open.escalation, answeredAt: at, answeredBy: actor }
+      const answered = open.kind === 'help' && turn.help !== undefined
+        ? { ...turn, help: { ...turn.help, escalation } }
+        : turn.council === undefined ? turn : { ...turn, council: { ...turn.council, escalation } }
       const nextOrigin = { ...origin, turns: (origin.turns ?? []).map(t => (t.id === turn.id ? answered : t)), updatedAt: at }
       const current = messages.find(candidate => candidate.id === reply.id) ?? reply
-      const relaunched = (current.turns ?? []).some(t => t.agentId === askerId)
+      // A help gives the asker the hand again. A council does not convene again:
+      // the person's answer is the decision.
+      const relaunched = open.kind === 'council' || (current.turns ?? []).some(t => t.agentId === askerId)
         ? current
         : { ...current, turns: [...(current.turns ?? []), { id: this.#id('trn'), agentId: askerId, status: 'queued' as const }], updatedAt: at }
       return {
@@ -1378,7 +1492,7 @@ export class WorkbenchService {
             ? nextOrigin
             : candidate.id === reply.id ? relaunched : candidate)),
         },
-        event: { at, actor, action: 'turn.help-answered', subject: turn.id, detail: reply.id },
+        event: { at, actor, action: open.kind === 'help' ? 'turn.help-answered' : 'turn.council-answered', subject: turn.id, detail: reply.id },
         value: relaunched,
       }
     })
@@ -1392,12 +1506,16 @@ export class WorkbenchService {
     const state = await this.snapshot()
     const mine = new Set((state.channels ?? []).filter(channel => channel.members.includes(identity)).map(channel => channel.id))
     return (state.messages ?? []).filter(message => mine.has(message.channelId)).flatMap(message => (message.turns ?? [])
-      .filter(turn => turn.help?.escalation !== undefined && turn.help.escalation.answeredAt === undefined)
-      .map(turn => ({
-        channelId: message.channelId, turnId: turn.id, messageId: message.id,
-        ...(turn.help?.escalation?.messageId === undefined ? {} : { questionMessageId: turn.help.escalation.messageId }),
-        question: turn.help?.escalation?.question ?? '', summary: turn.help?.escalation?.summary ?? '', at: turn.help?.escalation?.at ?? '',
-      })))
+      .flatMap((turn) => {
+        const open = openEscalationOf(turn)
+        if (open === undefined) return []
+        const { escalation } = open
+        return [{
+          kind: open.kind, channelId: message.channelId, turnId: turn.id, messageId: message.id,
+          ...(escalation.messageId === undefined ? {} : { questionMessageId: escalation.messageId }),
+          question: escalation.question, summary: escalation.summary, at: escalation.at,
+        }]
+      }))
   }
 
   /**
@@ -1461,6 +1579,29 @@ export class WorkbenchService {
           throw new CoordinationRefusal('budget-out-of-range', `a parallel turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
         }
         recorded = { mode: 'parallel-synthesis', workerIds: workers, synthesizerId: coordination.synthesizerId, maxEurPerTurn: cap }
+      } else if (coordination?.mode === 'council') {
+        const members = [...new Set(coordination.memberIds)]
+        if (members.length < MIN_COUNCIL_MEMBERS || members.length > MAX_COUNCIL_MEMBERS) {
+          throw new CoordinationRefusal(members.length < MIN_COUNCIL_MEMBERS ? 'too-few-members' : 'too-many-members',
+            `a council has ${MIN_COUNCIL_MEMBERS} to ${MAX_COUNCIL_MEMBERS} distinct members`)
+        }
+        if (members.some(agentId => active(agentId) === undefined)) throw new CoordinationRefusal('not-member', 'the members must all be active agents of this channel')
+        if (coordination.decision !== 'vote' && coordination.decision !== 'synthesis') {
+          throw new CoordinationRefusal('unknown-decision', 'a council decides by vote or by synthesis')
+        }
+        if (coordination.decision === 'synthesis') {
+          if (coordination.synthesizerId === undefined) throw new CoordinationRefusal('missing-fields', 'a council decided by synthesis needs a synthesizer')
+          if (members.includes(coordination.synthesizerId)) throw new CoordinationRefusal('synthesizer-is-member', 'the synthesizer is not one of the members')
+          if (active(coordination.synthesizerId) === undefined) throw new CoordinationRefusal('not-member', 'the synthesizer must be an active agent of this channel')
+        }
+        const cap = coordination.maxEurPerTurn
+        if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0 || cap > MAX_EUR_PER_COORDINATED_TURN) {
+          throw new CoordinationRefusal('budget-out-of-range', `a council turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
+        }
+        recorded = {
+          mode: 'council', memberIds: members, decision: coordination.decision, maxEurPerTurn: cap,
+          ...(coordination.decision === 'synthesis' && coordination.synthesizerId !== undefined ? { synthesizerId: coordination.synthesizerId } : {}),
+        }
       } else if (coordination !== undefined) {
         throw new CoordinationRefusal('unknown-mode', `unknown coordination mode: ${String((coordination as { mode?: unknown }).mode)}`)
       }

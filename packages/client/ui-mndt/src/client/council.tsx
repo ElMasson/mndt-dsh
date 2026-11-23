@@ -34,13 +34,15 @@ export interface CouncilCritique {
 /** A turn's council, as `turn.council` serves it. */
 export interface TurnCouncil {
   readonly state: string
+  /** The question put to the council. */
+  readonly question?: string
   readonly framing?: string
   readonly options: readonly string[]
   readonly positions: readonly CouncilPosition[]
   readonly critiques: readonly CouncilCritique[]
   readonly decision?:
     | { readonly kind: 'vote'; readonly tally: Readonly<Record<number, number>>; readonly chosen?: number }
-    | { readonly kind: 'synthesis'; readonly text: string; readonly agentId?: string }
+    | { readonly kind: 'synthesis'; readonly text: string; readonly agentId?: string; readonly chosen?: number }
   readonly dissent: readonly { readonly slot: string; readonly why?: string }[]
   /** Positions or critiques not counted, and why (by category before the decision). */
   readonly skipped: readonly { readonly slot?: string; readonly reason: string }[]
@@ -63,9 +65,12 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 function slotOf(value: unknown): string | undefined {
   return typeof value === 'string' && /^[A-Z]$/u.test(value) ? value : undefined
 }
-/** @param value - anything. @param count - the options. @returns an option's index, if valid. */
+/**
+ * @param value - an option's number as the core serves it (1-based, never a label).
+ * @param count - the options. @returns its index in `options` (0-based), if valid.
+ */
 function indexOf(value: unknown, count: number): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < count ? value : undefined
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= count ? value - 1 : undefined
 }
 /** @param value - anything. @returns a finite amount ≥ 0. */
 function amountOf(value: unknown): number | undefined {
@@ -97,7 +102,12 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
     decision = { kind: 'vote', tally, ...(chosen === undefined ? {} : { chosen }) }
   } else if (d?.kind === 'synthesis' && textOf(d.text) !== undefined) {
     const agentId = textOf(d.agentId)
-    decision = { kind: 'synthesis', text: textOf(d.text) as string, ...(agentId === undefined ? {} : { agentId }) }
+    const chosen = indexOf(d.chosen, labels.length)
+    decision = {
+      kind: 'synthesis', text: textOf(d.text) as string,
+      ...(agentId === undefined ? {} : { agentId }),
+      ...(chosen === undefined ? {} : { chosen }),
+    }
   }
   const decided = decision !== undefined
   const positions: CouncilPosition[] = []
@@ -157,6 +167,7 @@ export function councilOf(turn: ChatTurn): TurnCouncil | undefined {
   return {
     options: labels, positions, critiques, dissent, skipped,
     state: c.state,
+    ...(textOf(c.question) === undefined ? {} : { question: textOf(c.question) as string }),
     ...(framing === undefined ? {} : { framing }),
     ...(decision === undefined ? {} : { decision }),
     ...(escalation === undefined ? {} : { escalation }),
@@ -200,7 +211,9 @@ export function CouncilThread(props: {
       : c.decision?.kind === 'vote'
         ? (c.decision.chosen === undefined ? t('councilNoMajority') : t('councilChosen', { option: label(c.decision.chosen), n: c.decision.tally[c.decision.chosen] ?? 0, of: members }))
         : c.decision?.kind === 'synthesis'
-          ? t('councilSynthBy', { who: c.decision.agentId === undefined ? t('councilSynthesis') : name(c.decision.agentId) })
+          ? (c.decision.chosen === undefined
+            ? t('councilSynthBy', { who: c.decision.agentId === undefined ? t('councilSynthesis') : name(c.decision.agentId) })
+            : t('councilSynthChose', { option: label(c.decision.chosen), who: c.decision.agentId === undefined ? t('councilSynthesis') : name(c.decision.agentId) }))
           : ended ? endedWords : t('councilRunning')
   const target = props.canAnswer === true && waiting ? c.escalation.messageId : undefined
   const send = async (): Promise<void> => {
@@ -241,6 +254,7 @@ export function CouncilThread(props: {
       ) : undefined}
       <details className="mw-turn-steps" data-testid="council-steps" open={running}>
         <summary>{t('councilDetail')}</summary>
+        {c.question === undefined ? undefined : <p className="mw-ctx-strong" data-testid="council-question-asked">{c.question}</p>}
         {c.framing === undefined ? undefined : (
           <div data-testid="council-framing">
             <p className="mw-ctx-strong">{t('councilFraming', { who: name(chair) })}</p>
@@ -263,9 +277,9 @@ export function CouncilThread(props: {
                     <p className="mw-ctx-small">
                       <b>{t('councilCritique', { about: critique.about })}</b>
                       {' · '}
-                      {critique.choice === undefined ? t('councilChangesUnreadable')
-                        : critique.choice === p.choice ? t('councilConfirms')
-                          : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
+                      {/* No final choice: the position's counts, as the core does. */}
+                      {critique.choice === undefined || critique.choice === p.choice ? t('councilConfirms')
+                        : t('councilChanges', { n: critique.choice + 1, option: label(critique.choice) })}
                     </p>
                     <div className="mw-turn-part mw-agent-text">{renderBrief(critique.text, { plainHeadings: true })}</div>
                   </div>

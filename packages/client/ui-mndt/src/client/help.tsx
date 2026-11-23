@@ -200,6 +200,14 @@ function stateWord(help: TurnHelp, t: ChatTranslate, names?: Readonly<Record<str
     return help.closedBy.by === undefined ? t('helpClosedByHuman') : t('helpClosedByWho', { who: shownName(help.closedBy.by, names) })
   }
   if (help.escalation?.answeredAt !== undefined) return t('helpClosedByHuman')
+  // A question still waiting is said first, reading or not: it must never pass for a closed help.
+  if (help.escalation !== undefined) return t('helpQuestion')
+  // Ended without a reading (a restart, a stopped turn): said, with the reason the core gives.
+  // (no question waits here: it was said just above)
+  if (help.state === 'done' && help.reading === undefined) {
+    const reasons = [...new Set(help.skipped.filter(k => k.slot === undefined).map(k => k.reason))]
+    return reasons.length === 0 ? t('helpClosedUnread') : t('helpClosedUnreadWhy', { why: reasons.join(', ') })
+  }
   if (help.reading === undefined) return help.state === 'reading' ? t('helpReading') : t('helpRunning')
   return help.reading.verdict === 'unblocked' ? t('helpUnblocked')
     : help.reading.verdict === 'card' ? t('helpCard') : t('helpQuestion')

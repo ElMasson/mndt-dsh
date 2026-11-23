@@ -247,6 +247,8 @@ export interface OpenEscalation {
   readonly question: string
   readonly summary?: string
   readonly at?: string
+  /** Asked after a mutual help or by a council (#119). */
+  readonly kind?: 'help' | 'council'
 }
 
 /** A model the core offers to agents: one line of `GET /models`. */

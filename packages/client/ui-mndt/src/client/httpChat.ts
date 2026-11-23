@@ -113,13 +113,14 @@ export function createHttpChat(
       return (Array.isArray(body.escalations) ? body.escalations : []).flatMap((row: unknown): OpenEscalation[] => {
         const e = row as Partial<Record<keyof OpenEscalation, unknown>> | null
         if (e === null || typeof e !== 'object') return []
-        const { channelId, turnId, messageId, questionMessageId, question, summary, at } = e
+        const { channelId, turnId, messageId, questionMessageId, question, summary, at, kind } = e
         if (typeof channelId !== 'string' || typeof turnId !== 'string' || typeof messageId !== 'string'
           || typeof questionMessageId !== 'string' || typeof question !== 'string' || question.trim() === '') return []
         return [{
           channelId, turnId, messageId, questionMessageId, question: question.slice(0, 2000),
           ...(typeof summary === 'string' && summary.trim() !== '' ? { summary: summary.slice(0, 4000) } : {}),
           ...(typeof at === 'string' ? { at } : {}),
+          ...(kind === 'help' || kind === 'council' ? { kind } : {}),
         }]
       })
     },

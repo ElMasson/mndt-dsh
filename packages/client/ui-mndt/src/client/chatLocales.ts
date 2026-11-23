@@ -350,6 +350,10 @@ export const chatEn = {
   councilEnded: 'ended without a decision',
   councilSkipped: 'Position {slot} not counted: {reason}',
   councilEndedWhy: 'ended without a decision: {why}',
+  helpClosedUnread: 'closed without a reading',
+  helpClosedUnreadWhy: 'closed without a reading: {why}',
+  councilSynthChose: '{option} (synthesis by {who})',
+  councilQuestionFor: 'A council asks you: {question}',
 } as const
 
 /** One copy key. */
@@ -700,6 +704,10 @@ export const chatFr: Record<ChatKey, string> = {
   councilEnded: 'clos sans décision',
   councilSkipped: 'Position {slot} non comptée : {reason}',
   councilEndedWhy: 'clos sans décision : {why}',
+  helpClosedUnread: 'close sans lecture',
+  helpClosedUnreadWhy: 'close sans lecture : {why}',
+  councilSynthChose: '{option} (synthèse par {who})',
+  councilQuestionFor: 'Un conseil vous demande : {question}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

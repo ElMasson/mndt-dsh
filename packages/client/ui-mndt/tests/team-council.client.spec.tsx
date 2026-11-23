@@ -85,13 +85,13 @@ describe('the council in the panel', () => {
 
 const options = ['Relancer Sodiac maintenant', 'Attendre la fin du mois', 'aucune de ces options']
 const positions = [
-  { slot: 'A', choice: 0, text: 'La facture a 45 jours de retard.', agentId: 'agt_1', model: 'p/a' },
-  { slot: 'B', choice: 1, text: 'Sodiac paie toujours en fin de mois.', agentId: 'agt_2', model: 'p/b' },
-  { slot: 'C', choice: 0, text: '<b>Relancer</b> poliment.', agentId: 'agt_3', model: 'p/c' },
+  { slot: 'A', choice: 1, text: 'La facture a 45 jours de retard.', agentId: 'agt_1', model: 'p/a' },
+  { slot: 'B', choice: 2, text: 'Sodiac paie toujours en fin de mois.', agentId: 'agt_2', model: 'p/b' },
+  { slot: 'C', choice: 1, text: '<b>Relancer</b> poliment.', agentId: 'agt_3', model: 'p/c' },
 ]
 const critiques = [
-  { slot: 'A', about: 'B', text: 'La fin du mois est passée.', choice: 0 },
-  { slot: 'B', about: 'C', text: 'Je me range à A.', choice: 0 },
+  { slot: 'A', about: ['B'], text: 'La fin du mois est passée.', choice: 1 },
+  { slot: 'B', about: ['C'], text: 'Je me range à A.', choice: 1 },
 ]
 /** @param council - the turn's council. @returns a turn of the chair. */
 function turn(council: unknown): ChatTurn {
@@ -123,7 +123,7 @@ describe('a council in the feed', () => {
   })
 
   it('decided by vote: the option and its count, the critique\'s choice said, authors revealed, disagreement always visible', () => {
-    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 0: 3, 1: 0 }, chosen: 0 }, dissent: [{ slot: 'B', why: 'préférait attendre' }] })
+    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 1: 3, 2: 0 }, chosen: 1 }, dissent: [{ slot: 'B', why: 'préférait attendre' }] })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('Relancer Sodiac maintenant (3 sur 3)')
     expect(screen.getByTestId('council-dissent').textContent).toBe('Désaccord, position B : préférait attendre')
@@ -138,7 +138,7 @@ describe('a council in the feed', () => {
 
   it('a tie asks a person: one field, where the answer counts', async () => {
     const onAnswer = vi.fn(async () => undefined)
-    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 0: 1, 1: 1 } },
+    const council = read({ state: 'done', options, positions, critiques, decision: { kind: 'vote', tally: { 1: 1, 2: 1 } },
       escalation: { question: 'Relancer ou attendre ?', messageId: 'msg_9' } })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} onAnswer={onAnswer} canAnswer t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('une question pour vous')
@@ -157,7 +157,7 @@ describe('a council in the feed', () => {
 describe('an unreadable choice keeps the council', () => {
   it('the position stays, said « choix illisible »; the rest is shown', () => {
     const council = read({ state: 'done', options, positions: [...positions.slice(0, 2), { slot: 'C', choice: 7, text: 'Hors des options.' }], critiques,
-      decision: { kind: 'vote', tally: { 0: 1, 1: 1 } }, skipped: [{ slot: 'C', reason: 'choix illisible' }] })
+      decision: { kind: 'vote', tally: { 1: 1, 2: 1 } }, skipped: [{ slot: 'C', reason: 'choix illisible' }] })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
     const all = screen.getAllByTestId('council-position')
     expect(all).toHaveLength(3)
@@ -167,7 +167,7 @@ describe('an unreadable choice keeps the council', () => {
   })
 
   it('a critique may name several positions; a council closed by a restart is not shown as running', () => {
-    const council = read({ state: 'closed', options, positions, critiques: [{ slot: 'A', about: ['B', 'C'], text: 'Les deux oublient le retard.', choice: 0 }],
+    const council = read({ state: 'closed', options, positions, critiques: [{ slot: 'A', about: ['B', 'C'], text: 'Les deux oublient le retard.', choice: 1 }],
       skipped: [{ reason: 'redémarrage' }] })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('clos sans décision : redémarrage')
@@ -182,5 +182,23 @@ describe('a question waiting is never hidden by « clos sans décision »', () =
     render(<CouncilThread turn={turn({})} council={council} agents={byId} onAnswer={vi.fn()} canAnswer t={chatFrench} />)
     expect(screen.getByTestId('council-outcome').textContent).toBe('une question pour vous')
     expect(screen.getByRole('button', { name: 'Répondre et clore ce fil' })).toBeTruthy()
+  })
+})
+
+describe('options are numbered as the core numbers them (1-based)', () => {
+  it('choice 1 is the first option; tally keys and chosen are numbers too; option 0 is unreadable', () => {
+    const council = read({ state: 'done', options, positions: [{ slot: 'A', choice: 1, text: 'x' }, { slot: 'B', choice: 0, text: 'y' }],
+      critiques: [{ slot: 'A', about: ['B'], text: 'z' }], decision: { kind: 'vote', tally: { '1': 1, '2': 0 }, chosen: 1 } })
+    expect(council.positions[0]?.choice).toBe(0)
+    expect(council.positions[1]?.choice).toBeUndefined()
+    render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('council-outcome').textContent).toBe('Relancer Sodiac maintenant (1 sur 2)')
+    // A critique without a final choice keeps the position's: « confirme ».
+    expect(screen.getAllByTestId('council-position')[0]?.textContent).toContain('confirme')
+  })
+
+  it('a synthesis that chose an option says it, with its synthesiser', () => {
+    render(<CouncilThread turn={turn({})} council={read({ state: 'done', options, positions, critiques, decision: { kind: 'synthesis', text: 'Attendre.', chosen: 2, agentId: 'agt_4' } })} agents={byId} t={chatFrench} />)
+    expect(screen.getByTestId('council-outcome').textContent).toBe('Attendre la fin du mois (synthèse par @synthese)')
   })
 })
