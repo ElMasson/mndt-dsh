@@ -367,7 +367,7 @@ export class TurnScheduler {
     readonly call: (
       who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
     ) => Promise<{ output: TurnOutput; eur: number | undefined }>
-  }): Promise<{ text: string; eur: number }> {
+  }): Promise<{ text?: string; eur: number }> {
     const { messageId, turnId, asker, channel, prompt, first, agents, asked, signal, call } = input
     const { service, prices } = this.#options
     let help: TurnHelp = { ...asked, state: 'advising' }
@@ -392,10 +392,18 @@ export class TurnScheduler {
     // The slots, in an order drawn here: A is not « the first one named ».
     const named = randomUUID().charCodeAt(0) % 2 === 0 ? [...help.peerIds] : [...help.peerIds].reverse()
     const slots = named.map((peerId, index) => ({ slot: (index === 0 ? 'A' : 'B') as 'A' | 'B', peerId }))
-    const close = async (by: { by: string; at: string }): Promise<{ text: string; eur: number }> => {
-      help = { ...help, state: 'done', closedBy: by, eur: spent() }
+    // A person answered in the thread: the help ends there, and the asker
+    // publishes nothing (no reading after it, no text beside the person's).
+    const close = async (by: { by: string; at: string }): Promise<{ text?: string; eur: number }> => {
+      const { escalation: _none, ...rest } = help
+      help = { ...rest, state: 'done', closedBy: by, eur: spent() }
       await save()
-      return { text: `${first}\n\nEntraide close : ${by.by} a répondu dans le fil.`, eur: spent() }
+      return { eur: spent() }
+    }
+    /** @param result - what the help would publish. @returns it, unless a person answered meanwhile. */
+    const unlessClosed = async (result: { text: string; eur: number }): Promise<{ text?: string; eur: number }> => {
+      const by = await closedBy()
+      return by === undefined ? result : close(by)
     }
     /** One round of advices. @returns a person who closed the help meanwhile, if any. */
     const round = async (index: 1 | 2, disputed?: string): Promise<{ by: string; at: string } | undefined> => {
@@ -446,7 +454,9 @@ export class TurnScheduler {
       }
       return undefined
     }
-    const escalate = async (question: string, body: string, disputed?: string): Promise<{ text: string; eur: number }> => {
+    const escalate = async (question: string, body: string, disputed?: string): Promise<{ text?: string; eur: number }> => {
+      const by = await closedBy()
+      if (by !== undefined) return close(by)
       const reasons = help.skipped.map(skip => skip.reason)
       const summary = [
         `Blocage : ${help.request.blocker}.`,
@@ -462,7 +472,10 @@ export class TurnScheduler {
     if (firstClose !== undefined) return close(firstClose)
     if (help.advices.length === 0) return escalate(help.request.blocker, `${first}\n\nAucun avis n’a abouti.`)
     /** The asker's reading of the advices so far. */
-    const read = async (index: 1 | 2): Promise<ReturnType<typeof parseHelpReading> | { refused: string }> => {
+    type Reading = ReturnType<typeof parseHelpReading> | { refused: string } | { closed: { by: string; at: string } }
+    const read = async (index: 1 | 2): Promise<Reading> => {
+      const by = await closedBy()
+      if (by !== undefined) return { closed: by }
       help = { ...help, state: 'reading' }
       await save()
       const text = helpReadingPrompt(prompt, help.request, help.advices,
@@ -481,12 +494,14 @@ export class TurnScheduler {
       }
     }
     let parsed = await read(1)
+    if ('closed' in parsed) return close(parsed.closed)
     if ('refused' in parsed) return escalate(help.request.blocker, `${first}\n\nLecture des avis impossible : ${parsed.refused}.`)
     if (parsed.disputed !== undefined && help.request.need === 'fact' && help.advices.length === 2) {
       const disputed = parsed.disputed
       const secondClose = await round(2, disputed)
       if (secondClose !== undefined) return close(secondClose)
       const again = await read(2)
+      if ('closed' in again) return close(again.closed)
       if ('refused' in again) return escalate(help.request.blocker, parsed.body, disputed)
       parsed = again
     }
@@ -500,9 +515,11 @@ export class TurnScheduler {
     }
     help = { ...help, reading }
     if (reading.verdict === 'escalate') return escalate(parsed.question ?? help.request.blocker, parsed.body, parsed.disputed)
+    const done = await unlessClosed({ text: parsed.body, eur: spent() })
+    if (done.text === undefined) return done
     help = { ...help, state: 'done', eur: spent() }
     await save()
-    return { text: parsed.body, eur: spent() }
+    return done
   }
 
   /** @returns once every queued turn has settled (for tests and shutdown). */
@@ -654,6 +671,7 @@ export class TurnScheduler {
       // its own ceiling. A check that cannot happen says why; the draft goes out.
       let output = first.output
       let helpEur: number | undefined
+      let helpClosed = false
       // A help the agent asked its peers during this call (ask_peers): run now, by the host.
       const asked = parallel === undefined ? (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help : undefined
       if (asked?.state === 'asked') {
@@ -661,8 +679,9 @@ export class TurnScheduler {
           messageId, turnId: turn.id, asker: agent, channel, prompt, first: first.output.text.trim(), agents, asked,
           signal: controller.signal, call,
         })
-        output = { ...first.output, text: helped.text }
         helpEur = helped.eur
+        if (helped.text === undefined) helpClosed = true
+        else output = { ...first.output, text: helped.text }
       }
       let steps: TurnStep[] | undefined = parallel === undefined ? undefined : parallelSteps
       const coordination = channel.coordination
@@ -738,15 +757,18 @@ export class TurnScheduler {
           : uncorrected !== undefined
             ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
             : output.text
-      const answer = await service.reply(
-        channel.id,
-        messageId,
-        { kind: 'agent', agentId: agent.id },
-        published,
-      )
+      // A help a person closed by answering publishes nothing beside them.
+      const answer = helpClosed
+        ? undefined
+        : await service.reply(
+          channel.id,
+          messageId,
+          { kind: 'agent', agentId: agent.id },
+          published,
+        )
       // An escalated question names the message that publishes it: a person answers it there.
       const escalated = (await service.message(messageId))?.turns?.find(t => t.id === turn.id)?.help
-      if (escalated?.escalation !== undefined) {
+      if (answer !== undefined && escalated?.escalation !== undefined) {
         const escalation = { ...escalated.escalation, messageId: answer.id }
         await service.updateTurn(messageId, turn.id, { help: { ...escalated, escalation } })
       }

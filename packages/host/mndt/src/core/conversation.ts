@@ -601,15 +601,33 @@ export function servedMessage(message: Message): Message {
     turns: (message.turns ?? []).map((turn) => {
       if (turn.help === undefined || turn.help.reading !== undefined) return turn
       const { peerIds: _peers, ...help } = turn.help
+      // What each advice cost would name its model (with the price grid), and an
+      // engine's error may name a peer: before the reading, only the help's
+      // total and a reason by kind.
+      const total = help.eur ?? help.advices.reduce((sum, advice) => sum + (advice.eur ?? 0), 0)
       return {
         ...turn,
         help: {
           ...help,
           peerIds: [],
-          advices: help.advices.map(({ agentId: _agent, model: _model, ...advice }) => advice),
-          skipped: help.skipped.map(({ agentId: _agent, ...skip }) => skip),
+          eur: Math.round(total * 1_000_000) / 1_000_000,
+          advices: help.advices.map(({ agentId: _agent, model: _model, eur: _eur, tokens: _tokens, ...advice }) => advice),
+          skipped: help.skipped.map(({ agentId: _agent, reason, ...skip }) => ({ ...skip, reason: reasonKind(reason) })),
         },
       }
     }),
   }
+}
+
+/**
+ * @param reason - why a peer gave no advice, as recorded.
+ * @returns the same reason by kind, naming no one: what is served before the reading.
+ */
+function reasonKind(reason: string): string {
+  if (/borne/.test(reason)) return 'avis non obtenu : borne'
+  if (/^Plafond mensuel|^Prix du modèle/.test(reason)) return 'avis non obtenu : plafond'
+  if (reason === 'tour arrêté') return 'avis non obtenu : tour arrêté'
+  if (reason === 'aucun texte') return 'avis non obtenu : aucun texte'
+  if (/plus un agent actif/.test(reason)) return 'avis non obtenu : pair indisponible'
+  return 'avis non obtenu : erreur'
 }
