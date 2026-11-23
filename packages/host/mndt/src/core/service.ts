@@ -20,6 +20,8 @@ import type {
   Brief,
   BriefSource,
   Channel,
+  ChannelContext,
+  ContextProposal,
   MemoryKind,
   MemoryNote,
   MemoryScope,
@@ -81,6 +83,8 @@ export interface ApprovalRequest {
   readonly requestedBy: string
   /** A propose_agent card's agent, checked as POST /agents checks it. */
   readonly proposal?: AgentProposal
+  /** A propose_context card's new context; the card must be asked from a channel turn (channelId). */
+  readonly contextProposal?: ContextProposal
   /** The agent whose turn asked it: set by the server from the running turn, never from a request. */
   readonly requestedByAgent?: { readonly id: string; readonly handle: string }
 }
@@ -123,6 +127,42 @@ export const MAX_AGENT_NAME = 60
  * members must not file three cards for each of them.
  */
 export const MAX_PENDING_PROPOSALS = 3
+/** The longest context of a channel, in characters once trimmed: it enters every turn of the channel. */
+export const MAX_CONTEXT_CHARS = 4000
+
+/** Why a channel's context is refused, by a code the screen reads. */
+export type ContextRefusalCode = 'context-too-long' | 'context-changed'
+/** A refused change of a channel's context: 409 for context-changed, 400 otherwise. */
+export class ContextRefusal extends Error {
+  readonly code: ContextRefusalCode
+  constructor(code: ContextRefusalCode, message: string) {
+    super(message)
+    this.name = 'ContextRefusal'
+    this.code = code
+  }
+}
+
+/**
+ * @param channel - a channel.
+ * @param text - the new context; trimmed, empty erases it.
+ * @param baseVersion - the version it was written from (0: none).
+ * @param actor - who changes it.
+ * @param at - when.
+ * @returns the channel with its new context.
+ * @throws ContextRefusal when too long, or when the context moved since baseVersion.
+ */
+function withContext(channel: Channel, text: string, baseVersion: number, actor: string, at: string): Channel {
+  const trimmed = text.trim()
+  if (trimmed.length > MAX_CONTEXT_CHARS) {
+    throw new ContextRefusal('context-too-long', `a channel's context is ${MAX_CONTEXT_CHARS} characters at most (${trimmed.length} given)`)
+  }
+  const current = channel.context?.version ?? 0
+  if (baseVersion !== current) {
+    throw new ContextRefusal('context-changed', `the context of #${channel.name} changed since version ${baseVersion} (now ${current}): read it again`)
+  }
+  const context: ChannelContext = { text: trimmed, version: current + 1, updatedBy: actor, updatedAt: at }
+  return { ...channel, context }
+}
 
 /** Why a channel's coordination is refused, by a code the screen reads (not the English text). */
 export type CoordinationRefusalCode =
@@ -498,6 +538,15 @@ export class WorkbenchService {
     if (!needsApproval(request.kind)) return Promise.reject(new Error(`action ${String(request.kind)} does not need approval`))
     if (request.title.trim() === '') return Promise.reject(new Error('an approval needs a title'))
     if (request.requestedBy.trim() === '') return Promise.reject(new Error('an approval needs a requester'))
+    if (request.kind === 'propose_context') {
+      // A context belongs to a channel: the card is asked from one of its turns.
+      if (request.channelId === undefined) return Promise.reject(new Error('a propose_context card is asked from a channel turn'))
+      if (request.contextProposal === undefined) return Promise.reject(new Error('a propose_context card needs a text and a baseVersion'))
+      const length = request.contextProposal.text.trim().length
+      if (length > MAX_CONTEXT_CHARS) {
+        return Promise.reject(new ContextRefusal('context-too-long', `a channel's context is ${MAX_CONTEXT_CHARS} characters at most (${length} given)`))
+      }
+    }
     if (request.kind === 'propose_agent') {
       // The proposal is checked when the card is made, with the rules of POST /agents.
       const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
@@ -518,11 +567,31 @@ export class WorkbenchService {
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
       ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
+      ...(request.contextProposal === undefined || request.kind !== 'propose_context'
+        ? {}
+        : { contextProposal: { text: request.contextProposal.text.trim(), baseVersion: request.contextProposal.baseVersion } }),
       ...(request.requestedByAgent === undefined
         ? {}
         : { requestedByAgent: { id: request.requestedByAgent.id, handle: request.requestedByAgent.handle } }),
     }
     return this.#write((state) => {
+      if (approval.kind === 'propose_context') {
+        // The title is the server's, from the channel and the change: an agent's
+        // words never name what a person approves.
+        const channel = (state.channels ?? []).find(candidate => candidate.id === approval.channelId)
+        if (channel === undefined) throw new Error(`no channel ${String(approval.channelId)}`)
+        const waiting = state.approvals.filter(card => card.kind === 'propose_context' && card.state === 'pending' && card.channelId === channel.id)
+        if (waiting.length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`${MAX_PENDING_PROPOSALS} context proposals already wait for a decision in #${channel.name}: decide them first`)
+        }
+        const text = approval.contextProposal?.text ?? ''
+        const titled: Approval = { ...approval, title: text === '' ? `Effacer le contexte de #${channel.name}` : `Changer le contexte de #${channel.name} (${text.length} caractères)` }
+        return {
+          state: { ...state, approvals: [titled, ...state.approvals] },
+          event: { at: titled.requestedAt, actor: titled.requestedBy, action: 'approval.requested', subject: titled.id, detail: titled.kind },
+          value: titled,
+        }
+      }
       if (approval.kind === 'propose_agent') {
         const waiting = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending')
         // Both limits hold together: per person who asked, and per agent when the
@@ -539,6 +608,38 @@ export class WorkbenchService {
         state: { ...state, approvals: [approval, ...state.approvals] },
         event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
         value: approval,
+      }
+    })
+  }
+
+  /**
+   * Approve a propose_context card and apply its context, in ONE write: the card
+   * is approved only if the context is still at the version the proposal was
+   * written from. A refusal (context-changed, context-too-long, no channel)
+   * leaves the card pending.
+   * @param id - the card.
+   * @param actor - who approves it (an owner or an admin, member of the channel).
+   * @returns the approved card and the channel.
+   */
+  approveContextProposal(id: string, actor: string): Promise<{ approval: Approval; channel: Channel }> {
+    return this.#write((state) => {
+      const approval = state.approvals.find(candidate => candidate.id === id)
+      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval.kind !== 'propose_context' || approval.contextProposal === undefined) throw new Error(`approval ${id} proposes no context`)
+      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      const channel = (state.channels ?? []).find(candidate => candidate.id === approval.channelId)
+      if (channel === undefined || !channel.members.includes(actor.trim())) throw new Error(`no channel ${String(approval.channelId)}`)
+      const at = this.#at()
+      const next = withContext(channel, approval.contextProposal.text, approval.contextProposal.baseVersion, actor.trim(), at)
+      const decided: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at }
+      return {
+        state: {
+          ...state,
+          channels: (state.channels ?? []).map(candidate => (candidate.id === channel.id ? next : candidate)),
+          approvals: state.approvals.map(candidate => (candidate.id === id ? decided : candidate)),
+        },
+        event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `context of #${channel.name} at version ${next.context?.version ?? 0}` },
+        value: { approval: decided, channel: next },
       }
     })
   }
@@ -1132,6 +1233,28 @@ export class WorkbenchService {
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: events,
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Write a channel's context, from the version the writer read.
+   * @param id - the channel.
+   * @param text - the new context; trimmed, at most MAX_CONTEXT_CHARS; empty erases it.
+   * @param baseVersion - the version read (0: the channel had none).
+   * @param actor - a member who writes it.
+   * @returns the channel.
+   * @throws ContextRefusal context-too-long, or context-changed when another change came in between.
+   */
+  setChannelContext(id: string, text: string, baseVersion: number, actor: string): Promise<Channel> {
+    return this.#write((state) => {
+      const channel = (state.channels ?? []).find(candidate => candidate.id === id)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      const next = withContext(channel, text, baseVersion, actor, this.#at())
+      return {
+        state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor, action: 'channel.context', subject: id, detail: `version ${next.context?.version ?? 0}` },
         value: next,
       }
     })

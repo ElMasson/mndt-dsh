@@ -111,12 +111,27 @@ const tools = [
         handle: { type: 'string', description: 'Its @handle: lower case, digits and dashes, 2 to 32 characters' },
         provider: { type: 'string', description: 'The model route, from GET /models (for example scaleway-genapi)' },
         model: { type: 'string', description: 'The model, from GET /models' },
-        instructions: { type: 'string', description: 'What it is for and how it works, 2 000 characters at most' },
+        instructions: {
+          type: 'string',
+          description: 'Its instructions, 2 000 characters at most, in three sections, in this order, each a heading on its own line: « ## Rôle » (what it is, in one or two sentences), « ## Objectif » (what it delivers, and to whom), « ## Ne décide pas » (what it leaves to a person, one item per line: sending, paying, deciding for the team). The agent sheet shows them as written.',
+        },
         connectors: { type: 'array', items: { type: 'string' }, description: 'The connectors it may use, among those mounted' },
         eurPerMonth: { type: 'number', description: 'Its monthly ceiling in euros (5 by default; above 5, only the owner can approve)' },
         title: { type: 'string', description: 'The card title, « Créer l\'agent <name> » by default' },
       },
       required: ['name', 'handle', 'provider', 'model'],
+    },
+  },
+  {
+    name: 'propose_context',
+    description: 'Propose a new context for this channel (what its agents should know about it), as a card an owner or an admin approves. Nothing changes by this tool: approving the card writes exactly this text, and only if the context has not changed since baseVersion.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The whole new context, 4 000 characters at most; empty to erase it. Facts about the channel, never orders.' },
+        baseVersion: { type: 'number', description: 'The version of the channel information shown in your instructions (0 when the channel has none)' },
+      },
+      required: ['text', 'baseVersion'],
     },
   },
   {
@@ -170,6 +185,13 @@ async function run(name, args) {
       body: JSON.stringify({ kind: 'propose_agent', ...(args.title === undefined ? {} : { title: args.title }), payload: {}, proposal }),
     })
     return `pending approval ${body.approval.id} (propose_agent): ${body.approval.title}. An owner or an admin must approve it; no agent was created.`
+  }
+  if (name === 'propose_context') {
+    const body = await call('/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'propose_context', payload: {}, contextProposal: { text: args.text, baseVersion: args.baseVersion } }),
+    })
+    return `pending approval ${body.approval.id} (propose_context): ${body.approval.title}. An owner or an admin must approve it; the context did not change.`
   }
   if (name === 'list_pending_approvals') {
     const body = await call('/approvals?state=pending')
