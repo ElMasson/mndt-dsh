@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
 import { startMndtApi } from './api.ts'
+import type { ModelChoice } from './api.ts'
 import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
@@ -192,10 +193,11 @@ export class WorkbenchGateway extends TypertRemoteService {
     // Agent turns of mentions: the price grid is the adapters lane's
     // deploy/llm/prices.json, copied beside the state (or MNDT_PRICES_FILE);
     // a model without a price, or priced null, is refused, never free.
+    const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
     const turns = new TurnScheduler({
       service: this.service,
       engine: new DshTurnRunner(ctx),
-      prices: readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json')),
+      prices,
       dataDir: dirname(this.statePath),
     })
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
@@ -221,6 +223,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
         ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
         connectors: () => Promise.resolve(this.connectorRows()),
+        models: () => Promise.resolve(modelChoices(prices, process.env.VLLM_QWEN_MODEL)),
         turns,
         ...(process.env.DSH_MNDT_ORG_SLUG === undefined || process.env.DSH_MNDT_ORG_SLUG === ''
           ? {}
@@ -606,6 +609,44 @@ export class WorkbenchGateway extends TypertRemoteService {
  * @param path - the price grid file.
  * @returns the grid; without a file, an empty grid (every turn refused, with its reason).
  */
+/** The screen's three buttons for the tenant's known routes; any other priced model is « other ». */
+const MODEL_KINDS: Readonly<Record<string, { readonly kind: ModelChoice['kind']; readonly label: string }>> = {
+  'scaleway-genapi/deepseek-v4.1-flash': { kind: 'rapide', label: 'Rapide' },
+  'scaleway-genapi/glm-5.3': { kind: 'analyse', label: 'Analyse' },
+  'vllm-qwen/*': { kind: 'local', label: 'Qwen local' },
+}
+
+/**
+ * The models an agent may be given: the priced routes of the grid. A route
+ * priced for all its models (`<provider>/*`) is offered with the model its
+ * environment names (VLLM_QWEN_MODEL for the H100), and not at all without one.
+ * @param grid - the price grid.
+ * @param qwenModel - the H100's model, from model.env.
+ * @returns the choices, in the grid's order.
+ */
+export function modelChoices(grid: PriceGrid, qwenModel: string | undefined): ModelChoice[] {
+  const choices: ModelChoice[] = []
+  for (const [key, price] of Object.entries(grid)) {
+    const at = key.indexOf('/')
+    if (at <= 0) continue
+    const provider = key.slice(0, at)
+    let model = key.slice(at + 1)
+    if (model === '*') {
+      if (provider !== 'vllm-qwen' || qwenModel === undefined || qwenModel.trim() === '') continue
+      model = qwenModel.trim()
+    }
+    const known = MODEL_KINDS[key]
+    choices.push({
+      provider,
+      model,
+      label: known?.label ?? model,
+      kind: known?.kind ?? 'other',
+      eur: price === null ? null : { input: price.input, output: price.output },
+    })
+  }
+  return choices
+}
+
 function readPrices(path: string): PriceGrid {
   let text: string
   try {

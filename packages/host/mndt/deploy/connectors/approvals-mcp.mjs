@@ -102,6 +102,24 @@ const tools = [
     },
   },
   {
+    name: 'propose_agent',
+    description: 'Propose a new agent of the team, as a card an owner or an admin approves. Nothing is created by this tool: approving the card creates the agent, from exactly what is proposed here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Its name, as people will read it (for example « Recouvrement »)' },
+        handle: { type: 'string', description: 'Its @handle: lower case, digits and dashes, 2 to 32 characters' },
+        provider: { type: 'string', description: 'The model route, from GET /models (for example scaleway-genapi)' },
+        model: { type: 'string', description: 'The model, from GET /models' },
+        instructions: { type: 'string', description: 'What it is for and how it works, 2 000 characters at most' },
+        connectors: { type: 'array', items: { type: 'string' }, description: 'The connectors it may use, among those mounted' },
+        eurPerMonth: { type: 'number', description: 'Its monthly ceiling in euros (5 by default; above 5, only the owner can approve)' },
+        title: { type: 'string', description: 'The card title, « Créer l\'agent <name> » by default' },
+      },
+      required: ['name', 'handle', 'provider', 'model'],
+    },
+  },
+  {
     name: 'list_pending_approvals',
     description: 'List the decisions currently waiting for a person.',
     inputSchema: { type: 'object', properties: {} },
@@ -141,6 +159,17 @@ async function run(name, args) {
       body: JSON.stringify({ kind: args.kind, title: args.title, payload }),
     })
     return `pending approval ${body.approval.id} (${body.approval.kind}): ${body.approval.title}. A person must decide it; nothing was executed.`
+  }
+  if (name === 'propose_agent') {
+    const proposal = {}
+    for (const key of ['name', 'handle', 'provider', 'model', 'instructions', 'connectors', 'eurPerMonth']) {
+      if (args[key] !== undefined) proposal[key] = args[key]
+    }
+    const body = await call('/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'propose_agent', ...(args.title === undefined ? {} : { title: args.title }), payload: {}, proposal }),
+    })
+    return `pending approval ${body.approval.id} (propose_agent): ${body.approval.title}. An owner or an admin must approve it; no agent was created.`
   }
   if (name === 'list_pending_approvals') {
     const body = await call('/approvals?state=pending')

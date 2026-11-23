@@ -96,6 +96,7 @@
     },
     "allow": [
       "request_approval",
+      "propose_agent",
       "list_pending_approvals",
       "read_approval"
     ],

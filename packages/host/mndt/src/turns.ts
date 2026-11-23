@@ -131,21 +131,24 @@ export class TurnScheduler {
   }
 
   /**
-   * Stop the turns of a message (it was deleted) or of an agent in a channel
-   * (it left): a running one is aborted, a queued one will not start.
-   * @param filter - the message, or the channel and the agent.
+   * Stop the turns of a message (it was deleted), of an agent in a channel
+   * (it left) or of an agent everywhere (it was retired): a running one is
+   * aborted, a queued one will not start.
+   * @param filter - the message, the channel and the agent, or the agent alone.
    */
   stop(
     filter:
       | { readonly messageId: string }
-      | { readonly channelId: string; readonly agentId: string },
+      | { readonly channelId: string; readonly agentId: string }
+      | { readonly agentId: string },
   ): void {
     for (const running of this.#running.values()) {
       const matches =
         'messageId' in filter
           ? running.messageId === filter.messageId
-          : running.channelId === filter.channelId &&
-            running.agentId === filter.agentId
+          : 'channelId' in filter
+            ? running.channelId === filter.channelId && running.agentId === filter.agentId
+            : running.agentId === filter.agentId
       if (matches) running.controller.abort()
     }
   }
