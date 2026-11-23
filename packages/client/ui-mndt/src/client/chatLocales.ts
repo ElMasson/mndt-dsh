@@ -249,6 +249,20 @@ export const chatEn = {
   coordRevisionUnknown: 'Correction not confirmed: read this answer as not checked.',
   coordNotMember: 'The agents chosen must all be active agents of this channel.',
   coordMissingFields: 'Choose the agents of this mode first.',
+  sheetRetired: 'Retired on {at}',
+  sheetEdit: 'Change',
+  sheetClose: 'Close',
+  sheetNoConnector: 'No connector: it works on what it is given in the channel.',
+  sheetChannels: 'Channels',
+  sheetNoChannel: 'In no team channel',
+  sheetDeclared: 'Declared',
+  sheetDeclaredBy: 'by {who}, {at}',
+  sheetDoesNotDecide: 'What it does not decide',
+  sheetRule: 'Nothing on its own: what it proposes becomes a card, decided by a person. It reaches only the connectors listed here.',
+  sheetNoInstructions: 'No written instructions for this agent.',
+  sheetUnfold: 'Read all the instructions ({n} lines)',
+  sheetFold: 'Fold',
+  sheetOpen: 'See {name}',
 } as const
 
 /** One copy key. */
@@ -498,6 +512,20 @@ export const chatFr: Record<ChatKey, string> = {
   coordRevisionUnknown: 'Correction non confirmée : lisez cette réponse comme non vérifiée.',
   coordNotMember: 'Les agents choisis doivent tous être des agents actifs de ce canal.',
   coordMissingFields: 'Choisissez d\'abord les agents de ce mode.',
+  sheetRetired: 'Retiré le {at}',
+  sheetEdit: 'Modifier',
+  sheetClose: 'Fermer',
+  sheetNoConnector: 'Aucun connecteur : il travaille sur ce qu\'on lui donne dans le canal.',
+  sheetChannels: 'Canaux',
+  sheetNoChannel: 'Dans aucun canal d\'équipe',
+  sheetDeclared: 'Déclaré',
+  sheetDeclaredBy: 'par {who}, {at}',
+  sheetDoesNotDecide: 'Ce qu\'il ne décide pas',
+  sheetRule: 'Rien seul : ce qu\'il propose devient une carte, décidée par une personne. Il n\'atteint que les connecteurs listés ici.',
+  sheetNoInstructions: 'Pas de consigne écrite pour cet agent.',
+  sheetUnfold: 'Lire toute la consigne ({n} lignes)',
+  sheetFold: 'Replier',
+  sheetOpen: 'Voir {name}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
