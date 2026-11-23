@@ -489,7 +489,8 @@ export interface TurnCouncil {
   /** What the council cost, every call together. */
   readonly eur?: number
   readonly capEur: number
-  readonly skipped: readonly { readonly slot?: CouncilSlot; readonly agentId?: string; readonly reason: string }[]
+  /** A call that could not give its part; `eur` is what it consumed anyway (stopped at the bound). */
+  readonly skipped: readonly { readonly slot?: CouncilSlot; readonly agentId?: string; readonly reason: string; readonly eur?: number }[]
   readonly startedAt: string
 }
 

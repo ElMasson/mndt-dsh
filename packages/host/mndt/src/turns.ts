@@ -564,15 +564,16 @@ export class TurnScheduler {
       state: 'deliberating', question: '', options: [], positions: [], critiques: [], dissent: [],
       capEur: coordination.maxEurPerTurn, skipped: [], startedAt: new Date().toISOString(),
     }
-    let lost = 0
     const save = async (): Promise<void> => { await service.updateTurn(messageId, turnId, { council }) }
     const spent = (): number => [
       ...(council.framing === undefined ? [] : [council.framing]), ...council.positions, ...council.critiques,
-      ...(council.decision?.kind === 'synthesis' ? [council.decision] : []),
-    ].reduce((total, entry) => total + (entry.eur ?? 0), 0) + lost
+      ...(council.decision?.kind === 'synthesis' ? [council.decision] : []), ...council.skipped,
+    ].reduce((total, entry) => total + (entry.eur ?? 0), 0)
     const stopped = (error: unknown): boolean => signal.aborted || (error instanceof Error && error.message === 'turn stopped')
     /** One call with no tool, bounded. @returns its text and cost, or why it could not be made. */
-    const run = async (who: Agent, suffix: string, text: string): Promise<{ text: string; cost: CouncilCost } | { refused: string }> => {
+    /** What a call that could not give its part consumed, for its agent: recorded on its skipped entry. */
+    type Refused = { refused: string; eur?: number }
+    const run = async (who: Agent, suffix: string, text: string): Promise<{ text: string; cost: CouncilCost } | Refused> => {
       const price = priceOf(prices, who)
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
       if (spent() + reserved > council.capEur) return { refused: `le coût du tour atteindrait sa borne (${council.capEur} €)` }
@@ -591,8 +592,20 @@ export class TurnScheduler {
         }
       } catch (error) {
         if (stopped(error)) throw error
-        if (error instanceof TurnBudgetReached && price !== undefined) lost += eurOf(error.tokens, price)
-        return { refused: error instanceof Error ? error.message : String(error) }
+        const reason = error instanceof Error ? error.message : String(error)
+        return error instanceof TurnBudgetReached && price !== undefined
+          ? { refused: reason, eur: eurOf(error.tokens, price) }
+          : { refused: reason }
+      }
+    }
+    /** @param who - the agent. @param refused - why its call gave no part. @param slot - its slot, if any. */
+    const skip = (who: Agent, refused: Refused, slot?: CouncilSlot): void => {
+      council = {
+        ...council,
+        skipped: [...council.skipped, {
+          ...(slot === undefined ? {} : { slot }), agentId: who.id, reason: refused.refused,
+          ...(refused.eur === undefined ? {} : { eur: refused.eur }),
+        }],
       }
     }
     const escalate = async (question: string, why: string, body: string): Promise<{ text: string; eur: number }> => {
@@ -610,13 +623,16 @@ export class TurnScheduler {
     // 1. The chair frames the question; the host adds « none of these ».
     await save()
     const framed = await run(chair, 'cf', councilFramingPrompt(chair, channel, message))
-    if ('refused' in framed) return escalate(message.text, `cadrage impossible : ${framed.refused}`, 'Le conseil n’a pas pu être cadré.')
+    if ('refused' in framed) {
+      skip(chair, framed)
+      return escalate(message.text, `cadrage impossible : ${framed.refused}`, 'Le conseil n’a pas pu être cadré.')
+    }
     const frame = parseFraming(framed.text)
     council = { ...council, framing: { text: framed.text, ...framed.cost } }
     if (frame === undefined) return escalate(message.text, 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
     council = { ...council, question: frame.question, options: [...frame.options, NONE_OF_THESE] }
     await save()
-    // 2. The members, in slots drawn here (A is not the chair).
+    // 2. The members, in slots drawn here: A is not necessarily the chair.
     const active = coordination.memberIds.flatMap((memberId) => {
       const member = agents.find(a => a.id === memberId && a.retiredAt === undefined && channel.agents.includes(a.id))
       if (member === undefined) council = { ...council, skipped: [...council.skipped, { agentId: memberId, reason: 'n’est plus un agent actif de ce canal' }] }
@@ -630,7 +646,7 @@ export class TurnScheduler {
     for (const { slot, member } of slots) {
       const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options))
       if ('refused' in positioned) {
-        council = { ...council, skipped: [...council.skipped, { slot, agentId: member.id, reason: positioned.refused }] }
+        skip(member, positioned, slot)
       } else {
         const parsed = lastJsonLine(positioned.text)
         const choice = valid(parsed?.value.choice)
@@ -655,7 +671,7 @@ export class TurnScheduler {
       const others = counted.filter(other => other.slot !== own.slot).map(other => ({ slot: other.slot, text: other.text }))
       const critiqued = await run(member, `cc${own.slot.toLowerCase()}`, councilCritiquePrompt(member, channel, council.question, council.options, own, others))
       if ('refused' in critiqued) {
-        council = { ...council, skipped: [...council.skipped, { slot: own.slot, agentId: member.id, reason: critiqued.refused }] }
+        skip(member, critiqued, own.slot)
       } else {
         const parsed = lastJsonLine(critiqued.text)
         const about = Array.isArray(parsed?.value.about)
@@ -685,10 +701,12 @@ export class TurnScheduler {
         if (choice !== undefined) tally[String(choice)] = (tally[String(choice)] ?? 0) + 1
       }
       const top = Math.max(...Object.values(tally))
+      const votes = Object.values(tally).reduce((sum, n) => sum + n, 0)
       const leaders = Object.entries(tally).filter(([, n]) => n === top).map(([k]) => Number(k))
-      if (leaders.length !== 1) {
+      // An absolute majority, more than half of the votes counted: a 2-1-1 out of 4 does not decide.
+      if (leaders.length !== 1 || top * 2 <= votes) {
         council = { ...council, decision: { kind: 'vote', tally } }
-        return escalate(council.question, 'égalité', 'Le conseil est partagé.')
+        return escalate(council.question, leaders.length !== 1 ? 'égalité' : 'pas de majorité', 'Le conseil est partagé.')
       }
       const chosen = leaders[0] as number
       council = { ...council, decision: { kind: 'vote', tally, chosen } }
@@ -706,7 +724,10 @@ export class TurnScheduler {
     if (synthesizer === undefined) return escalate(council.question, 'le synthétiseur n’est plus un agent actif de ce canal', 'Le conseil n’a pas pu trancher.')
     const decided = await run(synthesizer, 'cs', councilSynthesisPrompt(synthesizer, channel, council.question, council.options,
       council.positions.map(p => ({ slot: p.slot, text: p.text })), council.critiques.map(c => ({ slot: c.slot, text: c.text }))))
-    if ('refused' in decided) return escalate(council.question, `synthèse impossible : ${decided.refused}`, 'Le conseil n’a pas pu trancher.')
+    if ('refused' in decided) {
+      skip(synthesizer, decided)
+      return escalate(council.question, `synthèse impossible : ${decided.refused}`, 'Le conseil n’a pas pu trancher.')
+    }
     const parsed = lastJsonLine(decided.text)
     const chosen = valid(parsed?.value.chosen)
     const body = parsed?.body || decided.text

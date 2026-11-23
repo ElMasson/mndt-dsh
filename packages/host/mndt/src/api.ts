@@ -358,7 +358,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const now = new Date().toISOString()
         const messages = (await service.snapshot()).messages ?? []
         const agents = await service.listAgents()
-        return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now) })) })
+        return respond(200, { agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now, true) })) })
       }
       if (request.method === 'POST' && parts.length === 3 && parts[2] === 'retire') {
         // Retiring an agent is creating's mirror: owners and admins only.

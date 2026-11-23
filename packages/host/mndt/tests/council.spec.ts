@@ -240,3 +240,77 @@ describe('« conseil »: anonymous until the decision, in the core', () => {
     expect(JSON.stringify(served)).not.toMatch(new RegExp(`${t.beta}|${t.gamma}`))
   })
 })
+
+describe('« conseil »: what C\'s review of 616afddc4a asked', () => {
+  it('a decided council that escalates keeps its members withheld until a person answers', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.positions = { alpha: 1, beta: 2, gamma: 3 }
+    const { turn, replies } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.decision).toBeDefined()
+    const served = async (): Promise<Turn | undefined> => (((await b.call('GET', `/channels/${t.channel}/messages`, 'operator')).body.messages as Message[])
+      .find(m => m.turns?.[0]?.council !== undefined))?.turns?.[0]
+    const open = await served()
+    expect(open?.council?.positions.every(p => p.agentId === undefined && p.eur === undefined)).toBe(true)
+    expect(JSON.stringify(open)).not.toMatch(new RegExp(`${t.beta}|${t.gamma}`))
+    await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    expect((await served())?.council?.positions.every(p => p.agentId !== undefined)).toBe(true)
+  })
+
+  it('the served eurThisMonth of no member moves while the council deliberates and critiques; once over, in one block', async () => {
+    const b = bench()
+    const t = await team(b)
+    const counters = async (): Promise<number[]> => {
+      const agents = (await b.call('GET', '/agents', 'owner')).body.agents as { id: string; eurThisMonth: number }[]
+      return [t.alpha, t.beta, t.gamma].map(id => agents.find(a => a.id === id)?.eurThisMonth ?? -1)
+    }
+    const seen: number[][] = []
+    b.engine.before = async (input) => { if (/-c[pc][a-d]$/.test(input.turnId)) seen.push(await counters()) }
+    await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(seen.length).toBe(6)
+    expect(seen.every(row => row.every(eur => eur === 0))).toBe(true)
+    expect((await counters()).every(eur => eur > 0)).toBe(true)
+  })
+
+  it('an absolute majority is needed: 2-1-1 out of 4 does not decide (« pas de majorité »)', async () => {
+    const b = bench()
+    const t = await team(b)
+    await b.call('POST', `/channels/${t.channel}/coordination`, 'owner', { mode: 'council', members: [t.alpha, t.beta, t.gamma, t.judge] })
+    b.engine.positions = { alpha: 1, beta: 1, gamma: 2, juge: 3 }
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(turn.council?.decision).toEqual({ kind: 'vote', tally: { 1: 2, 2: 1, 3: 1 } })
+    expect(turn.council?.escalation?.summary).toContain('Pourquoi : pas de majorité.')
+  })
+
+  it('a member mentioned during the council reads no position nor critique in its history', async () => {
+    const b = bench()
+    const t = await team(b)
+    let mentioned = false
+    b.engine.before = async (input) => {
+      if (input.turnId.endsWith('-cpa') && !mentioned) {
+        mentioned = true
+        await b.call('POST', `/channels/${t.channel}/messages`, 'owner', { text: '@beta autre chose ?' })
+      }
+    }
+    await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const ordinary = b.engine.seen.find(input => input.agent.handle === 'beta' && input.turnId === input.runId)
+    expect(ordinary).toBeDefined()
+    expect(ordinary?.prompt).not.toMatch(/position de|critique de/)
+  })
+
+  it('a call stopped at the bound counts for the agent that made it, on its skipped entry', async () => {
+    const b = bench()
+    const t = await team(b)
+    const { TurnBudgetReached } = await import('../src/turns.ts')
+    b.engine.before = (input) => { if (input.turnId.endsWith('-cpb')) throw new TurnBudgetReached({ input: 50_000, output: 0 }) }
+    const { turn } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    const stopped = turn.council?.skipped.find(s => s.slot === 'B')
+    expect(stopped?.eur).toBeGreaterThan(0)
+    const messages = (await b.service.snapshot()).messages ?? []
+    const c = turn.council
+    const own = [c?.framing, ...(c?.positions ?? []), ...(c?.critiques ?? []), ...(c?.skipped ?? [])]
+      .filter(e => e?.agentId === stopped?.agentId).reduce((sum, e) => sum + (e?.eur ?? 0), 0)
+    expect(spentThisMonth(messages, stopped?.agentId ?? '', new Date().toISOString())).toBeCloseTo(own, 9)
+  })
+})
