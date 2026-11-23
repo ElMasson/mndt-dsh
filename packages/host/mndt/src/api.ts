@@ -436,6 +436,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       return respond(200, { message })
     }
 
+    if (request.method === 'POST' && parts.length === 3 && parts[2] === 'coordination') {
+      // How the channel's turns are coordinated decides what runs and what it costs:
+      // owners and admins only.
+      const denied = await authorise(identity, 'rights.write')
+      if (denied !== undefined) return denied
+      if (input.mode === 'solo') return respond(200, { channel: await service.setCoordination(channel.id, undefined, identity) })
+      if (input.mode !== 'author-verifier' || typeof input.author !== 'string' || typeof input.verifier !== 'string') {
+        return respond(400, { error: 'mode is solo, or author-verifier with an author and a verifier (agent ids)' })
+      }
+      const updated = await service.setCoordination(channel.id, { mode: 'author-verifier', authorId: input.author, verifierId: input.verifier }, identity)
+      return respond(200, { channel: updated })
+    }
+
     if (request.method === 'POST' && parts.length === 3 && ['members', 'agents', 'connectors'].includes(parts[2] ?? '')) {
       // A channel's connectors give its agents access to data (Qonto, Dolibarr,
       // Office 365): owners and admins only (rights.write), not every operator

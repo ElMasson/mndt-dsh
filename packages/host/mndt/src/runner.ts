@@ -17,7 +17,7 @@ import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
-import { channelPolicy, scopeToolPolicy } from './tool-policy.ts'
+import { channelPolicy, NO_TOOLS_POLICY, scopeToolPolicy } from './tool-policy.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 import { warnOperator } from './operator-log.ts'
 
@@ -274,7 +274,8 @@ export class DshTurnRunner implements TurnEngine {
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
     // Deny by default: the channel's servers and the approvals, nothing else.
-    const policy = channelPolicy(input.servers)
+    // A reading step (an « auteur puis vérificateur » verifier) has no server, no tool.
+    const policy = input.tools === 'none' ? NO_TOOLS_POLICY : channelPolicy(input.servers)
     assertInProcessChildren(this.#ctx, engine)
     const { created, unscope } = await createUnderPolicy(this.#ctx, policy, input.turnId, () => this.#ctx.agents.create({
       sessionId: input.turnId as never,
@@ -282,7 +283,8 @@ export class DshTurnRunner implements TurnEngine {
       // The agent's own model, never the workstation default.
       agentOptions: { provider: input.agent.provider, model: input.agent.model },
     }))
-    await publishActor(input.actor, input.turnId)
+    // The cards of a step are filed in the thread of the turn it belongs to.
+    await publishActor(input.actor, input.runId ?? input.turnId)
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }

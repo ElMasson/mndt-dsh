@@ -64,6 +64,13 @@ export function channelPolicy(servers: readonly string[]): ToolPolicy {
   return { servers: new Set([...servers, ...ALWAYS_SERVERS].filter(isServerName)), tools: new Set(ALLOWED_TOOLS) }
 }
 
+/**
+ * The policy of a step that only reads a text it is given (the verifier of an
+ * « auteur puis vérificateur » turn): no server at all, not even the approvals,
+ * no tool. A draft can carry a document's words: nothing in it may act.
+ */
+export const NO_TOOLS_POLICY: ToolPolicy = { servers: new Set(), tools: new Set() }
+
 /** The policy of a mission on a team instance: MCP tools only, never the engine's own. */
 export const TEAM_MISSION_POLICY: ToolPolicy = { servers: 'any', tools: new Set(ALLOWED_TOOLS) }
 
