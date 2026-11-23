@@ -2,12 +2,17 @@
 // It never sees a real credential: the authorization endpoint approves at once,
 // which is exactly what a test needs and exactly what production must never do.
 import { createSign, generateKeyPairSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 
 const PORT = Number(process.env.PORT ?? 9000)
 const ISSUER = process.env.ISSUER ?? `http://localhost:${PORT}`
 const CLIENT_ID = process.env.CLIENT_ID ?? 'test-client'
 const EMAIL = process.env.EMAIL ?? 'duke@datanalysis.re'
+// EMAIL_FILE, when set, names a file read at each sign-in: a rehearsal switches
+// the identity between two sign-ins without restarting the provider.
+/** @returns the address of the next sign-in. */
+const currentEmail = () => (process.env.EMAIL_FILE ? readFileSync(process.env.EMAIL_FILE, 'utf8').trim() : EMAIL)
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'test-key', use: 'sig', alg: 'RS256' }
@@ -73,9 +78,9 @@ const server = createServer((request, response) => {
         iss: ISSUER,
         aud: CLIENT_ID,
         sub: 'test-subject',
-        email: EMAIL,
+        email: currentEmail(),
         email_verified: true,
-        preferred_username: EMAIL,
+        preferred_username: currentEmail(),
         name: 'Recette SSO',
         iat: now,
         exp: now + 3600,
@@ -87,7 +92,7 @@ const server = createServer((request, response) => {
   }
   if (url.pathname === '/userinfo') {
     response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ sub: 'test-subject', email: EMAIL, email_verified: true }))
+    response.end(JSON.stringify({ sub: 'test-subject', email: currentEmail(), email_verified: true }))
     return
   }
   response.writeHead(404).end('not found')

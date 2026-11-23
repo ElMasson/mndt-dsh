@@ -596,3 +596,76 @@ describe('the channel panel, by pills', () => {
     expect(await within(panel).findByText('Aucun connecteur n\'est branché sur cet espace.')).toBeTruthy()
   })
 })
+
+describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-23T08:00:00.000Z'
+  const agent = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at }
+  const team = { id: 'chn_1', name: 'compta', title: 'compta', kind: 'team' as const, members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at }
+
+  it('an empty lane welcomes: one click on an agent starts a message to it; the team channels open in one click', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane, team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    expect(within(welcome).getByText('Votre lane')).toBeTruthy()
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    const box = screen.getByRole('textbox', { name: /Écrivez|agents/u })
+    await waitFor(() => { expect(box instanceof HTMLTextAreaElement && box.value).toBe('@assistant ') })
+    fireEvent.click(within(welcome).getByRole('button', { name: '# compta' }))
+    expect(await screen.findByRole('heading', { name: '# compta' }, { timeout: 5000 })).toBeTruthy()
+  })
+
+  it('a draft already begun is kept: the mention goes in front, never twice', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane, team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const box = screen.getByRole('textbox', { name: /Écrivez|agents/u })
+    fireEvent.change(box, { target: { value: 'résume les impayés' } })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box instanceof HTMLTextAreaElement && box.value).toBe('@assistant résume les impayés') })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box instanceof HTMLTextAreaElement && box.value).toBe('@assistant résume les impayés') })
+  })
+
+  it('after a pill, typing in the middle of the draft keeps the caret where it is', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane, team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const box = screen.getByRole('textbox', { name: /Écrivez|agents/u })
+    if (!(box instanceof HTMLTextAreaElement)) throw new Error('no composer')
+    fireEvent.change(box, { target: { value: 'résume les impayés' } })
+    fireEvent.click(within(welcome).getByRole('button', { name: 'Écrire à @assistant' }))
+    await waitFor(() => { expect(box.value).toBe('@assistant résume les impayés') })
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    // A correction in the middle: the caret stays after the inserted letters.
+    box.setSelectionRange(11, 11)
+    fireEvent.change(box, { target: { value: '@assistant Xrésume les impayés', selectionStart: 12, selectionEnd: 12 } })
+    box.setSelectionRange(12, 12)
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    expect(box.value).toBe('@assistant Xrésume les impayés')
+    expect(box.selectionStart).toBe(12)
+  })
+
+  it('a lane without team channel says who adds the person; with no agent, who adds one', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [{ ...lane, agents: [] }] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    expect(within(welcome).getByTestId('welcome-no-channel').textContent).toBe('Vous n\'êtes encore dans aucun canal d\'équipe : un owner ou un admin vous y ajoute.')
+    expect(within(welcome).getByText('Aucun agent ne lit encore votre lane : un owner ou un admin en ajoute un.')).toBeTruthy()
+  })
+
+  it('no lane but a team channel: the person lands in it', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [team] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    expect(await screen.findByRole('heading', { name: '# compta' }, { timeout: 5000 })).toBeTruthy()
+  })
+
+  it('no channel at all: an arrival screen says what comes next, and the cards waiting', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{ name: 'Sophie Marion' }} />)
+    const arrival = await screen.findByTestId('team-arrival', {}, { timeout: 5000 })
+    expect(within(arrival).getByRole('heading').textContent).toBe('Bienvenue, Sophie Marion')
+    expect(arrival.textContent).toContain('un owner ou un admin ouvre votre accès')
+  })
+})

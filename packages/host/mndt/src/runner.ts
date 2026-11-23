@@ -16,9 +16,12 @@ import type {} from '@deepseek-ai/dsh-workflow'
 import { mkdir } from 'node:fs/promises'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
+import { RESERVED_OUTPUT_TOKENS, TurnBudgetReached } from './turns.ts'
+import { eurOf } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
-import { channelPolicy, scopeToolPolicy } from './tool-policy.ts'
+import { channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
+import { warnOperator } from './operator-log.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -86,7 +89,7 @@ async function endRun(ctx: Context, releases: readonly (() => unknown)[], unscop
     return
   }
   const reason = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
-  ctx.logger.warn(`mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
+  warnOperator(ctx, `mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
   throw failures[0]
 }
 
@@ -273,7 +276,11 @@ export class DshTurnRunner implements TurnEngine {
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
     // Deny by default: the channel's servers and the approvals, nothing else.
-    const policy = channelPolicy(input.servers)
+    // A reading step (an « auteur puis vérificateur » verifier) has no server, no tool.
+    // A worker of « en parallèle puis synthèse » keeps its connectors, not the approvals.
+    const policy = input.tools === 'none'
+      ? NO_TOOLS_POLICY
+      : input.tools === 'no-cards' ? noCardsPolicy(input.servers) : channelPolicy(input.servers)
     assertInProcessChildren(this.#ctx, engine)
     const { created, unscope } = await createUnderPolicy(this.#ctx, policy, input.turnId, () => this.#ctx.agents.create({
       sessionId: input.turnId as never,
@@ -281,10 +288,15 @@ export class DshTurnRunner implements TurnEngine {
       // The agent's own model, never the workstation default.
       agentOptions: { provider: input.agent.provider, model: input.agent.model },
     }))
-    await publishActor(input.actor, input.turnId)
+    // The cards of a step are filed in the thread of the turn it belongs to.
+    await publishActor(input.actor, input.runId ?? input.turnId)
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    // A step with a cost bound stops before a next message that would not fit:
+    // the next message reads at least what the last one read, and may write
+    // up to RESERVED_OUTPUT_TOKENS.
+    let overBudget = false
     const stopEvents = this.#ctx.on('session/event', (session, event) => {
       if (session.header.id !== sessionId && session.header.parentSession !== sessionId) return
       if (event.type === 'assistant/message') {
@@ -295,6 +307,14 @@ export class DshTurnRunner implements TurnEngine {
           usage.output += step.outputTokens ?? 0
           usage.cacheRead += step.cacheReadTokens ?? 0
           usage.cacheWrite += step.cacheWriteTokens ?? 0
+          const budget = input.budget
+          if (budget !== undefined && !overBudget) {
+            const next = eurOf({ input: step.inputTokens ?? 0, output: RESERVED_OUTPUT_TOKENS }, budget.price)
+            if (eurOf(usage, budget.price) + next > budget.eur) {
+              overBudget = true
+              void created.dispose()
+            }
+          }
         }
       }
       if (event.type === 'turn/end' && event.data.reason.kind !== 'completed') {
@@ -312,8 +332,12 @@ export class DshTurnRunner implements TurnEngine {
         meta: { name: 'mndt-turn', description: `@${input.agent.handle} in #${input.channel.name}` },
         parent: created.agent,
       })
-      const settled = await run.result
+      const settled = await run.result.catch((error: unknown) => {
+        if (overBudget) throw new TurnBudgetReached({ ...usage })
+        throw error
+      })
       if (input.signal.aborted) throw new Error('turn stopped')
+      if (overBudget) throw new TurnBudgetReached({ ...usage })
       if (failures.length > 0) throw new Error(failures.join('; '))
       const text = textOf(settled)
       if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)

@@ -51,6 +51,7 @@ docker rm -f mndt-workbench >/dev/null 2>&1 || true
 docker run -d --name mndt-workbench --restart unless-stopped --network host \
   -v "$OUT":/app -v "$STATE":/state \
   -e DSH_MNDT_IDENTITY=duke@datanalysis.re -e DSH_MNDT_LOCAL_OWNER=duke@datanalysis.re \
+  -e DSH_MNDT_SOLO_WORKSTATION=1 \
   -e DSH_MNDT_STATE=/state/state.json -e DSH_MNDT_PORT=8795 -e DSH_MNDT_HOST=127.0.0.1 \
   -e DSH_MNDT_BRIEFING_AT=06:30 -e DSH_PERMISSION_MODE=danger-full-access -e DSH_HOME=/state/home \
   node:22-bookworm node /app/lib/bin.js web --port 3111 --no-open

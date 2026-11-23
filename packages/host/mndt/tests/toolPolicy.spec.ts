@@ -7,10 +7,11 @@ import { DshMissionRunner, DshTurnRunner } from '../src/runner.ts'
 import { soloWorkstation } from '../src/gateway.ts'
 import {
   ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, channelPolicy, hideOutsidePolicy, isServerName, mcpServerOf,
-  scopeToolPolicy, toolRefusal,
+  noCardsPolicy, scopeToolPolicy, toolRefusal,
 } from '../src/tool-policy.ts'
 import type { LineageAgentLike, ScopedToolsLike } from '../src/tool-policy.ts'
 import type { Mission } from '../src/core/index.ts'
+import { TurnBudgetReached } from '../src/turns.ts'
 import type { TurnInput } from '../src/turns.ts'
 
 /** The engine's default composition, as a turn's agent would inherit it, plus MCP servers. */
@@ -214,6 +215,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     readonly createdAs?: string
     readonly provider?: { readonly name?: string; readonly start?: () => void; readonly unregistered?: true } | 'unreadable'
     readonly agentDisposeThrows?: boolean
+    /** Model messages the run reports, by their input tokens (each writes `output`). */
+    readonly messages?: readonly { readonly input: number; readonly output: number }[]
   }
 
   function fakeCtx(options: FakeOptions = {}) {
@@ -226,9 +229,15 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       guardsAtCreate?: number
       guardsAtRunDispose?: number
       runDisposedBeforeAgent?: boolean
+      /** How many messages had been reported when the agent was disposed. */
+      messagesAtAgentDispose?: number
     }
     const seen: Seen = {}
     let runDisposed = false
+    let agentDisposed = false
+    let reported = 0
+    type SessionListener = (session: unknown, event: unknown) => void
+    const sessionListeners = new Set<SessionListener>()
     const provider = options.provider ?? {}
     const engine = {
       ...(provider === 'unreadable' ? {} : { config: { provider: provider.name ?? 'spawn' } }),
@@ -238,6 +247,13 @@ describe('the runners scope it before the agent exists, and lift it after', () =
         announce(child)
         seen.child = child
         seen.childBash = refused('bash', child)
+        for (const [index, message] of (options.messages ?? []).entries()) {
+          if (agentDisposed) break
+          reported = index + 1
+          for (const listener of sessionListeners) {
+            listener(seen.root!.session, { type: 'assistant/message', data: { usage: { inputTokens: message.input, outputTokens: message.output } } })
+          }
+        }
         return {
           id: 'run-1',
           result: Promise.resolve('Réponse.'),
@@ -251,7 +267,11 @@ describe('the runners scope it before the agent exists, and lift it after', () =
         : undefined),
     }
     const ctx = {
-      on: host.on,
+      on: (event: string, listener: never) => {
+        if (event !== 'session/event') return host.on(event as 'agent/created', listener)
+        sessionListeners.add(listener)
+        return () => { sessionListeners.delete(listener) }
+      },
       logger: { warn: () => undefined },
       // As in production: this plugin does not inject `tools`, so reading it throws.
       get tools(): never { throw new Error('cannot get property "tools" without inject') },
@@ -266,6 +286,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
           return {
             agent: root,
             dispose: async () => {
+              if (!agentDisposed) seen.messagesAtAgentDispose = reported
+              agentDisposed = true
               seen.runDisposedBeforeAgent = runDisposed
               if (options.agentDisposeThrows === true) throw new Error('dispose failed')
             },
@@ -293,6 +315,30 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     expect(seen.child?.ctx.tools.allow).toEqual(['mcp__qonto__list_transactions', 'mcp__approvals__request_approval'])
     expect(seen.childBash).toBeDefined()
     expect(guards.size).toBe(0)
+  })
+
+  it('a worker of « en parallèle puis synthèse »: its connectors, not the approvals', async () => {
+    const { ctx, seen } = fakeCtx()
+    await new DshTurnRunner(ctx).run({ ...turn(), tools: 'no-cards' })
+    expect(seen.root?.ctx.tools.allow).toEqual(['mcp__qonto__list_transactions'])
+    expect(seen.child?.ctx.tools.allow).toEqual(['mcp__qonto__list_transactions'])
+    expect(noCardsPolicy(['qonto', 'approvals']).servers).toEqual(new Set(['qonto']))
+  })
+
+  it('a step with a cost bound stops before a message that would not fit, and says what it used', async () => {
+    // 1 €/M in, 1 €/M out: each message reads 100 000 tokens (0.1 €) and may write 8192.
+    const price = { input: 1, output: 1 }
+    const messages = [{ input: 100_000, output: 1000 }, { input: 100_000, output: 1000 }, { input: 100_000, output: 1000 }]
+    const bounded = fakeCtx({ messages })
+    const error = await new DshTurnRunner(bounded.ctx).run({ ...turn(), budget: { eur: 0.25, price } }).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(TurnBudgetReached)
+    // After two messages (0.202 €), a third (≥ 0.108 €) would pass 0.25 €: the agent is stopped there.
+    expect(bounded.seen.messagesAtAgentDispose).toBe(2)
+    expect((error as TurnBudgetReached).tokens).toMatchObject({ input: 200_000, output: 2000 })
+
+    const roomy = fakeCtx({ messages })
+    const output = await new DshTurnRunner(roomy.ctx).run({ ...turn(), budget: { eur: 5, price } })
+    expect(output.tokens).toMatchObject({ input: 300_000, output: 3000 })
   })
 
   it('fails closed when the agent is not created under the session its policy is keyed by', async () => {

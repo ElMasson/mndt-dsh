@@ -39,6 +39,11 @@ const GATEWAY_SECRET_HEADER = 'x-mndt-gateway'
 // The tenant's owner (DSH_MNDT_IDENTITY): the only person who gets the DSH shell,
 // under /dsh/. Everyone else gets the team page and the product API, nothing more.
 const OWNER = (process.env.OWNER ?? '').trim().toLowerCase()
+// An OWNER that is not plain ASCII can never match a proven e-mail (isOwner):
+// the shell would be closed to everyone, so say it once, at start.
+if (process.env.OWNER !== undefined && process.env.OWNER.trim() !== '' && !/^[\x21-\x7e]+$/.test(process.env.OWNER.trim())) {
+  console.error('mndt gateway: OWNER is not a plain ASCII e-mail; nobody gets the DSH shell until create-tenant.sh sets it again')
+}
 const SHELL_PREFIX = '/dsh'
 
 /**

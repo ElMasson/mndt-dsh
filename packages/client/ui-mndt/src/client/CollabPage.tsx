@@ -251,11 +251,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setChatError(undefined)
       if (!arrived.current) {
         arrived.current = true
-        const lane = channels.find(c => c.kind === 'solo')
-        if (lane !== undefined) {
-          setChatId(held => held ?? lane.id)
-          setView(held => (held === 'channel' ? 'chat' : held))
-        }
+        // The person lands in their lane, or else in their first team channel; on the team page with
+        // neither, on the arrival screen that says so (never on a page of the advanced mode).
+        const first = channels.find(c => c.kind === 'solo') ?? channels[0]
+        if (first !== undefined) setChatId(held => held ?? first.id)
+        if (first !== undefined || team !== undefined) setView(held => (held === 'channel' ? 'chat' : held))
       }
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
@@ -1211,6 +1211,20 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
 
       {(() => {
         const current = chatChannels?.find(c => c.id === chatId)
+        if (chat !== undefined && team !== undefined && current === undefined && chatChannels !== undefined && chatChannels.length === 0) {
+          // A new member with no channel yet, not even a lane: said, and what comes next.
+          return (
+            <section className="mw-screen mw-arrival" style={{ display: view === 'chat' ? undefined : 'none' }} data-testid="team-arrival">
+              <h1 className="mw-title">{tc('arrivalTitle', { name: team.name ?? state.you })}</h1>
+              <p className="mw-welcome-text">{tc('arrivalText')}</p>
+              {pendingCards.length === 0 ? undefined : (
+                <button type="button" className="mw-ctx-link" onClick={() => { setView('pending') }}>
+                  {tc(pendingCards.length === 1 ? 'laneWelcomePendingOne' : 'laneWelcomePendingMany', { n: pendingCards.length })}
+                </button>
+              )}
+            </section>
+          )
+        }
         if (chat === undefined || current === undefined) return undefined
         if (team !== undefined) {
           // As mndt-web draws a channel: a large title and its kind, the feed with its composer, and
@@ -1244,6 +1258,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                   isOwner={state.role === 'owner'}
                   offered={offered}
+                  arrival={{
+                    channels: (chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({ id: c.id, label: c.title || c.name })),
+                    onChannel: (id) => { setChatId(id) },
+                    pending: pendingCards.length,
+                    onPending: () => { setView('pending') },
+                  }}
                   look="mndt-web"
                 />
               </section>

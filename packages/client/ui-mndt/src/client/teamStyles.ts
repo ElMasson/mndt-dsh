@@ -435,6 +435,11 @@ export const TEAM_CSS = `
 }
 .mw-app .mw-pill-static { cursor: default; }
 
+.mw-welcome { display: flex; flex-direction: column; gap: 10px; max-width: 560px; margin: 24px auto; padding: 20px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card); }
+.mw-welcome-title { margin: 0; font-family: var(--mw-display, inherit); font-size: 18px; font-weight: 600; }
+.mw-welcome-text { margin: 0; color: var(--mw-slate); font-size: 14px; line-height: 20px; }
+.mw-arrival { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }
 @media (min-width: 768px) {
