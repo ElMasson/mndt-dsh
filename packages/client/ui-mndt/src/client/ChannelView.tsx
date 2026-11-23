@@ -552,14 +552,18 @@ function Composer(props: {
   const { chat, channel, t } = props
   const [text, setText] = useState('')
   const seededAt = useRef<number | undefined>(undefined)
+  // The text as it is now, for a seed applied once per click without depending on every keystroke.
+  const current = useRef('')
+  current.current = text
   useEffect(() => {
     const seed = props.seed
     if (seed === undefined || seed.at === seededAt.current) return
     seededAt.current = seed.at
     // A draft already begun is kept: the mention goes in front of it, never twice.
     const mention = seed.text.trim()
-    const already = text.split(/\s+/u).includes(mention)
-    const next = already ? text : `${seed.text}${text}`
+    const draft = current.current
+    const already = draft.split(/\s+/u).includes(mention)
+    const next = already ? draft : `${seed.text}${draft}`
     const at = already ? next.length : seed.text.length
     setText(next)
     setCaret(at)
@@ -567,7 +571,7 @@ function Composer(props: {
       box.current?.focus()
       box.current?.setSelectionRange(at, at)
     })
-  }, [props.seed, text])
+  }, [props.seed])
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
   const [busy, setBusy] = useState(false)
