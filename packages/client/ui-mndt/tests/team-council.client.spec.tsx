@@ -170,7 +170,7 @@ describe('an unreadable choice keeps the council', () => {
     const council = read({ state: 'closed', options, positions, critiques: [{ slot: 'A', about: ['B', 'C'], text: 'Les deux oublient le retard.', choice: 0 }],
       skipped: [{ reason: 'redémarrage' }] })
     render(<CouncilThread turn={turn({})} council={council} agents={byId} t={chatFrench} />)
-    expect(screen.getByTestId('council-outcome').textContent).toBe('clos sans décision')
+    expect(screen.getByTestId('council-outcome').textContent).toBe('clos sans décision : redémarrage')
     expect(screen.getByTestId('council-critique').textContent).toContain('Critique de la position B, C')
     expect(screen.getByTestId('council-skipped').textContent).toContain('redémarrage')
   })

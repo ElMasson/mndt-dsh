@@ -349,6 +349,7 @@ export const chatEn = {
   councilUnknownDecision: 'A council decides by vote or by synthesis.',
   councilEnded: 'ended without a decision',
   councilSkipped: 'Position {slot} not counted: {reason}',
+  councilEndedWhy: 'ended without a decision: {why}',
 } as const
 
 /** One copy key. */
@@ -698,6 +699,7 @@ export const chatFr: Record<ChatKey, string> = {
   councilUnknownDecision: 'Un conseil décide par vote ou par synthèse.',
   councilEnded: 'clos sans décision',
   councilSkipped: 'Position {slot} non comptée : {reason}',
+  councilEndedWhy: 'clos sans décision : {why}',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

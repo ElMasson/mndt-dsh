@@ -192,13 +192,16 @@ export function CouncilThread(props: {
   const ended = c.state === 'done' || c.state === 'closed'
   const running = !decided && c.escalation === undefined && !ended
   const members = c.positions.length
+  // Ended without a decision: the core's reason (a restart, a stopped turn), when it gives one.
+  const endReasons = [...new Set(c.skipped.filter(k => k.slot === undefined).map(k => k.reason))]
+  const endedWords = endReasons.length === 0 ? t('councilEnded') : t('councilEndedWhy', { why: endReasons.join(', ') })
   const outcome = waiting ? t('helpQuestion')
     : c.escalation?.answeredAt !== undefined ? t('helpClosedByHuman')
       : c.decision?.kind === 'vote'
         ? (c.decision.chosen === undefined ? t('councilNoMajority') : t('councilChosen', { option: label(c.decision.chosen), n: c.decision.tally[c.decision.chosen] ?? 0, of: members }))
         : c.decision?.kind === 'synthesis'
           ? t('councilSynthBy', { who: c.decision.agentId === undefined ? t('councilSynthesis') : name(c.decision.agentId) })
-          : ended ? t('councilEnded') : t('councilRunning')
+          : ended ? endedWords : t('councilRunning')
   const target = props.canAnswer === true && waiting ? c.escalation.messageId : undefined
   const send = async (): Promise<void> => {
     if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
