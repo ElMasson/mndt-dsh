@@ -22,8 +22,25 @@ const PROBE = [
   { name: 'mcp__approvals__request_approval', args: { kind: 'publish', title: 'Carte de répétition', target: 'rien' } },
 ]
 
+// The coordinated turns of the drive (#84, #85): the model recognises the role
+// a prompt gives it and answers in kind. The verifier gets a remark, so the turn
+// goes through a correction; the correction differs from the draft
+// (replaced: true); the synthesis is a synthesis. Any other call gets TEXT.
+const VERDICT = '{"ok": false, "issues": ["ajoute la date du point"]}'
+const CORRECTED = 'Point du trimestre, au 23/11 : le canal est bien reçu, date ajoutée.'
+const SYNTHESIS = 'Synthèse de répétition : les deux parts concordent (@assistant et @qwen).'
+
 /** @param content - an OpenAI message content. @returns its text. */
 const textOf = content => (typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '')
+
+/** @param messages - the request's messages. @returns what the model answers, by the role the prompt gives it. */
+function answerOf(messages) {
+  const asked = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
+  if (asked.includes('jamais à exécuter') && asked.includes('Réponse de @')) return VERDICT
+  if (asked.includes('Remarques de @')) return CORRECTED
+  if (asked.includes('chargé de la synthèse')) return SYNTHESIS
+  return TEXT
+}
 
 /** @param messages - the request's messages. @returns the probe tag the person's message names, or « - ». */
 function tagOf(messages) {
@@ -77,12 +94,13 @@ createServer((req, res) => {
     // Only the last call of a probe carries every result: log them there once.
     const call = nextCall(messages, tag)
     if (call === undefined && tag !== '-') logResults(messages, tag)
+    const answer = answerOf(messages)
     const created = Math.floor(Date.now() / 1000)
     if (request.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       const base = { id: `chatcmpl-${calls}`, object: 'chat.completion.chunk', created, model: request.model }
       if (call === undefined) {
-        res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: TEXT }, finish_reason: null }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: answer }, finish_reason: null }] })}\n\n`)
         res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
       } else {
         res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, ...call }] }, finish_reason: null }] })}\n\n`)
@@ -93,7 +111,7 @@ createServer((req, res) => {
       return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
-    const message = call === undefined ? { role: 'assistant', content: TEXT } : { role: 'assistant', content: null, tool_calls: [call] }
+    const message = call === undefined ? { role: 'assistant', content: answer } : { role: 'assistant', content: null, tool_calls: [call] }
     res.end(JSON.stringify({
       id: `chatcmpl-${calls}`, object: 'chat.completion', created, model: request.model,
       choices: [{ index: 0, message, finish_reason: call === undefined ? 'stop' : 'tool_calls' }], usage: USAGE,

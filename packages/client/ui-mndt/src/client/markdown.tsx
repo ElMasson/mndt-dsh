@@ -21,9 +21,11 @@ export function inlineNodes(text: string): ReactNode[] {
  * The Markdown an agent writes (a brief, an answer in a channel), as readable blocks: headings,
  * tables, lists, bold and code. Never raw markers; never HTML from the text.
  * @param markdown - the text.
+ * @param options - `plainHeadings`: headings as bold paragraphs, never heading elements (a text
+ * shown inside a page's own sections must not pass for one of them).
  * @returns the blocks.
  */
-export function renderBrief(markdown: string): ReactNode[] {
+export function renderBrief(markdown: string, options: { readonly plainHeadings?: boolean } = {}): ReactNode[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n')
   const blocks: ReactNode[] = []
   let list: string[] = []
@@ -68,7 +70,8 @@ export function renderBrief(markdown: string): ReactNode[] {
       flush()
       const level = heading[1]?.length ?? 1
       const content = inlineNodes(heading[2] ?? '')
-      blocks.push(level <= 2 ? <h3 key={`h-${index}`}>{content}</h3> : <h4 key={`h-${index}`}>{content}</h4>)
+      if (options.plainHeadings === true) blocks.push(<p key={`h-${index}`} className="md-heading"><strong>{content}</strong></p>)
+      else blocks.push(level <= 2 ? <h3 key={`h-${index}`}>{content}</h3> : <h4 key={`h-${index}`}>{content}</h4>)
       continue
     }
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {

@@ -5,6 +5,7 @@
 //   node drive.mjs <playwright module> <project> <shots dir>
 import { execFileSync } from 'node:child_process'
 import { connect } from 'node:net'
+import { readFileSync } from 'node:fs'
 
 const [playwrightModule, project, shots] = process.argv.slice(2)
 const { chromium } = await import(playwrightModule)
@@ -89,7 +90,19 @@ if (qwen !== undefined && channel !== undefined) {
 // server's open tools and nothing else, though workbench_facts is mounted. A
 // mission of the owner on a team instance: every MCP tool, never the engine's.
 // A tool more or a tool less fails.
-const APPROVALS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
+// The card tools a turn is offered: exactly the approvals server's « allow » in
+// the catalog this tenant was deployed with (MNDT_REHEARSAL_CATALOG), so the
+// same harness judges every version (three tools before #82, four after). And
+// that list must stay within the card tools this harness knows: a catalog that
+// opened another tool fails, rather than being taken as the expectation.
+const KNOWN_CARD_TOOLS = ['list_pending_approvals', 'propose_agent', 'read_approval', 'request_approval']
+const catalogPath = process.env.MNDT_REHEARSAL_CATALOG
+let deployedAllow = []
+try { deployedAllow = JSON.parse(readFileSync(catalogPath ?? '', 'utf8')).approvals?.allow ?? [] } catch { deployedAllow = [] }
+const unknownCardTools = deployedAllow.filter(tool => !KNOWN_CARD_TOOLS.includes(tool))
+check('turn-tools-catalog', deployedAllow.length > 0, `${catalogPath ?? 'no MNDT_REHEARSAL_CATALOG'}: approvals allow ${JSON.stringify(deployedAllow)}`)
+if (unknownCardTools.length > 0) check('turn-tools-unknown', false, `the deployed catalog opens card tools this harness does not know: ${JSON.stringify(unknownCardTools)}`)
+const APPROVALS = deployedAllow.filter(tool => KNOWN_CARD_TOOLS.includes(tool)).map(tool => `mcp__approvals__${tool}`).sort()
 const EXPECTED = { '-': APPROVALS, tour: APPROVALS, mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts'].sort() }
 const witness = () => docker('exec', `${project}-workbench`, 'sh', '-c', 'find /state /tmp -name policy-witness.txt 2>/dev/null | head -3')
 
@@ -157,8 +170,15 @@ check('admin-no-mission', adminRun.status === 404 && adminMission.status === 404
 const registry = (await api('GET', '/automations')).body.items ?? []
 const briefingItem = registry.find(item => item.id === 'auto_briefing')
 const missionsBefore = ((await api('GET', '/missions')).body.missions ?? []).filter(mission => mission.kind === 'briefing' && mission.createdAt >= DRIVE_START).length
-check('scheduler-first-pass', briefingItem?.enabled === false && /owner/.test(briefingItem?.lastOutcome ?? '') && missionsBefore === 0,
-  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} », briefing missions before any run: ${missionsBefore}`)
+// After an update from an installed instance, the owner may have run the old
+// briefing by hand (rehearse-update phase A2): its outcome is that run's
+// (« done »), and the automation stays switched off. Either way it must be off,
+// and nothing may have run during this drive.
+const allMissions = (await api('GET', '/missions')).body.missions ?? []
+const earlierRun = briefingItem?.lastMissionId !== undefined
+  && allMissions.some(mission => mission.id === briefingItem.lastMissionId && mission.createdAt < DRIVE_START)
+check('scheduler-first-pass', briefingItem?.enabled === false && (/owner/.test(briefingItem?.lastOutcome ?? '') || earlierRun) && missionsBefore === 0,
+  `auto_briefing enabled ${briefingItem?.enabled}, « ${briefingItem?.lastOutcome ?? '-'} »${earlierRun ? ' (a run before this drive)' : ''}, briefing missions before any run: ${missionsBefore}`)
 // A briefing the owner runs is theirs and private: neither a member nor the admin reads it.
 const briefing = await api('POST', '/automations/auto_briefing/run', {}, owner, 180000)
   .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
@@ -207,8 +227,62 @@ for (let index = 0; index < 4; index += 1) {
   await sleep(300)
   socket.resetAndDestroy()
 }
+// The coordination modes of a channel (#84, #85), end to end in the image. Both
+// routes answer from the fake model here (the rehearsal's copy of the routes),
+// with the price grid of the instance: a turn costs something.
+const byHandle = handle => agents.find(a => a.handle === handle)
+const [assistant, analyste] = [byHandle('assistant'), byHandle('analyste')]
+/** @param channelId - a channel. @param text - a message. @returns the turn it starts, once settled. */
+async function turnIn(channelId, text) {
+  const asked = (await api('POST', `/channels/${channelId}/messages`, { text })).body.message
+  let turn
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    turn = ((await api('GET', `/channels/${channelId}/messages`)).body.messages ?? []).find(m => m.id === asked?.id)?.turns?.[0]
+    if (turn !== undefined && !['queued', 'running'].includes(turn.status)) break
+    await sleep(2000)
+  }
+  return turn
+}
+if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
+  const room = (await api('POST', '/channels', { name: 'coordination', agents: [assistant.id, analyste.id, qwen.id], members: [] })).body.channel
+  // « Auteur puis vérificateur »: @assistant writes, @analyste (another model) checks.
+  const pair = await api('POST', `/channels/${room.id}/coordination`, { mode: 'author-verifier', author: assistant.id, verifier: analyste.id })
+  const checked = await turnIn(room.id, '@assistant fais le point du trimestre')
+  const steps = checked?.steps ?? []
+  const revision = steps.find(step => step.role === 'revision')
+  check('coord-author-verifier', pair.status === 200 && checked?.status === 'done' && steps.length <= 3
+    && steps.some(step => step.role === 'verifier' && step.verdict === 'issues') && revision?.replaced === true,
+  `status ${checked?.status}, steps ${steps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}${step.replaced === undefined ? '' : `:replaced=${step.replaced}`}`).join(' ')}, reason ${checked?.reason ?? '-'}`)
+  // « En parallèle puis synthèse »: @assistant and @qwen answer, @analyste assembles.
+  const bound = 1
+  const fanout = await api('POST', `/channels/${room.id}/coordination`, { mode: 'parallel-synthesis', workers: [assistant.id, qwen.id], synthesizer: analyste.id, maxEurPerTurn: bound })
+  const together = await turnIn(room.id, '@analyste fais la synthèse du trimestre')
+  const parts = (together?.steps ?? []).filter(step => step.role === 'worker' && typeof step.text === 'string')
+  check('coord-parallel', fanout.status === 200 && together?.status === 'done' && parts.length === 2
+    && (together?.steps ?? []).some(step => step.role === 'synthesis' && step.verdict === undefined)
+    && typeof together?.eur === 'number' && together.eur > 0 && together.eur <= bound,
+  `status ${together?.status}, ${parts.length} part(s), steps ${(together?.steps ?? []).map(step => step.role).join(' ')}, eur ${together?.eur} (bound ${bound} €)`)
+  // The bound held once: a bound one worker fits under and the next does not.
+  // Its reservation (prompt + 8192 output tokens at glm-5.3's 5.5 €/M, about
+  // 0.05 €) passes 0.03 €, @assistant's (deepseek, about 0.02 €) does not.
+  const tight = 0.03
+  const capped = await api('POST', `/channels/${room.id}/coordination`, { mode: 'parallel-synthesis', workers: [assistant.id, analyste.id], synthesizer: qwen.id, maxEurPerTurn: tight })
+  const held = await turnIn(room.id, '@qwen fais la synthèse du trimestre')
+  const heldSteps = held?.steps ?? []
+  const done = heldSteps.filter(step => step.role === 'worker' && typeof step.text === 'string')
+  const stopped = heldSteps.find(step => step.role === 'worker' && step.verdict === 'skipped')
+  // The worker stopped is the one whose reservation would pass the bound,
+  // @analyste, and the part kept is @assistant's: the bound stops the right step.
+  check('coord-bound', capped.status === 200 && done.length === 1 && done[0].agentId === assistant.id
+    && stopped?.agentId === analyste.id && /borne/.test(stopped?.notes?.[0] ?? '')
+    && typeof held?.eur === 'number' && held.eur > 0 && held.eur <= tight,
+  `status ${held?.status}, steps ${heldSteps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}@${agents.find(a => a.id === step.agentId)?.handle ?? step.agentId}`).join(' ')}, « ${stopped?.notes?.[0] ?? '-'} », eur ${held?.eur} (bound ${tight} €)`)
+} else {
+  check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
+}
 await browser.close()
 await sleep(2000)
+
 const gatewayAfter = started('gateway')
 const unhandled = (logs('gateway').match(/Unhandled 'error' event/g) ?? []).length
 check('gateway-alive', gatewayBefore === gatewayAfter && unhandled === 0, `before « ${gatewayBefore} », after « ${gatewayAfter} », unhandled errors ${unhandled}`)
@@ -216,5 +290,5 @@ const workbenchAfter = started('workbench')
 check('workbench-alive', workbenchBefore === workbenchAfter, `before « ${workbenchBefore} », after « ${workbenchAfter} »`)
 const health = await fetch(`${BASE}/mndt-api/health`).then(r => r.status, () => 0)
 check('still-serves', health === 200, `health ${health}`)
-console.log(`\n${results.filter(r => r.ok).length} OK, ${results.filter(r => !r.ok).length} KO`)
+console.log(`\nTOTAL ok=${results.filter(r => r.ok).length} ko=${results.filter(r => !r.ok).length}`)
 process.exit(results.some(r => !r.ok) ? 1 : 0)

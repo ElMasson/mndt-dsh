@@ -87,7 +87,8 @@ describe('declaring and changing an agent', { timeout: 20_000 }, () => {
 
   it('a click on a tile opens its sheet; the handle stays as it is, and an admin cannot raise the ceiling', async () => {
     const { chat, view } = await open('admin')
-    fireEvent.click(within(view).getByRole('button', { name: 'Modifier Analyste' }))
+    fireEvent.click(within(view).getByRole('button', { name: 'Voir Analyste' }))
+    fireEvent.click(within(await screen.findByTestId('agent-sheet')).getByRole('button', { name: 'Modifier' }))
     const form = await screen.findByTestId('agent-form')
     const fixed = within(form).getByLabelText('Identifiant (@…)')
     expect(fixed instanceof HTMLInputElement && fixed.readOnly).toBe(true)
@@ -103,10 +104,11 @@ describe('declaring and changing an agent', { timeout: 20_000 }, () => {
     expect((await chat.agents()).find(a => a.id === 'agt_2')).toMatchObject({ handle: 'analyste', eurPerMonth: 3, instructions: 'Analyse les comptes.' })
   })
 
-  it('an operator sees the agents but is offered neither the sheet nor a new agent', async () => {
+  it('an operator reads an agent\'s sheet but is offered neither its change nor a new agent', async () => {
     const { view } = await open('operator')
     expect(within(view).queryByRole('button', { name: 'Nouvel agent' })).toBeNull()
-    expect(within(view).queryByRole('button', { name: /Modifier/u })).toBeNull()
+    fireEvent.click(within(view).getByRole('button', { name: 'Voir Analyste' }))
+    expect(within(await screen.findByTestId('agent-sheet')).queryByRole('button', { name: 'Modifier' })).toBeNull()
     expect(within(view).getAllByTestId('team-agent')).toHaveLength(3)
   })
 })
@@ -145,7 +147,8 @@ describe('the agent sheet, after review of #81', { timeout: 20_000 }, () => {
 
   it('an agent changed by someone else meanwhile is said, not overwritten', async () => {
     const { chat, view } = await open('owner')
-    fireEvent.click(within(view).getByRole('button', { name: 'Modifier Analyste' }))
+    fireEvent.click(within(view).getByRole('button', { name: 'Voir Analyste' }))
+    fireEvent.click(within(await screen.findByTestId('agent-sheet')).getByRole('button', { name: 'Modifier' }))
     const form = await screen.findByTestId('agent-form')
     await chat.updateAgent?.('agt_2', { instructions: 'Changé ailleurs.' })
     type(form, 'À quoi il sert', 'Ma version.')
@@ -157,7 +160,8 @@ describe('the agent sheet, after review of #81', { timeout: 20_000 }, () => {
   it('a connector the agent carries but that is no longer mounted is named before anything is sent', async () => {
     const carrying = [...AGENTS.slice(0, 2), { ...agent('agt_3', 'qwen', 'vllm-qwen', 'qwen-local'), connectors: ['dolibarr'] }]
     const { view } = await open('owner', carrying)
-    fireEvent.click(within(view).getByRole('button', { name: 'Modifier Qwen' }))
+    fireEvent.click(within(view).getByRole('button', { name: 'Voir Qwen' }))
+    fireEvent.click(within(await screen.findByTestId('agent-sheet')).getByRole('button', { name: 'Modifier' }))
     const form = await screen.findByTestId('agent-form')
     expect(within(form).getByRole('alert').textContent).toBe('Retirez d\'abord dolibarr, qui n\'est plus branché.')
     expect(off(form, 'Enregistrer')).toBe(true)
