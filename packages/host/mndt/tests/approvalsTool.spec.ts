@@ -122,3 +122,13 @@ test('exposes the decision tool only when the deployment allows it', async () =>
   const names = harness.messages().find(message => message.id === 2)?.result?.tools?.map(tool => tool.name) ?? []
   expect(names).toContain('decide_approval')
 })
+
+test('asks propose_agent for instructions in three sections, in order: Rôle, Objectif, Ne décide pas', async () => {
+  const harness = await start(false)
+  const tools = harness.messages().find(message => message.id === 2)?.result?.tools ?? []
+  const propose = tools.find(tool => tool.name === 'propose_agent') as { inputSchema?: { properties?: { instructions?: { description?: string } } } } | undefined
+  const asked = propose?.inputSchema?.properties?.instructions?.description ?? ''
+  const at = ['## Rôle', '## Objectif', '## Ne décide pas'].map(section => asked.indexOf(section))
+  expect(at.every(position => position >= 0)).toBe(true)
+  expect([...at].sort((a, b) => a - b)).toEqual(at)
+})
