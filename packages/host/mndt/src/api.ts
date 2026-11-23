@@ -21,6 +21,7 @@ import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
+import { operatorLine } from './operator-log.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -96,6 +97,8 @@ export interface ModelChoice {
 
 export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
+  /** Where an unexpected error's detail is told to the operator (the web log); stderr by default. */
+  readonly warn?: (message: string) => void
   readonly authority?: {
     readonly baseUrl: string
     readonly token: string
@@ -325,12 +328,23 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     try {
       return await conversation(request, path, identity)
     } catch (error) {
+      // A refusal the product means (a plain Error, or a typed one named
+      // « …Refusal ») is served with its words. Anything else (a TypeError, a
+      // JSON error, a system error carrying a path) is an internal fault: the
+      // caller gets « internal error », the detail goes to the operator's log.
+      if (!isMeantRefusal(error)) {
+        warnInternal(`mndt: internal error on ${request.method} ${path}: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
+        return respond(500, { error: 'internal error' })
+      }
       const reason = messageOf(error)
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
-      return respond(400, { error: reason })
+      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
     }
   }
+
+  /** The operator's log for an internal fault: the gateway's, or stderr on one clean line. */
+  const warnInternal = options.warn ?? ((message: string): void => { process.stderr.write(`${operatorLine(message)}\n`) })
 
   const conversation = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
     const parts = path.split('/').slice(1)
@@ -1534,4 +1548,17 @@ export function eventLine(event: WorkbenchEvent): string {
 /** @param brief - a produced brief. @returns its title. */
 export function briefTitle(brief: Brief): string {
   return brief.title
+}
+
+/**
+ * @param error - what a conversation route threw.
+ * @returns whether it is a refusal the product means: a plain Error (the
+ * service's « no channel … », « a channel keeps at least one person »…) or a
+ * typed refusal (a class named « …Refusal », with its code). A system error
+ * (syscall, errno: its message carries a path) and any other class are not.
+ */
+function isMeantRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if ('syscall' in error || 'errno' in error) return false
+  return error.constructor === Error || error.name.endsWith('Refusal')
 }
