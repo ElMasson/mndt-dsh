@@ -140,6 +140,31 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
     expect(JSON.stringify(served)).not.toContain(t.beta)
   })
 
+  it('a message deleted during the advices is answered without the peers nor their costs', async () => {
+    const b = bench()
+    const t = await team(b)
+    let origin = ''
+    let deleted: Message | undefined
+    b.engine.before = async (input) => {
+      if (input.turnId === input.runId) origin = (await b.service.snapshot()).messages?.at(-1)?.id ?? ''
+      // During the second advice: the first one is recorded, with its peer and its cost.
+      if (/-h1[ab]$/.test(input.turnId) && b.engine.seen.filter(seen => /-h1[ab]$/.test(seen.turnId)).length === 2) {
+        const stored = (await b.service.message(origin))?.turns?.[0]?.help
+        expect(stored?.state).toBe('advising')
+        expect(stored?.advices[0]?.agentId).toBeDefined()
+        deleted = (await b.call('POST', `/channels/${t.channel}/messages/${origin}/delete`, 'owner')).body.message as Message
+      }
+    }
+    await ask(b, t.channel, '@alpha le point ?')
+    const help = deleted?.turns?.[0]?.help
+    expect(help?.advices).toHaveLength(1)
+    expect(help?.peerIds).toEqual([])
+    expect(help?.advices.every(advice => advice.agentId === undefined && advice.model === undefined
+      && advice.eur === undefined && advice.tokens === undefined)).toBe(true)
+    expect(JSON.stringify(deleted)).not.toContain(t.beta)
+    expect(JSON.stringify(deleted)).not.toContain(t.gamma)
+  })
+
   it('serves a skipped reason by kind until the reading, then in full', async () => {
     const b = bench()
     const t = await team(b)

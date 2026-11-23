@@ -468,13 +468,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         : false
       const answered = writer ? await service.answerEscalation(message, identity) : undefined
       options.turns?.launch(answered ?? message)
-      return respond(201, { message: answered ?? message })
+      return respond(201, { message: servedMessage(answered ?? message) })
     }
 
     if (request.method === 'POST' && parts.length === 5 && parts[2] === 'messages' && parts[4] === 'delete') {
       const message = await service.deleteMessage(channel.id, parts[3] ?? '', identity)
       options.turns?.stop({ messageId: message.id })
-      return respond(200, { message })
+      // A deleted message may carry a help still running: served like any other.
+      return respond(200, { message: servedMessage(message) })
     }
 
     if (request.method === 'POST' && parts.length === 3 && parts[2] === 'context') {
