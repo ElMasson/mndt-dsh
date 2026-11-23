@@ -61,6 +61,14 @@ export type CoordinationChange =
     readonly synthesizer: string
     readonly maxEurPerTurn?: number
   }
+  | {
+    readonly mode: 'council'
+    /** 2 to 4 agents; the first chairs (its turn calls the council). */
+    readonly members: readonly string[]
+    readonly decision: 'vote' | 'synthesis'
+    readonly synthesizer?: string
+    readonly maxEurPerTurn?: number
+  }
 
 /** One agent turn started by a mention. */
 export interface ChatTurn {
@@ -85,6 +93,8 @@ export interface ChatTurn {
   readonly steps?: unknown
   /** Its agent's help from its peers (`ask_peers`), read through `helpOf`, never trusted as is. */
   readonly help?: unknown
+  /** A council's deliberation on this turn, read through `councilOf`, never trusted as is. */
+  readonly council?: unknown
 }
 
 /** One message of a channel. */
@@ -183,6 +193,11 @@ export interface ChatFace {
   cards(): Promise<readonly ChatCard[]>
   /** The declared agents, with what they spent this month. */
   agents(): Promise<readonly ChatAgent[]>
+  /**
+   * This month's spend of councils closed without naming their members, for the whole space
+   * (`GET /agents` → `eurUnattributedThisMonth`, #119): never an agent's. Optional: the team page only.
+   */
+  unattributedEur?(): Promise<number | undefined>
   addAgents(
     channelId: string,
     agentIds: readonly string[],
@@ -237,6 +252,8 @@ export interface OpenEscalation {
   readonly question: string
   readonly summary?: string
   readonly at?: string
+  /** Asked after a mutual help or by a council (#119). */
+  readonly kind?: 'help' | 'council'
 }
 
 /** A model the core offers to agents: one line of `GET /models`. */

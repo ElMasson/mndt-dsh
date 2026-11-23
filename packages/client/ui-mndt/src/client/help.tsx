@@ -142,6 +142,9 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
       ...(textOf(rd.why) === undefined ? {} : { why: textOf(rd.why) as string }),
     }
     : undefined
+  // Authors only once the help is read and no question waits (#119): the same rule as a council.
+  const escalationRaw = escalationFrom(h.escalation)
+  const revealed = reading !== undefined && (escalationRaw === undefined || escalationRaw.answeredAt !== undefined)
   const advices: HelpAdvice[] = []
   for (const item of Array.isArray(h.advices) ? h.advices : []) {
     const a = recordOf(item)
@@ -150,10 +153,10 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
     if (a === undefined || slot === undefined || text === undefined) continue
     const round = typeof a.round === 'number' && Number.isInteger(a.round) && a.round >= 1 ? a.round : 1
     // Before the asking agent has read them, nothing per advice beyond its text: no cost, no author.
-    const eur = reading === undefined ? undefined : amountOf(a.eur)
-    const tokens = reading === undefined ? undefined : tokensOf(a.tokens)
-    const agentId = reading === undefined ? undefined : textOf(a.agentId)
-    const model = reading === undefined ? undefined : textOf(a.model)
+    const eur = revealed ? amountOf(a.eur) : undefined
+    const tokens = revealed ? tokensOf(a.tokens) : undefined
+    const agentId = revealed ? textOf(a.agentId) : undefined
+    const model = revealed ? textOf(a.model) : undefined
     advices.push({
       slot, round, text,
       ...(eur === undefined ? {} : { eur }),
@@ -167,7 +170,7 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
     const reason = textOf(k?.reason)
     if (k === undefined || reason === undefined) return []
     const slot = slotOf(k.slot)
-    const agentId = reading === undefined ? undefined : textOf(k.agentId)
+    const agentId = revealed ? textOf(k.agentId) : undefined
     return [{ reason, ...(slot === undefined ? {} : { slot }), ...(agentId === undefined ? {} : { agentId }) }]
   })
   const c = recordOf(h.closedBy)

@@ -19,6 +19,13 @@ export type Coordination =
     readonly synthesizerId: string
     readonly maxEurPerTurn: number
   }
+  | {
+    readonly mode: 'council'
+    readonly memberIds: readonly string[]
+    readonly decision: 'vote' | 'synthesis'
+    readonly synthesizerId?: string
+    readonly maxEurPerTurn: number
+  }
 
 /** The budget choices of a parallel turn, in euros (the core takes (0, 5]). */
 const TURN_BUDGETS = [0.5, 1, 2, 5] as const
@@ -70,6 +77,22 @@ export function coordinationOf(channel: ChatChannel): Coordination | undefined {
   const raw: unknown = channel.coordination
   if (typeof raw !== 'object' || raw === null) return undefined
   const c = raw as Record<string, unknown>
+  const max = c.maxEurPerTurn
+  const budget = typeof max === 'number' && Number.isFinite(max) && max > 0 && max <= 5 ? max : undefined
+  if (c.mode === 'council') {
+    const raw = c.memberIds
+    if (!Array.isArray(raw) || raw.length < 2 || raw.length > 4 || budget === undefined) return undefined
+    const ids = raw.map(idOf)
+    if (ids.some(id => id === undefined) || new Set(ids).size !== ids.length) return undefined
+    const memberIds = ids.filter((id): id is string => id !== undefined)
+    if (c.decision !== 'vote' && c.decision !== 'synthesis') return undefined
+    const synthesizerId = idOf(c.synthesizerId)
+    if (c.decision === 'synthesis' && (synthesizerId === undefined || memberIds.includes(synthesizerId))) return undefined
+    return {
+      mode: 'council', memberIds, decision: c.decision, maxEurPerTurn: budget,
+      ...(c.decision === 'synthesis' && synthesizerId !== undefined ? { synthesizerId } : {}),
+    }
+  }
   if (c.mode === 'parallel-synthesis') {
     const synthesizerId = idOf(c.synthesizerId)
     const workers: unknown = c.workerIds
@@ -131,7 +154,7 @@ function sameModel(a: ChatAgent, b: ChatAgent): boolean {
   return a.provider === b.provider && a.model === b.model
 }
 
-type Mode = 'solo' | 'author-verifier' | 'parallel-synthesis'
+type Mode = 'solo' | 'author-verifier' | 'parallel-synthesis' | 'council'
 
 /**
  * The COORDINATION section of a channel's panel: « Seul », « Auteur puis vérificateur » or « En
@@ -158,7 +181,11 @@ export function CoordinationSection(props: {
   const [author, setAuthor] = useState<string | undefined>(current?.mode === 'author-verifier' ? current.authorId : undefined)
   const [workers, setWorkers] = useState<readonly string[]>(current?.mode === 'parallel-synthesis' ? current.workerIds : [])
   const [synthesizer, setSynthesizer] = useState<string | undefined>(current?.mode === 'parallel-synthesis' ? current.synthesizerId : undefined)
-  const [budget, setBudget] = useState<number>(current?.mode === 'parallel-synthesis' ? current.maxEurPerTurn : 1)
+  const [budget, setBudget] = useState<number>(current?.mode === 'parallel-synthesis' || current?.mode === 'council' ? current.maxEurPerTurn : 1)
+  // The council being chosen: its members in order (the first chairs), « Vote » by default.
+  const [members, setMembers] = useState<readonly string[]>(current?.mode === 'council' ? current.memberIds : [])
+  const [decision, setDecision] = useState<'vote' | 'synthesis'>(current?.mode === 'council' ? current.decision : 'vote')
+  const [councilSynth, setCouncilSynth] = useState<string | undefined>(current?.mode === 'council' ? current.synthesizerId : undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const busy = useRef(false)
   const [pending, setPending] = useState(false)
@@ -179,11 +206,18 @@ export function CoordinationSection(props: {
         {current === undefined ? t('coordSolo')
           : current.mode === 'author-verifier'
             ? t('coordPair', { author: handle(current.authorId), verifier: handle(current.verifierId) })
-            : t('coordParallelRead', {
-              workers: current.workerIds.map(handle).join(', '),
-              synthesizer: handle(current.synthesizerId),
-              max: euros(current.maxEurPerTurn),
-            })}
+            : current.mode === 'council'
+              ? t(current.decision === 'vote' ? 'councilReadVote' : 'councilReadSynthesis', {
+                members: current.memberIds.map(handle).join(', '),
+                chair: handle(current.memberIds[0] ?? ''),
+                synthesizer: current.synthesizerId === undefined ? '' : handle(current.synthesizerId),
+                max: euros(current.maxEurPerTurn),
+              })
+              : t('coordParallelRead', {
+                workers: current.workerIds.map(handle).join(', '),
+                synthesizer: handle(current.synthesizerId),
+                max: euros(current.maxEurPerTurn),
+              })}
       </p>
     )
   }
@@ -213,6 +247,13 @@ export function CoordinationSection(props: {
       </button>
     )
   }
+  // The council as it would be sent, when it can be.
+  const councilReady = members.length >= 2 && members.length <= 4
+    && (decision === 'vote' || (councilSynth !== undefined && !members.includes(councilSynth)))
+  const councilSame = current?.mode === 'council' && decision === current.decision && budget === current.maxEurPerTurn
+    && (decision === 'vote' || councilSynth === current.synthesizerId)
+    && members.length === current.memberIds.length && members.every((id, i) => id === current.memberIds[i])
+  const oneModel = members.length >= 2 && new Set(members.map((id) => { const a = byId.get(id); return `${a?.provider ?? ''}/${a?.model ?? ''}` })).size === 1
   // The parallel turn as it would be sent, when it can be.
   const parallelReady = workers.length >= 2 && workers.length <= 4 && synthesizer !== undefined && !workers.includes(synthesizer)
   const parallelSame = current?.mode === 'parallel-synthesis' && synthesizer === current.synthesizerId && budget === current.maxEurPerTurn
@@ -223,6 +264,7 @@ export function CoordinationSection(props: {
         {modePill('solo', t('coordSoloButton'), 0, '')}
         {modePill('author-verifier', t('coordPairButton'), 2, t('coordNeedsTwo'))}
         {modePill('parallel-synthesis', t('coordParallelButton'), 3, t('coordNeedsThree'))}
+        {modePill('council', t('councilButton'), 3, t('councilNeedsThree'))}
       </div>
       {here.length < 2 ? <p className="mw-ctx-small mw-ctx-muted">{t('coordNeedsTwo')}</p> : undefined}
       {shown !== 'author-verifier' || here.length < 2 ? undefined : (
@@ -350,6 +392,110 @@ export function CoordinationSection(props: {
             onClick={() => {
               if (!parallelReady) return
               void send({ mode: 'parallel-synthesis', workers, synthesizer, maxEurPerTurn: budget })
+            }}
+          >
+            {t('coordSave')}
+          </button>
+        </>
+      )}
+      {shown !== 'council' || here.length < 3 ? undefined : (
+        <>
+          <p className="mw-ctx-small mw-ctx-muted">{t('councilMembers')}</p>
+          <div className="mw-pills" role="group" aria-label={t('councilMembers')} data-testid="council-members">
+            {here.map((a) => {
+              const at = members.indexOf(a.id)
+              const on = at >= 0
+              const full = !on && members.length >= 4
+              const why = full ? t('councilFourAtMost') : undefined
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="mw-pill"
+                  aria-pressed={on}
+                  aria-disabled={pending || full}
+                  aria-label={why === undefined ? (at === 0 ? `@${a.handle}, ${t('councilChair')}` : `@${a.handle}`) : `@${a.handle}, ${why}`}
+                  title={why}
+                  onClick={() => {
+                    if (pending || full) return
+                    setPicked('council')
+                    setError(undefined)
+                    setMembers(held => (on ? held.filter(id => id !== a.id) : [...held, a.id]))
+                    if (!on && councilSynth === a.id) setCouncilSynth(undefined)
+                  }}
+                >
+                  @{a.handle}
+                  {at === 0 ? <span className="mw-pill-note" aria-hidden="true">{t('councilChair')}</span> : undefined}
+                </button>
+              )
+            })}
+          </div>
+          {oneModel ? <p className="mw-ctx-small mw-ctx-muted" data-testid="council-one-model">{t('councilOneModel')}</p> : undefined}
+          <p className="mw-ctx-small mw-ctx-muted">{t('councilDecision')}</p>
+          <div className="mw-pills" role="group" aria-label={t('councilDecision')} data-testid="council-decision">
+            {(['vote', 'synthesis'] as const).map(kind => (
+              <button
+                key={kind}
+                type="button"
+                className="mw-pill"
+                aria-pressed={decision === kind}
+                aria-disabled={pending}
+                onClick={() => { if (!pending) { setDecision(kind); setPicked('council'); setError(undefined) } }}
+              >
+                {t(kind === 'vote' ? 'councilVote' : 'councilSynthesis')}
+              </button>
+            ))}
+          </div>
+          {decision !== 'synthesis' ? undefined : (
+            <>
+              <p className="mw-ctx-small mw-ctx-muted">{t('coordSynthesizer')}</p>
+              <div className="mw-pills" role="group" aria-label={t('coordSynthesizer')} data-testid="council-synthesizer">
+                {here.map((a) => {
+                  const member = members.includes(a.id)
+                  const why = member ? t('councilIsMember') : undefined
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className="mw-pill"
+                      aria-pressed={councilSynth === a.id}
+                      aria-disabled={pending || member}
+                      aria-label={why === undefined ? `@${a.handle}` : `@${a.handle}, ${why}`}
+                      title={why}
+                      data-off={member ? 'true' : undefined}
+                      onClick={() => { if (!pending && !member) { setCouncilSynth(a.id); setPicked('council'); setError(undefined) } }}
+                    >
+                      @{a.handle}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+          <p className="mw-ctx-small mw-ctx-muted">{t('coordBudget')}</p>
+          <div className="mw-pills" role="group" aria-label={t('coordBudget')} data-testid="council-budget">
+            {TURN_BUDGETS.map(value => (
+              <button
+                key={value}
+                type="button"
+                className="mw-pill"
+                aria-pressed={budget === value}
+                aria-disabled={pending}
+                onClick={() => { if (!pending) { setBudget(value); setPicked('council') } }}
+              >
+                {euros(value)}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mw-primary"
+            disabled={pending || !councilReady || councilSame}
+            onClick={() => {
+              if (!councilReady) return
+              void send(decision === 'vote' || councilSynth === undefined
+                ? { mode: 'council', members, decision: 'vote', maxEurPerTurn: budget }
+                : { mode: 'council', members, decision: 'synthesis', synthesizer: councilSynth, maxEurPerTurn: budget })
             }}
           >
             {t('coordSave')}

@@ -17,6 +17,7 @@ import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
 import { ContextFrame, contextOf, contextProposalOf } from './channelContext.tsx'
 import { HelpThread, helpOf } from './help.tsx'
+import { CouncilThread, councilOf } from './council.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
@@ -351,9 +352,14 @@ export function WebMessage(props: {
       {(m.turns ?? []).map((turn) => {
         // A turn whose agent asked its peers: the help shows in place, under the turn's line.
         const help = helpOf(turn)
+        // A council's deliberation shows in place too, under the chair's turn.
+        const council = councilOf(turn)
         return (
           <Fragment key={turn.id}>
             <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
+            {council === undefined ? undefined : (
+              <CouncilThread turn={turn} council={council} agents={agents} onAnswer={props.onAnswer} canAnswer={props.canAnswer} t={t} />
+            )}
             {help === undefined ? undefined : (
               <HelpThread
                 help={help}

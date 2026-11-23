@@ -129,6 +129,10 @@ const COORDINATION_CODES: Readonly<Record<string, ChatKey>> = {
   'budget-out-of-range': 'coordBudgetMax',
   'unknown-mode': 'coordModeUnknown',
   'missing-fields': 'coordMissingFields',
+  'too-few-members': 'councilTooFew',
+  'too-many-members': 'councilTooFew',
+  'synthesizer-is-member': 'councilSynthIsMember',
+  'unknown-decision': 'councilUnknownDecision',
 }
 
 export function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
@@ -354,6 +358,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const canManageAgents = chat?.createAgent !== undefined && (state?.role === 'owner' || state?.role === 'admin')
   const [editing, setEditing] = useState<ChatAgent | 'new' | undefined>(undefined)
   // An agent's sheet opens on the agent as it is now, read again, not as the list last showed it.
+  // Councils closed without naming their members: the space's spend, never an agent's (#119).
+  const [unattributed, setUnattributed] = useState<number | undefined>(undefined)
+  useEffect(() => {
+    if (view !== 'agents' || chat?.unattributedEur === undefined) return
+    void chat.unattributedEur().then(setUnattributed, () => { setUnattributed(undefined) })
+  }, [view, chat])
   // The agent whose readable sheet is open in the Agents view (lot 3), for everyone.
   const [viewing, setViewing] = useState<ChatAgent | undefined>(undefined)
   const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
@@ -1771,7 +1781,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     const where = chatChannels?.find(c => c.id === e.channelId)
                     return (
                       <div key={e.turnId} className="mw-queue-item mw-turn-unchecked mw-help-question" data-testid="pending-question">
-                        <p className="mw-help-question-text">{tc('helpQuestionFor', { question: e.question })}</p>
+                        <p className="mw-help-question-text">
+                          {tc(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
+                        </p>
                         {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
                         {where === undefined ? undefined : (
                           <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
@@ -1897,6 +1909,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   onClose={() => { setViewing(undefined) }}
                   t={tc}
                 />
+              )}
+              {unattributed === undefined || unattributed <= 0 ? undefined : (
+                <p className="mw-counts" data-testid="agents-unattributed">
+                  {tc('agentsMonthUnattributed', {
+                    total: euros(chatAgents.reduce((sum, a) => sum + (a.eurThisMonth ?? 0), 0) + unattributed),
+                    councils: euros(unattributed),
+                  })}
+                </p>
               )}
               {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? (
                 <div className="mw-empty-state"><p>{t('shell.agents-none')}</p></div>

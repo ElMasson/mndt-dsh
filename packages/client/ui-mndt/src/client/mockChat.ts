@@ -53,6 +53,8 @@ export interface MockSeed {
   /** The connectors mounted on the workbench; a channel may only hold an enabled one. */
   /** The open escalations; absent, `escalations()` answers 404 as an older core does. */
   readonly escalations?: readonly OpenEscalation[]
+  /** This month's spend of councils closed without naming their members, for the space. */
+  readonly unattributedEur?: number
   readonly mounted?: readonly MountedConnector[]
 }
 
@@ -202,6 +204,9 @@ export function createMockChat(
         return removed
       })
     },
+    unattributedEur() {
+      return settle(() => seed.unattributedEur)
+    },
     agents() {
       return settle(() => {
         return [...agents.values()]
@@ -266,6 +271,31 @@ export function createMockChat(
           const parallel = { ...c, coordination: { mode: 'parallel-synthesis', workerIds: [...change.workers], synthesizerId: change.synthesizer, maxEurPerTurn: max } }
           channels.set(c.id, parallel)
           return parallel
+        }
+        if (change.mode === 'council') {
+          // As the core is asked to: 2 to 4 distinct members of the channel, a synthesiser outside them.
+          if (change.members.length < 2) throw new ChatRefusal('a council has 2 to 4 members', 400, 'too-few-members')
+          if (change.members.length > 4 || new Set(change.members).size !== change.members.length) {
+            throw new ChatRefusal('a council has 2 to 4 members', 400, 'too-many-members')
+          }
+          const ids = [...change.members, ...(change.synthesizer === undefined ? [] : [change.synthesizer])]
+          if (ids.some(agentId => agents.get(agentId) === undefined || !c.agents.includes(agentId))) {
+            throw new ChatRefusal('the members must be active agents of this channel', 400, 'not-member')
+          }
+          if (change.decision === 'synthesis' && (change.synthesizer === undefined || change.members.includes(change.synthesizer))) {
+            throw new ChatRefusal('the synthesizer is not one of the members', 400, 'synthesizer-is-member')
+          }
+          const max = change.maxEurPerTurn ?? 1
+          if (max <= 0 || max > 5) throw new ChatRefusal('a council turn costs 5 € at most', 400, 'budget-out-of-range')
+          const council = {
+            ...c,
+            coordination: {
+              mode: 'council', memberIds: [...change.members], decision: change.decision, maxEurPerTurn: max,
+              ...(change.decision === 'synthesis' && change.synthesizer !== undefined ? { synthesizerId: change.synthesizer } : {}),
+            },
+          }
+          channels.set(c.id, council)
+          return council
         }
         // As the core (#84): two agents of the channel, on two different models.
         const author = agents.get(change.author)
