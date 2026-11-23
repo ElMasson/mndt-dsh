@@ -42,6 +42,15 @@ import type { ModelPrice, PriceGrid } from './core/index.ts'
  */
 export const RESERVED_OUTPUT_TOKENS = 8192
 
+/**
+ * The most a tool result may add to the next message's input, in estimated
+ * tokens: the base bundle's spill-policy keeps a result inline up to
+ * maxInlineTokens and spills the rest behind a reference
+ * (packages/bundle/base/cordis.patch.yml; tests/turnBudgetReserve.spec.ts
+ * fails if it moves). An estimate, not a count: the bound holds to it.
+ */
+export const RESERVED_TOOL_RESULT_TOKENS = 12_500
+
 /** @param text - a prompt. @returns a generous estimate of its input tokens. */
 export function estimatedTokens(text: string): number {
   return Math.ceil(text.length / 3)
