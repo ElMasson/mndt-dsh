@@ -112,5 +112,3 @@ export async function loadTokens(path: string): Promise<Record<string, Provision
   }
   return tokens
 }
-
-export { isPlainAscii }

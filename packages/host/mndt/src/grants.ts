@@ -9,7 +9,7 @@ import { asRole } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import type { Grant } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { readFile } from 'node:fs/promises'
 import type { GrantSource, SkippedGrant } from './policy.ts'
-import { isPlainAscii } from './identity.ts'
+import { isPlainAscii } from './core/address.ts'
 
 /** Ask the team authority for its grant table. */
 export function authorityGrants(

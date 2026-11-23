@@ -228,14 +228,16 @@ export class WorkbenchService {
    */
   async #write<T>(
     work: (state: WorkbenchState) =>
-      | { state: WorkbenchState; event: WorkbenchEvent; value: T }
-      | Promise<{ state: WorkbenchState; event: WorkbenchEvent; value: T }>,
+      | { state: WorkbenchState; event: WorkbenchEvent | readonly WorkbenchEvent[]; value: T }
+      | Promise<{ state: WorkbenchState; event: WorkbenchEvent | readonly WorkbenchEvent[]; value: T }>,
   ): Promise<T> {
     let result: T | undefined
     const run = this.#chain.then(async () => {
       const state = await this.#ready()
       const next = await work(state)
-      const committed: WorkbenchState = { ...next.state, events: [...next.state.events, next.event].slice(-500) }
+      // One change may journal several facts (a channel updated and a coordination ended).
+      const recorded = Array.isArray(next.event) ? next.event : [next.event as WorkbenchEvent]
+      const committed: WorkbenchState = { ...next.state, events: [...next.state.events, ...recorded].slice(-500) }
       await this.#options.store.save(committed)
       this.#state = committed
       result = next.value
@@ -1094,9 +1096,17 @@ export class WorkbenchService {
       const event = gained.length > 0 || lost.length > 0
         ? { at: this.#at(), actor, action: 'channel.connectors', subject: id, detail: [...gained.map(s => `+${s}`), ...lost.map(s => `-${s}`)].join(' ') }
         : { at: this.#at(), actor, action: 'channel.updated', subject: id }
+      // A coordination that ends because one of its agents left is said as such,
+      // with the agent who left: the screen and the journal show why it stopped.
+      const leaving = ended && coordination !== undefined
+        ? coordinationAgents(coordination).filter(agentId => (change.removeAgents ?? []).includes(agentId))
+        : []
+      const events = leaving.length > 0
+        ? [event, { at: this.#at(), actor, action: 'channel.coordination', subject: id, detail: `ended: ${leaving.join(' ')} left the channel` }]
+        : event
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
-        event,
+        event: events,
         value: next,
       }
     })

@@ -141,6 +141,10 @@ describe('« en parallèle puis synthèse »: setting it', () => {
     await b.call('POST', `/channels/${channel}/agents`, 'owner', { remove: [second] })
     const after = (await b.service.snapshot()).channels?.find(c => c.id === channel)
     expect(after?.coordination).toBeUndefined()
+    // Said in the journal, with the agent who left, next to the channel's own change.
+    const journal = (await b.service.events()).filter(event => event.subject === channel).map(event => [event.action, event.detail])
+    expect(journal).toContainEqual(['channel.coordination', `ended: ${second} left the channel`])
+    expect(journal.some(([action]) => action === 'channel.updated' || action === 'channel.connectors')).toBe(true)
   })
 })
 
