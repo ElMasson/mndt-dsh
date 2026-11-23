@@ -25,6 +25,7 @@ const noMissions: MissionRunner = {
 class ScriptedEngine implements TurnEngine {
   readonly seen: TurnInput[] = []
   verdict = '{"ok": true}'
+  revision = 'réponse corrigée'
   /** Called before answering: to stop the turn. */
   before?: (input: TurnInput) => void
   async run(input: TurnInput): Promise<TurnOutput> {
@@ -39,7 +40,7 @@ class ScriptedEngine implements TurnEngine {
       role === 'verifier'
         ? this.verdict
         : role === 'revision'
-          ? 'réponse corrigée'
+          ? this.revision
           : 'premier brouillon'
     return { text, tokens: { input: 1_000_000, output: 0 } }
   }
@@ -403,5 +404,49 @@ describe('reading a verdict: structure only', () => {
     expect(parseVerdict('{"ok": false}')).toEqual({ kind: 'unreadable' })
     expect(parseVerdict('oui')).toEqual({ kind: 'unreadable' })
     expect(parseVerdict('{ cassé')).toEqual({ kind: 'unreadable' })
+  })
+})
+
+describe('what the screen reads without parsing the text (review of #99)', () => {
+  it('a revision step says whether the published text is the revision', async () => {
+    const b = bench()
+    const { author, verifier, channel } = await team(b)
+    await b.call('POST', `/channels/${channel}/coordination`, 'owner', { mode: 'author-verifier', author, verifier })
+    b.engine.verdict = '{"ok": false, "issues": ["ajoute la date"]}'
+    const corrected = await ask(b, channel, '@auteur fais le point')
+    expect(corrected.asked?.turns?.[0]?.steps?.[2]).toMatchObject({ role: 'revision', replaced: true })
+    expect(corrected.asked?.turns?.[0]?.steps?.[2]?.notes).toBeUndefined()
+
+    b.engine.revision = '   '
+    const empty = await ask(b, channel, '@auteur refais le point')
+    expect(empty.asked?.turns?.[0]?.steps?.[2]).toMatchObject({ role: 'revision', replaced: false, notes: ['correction vide, brouillon publié'] })
+    expect(empty.replies.at(-1)?.text).toBe('premier brouillon')
+  })
+
+  it('every refusal of a coordination carries a stable code, the text unchanged', async () => {
+    const b = bench()
+    const { author, verifier, channel } = await team(b)
+    const same = await b.call('POST', '/agents', 'owner', { handle: 'jumeau', name: 'jumeau', provider: 'route-a', model: 'm', eurPerMonth: 5 })
+    const twin = (same.body.agent as { id: string }).id
+    await b.call('POST', `/channels/${channel}/agents`, 'owner', { add: [twin] })
+    const set = (body: Record<string, unknown>) => b.call('POST', `/channels/${channel}/coordination`, 'owner', body)
+    const cases: [Record<string, unknown>, string][] = [
+      [{ mode: 'author-verifier', author, verifier: author }, 'same-agent'],
+      [{ mode: 'author-verifier', author, verifier: twin }, 'same-model'],
+      [{ mode: 'author-verifier', author, verifier: 'agt_absent' }, 'not-member'],
+      [{ mode: 'author-verifier', author }, 'missing-fields'],
+      [{ mode: 'en-equipe' }, 'unknown-mode'],
+      [{ mode: 'parallel-synthesis', workers: [author], synthesizer: verifier }, 'too-few-workers'],
+      [{ mode: 'parallel-synthesis', workers: [author, twin, verifier, 'a', 'b'], synthesizer: 'c' }, 'too-many-workers'],
+      [{ mode: 'parallel-synthesis', workers: [author, twin], synthesizer: author }, 'synthesizer-is-worker'],
+      [{ mode: 'parallel-synthesis', workers: [author, twin], synthesizer: verifier, maxEurPerTurn: 9 }, 'budget-out-of-range'],
+      [{ mode: 'parallel-synthesis', synthesizer: verifier }, 'missing-fields'],
+    ]
+    for (const [body, code] of cases) {
+      const answer = await set(body)
+      expect([answer.status, answer.body.code], JSON.stringify(body)).toEqual([400, code])
+      expect(typeof answer.body.error).toBe('string')
+    }
+    expect((await set({ mode: 'author-verifier', author, verifier: author })).body.error).toBe('the author and the verifier must be two agents')
   })
 })

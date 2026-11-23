@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, CoordinationRefusal } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -326,6 +326,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       return await conversation(request, path, identity)
     } catch (error) {
       const reason = messageOf(error)
+      if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason })
@@ -462,7 +463,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (input.mode === 'solo') return respond(200, { channel: await service.setCoordination(channel.id, undefined, identity) })
       if (input.mode === 'parallel-synthesis') {
         if (!Array.isArray(input.workers) || typeof input.synthesizer !== 'string') {
-          return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)' })
+          return respond(400, { error: 'parallel-synthesis needs workers (2 to 4 agent ids) and a synthesizer (an agent id)', code: 'missing-fields' })
         }
         const updated = await service.setCoordination(channel.id, {
           mode: 'parallel-synthesis',
@@ -473,7 +474,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, { channel: updated })
       }
       if (input.mode !== 'author-verifier' || typeof input.author !== 'string' || typeof input.verifier !== 'string') {
-        return respond(400, { error: 'mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)' })
+        return respond(400, {
+          error: 'mode is solo, author-verifier (author, verifier) or parallel-synthesis (workers, synthesizer)',
+          code: input.mode === 'author-verifier' ? 'missing-fields' : 'unknown-mode',
+        })
       }
       const updated = await service.setCoordination(channel.id, { mode: 'author-verifier', authorId: input.author, verifierId: input.verifier }, identity)
       return respond(200, { channel: updated })

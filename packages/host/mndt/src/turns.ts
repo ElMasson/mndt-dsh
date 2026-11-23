@@ -523,12 +523,15 @@ export class TurnScheduler {
             // and could have written it into its remarks.
             const revisionMark = randomUUID().slice(0, 8)
             const revised = await call(agent, 'r', revisionPrompt(prompt, first.output.text, verifier, verdict.issues, revisionMark))
+            // Said positively: the published text is the revision, or the draft kept.
+            const replaced = revised.output.text.trim() !== ''
             steps.push({
-              role: 'revision', agentId: agent.id,
+              role: 'revision', agentId: agent.id, replaced,
+              ...(replaced ? {} : { notes: ['correction vide, brouillon publié'] }),
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
               ...(revised.eur === undefined ? {} : { eur: revised.eur }),
             })
-            if (revised.output.text.trim() !== '') output = revised.output
+            if (replaced) output = revised.output
           }
         }
       }
