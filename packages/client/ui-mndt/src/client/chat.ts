@@ -61,6 +61,14 @@ export type CoordinationChange =
     readonly synthesizer: string
     readonly maxEurPerTurn?: number
   }
+  | {
+    readonly mode: 'council'
+    /** 2 to 4 agents; the first chairs (its turn calls the council). */
+    readonly members: readonly string[]
+    readonly decision: 'vote' | 'synthesis'
+    readonly synthesizer?: string
+    readonly maxEurPerTurn?: number
+  }
 
 /** One agent turn started by a mention. */
 export interface ChatTurn {
@@ -85,6 +93,8 @@ export interface ChatTurn {
   readonly steps?: unknown
   /** Its agent's help from its peers (`ask_peers`), read through `helpOf`, never trusted as is. */
   readonly help?: unknown
+  /** A council's deliberation on this turn, read through `councilOf`, never trusted as is. */
+  readonly council?: unknown
 }
 
 /** One message of a channel. */

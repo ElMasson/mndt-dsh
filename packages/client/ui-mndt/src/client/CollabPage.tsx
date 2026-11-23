@@ -129,6 +129,10 @@ const COORDINATION_CODES: Readonly<Record<string, ChatKey>> = {
   'budget-out-of-range': 'coordBudgetMax',
   'unknown-mode': 'coordModeUnknown',
   'missing-fields': 'coordMissingFields',
+  'too-few-members': 'councilTooFew',
+  'too-many-members': 'councilTooFew',
+  'synthesizer-is-member': 'councilSynthIsMember',
+  'unknown-decision': 'councilUnknownDecision',
 }
 
 export function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
