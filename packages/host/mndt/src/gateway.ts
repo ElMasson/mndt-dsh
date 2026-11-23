@@ -274,6 +274,10 @@ export class WorkbenchGateway extends TypertRemoteService {
         if (stuck.length > 0) {
           warnOperator(ctx, `mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
         }
+        // A help left open by a previous process will never run either: closed,
+        // without a reading, so its peers stay unnamed.
+        const helps = await this.service.closeInterruptedHelps()
+        if (helps > 0) warnOperator(ctx, `mndt: ${helps} help(s) left open by a previous process were closed (« redémarrage »)`)
       } catch (error) {
         ctx.logger.error(`mndt: could not reconcile interrupted missions: ${error instanceof Error ? error.message : String(error)}`)
       }

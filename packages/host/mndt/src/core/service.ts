@@ -1342,6 +1342,39 @@ export class WorkbenchService {
   }
 
   /**
+   * Close the helps a previous process left open (asked, advising, reading):
+   * nothing will ever run them. Each is done, with a skipped entry
+   * « redémarrage », and no reading, so no peer is ever named for it.
+   * @returns how many were closed.
+   */
+  async closeInterruptedHelps(): Promise<number> {
+    const open = ((await this.snapshot()).messages ?? []).some(message =>
+      (message.turns ?? []).some(turn => turn.help !== undefined && turn.help.state !== 'done'))
+    if (!open) return 0
+    return this.#write((state) => {
+      let closed = 0
+      const at = this.#at()
+      const messages = (state.messages ?? []).map((message) => {
+        if (!(message.turns ?? []).some(turn => turn.help !== undefined && turn.help.state !== 'done')) return message
+        return {
+          ...message,
+          updatedAt: at,
+          turns: (message.turns ?? []).map((turn) => {
+            if (turn.help === undefined || turn.help.state === 'done') return turn
+            closed += 1
+            return { ...turn, help: { ...turn.help, state: 'done' as const, skipped: [...turn.help.skipped, { reason: 'redémarrage' }] } }
+          }),
+        }
+      })
+      return {
+        state: { ...state, messages },
+        event: { at, actor: 'mndt', action: 'turn.help-closed', subject: 'restart', detail: `${closed} help(s) left open by a previous process` },
+        value: closed,
+      }
+    })
+  }
+
+  /**
    * A person's reply to an agent's escalated question: answered, and the asker
    * gets a turn on that reply (it has the hand again).
    * @param reply - the person's message, replying to the agent's question.
