@@ -86,9 +86,11 @@ describe('a card of a private channel never reaches a person outside it', () => 
 
 describe('the workstation Remote on a team workbench', () => {
   it('is closed when a proxy proves each person, open on a workstation of one', () => {
-    expect(teamRemoteRefusal('x-forwarded-email')).toContain('the workstation Remote is closed')
-    expect(teamRemoteRefusal(undefined)).toBeUndefined()
-    expect(teamRemoteRefusal('')).toBeUndefined()
+    expect(teamRemoteRefusal('x-forwarded-email', { DSH_MNDT_SOLO_WORKSTATION: '1' })).toContain('the workstation Remote is closed')
+    // Closed by default: open only on a host declared solo, never behind the proxy.
+    expect(teamRemoteRefusal(undefined, {})).toContain('set DSH_MNDT_SOLO_WORKSTATION=1')
+    expect(teamRemoteRefusal('', { DSH_MNDT_SOLO_WORKSTATION: 'yes' })).toContain('set DSH_MNDT_SOLO_WORKSTATION=1')
+    expect(teamRemoteRefusal(undefined, { DSH_MNDT_SOLO_WORKSTATION: '1' })).toBeUndefined()
   })
 
   it('guards every method that reads or acts as the workstation identity', () => {

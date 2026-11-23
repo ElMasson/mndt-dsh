@@ -116,7 +116,13 @@ export interface Approval {
   readonly kind: ApprovalAction
   readonly title: string
   readonly payload: ApprovalPayload
+  /**
+   * The person the card is asked for (rights and reading rest on them): for a
+   * card an agent's turn asked, the person who mentioned the agent.
+   */
   readonly requestedBy: string
+  /** The agent whose turn asked the card, when a turn did; absent for a person or a mission. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
   readonly requestedAt: string
   readonly state: ApprovalState
   readonly decidedBy?: string

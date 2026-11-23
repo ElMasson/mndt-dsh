@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -313,6 +313,24 @@ describe('the platform chains', () => {
   })
 })
 
+describe('with a read allow-list (DSH_SANDBOX_READ_ROOTS)', () => {
+  it('chooses Landlock over a usable bwrap, and confines with the listed roots only', async () => {
+    const before = process.env.DSH_SANDBOX_READ_ROOTS
+    process.env.DSH_SANDBOX_READ_ROOTS = '/usr:/etc'
+    try {
+      // bwrap would pass its probe: it is still never chosen, it cannot honour the list.
+      const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => true, landlockLauncher: fakeLauncher() })
+      const confined = await sandbox.confine(['true'], { mode: 'workspace-write', workspaceRoot: '/ws' })
+      expect(confined.argv[0]).toMatch(/landlock-run$/)
+      expect(confined.argv).toContain('/usr')
+      expect(confined.argv.slice(0, confined.argv.indexOf('--'))).not.toContain('/')
+    } finally {
+      if (before === undefined) delete process.env.DSH_SANDBOX_READ_ROOTS
+      else process.env.DSH_SANDBOX_READ_ROOTS = before
+    }
+  })
+})
+
 describe('the default landlock probe (launcher CLI contract)', () => {
   it('parses a fully-enforced probe report as full enforcement', async () => {
     const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => false, landlockLauncher: fakeLauncher() })
@@ -488,5 +506,99 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     })
     const confined = await sandbox.confine(['true'], RO)
     expect(confined.argv.slice(0, 2)).toEqual([process.execPath, builtEntry])
+  })
+})
+
+describe('a private temp directory per session under Landlock with a read allow-list', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  /** The TMPDIR the launcher sets (--set-env, before the separator), with TMP, TEMP and HOME the same. */
+  function tempOf(argv: readonly string[]): string {
+    const grants = argv.slice(0, argv.indexOf('--'))
+    const set = grants.flatMap((arg, i) => (grants[i - 1] === '--set-env' ? [arg] : []))
+    const dir = set.find(entry => entry.startsWith('TMPDIR='))?.replace(/^TMPDIR=/, '') ?? ''
+    expect(set).toEqual([`TMPDIR=${dir}`, `TMP=${dir}`, `TEMP=${dir}`, `HOME=${dir}`])
+    return dir
+  }
+
+  it('grants each session its own directory, never the shared /tmp, and removes them all on dispose', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    const ctx = new Context()
+    await ctx.plugin(LocalSandboxProvider, {})
+    const sandbox = ctx.sandbox as LocalSandboxProvider
+    sandbox.internals = { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() }
+    const a = await sandbox.confine(['sh', '-c', 'true'], { ...WW, sessionId: 'session-a' as never })
+    const a2 = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    const b = await sandbox.confine(['true'], { ...WW, sessionId: 'session-b' as never })
+    const agentless = await sandbox.confine(['true'], WW)
+    const agentless2 = await sandbox.confine(['true'], WW)
+    const [dirA, dirB, dirNone] = [tempOf(a.argv), tempOf(b.argv), tempOf(agentless.argv)]
+    expect(tempOf(a2.argv)).toBe(dirA)
+    // A call without a session gets a directory for itself alone, never another call's.
+    expect(new Set([dirA, dirB, dirNone, tempOf(agentless2.argv)]).size).toBe(4)
+    for (const dir of [dirA, dirB, dirNone]) expect(statSync(dir).mode & 0o777).toBe(0o700)
+    // The command itself is not wrapped: the launcher filters the environment.
+    expect(a.argv.slice(a.argv.indexOf('--') + 1)).toEqual(['sh', '-c', 'true'])
+    // The grant names the session's private directory, never /tmp nor another session's.
+    const grants = a.argv.slice(1, a.argv.indexOf('--'))
+    expect(grants).toContain(dirA)
+    expect(grants).not.toContain('/tmp')
+    expect(grants).not.toContain(dirB)
+    expect(a.argv.slice(-3)).toEqual(['sh', '-c', 'true'])
+    // read-only writes nothing: no temp, no HOME, the environment still filtered.
+    const ro = await sandbox.confine(['true'], { ...RO, sessionId: 'session-a' as never })
+    expect(ro.argv.slice(ro.argv.indexOf('--') + 1)).toEqual(['true'])
+    expect(ro.argv).toContain('--keep-env')
+    expect(ro.argv).not.toContain('--set-env')
+    await ctx.fiber.dispose()
+    for (const dir of [dirA, dirB, dirNone]) expect(existsSync(dir)).toBe(false)
+  })
+
+  it('hands the launcher the kept names only, never a value of the environment', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    vi.stubEnv('DATABASE_URL', 'postgres://u:canary-value@h/db')
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    const grants = confined.argv.slice(0, confined.argv.indexOf('--'))
+    const kept = grants.flatMap((arg, i) => (grants[i - 1] === '--keep-env' ? [arg] : []))
+    expect(kept).toEqual(expect.arrayContaining(['PATH', 'NO_COLOR', 'NODE_OPTIONS']))
+    expect(kept).not.toContain('DATABASE_URL')
+    expect(grants.flatMap((arg, i) => (grants[i - 1] === '--keep-env-prefix' ? [arg] : []))).toEqual(['LC_', 'DSH_'])
+    expect(confined.argv.join(' ')).not.toContain('canary-value')
+  })
+
+  it('removes a session\'s directory once idle for 12 h, keeps a busy one, and gives a returning session a fresh one', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    let now = 0
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher(), now: () => now })
+    const at = async (session: string) => tempOf((await sandbox.confine(['true'], { ...WW, sessionId: session as never })).argv)
+    const idle = await at('turn-1')
+    const busy = await at('turn-2')
+    now = 11 * 3_600_000
+    expect(await at('turn-2')).toBe(busy)
+    now = 13 * 3_600_000
+    await at('turn-3') // a new session triggers the pruning
+    expect(existsSync(idle)).toBe(false)
+    expect(existsSync(busy)).toBe(true)
+    const back = await at('turn-1')
+    expect(back).not.toBe(idle)
+    expect(existsSync(back)).toBe(true)
+  })
+
+  it('keeps at most 32 directories of calls without a session, the oldest removed first', async () => {
+    vi.stubEnv('DSH_SANDBOX_READ_ROOTS', '/usr:/dev/null')
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const dirs: string[] = []
+    for (let call = 0; call < 40; call++) dirs.push(tempOf((await sandbox.confine(['true'], WW)).argv))
+    expect(dirs.filter(dir => existsSync(dir))).toHaveLength(32)
+    expect(existsSync(dirs[0] ?? '')).toBe(false)
+    expect(existsSync(dirs[39] ?? '')).toBe(true)
+  })
+
+  it('changes nothing without an allow-list: the shared /tmp, no prefix', async () => {
+    const { sandbox } = await setup({}, { platform: 'linux', chain: ['landlock'], landlockLauncher: fakeLauncher() })
+    const confined = await sandbox.confine(['true'], { ...WW, sessionId: 'session-a' as never })
+    expect(confined.argv.slice(confined.argv.indexOf('--') + 1)).toEqual(['true'])
+    expect(confined.argv).toContain('/tmp')
   })
 })

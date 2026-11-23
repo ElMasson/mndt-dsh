@@ -34,6 +34,7 @@ import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
+import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -121,17 +122,23 @@ export function automationRefusal(item: Automation, team: boolean, owners: Reado
 }
 
 /**
- * Whether the workstation Remote is closed: it is on a team workbench, where
- * several people reach the same shell behind single sign-on (a proxy user
- * header is configured) and the product API serves each under their own identity.
+ * Whether the workstation Remote is closed. Closed by default: it serves one
+ * person's workstation, so it opens only on a host declared solo
+ * (DSH_MNDT_SOLO_WORKSTATION=1, see soloWorkstation), never behind the sign-on
+ * proxy, where the product API serves each person under their own identity. A
+ * missing or mistyped setting closes it rather than opening it to a team.
  * @param proxyUserHeader - the header the proxy proves the person with, if any.
+ * @param env - the environment.
  * @returns the Remote's JSON refusal, or undefined when the Remote is open.
  */
-export function teamRemoteRefusal(proxyUserHeader: string | undefined): string | undefined {
-  if (proxyUserHeader === undefined || proxyUserHeader === '') return undefined
+export function teamRemoteRefusal(proxyUserHeader: string | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (soloWorkstation(proxyUserHeader, env)) return undefined
+  const team = proxyUserHeader !== undefined && proxyUserHeader !== ''
   return JSON.stringify({
     ok: false,
-    error: 'on a team workbench the product API (/mndt-api) serves each person under their own identity; the workstation Remote is closed',
+    error: team
+      ? 'on a team workbench the product API (/mndt-api) serves each person under their own identity; the workstation Remote is closed'
+      : 'the workstation Remote is closed unless this host is declared solo: set DSH_MNDT_SOLO_WORKSTATION=1',
   })
 }
 
@@ -159,7 +166,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
     this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
     this.automationsPath = join(dirname(this.statePath), 'automations.json')
-    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath) })
+    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath), warn: (message) => { warnOperator(ctx, message) } })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
     this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
@@ -169,9 +176,9 @@ export class WorkbenchGateway extends TypertRemoteService {
     // tenant's own role file, else the local owner alone (solo mode).
     const grantsFile = process.env.DSH_MNDT_GRANTS_FILE
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
-      ? authorityGrants({ baseUrl, token })
+      ? authorityGrants({ baseUrl, token }, (message) => { warnOperator(ctx, message) })
       : grantsFile !== undefined && grantsFile !== ''
-        ? fileGrants(grantsFile)
+        ? fileGrants(grantsFile, (message) => { warnOperator(ctx, message) })
         : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleAutomations(ctx)
@@ -197,7 +204,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // without it, the API never believes the proxy's identity header.
     const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
     if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
-      ctx.logger.warn('mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
+      warnOperator(ctx, 'mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
     }
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
@@ -256,7 +263,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           await this.service.failMission(mission.id, 'interrupted by a workbench restart; no result was produced')
         }
         if (stuck.length > 0) {
-          ctx.logger.warn(`mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
+          warnOperator(ctx, `mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
         }
       } catch (error) {
         ctx.logger.error(`mndt: could not reconcile interrupted missions: ${error instanceof Error ? error.message : String(error)}`)
@@ -320,9 +327,11 @@ export class WorkbenchGateway extends TypertRemoteService {
           const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            ctx.logger.warn('mndt: automations skipped: the role table names no owner, or cannot be read')
+            // Said once, not at every pass of the tick (every 30 s).
+            warnOperatorOnce(ctx, 'automations-owner', 'mndt: automations skipped: the role table names no owner, or cannot be read')
             return
           }
+          clearOperatorWarning('automations-owner')
           if (team) {
             // On a team instance an automation runs once an owner enabled it. One
             // enabled otherwise (the deployment default auto_briefing included) is
@@ -333,7 +342,7 @@ export class WorkbenchGateway extends TypertRemoteService {
                 const reason = stray.some(item => item.id === candidate.id) ? automationRefusal(candidate, true, owners) : undefined
                 return reason === undefined ? candidate : { ...candidate, enabled: false, lastOutcome: reason }
               })
-              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
+              for (const item of stray) warnOperator(ctx, `mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
               items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
@@ -343,8 +352,10 @@ export class WorkbenchGateway extends TypertRemoteService {
             // The run is the owner's who enabled it (team), private.
             fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
           }
+          clearOperatorWarning('automations-read')
         } catch (error) {
-          ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
+          // Its shape only: a JSON error quotes the start of the file, a prompt.
+          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations: ${errorShape(error)}`)
         }
       })()
     }

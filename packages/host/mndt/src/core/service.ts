@@ -39,6 +39,18 @@ import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { SLUG, freeSlug, mentionsOf, slugOf } from './conversation.ts'
+import { isPlainAscii } from './address.ts'
+
+/**
+ * @param members - the e-mails a person adds to a channel.
+ * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
+ * spelling would be lower-cased onto another person's address.
+ */
+function plainMembers(members: readonly string[]): readonly string[] {
+  const refused = members.filter(email => !isPlainAscii(email))
+  if (refused.length > 0) throw new Error(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
+  return members
+}
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -69,6 +81,8 @@ export interface ApprovalRequest {
   readonly requestedBy: string
   /** A propose_agent card's agent, checked as POST /agents checks it. */
   readonly proposal?: AgentProposal
+  /** The agent whose turn asked it: set by the server from the running turn, never from a request. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
 }
 
 /** What creating an agent needs. */
@@ -128,6 +142,8 @@ export interface ServiceOptions {
   readonly store: WorkbenchStore
   readonly now?: () => Date
   readonly nextId?: (prefix: string) => string
+  /** Where the service says what it changed on its own at load (a mandate retired). */
+  readonly warn?: (message: string) => void
 }
 
 /** The service. */
@@ -158,7 +174,24 @@ export class WorkbenchService {
     if (!this.#loaded) {
       const loaded = await this.#options.store.load()
       // Older state files predate mandates; they read as no mandates, never as a crash.
-      const mandates = (loaded as { mandates?: readonly Mandate[] }).mandates ?? []
+      // Its parties read as the lower-case e-mail the proxy proves, as channel
+      // members do: a mandate written with capitals before #60 keeps working.
+      // A row without its parties, or one whose parties are the same person once
+      // lower-cased (A@x and a@x, which the draft check now refuses), is kept for
+      // the record but retired: it authorises nothing, and a load never crashes on it.
+      let retiredOnLoad = 0
+      const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map((mandate) => {
+        const party = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
+        const delegant = party(mandate.delegant)
+        const delegataire = party(mandate.delegataire)
+        const why = delegant === '' || delegataire === '' ? 'a party is missing' : delegant === delegataire ? 'its two parties are the same person' : undefined
+        if (why !== undefined && mandate.state !== 'retired') {
+          // Said once per load, with what it was: the next write keeps only « retired ».
+          this.#options.warn?.(`mndt: mandate ${String(mandate.id)} retired on load (${why}); it was ${String(mandate.state)}, ${delegant || '?'} to ${delegataire || '?'}`)
+          retiredOnLoad += 1
+        }
+        return { ...mandate, delegant, delegataire, ...(why === undefined ? {} : { state: 'retired' as const }) }
+      })
       // One spelling of a person: members written with capitals before identities were normalised
       // read as the lower-case e-mail the proxy proves, so nobody loses a channel.
       const channels = loaded.channels?.map(channel => ({
@@ -167,6 +200,15 @@ export class WorkbenchService {
       }))
       this.#state = { ...loaded, mandates, ...(channels === undefined ? {} : { channels }) }
       this.#loaded = true
+      // Recorded once: a mandate retired on load is said at this start only, not at every start.
+      // Through the write chain, behind any write already queued: never a save
+      // that races another one.
+      // The state saved is the one current when this link runs, never the load's
+      // snapshot: a write queued before it must not be overwritten on disk.
+      if (retiredOnLoad > 0) {
+        const save = this.#chain.then(() => this.#options.store.save(this.#state))
+        this.#chain = save.catch(() => undefined)
+      }
     }
     return this.#state
   }
@@ -448,6 +490,9 @@ export class WorkbenchService {
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
       ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
+      ...(request.requestedByAgent === undefined
+        ? {}
+        : { requestedByAgent: { id: request.requestedByAgent.id, handle: request.requestedByAgent.handle } }),
     }
     return this.#write((state) => {
       if (approval.kind === 'propose_agent') {
@@ -671,8 +716,8 @@ export class WorkbenchService {
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
     const mandate: Mandate = {
       id: this.#id('mnd'),
-      delegant: draft.delegant.trim(),
-      delegataire: draft.delegataire.trim(),
+      delegant: draft.delegant.trim().toLowerCase(),
+      delegataire: draft.delegataire.trim().toLowerCase(),
       purpose: draft.purpose.trim(),
       connectors: [...draft.connectors],
       missionKinds: [...draft.missionKinds],
@@ -926,7 +971,8 @@ export class WorkbenchService {
     return this.#write((state) => {
       const taken = new Set((state.channels ?? []).map(channel => channel.name))
       if (draft.name !== undefined && taken.has(draft.name)) {
-        throw new Error(`the channel #${draft.name} exists`)
+        // Neutral: the name may be a private channel's the caller is not in.
+        throw new Error(`the name #${draft.name} is not available`)
       }
       // A name the person chose is theirs; one derived from a title takes the
       // first free suffix instead of failing.
@@ -939,7 +985,7 @@ export class WorkbenchService {
         name,
         title: title || name,
         kind: 'team',
-        members: [...new Set([actor, ...(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
+        members: [...new Set([actor, ...plainMembers(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
         agents: [...new Set(agents)],
         connectors: [...new Set(draft.connectors ?? [])].sort(),
         createdBy: actor,
@@ -969,11 +1015,15 @@ export class WorkbenchService {
       readonly addAgents?: readonly string[]
       readonly removeAgents?: readonly string[]
       readonly connectors?: readonly string[]
+      /** Connectors added and removed against the CURRENT list, in one atomic write. */
+      readonly addConnectors?: readonly string[]
+      readonly removeConnectors?: readonly string[]
     },
     actor: string,
   ): Promise<Channel> {
-    if (change.connectors !== undefined) {
-      const refusal = serversRefusal(change.connectors)
+    for (const servers of [change.connectors, change.addConnectors, change.removeConnectors]) {
+      if (servers === undefined) continue
+      const refusal = serversRefusal(servers)
       if (refusal !== undefined) return Promise.reject(new Error(refusal))
     }
     return this.#write((state) => {
@@ -987,9 +1037,17 @@ export class WorkbenchService {
       if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
       // One spelling of a person: an e-mail written Prenom.Nom@ is the same member as prenom.nom@.
       const removed = (change.removeMembers ?? []).map(email => email.trim().toLowerCase())
-      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
+      const members = [...new Set([...channel.members, ...plainMembers(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
+      // The connectors, applied on the list as it is NOW (inside the write chain):
+      // two people toggling one connector each never undo each other.
+      const before = [...(channel.connectors ?? [])].sort()
+      const touched = change.connectors !== undefined || change.addConnectors !== undefined || change.removeConnectors !== undefined
+      const removedConnectors = change.removeConnectors ?? []
+      const connectors = change.connectors !== undefined
+        ? [...new Set(change.connectors)].sort()
+        : [...new Set([...before, ...(change.addConnectors ?? [])])].filter(server => !removedConnectors.includes(server)).sort()
       // A coordination whose author or verifier leaves the channel ends with it.
       const { coordination, ...base } = channel
       const ended = coordination !== undefined
@@ -999,11 +1057,18 @@ export class WorkbenchService {
         ...(coordination === undefined || ended ? {} : { coordination }),
         members,
         agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
-        ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
+        ...(touched ? { connectors } : {}),
       }
+      // A change of connectors grants or withdraws access to data: journalled as
+      // such, with who, what was added and removed, and when.
+      const gained = touched ? connectors.filter(server => !before.includes(server)) : []
+      const lost = touched ? before.filter(server => !connectors.includes(server)) : []
+      const event = gained.length > 0 || lost.length > 0
+        ? { at: this.#at(), actor, action: 'channel.connectors', subject: id, detail: [...gained.map(s => `+${s}`), ...lost.map(s => `-${s}`)].join(' ') }
+        : { at: this.#at(), actor, action: 'channel.updated', subject: id }
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
-        event: { at: this.#at(), actor, action: 'channel.updated', subject: id },
+        event,
         value: next,
       }
     })
