@@ -59,6 +59,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [[ $owner =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || { echo "--owner <email> is required" >&2; exit 1; }
+# Plain ASCII only: the gateway and the API never take another spelling for the owner.
+LC_ALL=C; [[ $owner =~ ^[!-~]+$ ]] || { echo "--owner must be a plain ASCII e-mail address" >&2; exit 1; }; unset LC_ALL
 [ -n "$email_domains" ] || email_domains=${domain#*.}
 [ -n "$org_name" ] || org_name=$(printf '%s' "$slug" | tr '[:lower:]' '[:upper:]')
 # Rendered by sed into a Compose file: a sed or Compose special character would
@@ -71,6 +73,26 @@ fi
 root=${MNDT_ROOT:-}
 here=$(cd "$(dirname "$0")" && pwd)
 app="/opt/mndt/$slug"; conf="/etc/mndt/$slug"; data="/data/mndt/$slug/live"
+# Root, checked before anything is written: the secrets and the sign-in list
+# must belong to the proxy (65532), or it stops at its next start. Only a test
+# root (MNDT_ROOT) may be rendered unprivileged. A test switch left in a root
+# shell never applies (render-authenticated-emails.py ignores it for root too).
+unset MNDT_EMAILS_UNPRIVILEGED
+if [ -z "$root" ] && [ "$(id -u)" != 0 ]; then
+  echo "refused: run create-tenant.sh as root; nothing was written" >&2; exit 1
+fi
+
+# The options of the previous run, said when they differ, before writing: a rerun
+# without --org-name, --env or --image would otherwise apply the defaults in silence.
+options_file="$root$app/.create-tenant.options"
+options_now=$(printf 'owner=%s\nemail-domains=%s\nentra-tenant=%s\nclient-id=%s\ntraefik-network=%s\ntrusted-proxy=%s\nimage=%s\norg-name=%s\nenv=%s\n' \
+  "$owner" "$email_domains" "$entra_tenant" "${client_id:-(from $client_conf)}" "$traefik_network" "$trusted_proxy" "$image" "$org_name" "$env_name")
+if [ -f "$options_file" ]; then
+  while IFS='=' read -r name before; do
+    now=$(printf '%s\n' "$options_now" | sed -n "s/^$name=//p")
+    [ "$now" = "$before" ] || echo "  option --$name differs from the previous run: was « $before », now « $now »"
+  done < "$options_file"
+fi
 
 # Secrets first: nothing is rendered for a tenant that could not sign in.
 if [ -z "$client_id" ]; then
@@ -105,7 +127,6 @@ chmod 400 "$root$conf/client_secret" "$root$conf/cookie_secret"
 # The proxy runs as 65532; only root can hand the secrets over.
 if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$conf/cookie_secret"; fi
 
-quoted=$(printf '%s' "$email_domains" | awk -F, '{for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i}')
 # Fingerprints of the code the containers mount from disk (gateway/server.mjs,
 # workbench-entrypoint.sh): written into the compose so that `up -d` recreates a
 # container whose code changed, even when its image and settings did not.
@@ -115,17 +136,24 @@ gateway_code=$(fingerprint "$here/gateway/server.mjs")
 # disk: the entrypoint and the connector tools. One aggregated fingerprint.
 tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs)
 tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
+render_with_proxy() { render "$1" | sed -e "s|__PROXY_CONF__|$proxy_conf|g"; }
 render() {
   sed -e "s|__SLUG__|$slug|g" -e "s|__DOMAIN__|$domain|g" -e "s|__OWNER__|$owner|g" \
       -e "s|__APP__|$app|g" -e "s|__CONF__|$conf|g" -e "s|__DATA__|$data|g" \
       -e "s|__TRAEFIK_NETWORK__|$traefik_network|g" -e "s|__TRUSTED_PROXY__|$trusted_proxy|g" \
       -e "s|__IMAGE__|$image|g" -e "s|__ENTRA_TENANT__|$entra_tenant|g" \
-      -e "s|__CLIENT_ID__|$client_id|g" -e "s|__EMAIL_DOMAINS__|$quoted|g" \
+      -e "s|__CLIENT_ID__|$client_id|g" \
       -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
 }
-render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg"
-chmod 644 "$root$conf/oauth2.cfg"
-render "$here/tenant/docker-compose.yml.template" > "$root$app/docker-compose.yml"
+# The tenant's role table: the owner first; the team is added by hand. A change
+# applies to the API on the next request; to the sign-in list only once
+# tenant/render-authenticated-emails.py is run again (as root, reloaded hot by
+# the proxy), the command printed at the end. Kept when it exists.
+mkdir -p "$root$data"
+if [ ! -f "$root$data/grants.json" ]; then
+  ( umask 077 && printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json" )
+  chmod 600 "$root$data/grants.json"
+fi
 mkdir -p "$root$app/gateway"
 cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # The connector machinery of the adapters lane, at this tenant's paths: the
@@ -190,19 +218,40 @@ if [ ! -f "$root$data/prices.json" ] && [ -f "$here/llm/prices.json" ]; then
   cp "$here/llm/prices.json" "$root$data/prices.json"
 fi
 [ -f "$root$data/prices.json" ] || echo "  no price grid yet: copy deploy/llm/prices.json to $data/prices.json, or every agent turn is refused"
-# The tenant's role table: the owner first; the team is added by hand, and a
-# change applies on the next request. Kept when it exists.
-if [ ! -f "$root$data/grants.json" ]; then
-  umask 077
-  printf '{\n  "grants": [\n    { "subject": "%s", "role": "owner" }\n  ]\n}\n' "$owner" > "$root$data/grants.json"
-  chmod 600 "$root$data/grants.json"
-fi
 [ -f "$root$data/state.json" ] || printf '{\n  "version": 1,\n  "missions": [],\n  "briefs": [],\n  "memories": [],\n  "approvals": [],\n  "events": [],\n  "mandates": []\n}\n' > "$root$data/state.json"
 
-echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for $email_domains)"
+# The proxy's side, LAST, right before `up -d`: who may sign in, its
+# configuration and the compose that fingerprints both. Written at the end so
+# that a failure of anything above (a patch, a copy) leaves the proxy's files
+# as they were, never a new configuration that the running proxy ignores.
+# The list from the role table, BEFORE the configuration that names it: a
+# refusal (an invalid table, an address outside the domains, the owner missing,
+# no root) leaves the previous list and the previous configuration as they were.
+# A tenant rendered into a test root (MNDT_ROOT) by an unprivileged user cannot
+# hand the list to the proxy's 65532: that run alone writes it without.
+if [ -n "$root" ] && [ "$(id -u)" != 0 ]; then export MNDT_EMAILS_UNPRIVILEGED=1; fi
+python3 "$here/tenant/render-authenticated-emails.py" "$root$data/grants.json" "$root$conf/authenticated_emails" "$email_domains" --owner "$owner" || exit 1
+trap 'rm -f "$root$conf/oauth2.cfg.new"' EXIT
+if ! render "$here/tenant/oauth2.cfg.template" > "$root$conf/oauth2.cfg.new" || ! chmod 644 "$root$conf/oauth2.cfg.new" \
+   || ! mv -f "$root$conf/oauth2.cfg.new" "$root$conf/oauth2.cfg"; then
+  echo "refused: the proxy configuration could not be written; the previous one stays" >&2
+  exit 1
+fi
+# The proxy reads oauth2.cfg once, at start, and watches the list. The
+# fingerprint of BOTH in the compose makes `up -d` recreate it when either
+# changed (as the gateway's code, #53).
+proxy_conf=$(cat "$root$conf/oauth2.cfg" "$root$conf/authenticated_emails" | sha256sum | cut -c1-16)
+render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/.docker-compose.yml.new" \
+  && mv -f "$root$app/.docker-compose.yml.new" "$root$app/docker-compose.yml" \
+  || { rm -f "$root$app/.docker-compose.yml.new"; echo "refused: the compose could not be written; the previous one stays" >&2; exit 1; }
+printf '%s\n' "$options_now" > "$options_file"
+
+echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for the addresses of grants.json within $email_domains)"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"
 echo "  fill in $data/model.env before the first agent turn"
 echo "  then, once the stack runs: tenant/seed-team.sh $slug --owner $owner"
+echo "  after each change of grants.json, as root (the proxy reloads the list without a restart):"
+echo "    python3 $here/tenant/render-authenticated-emails.py $data/grants.json $conf/authenticated_emails $email_domains --owner $owner"
 if [ "$docker" = 1 ]; then
   cd "$root$app"
   docker compose up -d

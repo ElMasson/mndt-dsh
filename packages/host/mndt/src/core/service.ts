@@ -8,9 +8,11 @@
  * decision.
  */
 import { randomUUID } from 'node:crypto'
-import { emptyState, isMissionKind, needsApproval } from './types.ts'
+import { coordinationAgents, emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
+  AgentProposal,
+  Coordination,
   Approval,
   ApprovalAction,
   ApprovalPayload,
@@ -37,6 +39,18 @@ import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { SLUG, freeSlug, mentionsOf, slugOf } from './conversation.ts'
+import { isPlainAscii } from './address.ts'
+
+/**
+ * @param members - the e-mails a person adds to a channel.
+ * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
+ * spelling would be lower-cased onto another person's address.
+ */
+function plainMembers(members: readonly string[]): readonly string[] {
+  const refused = members.filter(email => !isPlainAscii(email))
+  if (refused.length > 0) throw new Error(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
+  return members
+}
 
 /** What a caller must say to ask for work. */
 export interface MissionRequest {
@@ -65,6 +79,10 @@ export interface ApprovalRequest {
   readonly channelId?: string
   readonly messageId?: string
   readonly requestedBy: string
+  /** A propose_agent card's agent, checked as POST /agents checks it. */
+  readonly proposal?: AgentProposal
+  /** The agent whose turn asked it: set by the server from the running turn, never from a request. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
 }
 
 /** What creating an agent needs. */
@@ -93,6 +111,25 @@ export interface ChannelDraft {
 
 /** The default monthly ceiling of an agent, in euros. */
 export const DEFAULT_EUR_PER_MONTH = 5
+/** The highest monthly ceiling of an agent, whoever sets it (21/11, rule of C on #81). */
+export const MAX_EUR_PER_MONTH = 50
+/** The longest framing of an agent, in characters: it is added to every turn. */
+export const MAX_INSTRUCTIONS = 2000
+/** The longest name of an agent: it enters the turn prompt of every agent of its channels. */
+export const MAX_AGENT_NAME = 60
+/**
+ * The propose_agent cards that may wait at once, per person who asked and,
+ * for a card asked during a turn, per agent too: an agent mentioned by several
+ * members must not file three cards for each of them.
+ */
+export const MAX_PENDING_PROPOSALS = 3
+/** The workers of a « en parallèle puis synthèse » turn. */
+export const MIN_WORKERS = 2
+export const MAX_WORKERS = 4
+/** The most a coordinated turn may be allowed to cost, in euros. */
+export const MAX_EUR_PER_COORDINATED_TURN = 5
+/** The default cost bound of a parallel turn, in euros. */
+export const DEFAULT_EUR_PER_PARALLEL_TURN = 1
 
 /** An MCP server name, as the MCP client accepts it. */
 const SERVER = /^[A-Za-z0-9_-]{1,32}$/
@@ -116,6 +153,8 @@ export interface ServiceOptions {
   readonly store: WorkbenchStore
   readonly now?: () => Date
   readonly nextId?: (prefix: string) => string
+  /** Where the service says what it changed on its own at load (a mandate retired). */
+  readonly warn?: (message: string) => void
 }
 
 /** The service. */
@@ -146,7 +185,24 @@ export class WorkbenchService {
     if (!this.#loaded) {
       const loaded = await this.#options.store.load()
       // Older state files predate mandates; they read as no mandates, never as a crash.
-      const mandates = (loaded as { mandates?: readonly Mandate[] }).mandates ?? []
+      // Its parties read as the lower-case e-mail the proxy proves, as channel
+      // members do: a mandate written with capitals before #60 keeps working.
+      // A row without its parties, or one whose parties are the same person once
+      // lower-cased (A@x and a@x, which the draft check now refuses), is kept for
+      // the record but retired: it authorises nothing, and a load never crashes on it.
+      let retiredOnLoad = 0
+      const mandates = ((loaded as { mandates?: readonly Mandate[] }).mandates ?? []).map((mandate) => {
+        const party = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '')
+        const delegant = party(mandate.delegant)
+        const delegataire = party(mandate.delegataire)
+        const why = delegant === '' || delegataire === '' ? 'a party is missing' : delegant === delegataire ? 'its two parties are the same person' : undefined
+        if (why !== undefined && mandate.state !== 'retired') {
+          // Said once per load, with what it was: the next write keeps only « retired ».
+          this.#options.warn?.(`mndt: mandate ${String(mandate.id)} retired on load (${why}); it was ${String(mandate.state)}, ${delegant || '?'} to ${delegataire || '?'}`)
+          retiredOnLoad += 1
+        }
+        return { ...mandate, delegant, delegataire, ...(why === undefined ? {} : { state: 'retired' as const }) }
+      })
       // One spelling of a person: members written with capitals before identities were normalised
       // read as the lower-case e-mail the proxy proves, so nobody loses a channel.
       const channels = loaded.channels?.map(channel => ({
@@ -155,6 +211,15 @@ export class WorkbenchService {
       }))
       this.#state = { ...loaded, mandates, ...(channels === undefined ? {} : { channels }) }
       this.#loaded = true
+      // Recorded once: a mandate retired on load is said at this start only, not at every start.
+      // Through the write chain, behind any write already queued: never a save
+      // that races another one.
+      // The state saved is the one current when this link runs, never the load's
+      // snapshot: a write queued before it must not be overwritten on disk.
+      if (retiredOnLoad > 0) {
+        const save = this.#chain.then(() => this.#options.store.save(this.#state))
+        this.#chain = save.catch(() => undefined)
+      }
     }
     return this.#state
   }
@@ -416,10 +481,18 @@ export class WorkbenchService {
     if (!needsApproval(request.kind)) return Promise.reject(new Error(`action ${String(request.kind)} does not need approval`))
     if (request.title.trim() === '') return Promise.reject(new Error('an approval needs a title'))
     if (request.requestedBy.trim() === '') return Promise.reject(new Error('an approval needs a requester'))
+    if (request.kind === 'propose_agent') {
+      // The proposal is checked when the card is made, with the rules of POST /agents.
+      const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
+      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    }
+    // A propose_agent card's title is the server's, built from the proposal: what an
+    // agent writes never names what a person grants.
+    const title = request.kind === 'propose_agent' && request.proposal !== undefined ? proposalTitle(request.proposal) : request.title.trim()
     const approval: Approval = {
       id: this.#id('apr'),
       kind: request.kind,
-      title: request.title.trim(),
+      title,
       payload: request.payload ?? {},
       requestedBy: request.requestedBy.trim(),
       requestedAt: this.#at(),
@@ -427,12 +500,84 @@ export class WorkbenchService {
       ...(request.missionId === undefined ? {} : { missionId: request.missionId }),
       ...(request.channelId === undefined ? {} : { channelId: request.channelId }),
       ...(request.messageId === undefined ? {} : { messageId: request.messageId }),
+      ...(request.proposal === undefined || request.kind !== 'propose_agent' ? {} : { proposal: proposalOf(request.proposal) }),
+      ...(request.requestedByAgent === undefined
+        ? {}
+        : { requestedByAgent: { id: request.requestedByAgent.id, handle: request.requestedByAgent.handle } }),
     }
-    return this.#write(state => ({
-      state: { ...state, approvals: [approval, ...state.approvals] },
-      event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
-      value: approval,
-    }))
+    return this.#write((state) => {
+      if (approval.kind === 'propose_agent') {
+        const waiting = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending')
+        // Both limits hold together: per person who asked, and per agent when the
+        // card was asked during a turn (requestedByAgent, set by the server).
+        if (waiting.filter(card => card.requestedBy === approval.requestedBy).length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
+        }
+        const agent = approval.requestedByAgent
+        if (agent !== undefined && waiting.filter(card => card.requestedByAgent?.id === agent.id).length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`@${agent.handle} already has ${MAX_PENDING_PROPOSALS} agent proposals waiting for a decision: decide them first`)
+        }
+      }
+      return {
+        state: { ...state, approvals: [approval, ...state.approvals] },
+        event: { at: approval.requestedAt, actor: approval.requestedBy, action: 'approval.requested', subject: approval.id, detail: approval.kind },
+        value: approval,
+      }
+    })
+  }
+
+  /** @param draft - a checked draft. @param actor - its creator. @param at - when. @returns the agent. */
+  #newAgent(draft: AgentDraft, actor: string, at: string): Agent {
+    return {
+      id: this.#id('agt'),
+      handle: draft.handle,
+      name: draft.name.trim(),
+      provider: draft.provider.trim(),
+      model: draft.model.trim(),
+      ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
+      connectors: [...new Set(draft.connectors ?? [])].sort(),
+      eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
+      createdBy: actor,
+      createdAt: at,
+    }
+  }
+
+  /**
+   * Approve a propose_agent card and create its agent, in ONE write: the card
+   * is approved only if the agent is created, from the proposal recorded on the
+   * card. The rules of POST /agents apply, with the approver's role: a ceiling
+   * above the default is the owner's to give. A refusal leaves the card pending.
+   * @param id - the card.
+   * @param actor - who approves it (an owner or an admin).
+   * @param role - their role.
+   * @returns the approved card and the agent.
+   */
+  approveAgentProposal(id: string, actor: string, role: Role | undefined): Promise<{ approval: Approval; agent: Agent }> {
+    return this.#write((state) => {
+      const approval = state.approvals.find(candidate => candidate.id === id)
+      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Error(`approval ${id} proposes no agent`)
+      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      const proposal = approval.proposal
+      const refusal = agentRefusal(proposal)
+      if (refusal !== undefined) throw new Error(refusal)
+      if ((proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+        throw new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`)
+      }
+      if ((state.agents ?? []).some(agent => agent.handle === proposal.handle)) throw new Error(`the handle @${proposal.handle} is taken`)
+      const at = this.#at()
+      const agent = this.#newAgent(proposal, actor.trim(), at)
+      const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, agentId: agent.id }
+      return {
+        state: {
+          ...state,
+          agents: [...(state.agents ?? []), agent],
+          approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
+        },
+        event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `agent @${agent.handle} created (${agent.id})` },
+        value: { approval: next, agent },
+      }
+    })
   }
 
   /**
@@ -588,8 +733,8 @@ export class WorkbenchService {
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
     const mandate: Mandate = {
       id: this.#id('mnd'),
-      delegant: draft.delegant.trim(),
-      delegataire: draft.delegataire.trim(),
+      delegant: draft.delegant.trim().toLowerCase(),
+      delegataire: draft.delegataire.trim().toLowerCase(),
       purpose: draft.purpose.trim(),
       connectors: [...draft.connectors],
       missionKinds: [...draft.missionKinds],
@@ -686,7 +831,51 @@ export class WorkbenchService {
     }))
   }
 
+  /**
+   * Journal a role change asked through the members routes: who, for whom,
+   * before, after, and whether it was applied.
+   * @param actor - who asked.
+   * @param subject - whose role.
+   * @param change - the roles before and after (undefined: none), and the outcome.
+   * @returns nothing.
+   */
+  async recordRoleChange(
+    actor: string,
+    subject: string,
+    change: { readonly before: string | undefined; readonly after: string | undefined; readonly outcome: string },
+  ): Promise<void> {
+    const detail = `${change.before ?? 'none'} -> ${change.after ?? 'none'}: ${change.outcome}`
+    await this.#write(state => ({
+      state,
+      event: { at: this.#at(), actor, action: 'member.role', subject, detail },
+      value: undefined,
+    }))
+  }
+
   // ---------------------------------------------------------------- agents
+
+  /**
+   * Retire an agent: kept for the record (its messages, its spending), it no
+   * longer answers, no longer appears among the agents, and cannot be added to
+   * a channel again. Retiring twice is refused.
+   * @param id - the agent.
+   * @param actor - who retires it.
+   * @returns the retired agent.
+   */
+  retireAgent(id: string, actor: string): Promise<Agent> {
+    return this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === id)
+      if (agent === undefined) throw new Error(`no agent ${id}`)
+      if (agent.retiredAt !== undefined) throw new Error(`the agent @${agent.handle} is already retired`)
+      const at = this.#at()
+      const next: Agent = { ...agent, retiredAt: at, retiredBy: actor }
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'agent.retired', subject: id, detail: agent.handle },
+        value: next,
+      }
+    })
+  }
 
   /** @param includeRetired - whether retired agents show. @returns the agents, oldest first. */
   async listAgents(includeRetired = false): Promise<readonly Agent[]> {
@@ -703,27 +892,23 @@ export class WorkbenchService {
    * Declare an agent.
    * @param draft - handle, name, model and connectors.
    * @param actor - who declares it.
+   * @param role - their role: only the owner gives a ceiling above the default.
    * @returns the agent.
    */
-  createAgent(draft: AgentDraft, actor: string): Promise<Agent> {
+  createAgent(draft: AgentDraft, actor: string, role?: Role): Promise<Agent> {
     const refusal = agentRefusal(draft)
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    // A ceiling above the default is the owner's to give, at creation as at a
+    // change: an admin cannot create an agent at 50 € a month, nor recreate under
+    // another handle one the owner bounded.
+    if ((draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
+      return Promise.reject(new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`))
+    }
     return this.#write((state) => {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
         throw new Error(`the handle @${draft.handle} is taken`)
       }
-      const agent: Agent = {
-        id: this.#id('agt'),
-        handle: draft.handle,
-        name: draft.name.trim(),
-        provider: draft.provider.trim(),
-        model: draft.model.trim(),
-        ...(draft.instructions === undefined || draft.instructions.trim() === '' ? {} : { instructions: draft.instructions.trim() }),
-        connectors: [...new Set(draft.connectors ?? [])].sort(),
-        eurPerMonth: draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH,
-        createdBy: actor,
-        createdAt: this.#at(),
-      }
+      const agent = this.#newAgent(draft, actor, this.#at())
       return {
         state: { ...state, agents: [...(state.agents ?? []), agent] },
         event: { at: agent.createdAt, actor, action: 'agent.created', subject: agent.id, detail: `@${agent.handle} ${agent.provider}/${agent.model}` },
@@ -824,7 +1009,8 @@ export class WorkbenchService {
     return this.#write((state) => {
       const taken = new Set((state.channels ?? []).map(channel => channel.name))
       if (draft.name !== undefined && taken.has(draft.name)) {
-        throw new Error(`the channel #${draft.name} exists`)
+        // Neutral: the name may be a private channel's the caller is not in.
+        throw new Error(`the name #${draft.name} is not available`)
       }
       // A name the person chose is theirs; one derived from a title takes the
       // first free suffix instead of failing.
@@ -837,7 +1023,7 @@ export class WorkbenchService {
         name,
         title: title || name,
         kind: 'team',
-        members: [...new Set([actor, ...(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
+        members: [...new Set([actor, ...plainMembers(draft.members ?? [])].map(email => email.trim().toLowerCase()))],
         agents: [...new Set(agents)],
         connectors: [...new Set(draft.connectors ?? [])].sort(),
         createdBy: actor,
@@ -867,11 +1053,15 @@ export class WorkbenchService {
       readonly addAgents?: readonly string[]
       readonly removeAgents?: readonly string[]
       readonly connectors?: readonly string[]
+      /** Connectors added and removed against the CURRENT list, in one atomic write. */
+      readonly addConnectors?: readonly string[]
+      readonly removeConnectors?: readonly string[]
     },
     actor: string,
   ): Promise<Channel> {
-    if (change.connectors !== undefined) {
-      const refusal = serversRefusal(change.connectors)
+    for (const servers of [change.connectors, change.addConnectors, change.removeConnectors]) {
+      if (servers === undefined) continue
+      const refusal = serversRefusal(servers)
       if (refusal !== undefined) return Promise.reject(new Error(refusal))
     }
     return this.#write((state) => {
@@ -885,18 +1075,93 @@ export class WorkbenchService {
       if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
       // One spelling of a person: an e-mail written Prenom.Nom@ is the same member as prenom.nom@.
       const removed = (change.removeMembers ?? []).map(email => email.trim().toLowerCase())
-      const members = [...new Set([...channel.members, ...(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
+      const members = [...new Set([...channel.members, ...plainMembers(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
       if (members.length === 0) throw new Error('a channel keeps at least one person')
+      // The connectors, applied on the list as it is NOW (inside the write chain):
+      // two people toggling one connector each never undo each other.
+      const before = [...(channel.connectors ?? [])].sort()
+      const touched = change.connectors !== undefined || change.addConnectors !== undefined || change.removeConnectors !== undefined
+      const removedConnectors = change.removeConnectors ?? []
+      const connectors = change.connectors !== undefined
+        ? [...new Set(change.connectors)].sort()
+        : [...new Set([...before, ...(change.addConnectors ?? [])])].filter(server => !removedConnectors.includes(server)).sort()
+      // A coordination whose author or verifier leaves the channel ends with it.
+      const { coordination, ...base } = channel
+      const ended = coordination !== undefined
+        && coordinationAgents(coordination).some(agentId => (change.removeAgents ?? []).includes(agentId))
       const next: Channel = {
-        ...channel,
+        ...base,
+        ...(coordination === undefined || ended ? {} : { coordination }),
         members,
         agents: [...new Set([...channel.agents, ...added])].filter(agentId => !(change.removeAgents ?? []).includes(agentId)),
-        ...(change.connectors === undefined ? {} : { connectors: [...new Set(change.connectors)].sort() }),
+        ...(touched ? { connectors } : {}),
       }
+      // A change of connectors grants or withdraws access to data: journalled as
+      // such, with who, what was added and removed, and when.
+      const gained = touched ? connectors.filter(server => !before.includes(server)) : []
+      const lost = touched ? before.filter(server => !connectors.includes(server)) : []
+      const event = gained.length > 0 || lost.length > 0
+        ? { at: this.#at(), actor, action: 'channel.connectors', subject: id, detail: [...gained.map(s => `+${s}`), ...lost.map(s => `-${s}`)].join(' ') }
+        : { at: this.#at(), actor, action: 'channel.updated', subject: id }
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
-        event: { at: this.#at(), actor, action: 'channel.updated', subject: id },
+        event,
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Set how a channel's turns are coordinated, or go back to each agent alone.
+   * « Auteur puis vérificateur »: both agents are on the channel, active, distinct,
+   * and of DIFFERENT models (a model rarely catches its own mistakes).
+   * @param id - the channel.
+   * @param coordination - the mode, or undefined for each agent alone.
+   * @param actor - a member who sets it.
+   * @returns the channel.
+   */
+  setCoordination(id: string, coordination: Coordination | undefined, actor: string): Promise<Channel> {
+    return this.#write((state) => {
+      const channel = (state.channels ?? []).find(candidate => candidate.id === id)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      const active = (agentId: string): Agent | undefined =>
+        (state.agents ?? []).find(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
+      let recorded: Coordination | undefined
+      if (coordination?.mode === 'author-verifier') {
+        const author = active(coordination.authorId)
+        const verifier = active(coordination.verifierId)
+        if (author === undefined || verifier === undefined) throw new Error('the author and the verifier must both be active agents of this channel')
+        if (author.id === verifier.id) throw new Error('the author and the verifier must be two agents')
+        if (author.provider === verifier.provider && author.model === verifier.model) {
+          throw new Error(`the verifier must run another model than the author (both are ${author.provider}/${author.model})`)
+        }
+        recorded = { mode: 'author-verifier', authorId: author.id, verifierId: verifier.id }
+      } else if (coordination?.mode === 'parallel-synthesis') {
+        const workers = [...new Set(coordination.workerIds)]
+        if (workers.length < MIN_WORKERS || workers.length > MAX_WORKERS) {
+          throw new Error(`a parallel turn has ${MIN_WORKERS} to ${MAX_WORKERS} distinct workers`)
+        }
+        if (workers.some(agentId => active(agentId) === undefined) || active(coordination.synthesizerId) === undefined) {
+          throw new Error('the workers and the synthesizer must all be active agents of this channel')
+        }
+        if (workers.includes(coordination.synthesizerId)) throw new Error('the synthesizer is not one of the workers')
+        const cap = coordination.maxEurPerTurn
+        if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0 || cap > MAX_EUR_PER_COORDINATED_TURN) {
+          throw new Error(`a parallel turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
+        }
+        recorded = { mode: 'parallel-synthesis', workerIds: workers, synthesizerId: coordination.synthesizerId, maxEurPerTurn: cap }
+      } else if (coordination !== undefined) {
+        throw new Error(`unknown coordination mode: ${String((coordination as { mode?: unknown }).mode)}`)
+      }
+      const { coordination: _previous, ...rest } = channel
+      const next: Channel = recorded === undefined ? rest : { ...rest, coordination: recorded }
+      return {
+        state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: {
+          at: this.#at(), actor, action: 'channel.coordination', subject: id,
+          detail: recorded === undefined ? 'solo' : `${recorded.mode} ${coordinationAgents(recorded).join(' ')}`,
+        },
         value: next,
       }
     })
@@ -1091,11 +1356,49 @@ export class WorkbenchService {
  * @param agent - an agent as drafted or patched.
  * @returns why it cannot be kept, or undefined.
  */
+/**
+ * The title of a propose_agent card, built from what it grants: name, handle,
+ * model, connectors, ceiling. Never the requester's words.
+ * @param proposal - the agent proposed.
+ * @returns the title.
+ */
+function proposalTitle(proposal: AgentProposal): string {
+  const connectors = (proposal.connectors ?? []).length === 0 ? 'aucun connecteur' : `connecteurs ${[...new Set(proposal.connectors)].sort().join(', ')}`
+  return `Créer l'agent ${proposal.name.trim()} (@${proposal.handle}) : ${proposal.provider}/${proposal.model}, ${connectors}, plafond ${proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH} €/mois`
+}
+
+/** @param draft - a proposal as asked. @returns it with only the fields of POST /agents. */
+function proposalOf(draft: AgentProposal): AgentProposal {
+  return {
+    handle: draft.handle,
+    name: draft.name,
+    provider: draft.provider,
+    model: draft.model,
+    ...(draft.instructions === undefined ? {} : { instructions: draft.instructions }),
+    ...(draft.connectors === undefined ? {} : { connectors: [...draft.connectors] }),
+    ...(draft.eurPerMonth === undefined ? {} : { eurPerMonth: draft.eurPerMonth }),
+  }
+}
+
 function agentRefusal(agent: AgentDraft): string | undefined {
   if (!SLUG.test(agent.handle)) return `a handle is a slug of 2 to 32 characters: ${agent.handle}`
   if (agent.name.trim() === '') return 'an agent needs a name'
+  // The name enters the turn prompt of every agent of the channel (speaker()): one
+  // line, no control character nor line separator, 60 characters at most.
+  if (agent.name.trim().length > MAX_AGENT_NAME || /[\u0000-\u001f\u007f\u2028\u2029]/.test(agent.name)) {
+    return `an agent's name is one line of ${MAX_AGENT_NAME} characters at most`
+  }
   if (agent.provider.trim() === '' || agent.model.trim() === '') return 'an agent needs a provider and a model'
+  // Even when the host lists no models: one line each, no control character, bounded.
+  for (const [field, value] of [['provider', agent.provider], ['model', agent.model]] as const) {
+    if (value.trim().length > 128 || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return `an agent's ${field} is one line of 128 characters at most`
+  }
   const ceiling = agent.eurPerMonth ?? DEFAULT_EUR_PER_MONTH
+  if (typeof ceiling === 'number' && ceiling > MAX_EUR_PER_MONTH) return `a monthly ceiling is ${MAX_EUR_PER_MONTH} € at most: ${ceiling}`
+  // The framing is added to every turn, so to its cost.
+  if (agent.instructions !== undefined && agent.instructions.trim().length > MAX_INSTRUCTIONS) {
+    return `the instructions are ${MAX_INSTRUCTIONS} characters at most (${agent.instructions.trim().length})`
+  }
   if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling <= 0) return 'a monthly ceiling is a positive number of euros'
   return serversRefusal(agent.connectors ?? [])
 }

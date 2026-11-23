@@ -341,6 +341,19 @@ export const en = {
   'shell.settings-automations': 'The workspace\'s scheduled tasks.',
   'shell.settings-legacy': 'Missions and briefs, the owner\'s.',
   'shell.owner-only': 'Reserved to the owner of the workspace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Operator',
+  'shell.role-viewer': 'Reader',
+  'ui.confirmer': 'Confirm',
+  'ui.confirmer-le-role': 'Confirm the role',
+  'ui.confirmer-promotion': 'Make {name} {role}?',
+  'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
+  'ui.roles-par-fichier': 'The roles of this workspace are managed in the role file, by the owner.',
+  'ui.roles-poste-seul': 'This station has a single owner: there is no role to change here.',
+  'ui.autorite-sans-reponse': 'The team authority did not answer within 10 s: the role is unchanged.',
+  'ui.roles-illisibles': 'The role table cannot be read: {reason}',
+  'ui.adresse-ascii': 'The address must be a plain e-mail address, without accents or spaces.',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -686,6 +699,19 @@ export const fr: Record<MndtKey, string> = {
   'shell.settings-automations': 'Les tâches planifiées de l\'espace.',
   'shell.settings-legacy': 'Missions et briefs, réservés au propriétaire.',
   'shell.owner-only': 'Réservé au propriétaire de l\'espace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Opérateur',
+  'shell.role-viewer': 'Lecteur',
+  'ui.confirmer': 'Confirmer',
+  'ui.confirmer-le-role': 'Confirmer le rôle',
+  'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
+  'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
+  'ui.roles-par-fichier': 'Les rôles de cet espace se gèrent dans le fichier des rôles, par l\'owner.',
+  'ui.roles-poste-seul': 'Ce poste n\'a qu\'un owner : il n\'y a pas de rôle à changer ici.',
+  'ui.autorite-sans-reponse': 'L\'autorité d\'équipe n\'a pas répondu en 10 s : le rôle est inchangé.',
+  'ui.roles-illisibles': 'La table des rôles est illisible : {reason}',
+  'ui.adresse-ascii': 'L\'adresse doit être une adresse e-mail simple, sans accent ni espace.',
 }
 
 /** Substitution values for a message. */

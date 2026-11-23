@@ -132,6 +132,8 @@ VLLM_API_KEY=placeholder
 SCW_PROJECT_ID=11111111-2222-3333-4444-555555555555
 VLLM_QWEN_BASE_URL=http://fakellm:8000/v1
 VLLM_QWEN_MODEL=fake-qwen
+CANARY_SECRET_MODEL_ENV=CANARY_SECRET_model_env_value
+MNDT_PROBE_DSN=postgres://team:CANARY_SECRET_innocuous_live@db:5432/team
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || exit 1
 # An admin who is not the owner: missions and automations stay closed to them.
@@ -161,7 +163,7 @@ step "1 bis. nothing of an operator's machine in the image"
 SCAN='set -f
 roots="$*"
 skip="-path */node_modules -o -path */lib -o -path */.pnpm"
-KEYS="(^|[^A-Za-z0-9_-])(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-(ant-|proj-)?[A-Za-z0-9_-]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17})"
+KEYS="(-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_-])(lin_api_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|sk-(ant-|proj-)?[A-Za-z0-9_-]{32,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}[.]eyJ[A-Za-z0-9_-]{10,}[.][A-Za-z0-9_-]{10,}|SCW[A-Z0-9]{17}))"
 find $roots \( $skip \) -prune -o -name .git -print 2>/dev/null | head -3
 find $roots \( $skip \) -prune -o -type f \( -name "*.env" -o -name ".env" -o -name ".env.*" -o -name ".envrc" \) -not -name "*.example" -print 2>/dev/null | head -3
 find $roots /root \( $skip \) -prune -o -name .npmrc -print 2>/dev/null | xargs -r grep -l "_authToken" 2>/dev/null | head -3
@@ -174,10 +176,12 @@ if [ -z "$image_secrets" ]; then echo "OK  image-clean    no .git, no environmen
 else echo "KO  image-clean    found in the image:"; echo "$image_secrets" | sed 's/^/      /'; imaged=1; fi
 # The negative witness: what an operator's clone could bring, planted on purpose in a
 # throwaway container of the image, must be found, or the scan proves nothing.
-witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
-caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/witness/.env' -e '/app/witness/notes.txt' -e '/app/witness/readme.md')
-if [ "$caught" -ge 4 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line and sk-ant- key are all found"
-else echo "KO  scan-witness   the scan missed a planted secret ($caught of 4 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
+# The planted key's header is assembled at run time (printf %s): this script is
+# copied into the image, and its own text must not match the scan it runs.
+witness=$(docker run --rm --entrypoint sh "$image" -c 'mkdir -p /app/witness/sub/.git && printf "API_TOKEN=abc123\n" > /app/witness/.env && printf "OPENAI_PASSWORD=hunter2\n" > /app/witness/notes.txt && printf "key sk-ant-api03-%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" > /app/witness/readme.md && printf -- "-----BEGIN OPENSSH %s KEY-----\nb3BlbnNzaA==\n" PRIVATE > /app/witness/deploy_key && sh -c "$1" scan /app/witness' witness "$SCAN" 2>&1)
+caught=$(printf '%s\n' "$witness" | grep -c -e '/app/witness/sub/.git' -e '/app/witness/.env' -e '/app/witness/notes.txt' -e '/app/witness/readme.md' -e '/app/witness/deploy_key')
+if [ "$caught" -ge 5 ]; then echo "OK  scan-witness   the planted .git, .env, PASSWORD= line, sk-ant- key and private key are all found"
+else echo "KO  scan-witness   the scan missed a planted secret ($caught of 5 found): it proves nothing"; echo "$witness" | sed 's/^/      /'; imaged=1; fi
 step "2. first start"
 node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $project || exit 1
 if health 80; then echo "API answers through the gateway"; else echo "KO: the API does not answer after the first start"; workbench_log; fi
@@ -232,4 +236,51 @@ playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwrig
 if [ -z "$playwright" ]; then echo "KO: Playwright is not installed in $repo/node_modules (pnpm install)" >&2; exit 1; fi
 node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ]
+step "6. the sandbox of the running workbench, canaries where its secrets live"
+# The model.env canary is in the workbench's environment (env_file): the probe
+# must not reach it. The others where the instance keeps its secrets (the tools
+# folder, mounted from inside /state, and another session's spill in /tmp
+# included), plus one where reading is allowed (the probe must see it, or it
+# proves nothing).
+printf '{ "CANARY_SECRET_tokens": { "user": "nobody@datanalysis.re" } }\n' > "$data/tokens.json"
+printf 'CANARY_SECRET_connector_env=1\n' > "$data/connectors/probe-canary.env"
+printf 'CANARY_SECRET_tools_data\n' > "$data/tools/canary-facts.md"
+docker exec -u 0 $project-workbench sh -c 'mkdir -p /state/channels/chn_other/files /state/home/sessions/--state-channels-chn_other-files-- /state/channels/chn_probe/files /tmp/probe-tools /tmp/dsh-subprocess-other \
+  && echo CANARY_SECRET_other_channel > /state/channels/chn_other/files/note.txt \
+  && echo CANARY_SECRET_transcript > /state/home/sessions/--state-channels-chn_other-files--/turn.jsonl \
+  && echo CANARY_SECRET_spill > /tmp/dsh-subprocess-other/stdout \
+  && echo CANARY_SECRET_dev_shm > /dev/shm/canary && echo "# CANARY_SEARCHED_etc" > /etc/mndt-probe-searched.conf'
+docker cp "$here/probe.sh" $project-workbench:/state/channels/chn_probe/files/probe.sh >/dev/null
+docker cp "$here/sandbox-probe.mjs" $project-workbench:/tmp/probe-tools/sandbox-probe.mjs >/dev/null
+planted=$(docker exec $project-workbench sh -c 'tr "\0" "\n" < /proc/1/environ | grep -c CANARY_SECRET_MODEL_ENV; grep -c . /run/mndt-launch/web-token')
+probe_out=$(docker exec $project-workbench node /tmp/probe-tools/sandbox-probe.mjs /state/channels/chn_probe/files probe.sh 2>&1)
+echo "$probe_out" | grep -E '^(RUNNER|READ|LEAK|SEEN|CROSS|OPEN|DONE|TIMEOUT|TRUNCATED|WITNESS|SANDBOX-REFUSED)' | sed 's/^/    /'
+live=0
+[ "$(echo "$planted" | head -1)" -ge 1 ] && [ "$(echo "$planted" | tail -1)" -ge 1 ] || { echo "KO  live-planted   the model.env canary is not in the workbench's environment, or no launch token: the probe would prove nothing"; live=1; }
+leaks=$(echo "$probe_out" | grep -cE '^(LEAK|CROSS|OPEN|TIMEOUT|TRUNCATED)')
+if [ "$leaks" = 0 ]; then echo "OK  live-no-leak   on the running workbench: no LEAK, no CROSS, no cut walk (environment, /proc, /state, /opt/mndt-tools, /run, /tmp, /dev/shm, /root)"; else echo "KO  live-no-leak   $leaks LEAK/CROSS/OPEN/TIMEOUT/TRUNCATED line(s)"; live=1; fi
+if echo "$probe_out" | grep -q '^SEEN file .*SEARCHED_etc'; then echo "OK  live-searched  the probe read /etc, where reading is allowed"; else echo "KO  live-searched  the probe did not read the allowed place"; live=1; fi
+if echo "$probe_out" | grep -q '^DONE6' && echo "$probe_out" | grep -q '^WITNESS own-channel-file' && echo "$probe_out" | grep -q '^RUNNER .*landlock'; then echo "OK  live-witness   Landlock, every step done, the agent still writes in its channel"; else echo "KO  live-witness   $(echo "$probe_out" | grep -E '^(RUNNER|SANDBOX-REFUSED)' | head -1)"; live=1; fi
+
+step "7. the sandbox proof: the same probe with and without the allow-list, three sessions"
+bash "$here/sandbox-proof.sh" "$image" | grep -E '^(OK|KO|LIMIT|NOTE|sandbox-proof) ' ; proved=${PIPESTATUS[0]}
+# The counter-proof, scripted: the same proof on an image without these fixes
+# (the first jump's, by default) must fail, or the proof proves nothing.
+old_image=${REHEARSAL_COUNTER_IMAGE:-mndt-workbench:jump73a}
+if docker image inspect "$old_image" >/dev/null 2>&1; then
+  bash "$here/sandbox-proof.sh" "$old_image" > "$root/counter-proof.txt" 2>&1; countered=$?
+  # Named failures, not just a non-zero exit (docker or an incompatible image
+  # would give one too): the leak with the list, and a turn reading another
+  # session's temp, must be the reasons.
+  named=$(grep -cE '^KO  (no-leak|sessions) ' "$root/counter-proof.txt")
+  if [ "$countered" != 0 ] && [ "$named" = 2 ]; then echo "OK  counter-proof  on $old_image the same proof fails for the right reasons: $(grep -E '^KO  (no-leak|sessions) ' "$root/counter-proof.txt" | cut -c5-60 | tr '\n' ';')"
+  else echo "KO  counter-proof  on $old_image: exit $countered, $named of the 2 expected KO (no-leak, sessions): it proves nothing"; proved=1; fi
+else
+  # The reference image is local only (built for the first jump): its absence is a failure, never a pass.
+  echo "KO  counter-proof  the reference image $old_image is absent (REHEARSAL_COUNTER_IMAGE): no counter-proof"; proved=1
+fi
+
+step "8. the role file row by row (#75), through the gateway"
+bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
+
+[ "$granted" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]

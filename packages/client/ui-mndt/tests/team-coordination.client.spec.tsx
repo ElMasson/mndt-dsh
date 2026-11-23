@@ -301,3 +301,15 @@ describe('a stopped turn keeps its steps (#85)', () => {
     expect(screen.getByTestId('turn-steps').textContent).toContain('tour arrêté')
   })
 })
+
+describe('a step\'s tokens as the core serves them (#84)', () => {
+  it('{ input, output } is summed; anything else is left out', () => {
+    expect(stepsOf(turn([{ role: 'author', agentId: 'agt_1', tokens: { input: 900, output: 120, cacheRead: 400 } }]))[0]?.tokens).toBe(1020)
+    expect(stepsOf(turn([{ role: 'author', agentId: 'agt_1', tokens: { input: 'x' } }]))[0]?.tokens).toBeUndefined()
+    render(<>{coordinatedTurn(turn([
+      { role: 'author', agentId: 'agt_1', tokens: { input: 1000, output: 234 } },
+      { role: 'verifier', agentId: 'agt_2', verdict: 'ok' },
+    ]), byId, chatFrench)}</>)
+    expect(screen.getByTestId('turn-steps').textContent).toContain('1\u202f234 jetons')
+  })
+})

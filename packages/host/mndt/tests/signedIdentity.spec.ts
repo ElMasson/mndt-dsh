@@ -13,6 +13,7 @@ import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { startMndtApi } from '../src/api.ts'
 import { identityOf } from '../src/identity.ts'
 import { gapSignature, proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
+import { freePort } from './support/freePort.ts'
 
 const deploy = join(import.meta.dirname, '..', 'deploy')
 const owner = 'duke@datanalysis.re'
@@ -76,7 +77,7 @@ describe('the gateway vouches for its own requests only', () => {
 
   /** @returns the gateway's port, once it listens. */
   async function gateway(api: string, workbench: string, secretFile: string): Promise<number> {
-    const port = 20000 + Math.floor(Math.random() * 20000)
+    const port = await freePort()
     const child: ChildProcess = spawn(process.execPath, [join(deploy, 'gateway', 'server.mjs')], {
       env: {
         ...process.env, PORT: String(port), API: api, WORKBENCH: workbench, TOKEN_FILE: '/nonexistent',

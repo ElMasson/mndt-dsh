@@ -6,10 +6,18 @@ oidc_issuer_url = "https://login.microsoftonline.com/__ENTRA_TENANT__/v2.0"
 client_id = "__CLIENT_ID__"
 
 redirect_url = "https://__DOMAIN__/oauth2/callback"
-email_domains = [__EMAIL_DOMAINS__]
+# Who may sign in: the addresses of the tenant's role table, written by
+# tenant/render-authenticated-emails.py (create-tenant.sh, then after each change
+# of grants.json). No email_domains: oauth2-proxy admits an address in this file
+# OR in those domains, so a domain list would let the whole directory in.
+authenticated_emails_file = "/etc/mndt-front/authenticated_emails"
 
 cookie_secure = true
 cookie_samesite = "lax"
+# A person taken off grants.json signs in again within 8 hours at most (the
+# default is 168). Until then the API, which rereads the role table on every
+# request, already serves them nothing.
+cookie_expire = "8h"
 cookie_name = "_mndt___SLUG__"
 
 http_address = "0.0.0.0:4180"

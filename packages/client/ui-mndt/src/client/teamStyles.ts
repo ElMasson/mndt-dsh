@@ -410,6 +410,48 @@ export const TEAM_CSS = `
   border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px;
 }
 .mw-turn-notes { margin: 2px 0 4px; padding-left: 16px; color: var(--mw-slate); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The agent sheet (lot 1a): short, buttons rather than lists. */
+.mw-screen-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.mw-agent-form {
+  display: flex; flex-direction: column; gap: 12px; max-width: 640px; padding: 16px;
+  border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card);
+}
+.mw-field { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; color: var(--mw-slate); }
+.mw-field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.mw-counter { align-self: flex-end; font-size: 11px; color: var(--mw-slate); }
+.mw-field-narrow { flex: 0 0 140px; }
+.mw-input {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--mw-line); border-radius: 12px;
+  background: var(--mw-card); color: var(--mw-charcoal); font: inherit; font-size: 14px;
+}
+.mw-input[readonly] { background: var(--mw-surface); color: var(--mw-slate); }
+.mw-input:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(52, 69, 209, 0.3); }
+.mw-model-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.mw-app .mw-model {
+  display: flex; min-width: 120px; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px;
+  border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-card); color: var(--mw-charcoal);
+  text-align: left; cursor: pointer;
+}
+.mw-app .mw-model[aria-pressed="true"] { border-color: var(--mw-charcoal); box-shadow: inset 0 0 0 1px var(--mw-charcoal); }
+.mw-model-label { font-size: 14px; font-weight: 500; }
+.mw-model-tech { font-size: 11px; color: var(--mw-slate); }
+@media (max-width: 767px) { .mw-app .mw-model { min-height: 44px; } }
+
+.mw-sheet-view { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 14px; }
+.mw-sheet-view dt { color: var(--mw-slate); font-size: 13px; }
+.mw-sheet-view dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mw-sheet-purpose { white-space: pre-wrap; }
+/* On a phone the proposed sheet reads label above value, not in two cramped columns. */
+@media (max-width: 639px) {
+  .mw-sheet-view { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .mw-sheet-view dd { margin-bottom: 8px; }
+}
+.mw-app .mw-pill-static { cursor: default; }
+
+.mw-welcome { display: flex; flex-direction: column; gap: 10px; max-width: 560px; margin: 24px auto; padding: 20px; border: 1px solid var(--mw-line); border-radius: 16px; background: var(--mw-card); }
+.mw-welcome-title { margin: 0; font-family: var(--mw-display, inherit); font-size: 18px; font-weight: 600; }
+.mw-welcome-text { margin: 0; color: var(--mw-slate); font-size: 14px; line-height: 20px; }
+.mw-arrival { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }
 @media (min-width: 768px) { .mw-screen { padding: 24px 32px 40px; } }

@@ -8,14 +8,15 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AutomationsAnswer, MemberRow, MndtFace, SearchRow } from './face.ts'
+import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
+import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
@@ -60,6 +61,43 @@ export interface CollabPageProps {
   readonly team?: TeamFrame | undefined
   /** A channel's documents (the team frame); absent, the section says « Bientôt ». */
   readonly documents?: DocumentsFace | undefined
+}
+
+/**
+ * @param message - the core's sentence refusing a decision. @param t - the copy.
+ * @returns it in the page's words where the sentence is known (#82), else as served.
+ */
+export function decisionRefusal(message: string, t: ChatTranslate): string {
+  const taken = /the handle @(\S+) is taken/u.exec(message)
+  if (taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
+  if (message.includes('only the owner gives an agent a ceiling above')) return t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })
+  const unmounted = /connector not mounted: (.+)$/u.exec(message)
+  if (unmounted !== null) return t('connNotMounted', { names: unmounted[1] ?? '' })
+  const model = /model not offered: (.+)$/u.exec(message)
+  if (model !== null) return t('proposeAgentModelGone', { model: model[1] ?? '' })
+  if (message.includes('approve it from a screen that shows the whole proposal')) return t('proposeAgentUnreadable')
+  return message
+}
+
+/**
+ * @param failure - a refusal of the agents route. @param t - the copy.
+ * @returns it in the page's words where the core's sentence is known, else as served.
+ */
+function agentRefusal(failure: unknown, t: ChatTranslate): string {
+  if (failure instanceof ChatRefusal) {
+    const taken = /^the handle @(\S+) is taken$/u.exec(failure.message)
+    if (failure.status === 409 && taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
+    if (failure.message.startsWith('only the owner raises the ceiling')) return t('agentOnlyOwnerRaises')
+    if (failure.message.startsWith('a handle is a slug')) return t('agentHandleShape')
+  }
+  return reasonOf(failure, t)
+}
+
+/** @param before - the agent as the sheet opened on it. @param now - as it is now. @returns whether it changed meanwhile. */
+function agentChanged(before: ChatAgent, now: ChatAgent): boolean {
+  return before.name !== now.name || before.provider !== now.provider || before.model !== now.model
+    || (before.instructions ?? '') !== (now.instructions ?? '') || before.eurPerMonth !== now.eurPerMonth
+    || [...before.connectors].sort().join(',') !== [...now.connectors].sort().join(',')
 }
 
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
@@ -197,6 +235,16 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // `absent`: the route is not served here, and nothing is marked « non branché » for that.
   const [mounted, setMounted] = useState<readonly MountedConnector[] | 'absent' | undefined>(undefined)
   const [mountedError, setMountedError] = useState<string | undefined>(undefined)
+  // The models the core offers (#82); undefined while unknown or not served.
+  const [offered, setOffered] = useState<readonly OfferedModel[] | undefined>(undefined)
+  const loadOffered = useCallback(async () => {
+    if (team === undefined || chat?.models === undefined) return
+    try {
+      setOffered(await chat.models())
+    } catch {
+      setOffered(undefined)
+    }
+  }, [team, chat])
   const loadMounted = useCallback(async () => {
     if (team === undefined || chat?.mounted === undefined) return
     try {
@@ -214,6 +262,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     if (chat === undefined) return
     void loadCards()
     void loadMounted()
+    void loadOffered()
     const started = Date.now()
     try {
       const [channels, agents] = await Promise.all([chat.channels(), chat.agents()])
@@ -223,16 +272,16 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       setChatError(undefined)
       if (!arrived.current) {
         arrived.current = true
-        const lane = channels.find(c => c.kind === 'solo')
-        if (lane !== undefined) {
-          setChatId(held => held ?? lane.id)
-          setView(held => (held === 'channel' ? 'chat' : held))
-        }
+        // The person lands in their lane, or else in their first team channel; on the team page with
+        // neither, on the arrival screen that says so (never on a page of the advanced mode).
+        const first = channels.find(c => c.kind === 'solo') ?? channels[0]
+        if (first !== undefined) setChatId(held => held ?? first.id)
+        if (first !== undefined || team !== undefined) setView(held => (held === 'channel' ? 'chat' : held))
       }
     } catch (failure) {
       setChatError(reasonOf(failure, tc))
     }
-  }, [chat, tc, loadCards, loadMounted])
+  }, [chat, tc, loadCards, loadMounted, loadOffered])
 
   useEffect(() => {
     void loadChat()
@@ -278,6 +327,43 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
       return reasonOf(failure, tc)
     }
   }, [chat, chatId, tc])
+
+  // Owners and admins declare and change agents; the sheet open, if any.
+  const canManageAgents = chat?.createAgent !== undefined && (state?.role === 'owner' || state?.role === 'admin')
+  const [editing, setEditing] = useState<ChatAgent | 'new' | undefined>(undefined)
+  // An agent's sheet opens on the agent as it is now, read again, not as the list last showed it.
+  const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
+    if (chat === undefined) return
+    try {
+      const fresh = (await chat.agents()).find(a => a.id === agent.id)
+      setChatAgents(await chat.agents())
+      setEditing(fresh ?? agent)
+    } catch {
+      setEditing(agent)
+    }
+  }, [chat])
+  const saveAgent = useCallback(async (input: AgentInput): Promise<string | undefined> => {
+    if (chat?.createAgent === undefined || chat.updateAgent === undefined || editing === undefined) return undefined
+    try {
+      if (editing === 'new') await chat.createAgent(input)
+      else {
+        // Someone may have changed the agent since the sheet opened: said, never overwritten.
+        const now = (await chat.agents()).find(a => a.id === editing.id)
+        if (now === undefined) return tc('agentGone')
+        if (agentChanged(editing, now)) {
+          setChatAgents(await chat.agents())
+          return tc('agentChangedMeanwhile')
+        }
+        const { handle: _fixed, ...patch } = input
+        await chat.updateAgent(editing.id, patch)
+      }
+      setEditing(undefined)
+      setChatAgents(await chat.agents())
+      return undefined
+    } catch (failure) {
+      return agentRefusal(failure, tc)
+    }
+  }, [chat, editing, tc])
 
   /** @param next - the channel as the Host returned it. */
   const replaceChannel = (next: ChatChannel): void => {
@@ -334,15 +420,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     }
   }, [chat, chatId, tc, mounted])
 
-  const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string): Promise<string | undefined> => {
-    const outcome = await api.decide(id, decision, reason)
+  const decideCard = useCallback(async (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions): Promise<string | undefined> => {
+    const outcome = await api.decide(id, decision, reason, options)
     if (outcome.ok) {
       void load()
       void loadCards()
+      // An approved proposal created an agent: the list is read again.
+      if (decision === 'approved' && options?.showsProposal === true && chat !== undefined) void chat.agents().then(setChatAgents, () => undefined)
       return undefined
     }
-    return outcome.error ?? decision
-  }, [api, load, loadCards])
+    // A model or a connector gone since the card was drawn: both lists are read again, and the card
+    // then offers « Refuser » only — no second try of what the core just refused.
+    if (options?.showsProposal === true) {
+      void loadOffered()
+      void loadMounted()
+    }
+    return decisionRefusal(outcome.error ?? decision, tc)
+  }, [api, load, loadCards, chat, tc, loadOffered, loadMounted])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
@@ -409,6 +503,46 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [adminBusy, setAdminBusy] = useState<string | undefined>(undefined)
   const [grantEmail, setGrantEmail] = useState('')
   const [grantRole, setGrantRole] = useState<MemberRole>('viewer')
+  // A role change waiting for its confirmation (a promotion to admin or owner, any demotion).
+  type RoleChange = { readonly subject: string; readonly from?: MemberRole; readonly to: MemberRole }
+  const [confirming, setConfirming] = useState<RoleChange | undefined>(undefined)
+  const RANK: Readonly<Record<MemberRole, number>> = { viewer: 0, operator: 1, admin: 2, owner: 3 }
+  const readerRole = MEMBER_ROLES.find(r => r === state?.role)
+  // The owner gives every role; anyone else only the roles strictly below their own (the core
+  // aligns: an admin never changes another admin). A reader whose role is not served: Lecteur only.
+  const below = (role: MemberRole): boolean => readerRole === 'owner' || RANK[role] < RANK[readerRole ?? 'operator']
+  const grantable = MEMBER_ROLES.filter(below)
+  /** @param subject - a person of the table. @param role - their role. @returns whether this reader may change their line. */
+  const canTouch = (subject: string, role: string): boolean => {
+    const theirs = MEMBER_ROLES.find(r => r === role)
+    return subject !== state?.you && theirs !== undefined && below(theirs)
+  }
+  // Where the roles come from (`/state.rolesFrom`, A1 #88): only « authority » lets the page change
+  // one; « file » (grants.json, kept by the owner) and « local » (a solo station and its owner)
+  // offer no button. An older Host without the field: a 503 `no-authority` (or, before the code,
+  // an error starting « no team authority ») says the same. Any other 503 (`grants-unreadable`) and
+  // the authority's 504 stay errors, said with their reason: the owner must see them.
+  const [refusedForFile, setRefusedForFile] = useState(false)
+  const rolesFrom: unknown = state?.rolesFrom
+  // Closed by default: only « authority » offers buttons; an absent field offers them until a 503
+  // no-authority (an older Host); any other value, known or not, shows the role file's note.
+  const rolesFixed: 'file' | 'local' | undefined = rolesFrom === 'authority' ? undefined
+    : rolesFrom === undefined ? (refusedForFile ? 'file' : undefined)
+      : rolesFrom === 'local' ? 'local' : 'file'
+  const rolesFromFile = rolesFixed !== undefined
+  /** @param result - a refused grant or revoke. @returns whether it says the roles live in the file. */
+  const noAuthority = (result: { readonly status?: number; readonly code?: string; readonly error?: string }): boolean =>
+    result.status === 503 && (result.code === undefined ? (result.error ?? '').startsWith('no team authority') : result.code === 'no-authority')
+  /** @param result - a refused grant or revoke. @param fallback - when nothing is served. @returns its reason in words. */
+  const roleRefusal = (result: { readonly status?: number; readonly code?: string; readonly error?: string }, fallback: string): string =>
+    result.status === 504 ? t('ui.autorite-sans-reponse')
+      : result.code === 'grants-unreadable' ? t('ui.roles-illisibles', { reason: result.error ?? '' })
+        // The core's sentence for an address with accents or spaces; to read by its code once served.
+        : (result.error ?? '').startsWith('subject must be a plain ASCII e-mail') ? t('ui.adresse-ascii')
+          : result.error ?? fallback
+  /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
+  const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
+    to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])
   const [mandatePurpose, setMandatePurpose] = useState('')
   const [mandateDelegate, setMandateDelegate] = useState('')
   const [mandateUntil, setMandateUntil] = useState('')
@@ -433,7 +567,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.grantMember(subject, role)
-      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le droit n a pas ete accorde'))
       else {
         setAdminNotice(`${subject} : ${role}`)
         setAdminMembers(await api.members())
@@ -453,7 +588,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminNotice(undefined)
     try {
       const result = await api.grantMember(subject, grantRole)
-      if (!result.ok) setAdminError(result.error ?? 'le droit n a pas ete accorde')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le droit n a pas ete accorde'))
       else {
         setAdminNotice(`${subject} : ${grantRole}`)
         setGrantEmail('')
@@ -472,7 +608,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     setAdminError(undefined)
     try {
       const result = await api.revokeMember(subject)
-      if (!result.ok) setAdminError(result.error ?? 'le retrait a ete refuse')
+      if (!result.ok && noAuthority(result)) setRefusedForFile(true)
+      else if (!result.ok) setAdminError(roleRefusal(result, 'le retrait a ete refuse'))
       else {
         setAdminNotice(`${subject} : acces retire`)
         setAdminMembers(await api.members())
@@ -1070,9 +1207,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
               <span className="mndt-composer-note">{t('ui.elle-demarre-en-prive-cochez-le-partage')}</span>
             </div>
             <div className="mndt-composer-row">
-              <select className="mndt-input" value={kind} onChange={(event) => { setKind(event.target.value) }} aria-label={t('ui.type-de-mission')}>
-                {MISSION_KINDS.map(option => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-              </select>
+              <Segmented
+                label={t('ui.type-de-mission')}
+                value={kind}
+                options={MISSION_KINDS.map(option => ({ value: option.value, label: t(option.label) }))}
+                onChange={setKind}
+              />
               {state.canShare === true ? (
                 <label className="mndt-check">
                   <input type="checkbox" checked={share} onChange={(event) => { setShare(event.target.checked) }} />
@@ -1103,6 +1243,20 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
 
       {(() => {
         const current = chatChannels?.find(c => c.id === chatId)
+        if (chat !== undefined && team !== undefined && current === undefined && chatChannels !== undefined && chatChannels.length === 0) {
+          // A new member with no channel yet, not even a lane: said, and what comes next.
+          return (
+            <section className="mw-screen mw-arrival" style={{ display: view === 'chat' ? undefined : 'none' }} data-testid="team-arrival">
+              <h1 className="mw-title">{tc('arrivalTitle', { name: team.name ?? state.you })}</h1>
+              <p className="mw-welcome-text">{tc('arrivalText')}</p>
+              {pendingCards.length === 0 ? undefined : (
+                <button type="button" className="mw-ctx-link" onClick={() => { setView('pending') }}>
+                  {tc(pendingCards.length === 1 ? 'laneWelcomePendingOne' : 'laneWelcomePendingMany', { n: pendingCards.length })}
+                </button>
+              )}
+            </section>
+          )
+        }
         if (chat === undefined || current === undefined) return undefined
         if (team !== undefined) {
           // As mndt-web draws a channel: a large title and its kind, the feed with its composer, and
@@ -1133,6 +1287,15 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                   names={team.names}
                   onPending={() => { setView('pending') }}
+                  mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
+                  isOwner={state.role === 'owner'}
+                  offered={offered}
+                  arrival={{
+                    channels: (chatChannels ?? []).filter(c => c.kind !== 'solo').map(c => ({ id: c.id, label: c.title || c.name })),
+                    onChannel: (id) => { setChatId(id) },
+                    pending: pendingCards.length,
+                    onPending: () => { setView('pending') },
+                  }}
                   look="mndt-web"
                 />
               </section>
@@ -1278,48 +1441,93 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <div className="mndt-post-body">
               {(adminMembers ?? []).map(member => (
                 <div key={member.subject} className="mndt-post-actions">
-                  <span className="mndt-tag">{member.subject}</span>
-                  <select
-                    className="mndt-input"
-                    aria-label={t('ui.role-de-personne', { name: member.subject })}
-                    value={member.role}
-                    disabled={adminBusy === `grant:${member.subject}`}
-                    onChange={(event) => { void changeMemberRole(member.subject, event.target.value as MemberRole) }}
-                  >
-                    {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-                  </select>
-                  <button
-                    type="button"
-                    className="mndt-button"
-                    disabled={adminBusy === `revoke:${member.subject}`}
-                    onClick={() => { void revokeMemberNow(member.subject) }}
-                  >
-                    {t('ui.retirer')}
-                  </button>
+                  <span className="mndt-tag" title={member.subject}>{member.subject}</span>
+                  {canTouch(member.subject, member.role) && !rolesFromFile ? (
+                    <>
+                      <Segmented
+                        label={t('ui.role-de-personne', { name: member.subject })}
+                        value={member.role}
+                        disabled={adminBusy === `grant:${member.subject}` || confirming !== undefined}
+                        options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                        onChange={(role) => {
+                          // A button gives one of the table's roles: found back, never cast.
+                          const chosen = grantable.find(r => r === role)
+                          if (chosen === undefined) return
+                          const from = MEMBER_ROLES.find(r => r === member.role)
+                          const change = { subject: member.subject, ...(from === undefined ? {} : { from }), to: chosen }
+                          if (asksFirst(from, chosen)) setConfirming(change)
+                          else void changeMemberRole(member.subject, chosen)
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="mndt-button"
+                        disabled={adminBusy === `revoke:${member.subject}`}
+                        onClick={() => { void revokeMemberNow(member.subject) }}
+                      >
+                        {t('ui.retirer')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="mndt-role" data-testid="member-role-fixed">{roleWord(member.role, t)}</span>
+                  )}
                 </div>
               ))}
               {adminMembers !== undefined && adminMembers.length === 0 ? <p className="mndt-empty">{t('ui.aucune-personne')}</p> : undefined}
+              {confirming === undefined ? undefined : (
+                <div className="mndt-confirm" role="alertdialog" aria-label={t('ui.confirmer-le-role')} data-testid="role-confirm">
+                  <p>
+                    {confirming.from === undefined || RANK[confirming.to] > RANK[confirming.from]
+                      ? t('ui.confirmer-promotion', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, role: roleWord(confirming.to, t) })
+                      : t('ui.confirmer-retrogradation', { name: confirming.subject === '' ? grantEmail.trim() : confirming.subject, from: roleWord(confirming.from, t), to: roleWord(confirming.to, t) })}
+                  </p>
+                  <button
+                    type="button"
+                    className="mndt-button"
+                    onClick={() => {
+                      const { subject, to } = confirming
+                      setConfirming(undefined)
+                      if (subject === '') void grantTypedMember()
+                      else void changeMemberRole(subject, to)
+                    }}
+                  >
+                    {t('ui.confirmer')}
+                  </button>
+                  <button type="button" className="mndt-button" onClick={() => { setConfirming(undefined) }}>{t('ui.annuler')}</button>
+                </div>
+              )}
             </div>
-            <div className="mndt-post-actions">
-              <input
-                className="mndt-input"
-                aria-label={t('ui.adresse-de-la-personne-a-accorder')}
-                placeholder={t('ui.prenom-datanalysis-re')}
-                value={grantEmail}
-                onChange={(event) => { setGrantEmail(event.target.value) }}
-              />
-              <select
-                className="mndt-input"
-                aria-label={t('ui.role-a-accorder')}
-                value={grantRole}
-                onChange={(event) => { setGrantRole(event.target.value as MemberRole) }}
-              >
-                {MEMBER_ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-              </select>
-              <button type="button" className="mndt-button" disabled={grantEmail.trim() === '' || adminBusy === 'grant'} onClick={() => { void grantTypedMember() }}>
-                {t('ui.accorder')}
-              </button>
-            </div>
+            {rolesFromFile ? (
+              <p className="mndt-empty" role="note" data-testid="roles-from-file">{rolesFixed === 'local' ? t('ui.roles-poste-seul') : t('ui.roles-par-fichier')}</p>
+            ) : (
+              <div className="mndt-post-actions">
+                <input
+                  className="mndt-input"
+                  aria-label={t('ui.adresse-de-la-personne-a-accorder')}
+                  placeholder={t('ui.prenom-datanalysis-re')}
+                  value={grantEmail}
+                  onChange={(event) => { setGrantEmail(event.target.value) }}
+                />
+                <Segmented
+                  label={t('ui.role-a-accorder')}
+                  value={grantRole}
+                  options={grantable.map(role => ({ value: role, label: roleWord(role, t) }))}
+                  onChange={setGrantRole}
+                />
+                <button
+                  type="button"
+                  className="mndt-button"
+                  disabled={grantEmail.trim() === '' || adminBusy === 'grant' || confirming !== undefined || !grantable.includes(grantRole)}
+                  onClick={() => {
+                    // Admin or owner to a new person: asked first, naming them. An empty subject marks the typed one.
+                    if (asksFirst(undefined, grantRole)) setConfirming({ subject: '', to: grantRole })
+                    else void grantTypedMember()
+                  }}
+                >
+                  {t('ui.accorder')}
+                </button>
+              </div>
+            )}
           </article>
 
           <article className="mndt-post-card" data-kind="mandates">
@@ -1380,21 +1588,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             <p className="mndt-channel-subject">{t('ui.tout-ce-qui-s-est-passe-dans')}</p>
           </div>
           <div className="mndt-channel-head-side">
-            <select className="mndt-input" value={activityChannel} onChange={(event) => { setActivityChannel(event.target.value) }} aria-label={t('ui.filtrer-par-canal')}>
-              <option value="all">{t('ui.tous-les-canaux')}</option>
-              {channels.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-            </select>
-            <select
-              className="mndt-input"
+            <Segmented
+              label={t('ui.filtrer-par-canal')}
+              value={activityChannel}
+              options={[{ value: 'all', label: t('ui.tous-les-canaux') }, ...channels.map(candidate => ({ value: candidate.id, label: candidate.name }))]}
+              onChange={setActivityChannel}
+            />
+            <Segmented
+              label={t('ui.filtrer-l-activite')}
               value={activityFilter}
-              onChange={(event) => { setActivityFilter(event.target.value as 'all' | 'humans' | 'agents' | 'me') }}
-              aria-label={t('ui.filtrer-l-activite')}
-            >
-              <option value="all">{t('ui.tout')}</option>
-              <option value="humans">{t('ui.humains')}</option>
-              <option value="agents">{t('ui.agents')}</option>
-              <option value="me">{t('ui.moi')}</option>
-            </select>
+              options={[
+                { value: 'all', label: t('ui.tout') },
+                { value: 'humans', label: t('ui.humains') },
+                { value: 'agents', label: t('ui.agents') },
+                { value: 'me', label: t('ui.moi') },
+              ] as const}
+              onChange={setActivityFilter}
+            />
             <button type="button" className="mndt-button" onClick={markAllRead}>{t('ui.tout-marquer-comme-lu')}</button>
             <button type="button" className="mndt-button" onClick={exportActivity}>{t('ui.exporter-en-csv')}</button>
             <span className="mndt-pill" data-tone="id">{filteredEvents.length} {word(filteredEvents.length, 'ligne', 'lignes')}</span>
@@ -1524,6 +1734,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             canDecide={card.canDecide ?? state.canAdmin === true}
                             onDecide={decideCard}
                             names={team.names}
+                            mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
+                            isOwner={state.role === 'owner'}
+                            offered={offered}
                             t={tc}
                           />
                         </div>
@@ -1580,18 +1793,52 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           )}
           {view !== 'agents' ? undefined : (
             <section className="mw-screen" data-testid="team-agents">
-              <h1 className="mw-title">{t('shell.agents')}</h1>
+              <div className="mw-screen-head">
+                <h1 className="mw-title">{t('shell.agents')}</h1>
+                {/* Owners and admins declare and change agents (Stéphane, 15/11). */}
+                {!canManageAgents || editing !== undefined ? undefined : (
+                  <button type="button" className="mw-primary" onClick={() => { setEditing('new') }}>{tc('agentNew')}</button>
+                )}
+              </div>
+              {editing === undefined || chat === undefined ? undefined : (
+                <TeamAgentForm
+                  key={editing === 'new' ? 'new' : editing.id}
+                  agent={editing === 'new' ? undefined : editing}
+                  models={modelsOf(chatAgents)}
+                  mounted={mounted === undefined || mounted === 'absent' ? [] : mounted}
+                  canRaiseCeiling={state.role === 'owner'}
+                  onSave={saveAgent}
+                  onCancel={() => { setEditing(undefined) }}
+                  t={tc}
+                />
+              )}
               {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? (
                 <div className="mw-empty-state"><p>{t('shell.agents-none')}</p></div>
               ) : (
                 <ul className="mw-tiles">
-                  {chatAgents.filter(a => a.retiredAt === undefined).map(agent => (
-                    <li key={agent.id} className="mw-tile" data-testid="team-agent">
-                      <p className="mw-tile-title"><Icon name="Bot" className="mw-slate" />{agent.name}</p>
-                      <p className="mw-tile-text">@{agent.handle} · {agent.model}</p>
-                      <p className="mw-tile-text">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</p>
-                    </li>
-                  ))}
+                  {chatAgents.filter(a => a.retiredAt === undefined).map((agent) => {
+                    const body = (
+                      <>
+                        <span className="mw-tile-title"><Icon name="Bot" className="mw-slate" />{agent.name}</span>
+                        <span className="mw-tile-text">@{agent.handle} · {agent.model}</span>
+                        <span className="mw-tile-text">{tc('agentMonth', { spent: euros(agent.eurThisMonth ?? 0), ceiling: euros(agent.eurPerMonth) })}</span>
+                      </>
+                    )
+                    return (
+                      <li key={agent.id} data-testid="team-agent">
+                        {canManageAgents ? (
+                          <button
+                            type="button"
+                            className="mw-tile mw-tile-link"
+                            aria-label={tc('agentEdit', { name: agent.name })}
+                            onClick={() => { void openAgent(agent) }}
+                          >
+                            {body}
+                          </button>
+                        ) : <div className="mw-tile">{body}</div>}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </section>
@@ -1819,5 +2066,42 @@ function PostView(props: {
       </div>
       {open && body.brief !== undefined ? <div className="mndt-brief-body">{renderBrief(body.brief.markdown)}</div> : undefined}
     </article>
+  )
+}
+
+/** @param role - a role of the grant table. @param t - the copy. @returns its name for a person. */
+function roleWord(role: string, t: MndtTranslate): string {
+  return role === 'owner' ? t('shell.role-owner')
+    : role === 'admin' ? t('shell.role-admin')
+      : role === 'operator' ? t('shell.role-operator')
+        : role === 'viewer' ? t('shell.role-viewer') : role
+}
+
+/**
+ * A choice among a few values, as buttons side by side rather than a drop-down (Stéphane's rule):
+ * every option is visible, one click chooses.
+ */
+function Segmented<V extends string>(props: {
+  readonly label: string
+  readonly value: V
+  readonly options: readonly { readonly value: V; readonly label: string }[]
+  readonly onChange: (value: V) => void
+  readonly disabled?: boolean
+}): ReactNode {
+  return (
+    <div className="mndt-segmented" role="group" aria-label={props.label}>
+      {props.options.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          className="mndt-segment"
+          aria-pressed={option.value === props.value}
+          disabled={props.disabled === true}
+          onClick={() => { if (option.value !== props.value) props.onChange(option.value) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 }

@@ -8,17 +8,7 @@
  * system message), as the Host would between two reads.
  */
 import { ChatRefusal } from './chat.ts'
-import type {
-  MountedConnector,
-  ChannelCreate,
-  ChatAgent,
-  ChatCard,
-  ChatChannel,
-  ChatChanges,
-  ChatFace,
-  ChatMessage,
-  ChatTurn,
-} from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 
 /**
  * A promise of what `work` returns, or of the error it throws: the double answers like the Host,
@@ -58,6 +48,8 @@ export interface MockSeed {
   readonly channels: readonly ChatChannel[]
   readonly messages?: readonly ChatMessage[]
   readonly cards?: readonly ChatCard[]
+  /** The models offered to agents; absent, `models()` answers 404 as an older core does. */
+  readonly models?: readonly OfferedModel[]
   /** The connectors mounted on the workbench; a channel may only hold an enabled one. */
   readonly mounted?: readonly MountedConnector[]
 }
@@ -284,8 +276,39 @@ export function createMockChat(
         return next
       })
     },
+    models() {
+      return settle(() => {
+        if (seed.models === undefined) throw new ChatRefusal('no route', 404)
+        return [...seed.models]
+      })
+    },
     mounted() {
       return settle(() => [...(seed.mounted ?? [])])
+    },
+    createAgent(input) {
+      return settle(() => {
+        // As the core: a slug of 2 to 32 characters, unique, a name and a model.
+        if (!/^[a-z0-9][a-z0-9-]{1,31}$/u.test(input.handle)) throw new ChatRefusal(`a handle is a slug of 2 to 32 characters: ${input.handle}`, 400)
+        if ([...agents.values()].some(a => a.handle === input.handle)) throw new ChatRefusal(`the handle @${input.handle} is taken`, 409)
+        if (input.name.trim() === '') throw new ChatRefusal('an agent needs a name', 400)
+        const agent: ChatAgent & { eurThisMonth: number } = {
+          id: `agt_${agents.size + 1}_${input.handle}`, handle: input.handle, name: input.name, provider: input.provider, model: input.model,
+          ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+          connectors: [...(input.connectors ?? [])], eurPerMonth: input.eurPerMonth ?? 5, eurThisMonth: 0,
+          createdBy: seed.you, createdAt: now(),
+        }
+        agents.set(agent.id, agent)
+        return agent
+      })
+    },
+    updateAgent(agentId, patch) {
+      return settle(() => {
+        const agent = agents.get(agentId)
+        if (agent === undefined) throw new ChatRefusal(`no agent ${agentId}`, 404)
+        const next = { ...agent, ...patch, ...(patch.connectors === undefined ? {} : { connectors: [...patch.connectors] }) }
+        agents.set(agentId, next)
+        return next
+      })
     },
     tick() {
       for (const m of [...messages.values()]) {

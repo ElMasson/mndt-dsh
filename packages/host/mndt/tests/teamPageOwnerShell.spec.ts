@@ -11,6 +11,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { gapSignature, proxyFetch, proxyKeyFile } from './support/proxySigned.ts'
+import { freePort } from './support/freePort.ts'
 
 const owner = 'duke@datanalysis.re'
 const viewer = 'smarion@datanalysis.re'
@@ -84,7 +85,7 @@ describe('the gateway: the team page for everyone, the shell for the owner alone
     return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen }
   }
   async function gateway(api: string, shell: string, extra: Record<string, string> = {}): Promise<string> {
-    const port = 20000 + Math.floor(Math.random() * 20000)
+    const port = await freePort()
     const child: ChildProcess = spawn(process.execPath, [join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')], {
       env: { ...process.env, PORT: String(port), API: api, WORKBENCH: shell, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: owner, ...extra },
       stdio: 'ignore',
@@ -160,7 +161,7 @@ describe('the gateway: the team page for everyone, the shell for the owner alone
   it('never takes an e-mail that is not plain ASCII for the owner', async () => {
     const api = await recorder()
     const shell = await recorder()
-    const port = 20000 + Math.floor(Math.random() * 20000)
+    const port = await freePort()
     // An owner configured with a non-ASCII letter: nobody, the same spelling included, is the owner.
     const child: ChildProcess = spawn(process.execPath, [join(import.meta.dirname, '..', 'deploy', 'gateway', 'server.mjs')], {
       env: { ...process.env, PORT: String(port), API: api.url, WORKBENCH: shell.url, TOKEN_FILE: '/nonexistent', PROXY_SIGNATURE_KEY_FILE: proxyKeyFile(), OWNER: 'duké@datanalysis.re' },

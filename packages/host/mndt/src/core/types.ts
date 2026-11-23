@@ -91,7 +91,7 @@ export interface MemoryNote {
 }
 
 /** An action that touches the outside world, so a person must decide it. */
-export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete'
+export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent'
 
 /** Where an approval stands. */
 export type ApprovalState = 'pending' | 'approved' | 'rejected'
@@ -116,12 +116,37 @@ export interface Approval {
   readonly kind: ApprovalAction
   readonly title: string
   readonly payload: ApprovalPayload
+  /**
+   * The person the card is asked for (rights and reading rest on them): for a
+   * card an agent's turn asked, the person who mentioned the agent.
+   */
   readonly requestedBy: string
+  /** The agent whose turn asked the card, when a turn did; absent for a person or a mission. */
+  readonly requestedByAgent?: { readonly id: string; readonly handle: string }
   readonly requestedAt: string
   readonly state: ApprovalState
   readonly decidedBy?: string
   readonly decidedAt?: string
   readonly reason?: string
+  /**
+   * A propose_agent card: the agent to create, exactly the body of POST /agents.
+   * The server creates it from THIS proposal when an owner or an admin approves
+   * the card, never from what a page sends.
+   */
+  readonly proposal?: AgentProposal
+  /** The agent the approval created. */
+  readonly agentId?: string
+}
+
+/** An agent proposed on a card (lot 1b): the fields of POST /agents. */
+export interface AgentProposal {
+  readonly handle: string
+  readonly name: string
+  readonly provider: string
+  readonly model: string
+  readonly instructions?: string
+  readonly connectors?: readonly string[]
+  readonly eurPerMonth?: number
 }
 
 /** One line of the product's own history. */
@@ -178,6 +203,8 @@ export interface Agent {
   readonly createdBy: string
   readonly createdAt: string
   readonly retiredAt?: string
+  /** Who retired it. */
+  readonly retiredBy?: string
 }
 
 /** A team channel, or one person's own lane. */
@@ -198,6 +225,61 @@ export interface Channel {
   readonly connectors: readonly string[]
   readonly createdBy: string
   readonly createdAt: string
+  /** How a turn of this channel is coordinated; absent, each agent answers alone. */
+  readonly coordination?: Coordination
+}
+
+/**
+ * « Auteur puis vérificateur » (lot 2): a turn of the author is checked by the
+ * verifier, an agent of ANOTHER model, against the request; the author corrects
+ * once if the verifier finds something. A host script, never an agent's choice.
+ */
+export type Coordination = AuthorVerifier | ParallelSynthesis
+
+/** « Auteur puis vérificateur ». */
+export interface AuthorVerifier {
+  readonly mode: 'author-verifier'
+  readonly authorId: string
+  readonly verifierId: string
+}
+
+/**
+ * « En parallèle puis synthèse » (lot 2): a turn of the synthesizer has each
+ * worker (2 to 4) answer the request on its own, with its own connectors, then
+ * the synthesizer, with NO tool, assembles their parts and says where they
+ * disagree. Bounded in agents, in calls (workers + 1) and in euros per turn.
+ */
+export interface ParallelSynthesis {
+  readonly mode: 'parallel-synthesis'
+  readonly workerIds: readonly string[]
+  readonly synthesizerId: string
+  /** The most one such turn may cost, all steps together, in euros. */
+  readonly maxEurPerTurn: number
+}
+
+/** @param coordination - a channel's coordination. @returns the agents it engages. */
+export function coordinationAgents(coordination: Coordination): readonly string[] {
+  return coordination.mode === 'author-verifier'
+    ? [coordination.authorId, coordination.verifierId]
+    : [...coordination.workerIds, coordination.synthesizerId]
+}
+
+/** One step of a coordinated turn: who did what, at what cost. */
+export interface TurnStep {
+  readonly role: 'author' | 'verifier' | 'revision' | 'worker' | 'synthesis'
+  readonly agentId: string
+  readonly tokens?: Mission['tokens']
+  readonly eur?: number
+  /** The verifier's reading: nothing to fix, things to fix, or no usable verdict. */
+  readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
+  /** What the verifier asked to fix, or why the check did not happen. */
+  readonly notes?: readonly string[]
+  /**
+   * A worker's part (« en parallèle puis synthèse »), kept apart from the
+   * published text: the screen presents each part under its agent, so a part
+   * cannot write a heading that passes for another agent's part.
+   */
+  readonly text?: string
 }
 
 /** Who wrote a message. */
@@ -221,6 +303,8 @@ export interface Turn {
   readonly eur?: number
   /** Why it failed, was refused or cancelled, in plain words. */
   readonly reason?: string
+  /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
+  readonly steps?: readonly TurnStep[]
   readonly startedAt?: string
   readonly finishedAt?: string
 }
@@ -286,5 +370,5 @@ export function isMissionStatus(value: unknown): value is MissionStatus {
 
 /** @param value - the candidate action. @returns true when it leaves the building. */
 export function needsApproval(value: string): value is ApprovalAction {
-  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete'
+  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent'
 }

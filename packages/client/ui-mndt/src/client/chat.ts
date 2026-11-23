@@ -119,6 +119,11 @@ export interface ChatCard {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them (pending cards only). */
   readonly canDecide?: boolean
+  /**
+   * What the card proposes to declare, when an agent proposes an agent (`propose_agent`, lot 1b):
+   * read through `proposalOf`, never trusted as is.
+   */
+  readonly proposal?: unknown
   /** The mission that asked for it, when one did (such a card belongs to no channel). */
   readonly missionId?: string
   /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */
@@ -186,6 +191,31 @@ export interface ChatFace {
   setCoordination?(channelId: string, change: CoordinationChange): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
+  /** The models offered to agents (`GET /models`, #82). Optional: the team page only. */
+  models?(): Promise<readonly OfferedModel[]>
+  /** Declare an agent (`POST /agents`, agents.write). Optional: the team page only. */
+  createAgent?(input: AgentInput): Promise<ChatAgent>
+  /** Change an agent; its handle never changes (`POST /agents/:id`). Optional: the team page only. */
+  updateAgent?(id: string, patch: Partial<Omit<AgentInput, 'handle'>>): Promise<ChatAgent>
+}
+
+/** What declares an agent: the API's fields, its handle written once. */
+export interface AgentInput {
+  readonly handle: string
+  readonly name: string
+  readonly provider: string
+  readonly model: string
+  /** What it is for, in a sentence: its standing instructions. */
+  readonly instructions?: string
+  readonly connectors?: readonly string[]
+  /** The monthly ceiling, in euros (5 by default on the server). */
+  readonly eurPerMonth?: number
+}
+
+/** A model the core offers to agents: one line of `GET /models`. */
+export interface OfferedModel {
+  readonly provider: string
+  readonly model: string
 }
 
 /** A connector as the workbench reports it: an MCP server, and whether it is switched on. */

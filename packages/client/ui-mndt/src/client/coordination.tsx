@@ -55,6 +55,11 @@ function amountOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
+/** @param a - a count, if read. @param b - another. @returns their sum, or undefined when neither was read. */
+function sumOf(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
+}
+
 /**
  * @param channel - a channel as served.
  * @returns its coordination when it is a well-formed author-verifier one, else undefined (alone).
@@ -96,7 +101,13 @@ export function stepsOf(turn: ChatTurn): readonly TurnStep[] {
     if (typeof s.role !== 'string' || !ROLES.has(s.role) || agentId === undefined) return []
     if (s.verdict !== undefined && (typeof s.verdict !== 'string' || !VERDICTS.has(s.verdict))) return []
     const notes = Array.isArray(s.notes) ? s.notes.filter((n): n is string => typeof n === 'string' && n.trim() !== '').map(n => n.slice(0, 2000)) : []
-    const tokens = amountOf(s.tokens)
+    // As the core serves them: { input, output } (the cache counts are inside input). A bare number,
+    // as an older double served, is read too.
+    const raw = s.tokens
+    const tokens = typeof raw === 'number' ? amountOf(raw)
+      : typeof raw === 'object' && raw !== null
+        ? sumOf(amountOf((raw as Record<string, unknown>).input), amountOf((raw as Record<string, unknown>).output))
+        : undefined
     const eur = amountOf(s.eur)
     const text = typeof s.text === 'string' && s.text.trim() !== '' ? s.text.slice(0, 20_000) : undefined
     steps.push({
