@@ -123,6 +123,21 @@ export const MAX_AGENT_NAME = 60
  * members must not file three cards for each of them.
  */
 export const MAX_PENDING_PROPOSALS = 3
+
+/** Why a channel's coordination is refused, by a code the screen reads (not the English text). */
+export type CoordinationRefusalCode =
+  | 'not-member' | 'same-agent' | 'same-model' | 'too-few-workers' | 'too-many-workers'
+  | 'synthesizer-is-worker' | 'budget-out-of-range' | 'unknown-mode' | 'missing-fields'
+
+/** A refused coordination: its message for people, its code for the screen. */
+export class CoordinationRefusal extends Error {
+  readonly code: CoordinationRefusalCode
+  constructor(code: CoordinationRefusalCode, message: string) {
+    super(message)
+    this.name = 'CoordinationRefusal'
+    this.code = code
+  }
+}
 /** The workers of a « en parallèle puis synthèse » turn. */
 export const MIN_WORKERS = 2
 export const MAX_WORKERS = 4
@@ -1141,28 +1156,28 @@ export class WorkbenchService {
       if (coordination?.mode === 'author-verifier') {
         const author = active(coordination.authorId)
         const verifier = active(coordination.verifierId)
-        if (author === undefined || verifier === undefined) throw new Error('the author and the verifier must both be active agents of this channel')
-        if (author.id === verifier.id) throw new Error('the author and the verifier must be two agents')
+        if (author === undefined || verifier === undefined) throw new CoordinationRefusal('not-member', 'the author and the verifier must both be active agents of this channel')
+        if (author.id === verifier.id) throw new CoordinationRefusal('same-agent', 'the author and the verifier must be two agents')
         if (author.provider === verifier.provider && author.model === verifier.model) {
-          throw new Error(`the verifier must run another model than the author (both are ${author.provider}/${author.model})`)
+          throw new CoordinationRefusal('same-model', `the verifier must run another model than the author (both are ${author.provider}/${author.model})`)
         }
         recorded = { mode: 'author-verifier', authorId: author.id, verifierId: verifier.id }
       } else if (coordination?.mode === 'parallel-synthesis') {
         const workers = [...new Set(coordination.workerIds)]
         if (workers.length < MIN_WORKERS || workers.length > MAX_WORKERS) {
-          throw new Error(`a parallel turn has ${MIN_WORKERS} to ${MAX_WORKERS} distinct workers`)
+          throw new CoordinationRefusal(workers.length < MIN_WORKERS ? 'too-few-workers' : 'too-many-workers', `a parallel turn has ${MIN_WORKERS} to ${MAX_WORKERS} distinct workers`)
         }
         if (workers.some(agentId => active(agentId) === undefined) || active(coordination.synthesizerId) === undefined) {
-          throw new Error('the workers and the synthesizer must all be active agents of this channel')
+          throw new CoordinationRefusal('not-member', 'the workers and the synthesizer must all be active agents of this channel')
         }
-        if (workers.includes(coordination.synthesizerId)) throw new Error('the synthesizer is not one of the workers')
+        if (workers.includes(coordination.synthesizerId)) throw new CoordinationRefusal('synthesizer-is-worker', 'the synthesizer is not one of the workers')
         const cap = coordination.maxEurPerTurn
         if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0 || cap > MAX_EUR_PER_COORDINATED_TURN) {
-          throw new Error(`a parallel turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
+          throw new CoordinationRefusal('budget-out-of-range', `a parallel turn costs ${MAX_EUR_PER_COORDINATED_TURN} € at most (maxEurPerTurn)`)
         }
         recorded = { mode: 'parallel-synthesis', workerIds: workers, synthesizerId: coordination.synthesizerId, maxEurPerTurn: cap }
       } else if (coordination !== undefined) {
-        throw new Error(`unknown coordination mode: ${String((coordination as { mode?: unknown }).mode)}`)
+        throw new CoordinationRefusal('unknown-mode', `unknown coordination mode: ${String((coordination as { mode?: unknown }).mode)}`)
       }
       const { coordination: _previous, ...rest } = channel
       const next: Channel = recorded === undefined ? rest : { ...rest, coordination: recorded }

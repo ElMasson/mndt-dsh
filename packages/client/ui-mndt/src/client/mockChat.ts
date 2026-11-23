@@ -226,6 +226,44 @@ export function createMockChat(
         return next
       })
     },
+    setCoordination(channelId, change) {
+      return settle(() => {
+        const c = channelOf(channelId)
+        if (change.mode === 'solo') {
+          const { coordination: _gone, ...rest } = c
+          channels.set(c.id, rest)
+          return rest
+        }
+        if (change.mode === 'parallel-synthesis') {
+          // As the core (#85): 2 to 4 distinct workers, a synthesiser not among them, at most 5 EUR a turn.
+          const ids = [...change.workers, change.synthesizer]
+          if (change.workers.length < 2 || change.workers.length > 4 || new Set(change.workers).size !== change.workers.length) {
+            throw new ChatRefusal('a parallel turn has 2 to 4 distinct workers', 400)
+          }
+          if (ids.some(agentId => agents.get(agentId) === undefined || !c.agents.includes(agentId))) {
+            throw new ChatRefusal('the workers and the synthesizer must all be active agents of this channel', 400)
+          }
+          if (change.workers.includes(change.synthesizer)) throw new ChatRefusal('the synthesizer is not one of the workers', 400)
+          const max = change.maxEurPerTurn ?? 1
+          if (max <= 0 || max > 5) throw new ChatRefusal('a parallel turn costs 5 € at most (maxEurPerTurn)', 400)
+          const parallel = { ...c, coordination: { mode: 'parallel-synthesis', workerIds: [...change.workers], synthesizerId: change.synthesizer, maxEurPerTurn: max } }
+          channels.set(c.id, parallel)
+          return parallel
+        }
+        // As the core (#84): two agents of the channel, on two different models.
+        const author = agents.get(change.author)
+        const verifier = agents.get(change.verifier)
+        if (author === undefined || verifier === undefined || !c.agents.includes(author.id) || !c.agents.includes(verifier.id)) {
+          throw new ChatRefusal('author and verifier must be agents of the channel', 400)
+        }
+        if (author.provider === verifier.provider && author.model === verifier.model) {
+          throw new ChatRefusal('the verifier must run on another model than the author', 400)
+        }
+        const next = { ...c, coordination: { mode: 'author-verifier', authorId: author.id, verifierId: verifier.id } }
+        channels.set(c.id, next)
+        return next
+      })
+    },
     setConnectors(channelId, servers) {
       return settle(() => {
         const c = channelOf(channelId)

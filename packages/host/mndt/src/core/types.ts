@@ -280,6 +280,12 @@ export interface TurnStep {
    * cannot write a heading that passes for another agent's part.
    */
   readonly text?: string
+  /**
+   * On a revision step that ran: whether the published text is the revision
+   * (true) or the draft kept because the correction came back empty (false,
+   * with a note). The screen says « corrigé » only on true.
+   */
+  readonly replaced?: boolean
 }
 
 /** Who wrote a message. */

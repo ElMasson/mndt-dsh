@@ -15,6 +15,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import type { DecideOptions } from './face.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
+import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
 
@@ -58,7 +59,12 @@ export function DaySeparator(props: { readonly at: string }): ReactNode {
 }
 
 /** One turn under the message that started it. */
-function WebTurn(props: { readonly turn: ChatTurn; readonly agent: ChatAgent | undefined; readonly t: ChatTranslate }): ReactNode {
+function WebTurn(props: {
+  readonly turn: ChatTurn
+  readonly agent: ChatAgent | undefined
+  readonly agents: ReadonlyMap<string, ChatAgent>
+  readonly t: ChatTranslate
+}): ReactNode {
   const { turn, agent, t } = props
   if (turn.status === 'queued' || turn.status === 'running') {
     return (
@@ -70,13 +76,19 @@ function WebTurn(props: { readonly turn: ChatTurn; readonly agent: ChatAgent | u
   }
   if (turn.status !== 'done') {
     const word = turn.status === 'failed' ? 'webTurnFailed' : turn.status === 'refused' ? 'webTurnRefused' : 'webTurnCancelled'
-    return (
+    const line = (
       <p className="mw-turn-failed" data-testid="chat-turn" data-status={turn.status}>
         <Icon name="AlertTriangle" size={14} />
-        <span>{t(word)}{turn.reason === undefined ? '' : ` : ${turn.reason}`}</span>
+        <span>{t(word)}{turn.reason === undefined ? '' : ` : ${turn.reason}`}{turn.eur === undefined ? '' : ` · ${euros(turn.eur)}`}</span>
       </p>
     )
+    // A stopped coordinated turn keeps its steps, its cost and its parts (#85).
+    const steps = turnSteps(turn, props.agents, t)
+    return steps === undefined ? line : <div className="mw-turn-coord">{line}{steps}</div>
   }
+  // A coordinated turn (#84) says who wrote and who checked; unreadable steps fall back to the plain line.
+  const coordinated = coordinatedTurn(turn, props.agents, t)
+  if (coordinated !== undefined) return coordinated
   const seconds = turn.startedAt === undefined || turn.finishedAt === undefined
     ? undefined
     : (Date.parse(turn.finishedAt) - Date.parse(turn.startedAt)) / 1000
@@ -291,7 +303,7 @@ export function WebMessage(props: {
       ) : (
         <p className="mw-message-body">{m.text}</p>
       )}
-      {(m.turns ?? []).map(turn => <WebTurn key={turn.id} turn={turn} agent={agents.get(turn.agentId)} t={t} />)}
+      {(m.turns ?? []).map(turn => <WebTurn key={turn.id} turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />)}
       {waiting === 0 || props.onPending === undefined ? undefined : (
         <p className="mw-waiting">
           <Icon name="Inbox" size={14} />

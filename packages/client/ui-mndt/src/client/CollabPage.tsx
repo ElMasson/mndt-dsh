@@ -10,9 +10,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { AgentInput, ChatAgent, ChatChannel, ChatFace, MountedConnector, OfferedModel } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
-import type { ChatTranslate } from './chatLocales.ts'
+import type { ChatKey, ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
@@ -112,6 +112,42 @@ const MEMORY_KINDS: Readonly<Record<string, MndtKey>> = {
   fact: 'shell.memory-kind-fact',
   decision: 'shell.memory-kind-decision',
   preference: 'shell.memory-kind-preference',
+}
+
+/**
+ * @param failure - a refusal of the coordination route. @param t - the copy.
+ * @returns it in the page's words where the core's sentence is known, else as served.
+ */
+const COORDINATION_CODES: Readonly<Record<string, ChatKey>> = {
+  'not-member': 'coordNotMember',
+  'same-agent': 'coordTwoAgents',
+  'same-model': 'coordSameModel',
+  'too-few-workers': 'coordWorkersCount',
+  'too-many-workers': 'coordWorkersCount',
+  'synthesizer-is-worker': 'coordSynthNotWorker',
+  'budget-out-of-range': 'coordBudgetMax',
+  'unknown-mode': 'coordModeUnknown',
+  'missing-fields': 'coordMissingFields',
+}
+
+export function coordinationRefusal(failure: unknown, t: ChatTranslate): string {
+  if (failure instanceof ChatRefusal) {
+    if (failure.status === 404) return t('coordNotServed')
+    // The core's codes (A1, #100) first; a code the page does not know falls back on the sentence.
+    const word = failure.code === undefined ? undefined : COORDINATION_CODES[failure.code]
+    if (word !== undefined) return t(word)
+    // The core's sentences (A1, #84), said in the page's words.
+    if (failure.message.includes('must run another model')) return t('coordSameModel')
+    if (failure.message.includes('must both be active agents of this channel')) return t('coordNotActive')
+    if (failure.message.includes('must be two agents')) return t('coordTwoAgents')
+    if (failure.message.startsWith('mode is solo')) return t('coordModeUnknown')
+    if (failure.message.includes('has 2 to 4 distinct workers')) return t('coordWorkersCount')
+    if (failure.message.includes('must all be active agents of this channel')) return t('coordParallelNotActive')
+    if (failure.message.includes('the synthesizer is not one of the workers')) return t('coordSynthNotWorker')
+    if (failure.message.includes('costs 5 € at most')) return t('coordBudgetMax')
+    if (failure.message.startsWith('parallel-synthesis needs workers')) return t('coordParallelNeeds')
+  }
+  return reasonOf(failure, t)
 }
 
 /** @param kind - a note's kind as served. @returns its label; an unknown kind is a « Note ». */
@@ -349,6 +385,17 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     lastWrite.current = Date.now()
     setChatChannels(held => held?.map(c => (c.id === next.id ? next : c)))
   }
+
+  // The channel's coordination (#84): alone, or an author then a verifier.
+  const setChannelCoordination = useCallback(async (change: CoordinationChange): Promise<string | undefined> => {
+    if (chat?.setCoordination === undefined || chatId === undefined) return undefined
+    try {
+      replaceChannel(await chat.setCoordination(chatId, change))
+      return undefined
+    } catch (failure) {
+      return coordinationRefusal(failure, tc)
+    }
+  }, [chat, chatId, tc])
 
   // One click puts an agent in the open channel or takes it out (the team frame's pills).
   const toggleChatAgent = useCallback(async (agentId: string, inChannel: boolean): Promise<string | undefined> => {
@@ -1289,6 +1336,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   canManage={state.canWrite}
                   names={team.names}
                   documents={documents}
+                  onCoordination={chat.setCoordination === undefined ? undefined : setChannelCoordination}
+                  canCoordinate={state.canAdmin === true}
                   onMemory={() => { setContextOpen(false); setView('memory') }}
                 />
               </aside>
