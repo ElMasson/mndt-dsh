@@ -462,6 +462,9 @@ export const TEAM_CSS = `
 .mw-quoted-head { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--mw-line); color: var(--mw-slate); font-size: 12px; font-weight: 500; }
 .mw-quoted .mw-agent-text { padding: 8px 12px; }
 .mw-agent-text .md-heading { margin: 8px 0 2px; }
+.mw-context { display: flex; flex-direction: column; gap: 8px; }
+.mw-context-edit { display: flex; flex-direction: column; gap: 6px; }
+.mw-app .mw-quoted-more { margin: 0 12px 8px; }
 .mw-agent-sheet-instructions { display: flex; flex-direction: column; gap: 6px; }
 
 @media (min-width: 640px) { .mw-account-text { display: flex; } }

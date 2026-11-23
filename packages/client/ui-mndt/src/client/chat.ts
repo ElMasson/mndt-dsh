@@ -41,6 +41,8 @@ export interface ChatChannel {
   readonly createdAt: string
   /** « Auteur puis vérificateur » (#84), read through `coordinationOf`, never trusted as is. */
   readonly coordination?: unknown
+  /** What the channel's agents read before answering (lot 3), read through `contextOf`. Members only. */
+  readonly context?: unknown
 }
 
 /** Who wrote a message. */
@@ -124,6 +126,8 @@ export interface ChatCard {
    * read through `proposalOf`, never trusted as is.
    */
   readonly proposal?: unknown
+  /** What a propose_context card proposes (`{ text, baseVersion }`, #109), read through `contextProposalOf`. */
+  readonly contextProposal?: unknown
   /** The mission that asked for it, when one did (such a card belongs to no channel). */
   readonly missionId?: string
   /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */
@@ -190,6 +194,11 @@ export interface ChatFace {
    * then a verifier of another model. Optional: the team page only.
    */
   setCoordination?(channelId: string, change: CoordinationChange): Promise<ChatChannel>
+  /**
+   * Write the channel's context (`POST /channels/:id/context`, owners and admins): the text, and the
+   * version it replaces (a change since is refused 409 `context-changed`). Optional: the team page only.
+   */
+  setContext?(channelId: string, change: { readonly text: string; readonly version: number }): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
   /** The models offered to agents (`GET /models`, #82). Optional: the team page only. */

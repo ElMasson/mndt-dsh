@@ -7,6 +7,7 @@ import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatChannel, CoordinationChange, MountedConnector } from './chat.ts'
 import { CoordinationSection, coordinationOf } from './coordination.tsx'
+import { ContextSection } from './channelContext.tsx'
 import { euros } from './ChannelView.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
@@ -53,6 +54,10 @@ export interface TeamContextProps {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** The documents route; without it the section says « Bientôt ». */
   readonly documents?: DocumentsFace | undefined
+  /** Write the channel's context (owners and admins); absent, the context is read only. */
+  readonly onContext?: ((text: string, version: number) => Promise<string | undefined>) | undefined
+  /** Put a text in the channel's composer (the context's « Demander à @agent »). */
+  readonly onAsk?: ((text: string) => void) | undefined
   /** Set the channel's coordination (#84); absent, the section is not shown. */
   readonly onCoordination?: ((change: CoordinationChange) => Promise<string | undefined>) | undefined
   /** Whether the reader may set it: owners and admins. */
@@ -96,6 +101,17 @@ export function TeamContext(props: TeamContextProps): ReactNode {
   const connectorsWritable = canManage && served !== undefined && props.onToggleConnector !== undefined
   return (
     <div className="mw-ctx" data-testid="context-panel">
+      <Section title={t('contextTitle')}>
+        <ContextSection
+          channel={channel}
+          agents={props.agents}
+          canEdit={props.canCoordinate === true}
+          onSave={props.onContext}
+          onAsk={props.onAsk}
+          names={props.names}
+          t={t}
+        />
+      </Section>
       <Section title={t('ctxChannel')}>
         <p>{channel.kind === 'solo' ? t('ctxKindLane') : t('ctxKindTeam')}</p>
       </Section>
