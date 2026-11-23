@@ -546,7 +546,7 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
   it('a rolesFrom the page does not know offers no button: closed by default', async () => {
     for (const rolesFrom of ['Authority', 'files', '', 3, null]) {
       const api = fakeFace({
-        state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom }) as never,
+        state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom }),
         members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
         grantMember,
       })
@@ -558,7 +558,7 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     }
     // « authority » offers them.
     const api = fakeFace({
-      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'authority' }) as never,
+      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'authority' }),
       members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
       grantMember,
     })
