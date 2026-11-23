@@ -1342,25 +1342,79 @@ export class WorkbenchService {
   }
 
   /**
+   * Cancel the turns a previous process left running or queued: nothing will
+   * run them, and a request minutes old must not leave alone after an update.
+   * A running turn says « interrompu par un redémarrage », a queued one « non
+   * lancé : redémarrage »; each keeps what it already cost (its own eur, or
+   * what its recorded steps and help spent). No message in the thread: the
+   * screen shows the status and the reason, the person asks again if they want.
+   * Only what predates this process: a mention posted since it started is never touched.
+   * @param before - when this process started (ISO).
+   * @returns how many running and queued turns were cancelled.
+   */
+  async cancelInterruptedTurns(before: string): Promise<{ running: number; queued: number }> {
+    const old = (message: Message, turn: Turn): boolean =>
+      message.createdAt < before && (turn.startedAt === undefined || turn.startedAt < before)
+    const unsettledIn = (message: Message) => (turn: Turn): boolean => (turn.status === 'running' || turn.status === 'queued') && old(message, turn)
+    const any = ((await this.snapshot()).messages ?? []).some(message => (message.turns ?? []).some(unsettledIn(message)))
+    if (!any) return { running: 0, queued: 0 }
+    return this.#write((state) => {
+      const at = this.#at()
+      let running = 0
+      let queued = 0
+      const messages = (state.messages ?? []).map((message) => {
+        const unsettled = unsettledIn(message)
+        if (!(message.turns ?? []).some(unsettled)) return message
+        return {
+          ...message,
+          updatedAt: at,
+          turns: (message.turns ?? []).map((turn): Turn => {
+            if (!unsettled(turn)) return turn
+            if (turn.status === 'running') running += 1
+            else queued += 1
+            const spent = turn.eur
+              ?? ((turn.steps ?? []).reduce((total, step) => total + (step.eur ?? 0), 0)
+                + (turn.help?.advices ?? []).reduce((total, advice) => total + (advice.eur ?? 0), 0))
+            return {
+              ...turn,
+              status: 'cancelled',
+              reason: turn.status === 'running' ? 'interrompu par un redémarrage' : 'non lancé : redémarrage',
+              finishedAt: at,
+              ...(spent > 0 ? { eur: Math.round(spent * 1_000_000) / 1_000_000 } : {}),
+            }
+          }),
+        }
+      })
+      return {
+        state: { ...state, messages },
+        event: { at, actor: 'mndt', action: 'turn.cancelled', subject: 'restart', detail: `${running} running, ${queued} queued, left by a previous process` },
+        value: { running, queued },
+      }
+    })
+  }
+
+  /**
    * Close the helps a previous process left open (asked, advising, reading):
    * nothing will ever run them. Each is done, with a skipped entry
    * « redémarrage », and no reading, so no peer is ever named for it.
+   * Only what predates this process: a help asked since it started is never touched.
+   * @param before - when this process started (ISO).
    * @returns how many were closed.
    */
-  async closeInterruptedHelps(): Promise<number> {
-    const open = ((await this.snapshot()).messages ?? []).some(message =>
-      (message.turns ?? []).some(turn => turn.help !== undefined && turn.help.state !== 'done'))
+  async closeInterruptedHelps(before: string): Promise<number> {
+    const stale = (turn: Turn): boolean => turn.help !== undefined && turn.help.state !== 'done' && turn.help.askedAt < before
+    const open = ((await this.snapshot()).messages ?? []).some(message => (message.turns ?? []).some(stale))
     if (!open) return 0
     return this.#write((state) => {
       let closed = 0
       const at = this.#at()
       const messages = (state.messages ?? []).map((message) => {
-        if (!(message.turns ?? []).some(turn => turn.help !== undefined && turn.help.state !== 'done')) return message
+        if (!(message.turns ?? []).some(stale)) return message
         return {
           ...message,
           updatedAt: at,
           turns: (message.turns ?? []).map((turn) => {
-            if (turn.help === undefined || turn.help.state === 'done') return turn
+            if (turn.help === undefined || !stale(turn)) return turn
             closed += 1
             return { ...turn, help: { ...turn.help, state: 'done' as const, skipped: [...turn.help.skipped, { reason: 'redémarrage' }] } }
           }),

@@ -3,6 +3,8 @@ import { MemoryStore, servedMessage, WorkbenchService } from '../src/core/index.
 import type { TurnHelp, WorkbenchState } from '../src/core/index.ts'
 
 const at = '2026-11-24T08:00:00.000Z'
+/** This process's start: what the previous one left is older. */
+const START = '2026-11-24T09:00:00.000Z'
 /** @param state - the help's state. @returns a help, one advice recorded with its peer. */
 const help = (state: TurnHelp['state']): TurnHelp => ({
   state,
@@ -31,7 +33,7 @@ async function left(): Promise<WorkbenchService> {
 describe('a help left open by a previous process is closed at start', () => {
   it('asked, advising and reading become done, « redémarrage », with no reading; a finished one is untouched', async () => {
     const service = await left()
-    expect(await service.closeInterruptedHelps()).toBe(3)
+    expect(await service.closeInterruptedHelps(START)).toBe(3)
     const messages = (await service.snapshot()).messages ?? []
     const helps = messages.map(m => m.turns?.[0]?.help)
     expect(helps.slice(0, 3).every(h => h?.state === 'done' && h.reading === undefined && h.skipped.at(-1)?.reason === 'redémarrage')).toBe(true)
@@ -40,7 +42,7 @@ describe('a help left open by a previous process is closed at start', () => {
 
   it('no peer is named once closed: without a reading, the served help keeps them withheld', async () => {
     const service = await left()
-    await service.closeInterruptedHelps()
+    await service.closeInterruptedHelps(START)
     const served = ((await service.snapshot()).messages ?? []).slice(0, 3).map(servedMessage)
     for (const message of served) {
       const closed = message.turns?.[0]?.help
@@ -53,9 +55,9 @@ describe('a help left open by a previous process is closed at start', () => {
 
   it('a second start finds nothing open: 0, and no write', async () => {
     const service = await left()
-    await service.closeInterruptedHelps()
+    await service.closeInterruptedHelps(START)
     const events = (await service.snapshot()).events.length
-    expect(await service.closeInterruptedHelps()).toBe(0)
+    expect(await service.closeInterruptedHelps(START)).toBe(0)
     expect((await service.snapshot()).events.length).toBe(events)
   })
 })
