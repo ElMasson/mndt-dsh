@@ -25,11 +25,57 @@ const assistant = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provide
 const analyste = { id: 'agt_2', handle: 'analyste', name: 'Analyste', provider: 'scaleway-genapi', model: 'glm-5.3', connectors: [], eurPerMonth: 5, eurThisMonth: 0, createdBy: you, createdAt: at(-600) }
 const channel = { id: 'chn_1', name: 'recouvrement', title: 'recouvrement', kind: 'team' as const, members: [you, 'smarion@datanalysis.re'], agents: ['agt_1'], connectors: ['qonto'], createdBy: you, createdAt: at(-600) }
 const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at(-600) }
+const redacteur = { id: 'agt_3', handle: 'redacteur', name: 'Rédacteur', provider: 'scaleway-genapi', model: 'qwen-3.5', connectors: [], eurPerMonth: 5, eurThisMonth: 0.02, createdBy: you, createdAt: at(-600) }
+const synthese = { id: 'agt_4', handle: 'synthese', name: 'Synthèse', provider: 'scaleway-genapi', model: 'glm-5.3', connectors: [], eurPerMonth: 5, eurThisMonth: 0.01, createdBy: you, createdAt: at(-600) }
+// Two coordinated channels (simulated): an author then a verifier, and parts in parallel then a synthesis.
+const relecture = {
+  id: 'chn_2', name: 'relecture', title: 'relecture', kind: 'team' as const, members: [you], agents: ['agt_1', 'agt_2', 'agt_3'], connectors: [],
+  createdBy: you, createdAt: at(-600), coordination: { mode: 'author-verifier', authorId: 'agt_1', verifierId: 'agt_2' },
+}
+const parallele = {
+  id: 'chn_3', name: 'veille', title: 'veille', kind: 'team' as const, members: [you], agents: ['agt_1', 'agt_2', 'agt_3', 'agt_4'], connectors: [],
+  createdBy: you, createdAt: at(-600), coordination: { mode: 'parallel-synthesis', workerIds: ['agt_1', 'agt_3'], synthesizerId: 'agt_4', maxEurPerTurn: 1 },
+}
 const chat = createMockChat({
   you,
-  agents: [assistant, analyste],
-  channels: [lane, channel],
+  agents: [assistant, analyste, redacteur, synthese],
+  channels: [lane, channel, relecture, parallele],
   messages: [
+    {
+      id: 'msg_21', channelId: 'chn_2', author: { kind: 'human', email: you }, text: '@assistant rédige la relance Sodiac', mentions: ['agt_1'], createdAt: at(1), updatedAt: at(2),
+      turns: [{
+        id: 'trn_21', agentId: 'agt_1', status: 'done', eur: 0.0062, startedAt: at(1), finishedAt: at(2),
+        steps: [
+          { role: 'author', agentId: 'agt_1', tokens: { input: 3100, output: 420 }, eur: 0.0021 },
+          { role: 'verifier', agentId: 'agt_2', tokens: { input: 1200, output: 160 }, eur: 0.0018, verdict: 'issues', notes: ['Le montant ne correspond pas à FA2610-031 (1 640,00 €).'] },
+          { role: 'revision', agentId: 'agt_1', tokens: { input: 3500, output: 430 }, eur: 0.0023 },
+        ],
+      }],
+    },
+    { id: 'msg_22', channelId: 'chn_2', author: { kind: 'agent', agentId: 'agt_1' }, replyTo: 'msg_21', text: 'Relance prête, montant corrigé : 1 640,00 €.', mentions: [], createdAt: at(2), updatedAt: at(2) },
+    {
+      id: 'msg_23', channelId: 'chn_2', author: { kind: 'human', email: you }, text: '@assistant prépare le récapitulatif des impayés', mentions: ['agt_1'], createdAt: at(5), updatedAt: at(6),
+      turns: [{
+        id: 'trn_23', agentId: 'agt_1', status: 'done', eur: 0.0019, startedAt: at(5), finishedAt: at(6),
+        steps: [
+          { role: 'author', agentId: 'agt_1', eur: 0.0019 },
+          { role: 'verifier', agentId: 'agt_2', verdict: 'skipped', notes: ['plafond mensuel de @analyste atteint'] },
+        ],
+      }],
+    },
+    { id: 'msg_24', channelId: 'chn_2', author: { kind: 'agent', agentId: 'agt_1' }, replyTo: 'msg_23', text: 'Récapitulatif : 3 factures, 4 210,00 €.', mentions: [], createdAt: at(6), updatedAt: at(6) },
+    {
+      id: 'msg_31', channelId: 'chn_3', author: { kind: 'human', email: you }, text: '@synthese que disent les appels d\'offres de la semaine ?', mentions: ['agt_4'], createdAt: at(1), updatedAt: at(3),
+      turns: [{
+        id: 'trn_31', agentId: 'agt_4', status: 'done', eur: 0.0105, startedAt: at(1), finishedAt: at(3),
+        steps: [
+          { role: 'worker', agentId: 'agt_1', text: 'Région Réunion : 2 appels BI, clôture le 05/12.', eur: 0.004 },
+          { role: 'worker', agentId: 'agt_3', verdict: 'skipped', notes: ['le coût du tour atteindrait sa borne (1 €)'] },
+          { role: 'synthesis', agentId: 'agt_4', eur: 0.0065 },
+        ],
+      }],
+    },
+    { id: 'msg_32', channelId: 'chn_3', author: { kind: 'agent', agentId: 'agt_4' }, replyTo: 'msg_31', text: 'Deux appels BI à la Région, clôture le 05/12 ; une source n\'a pas répondu.', mentions: [], createdAt: at(3), updatedAt: at(3) },
     { id: 'msg_1', channelId: 'chn_1', author: { kind: 'human', email: 'smarion@datanalysis.re' }, text: 'Sodiac n\'a toujours pas réglé FA2610-031.', mentions: [], createdAt: at(0), updatedAt: at(0) },
     {
       id: 'msg_2', channelId: 'chn_1', author: { kind: 'human', email: you }, text: '@assistant prépare un brouillon de relance pour Sodiac', mentions: ['agt_1'], createdAt: at(3), updatedAt: at(4),
