@@ -33,6 +33,7 @@ import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
+import { warnOperator } from './operator-log.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -164,7 +165,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
     this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
     this.automationsPath = join(dirname(this.statePath), 'automations.json')
-    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath), warn: (message) => { ctx.logger.warn(message) } })
+    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath), warn: (message) => { warnOperator(ctx, message) } })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
     this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
@@ -174,9 +175,9 @@ export class WorkbenchGateway extends TypertRemoteService {
     // tenant's own role file, else the local owner alone (solo mode).
     const grantsFile = process.env.DSH_MNDT_GRANTS_FILE
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
-      ? authorityGrants({ baseUrl, token }, (message) => { ctx.logger.warn(message) })
+      ? authorityGrants({ baseUrl, token }, (message) => { warnOperator(ctx, message) })
       : grantsFile !== undefined && grantsFile !== ''
-        ? fileGrants(grantsFile, (message) => { ctx.logger.warn(message) })
+        ? fileGrants(grantsFile, (message) => { warnOperator(ctx, message) })
         : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleAutomations(ctx)
@@ -201,7 +202,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // without it, the API never believes the proxy's identity header.
     const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
     if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
-      ctx.logger.warn('mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
+      warnOperator(ctx, 'mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
     }
     const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
       startMndtApi({
@@ -259,7 +260,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           await this.service.failMission(mission.id, 'interrupted by a workbench restart; no result was produced')
         }
         if (stuck.length > 0) {
-          ctx.logger.warn(`mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
+          warnOperator(ctx, `mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
         }
       } catch (error) {
         ctx.logger.error(`mndt: could not reconcile interrupted missions: ${error instanceof Error ? error.message : String(error)}`)
@@ -323,7 +324,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            ctx.logger.warn('mndt: automations skipped: the role table names no owner, or cannot be read')
+            warnOperator(ctx, 'mndt: automations skipped: the role table names no owner, or cannot be read')
             return
           }
           if (team) {
@@ -336,7 +337,7 @@ export class WorkbenchGateway extends TypertRemoteService {
                 const reason = stray.some(item => item.id === candidate.id) ? automationRefusal(candidate, true, owners) : undefined
                 return reason === undefined ? candidate : { ...candidate, enabled: false, lastOutcome: reason }
               })
-              for (const item of stray) ctx.logger.warn(`mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
+              for (const item of stray) warnOperator(ctx, `mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
               items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
@@ -347,7 +348,7 @@ export class WorkbenchGateway extends TypertRemoteService {
             fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
           }
         } catch (error) {
-          ctx.logger.warn(`mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
+          warnOperator(ctx, `mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
         }
       })()
     }
