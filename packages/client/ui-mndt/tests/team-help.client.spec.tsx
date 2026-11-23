@@ -181,3 +181,12 @@ describe('a question waiting is never hidden by « close sans lecture »', () =>
     expect(screen.getByRole('button', { name: 'Répondre et clore ce fil' })).toBeTruthy()
   })
 })
+
+describe('a help\'s authors only once read and no question waits (#119)', () => {
+  it('read but asking a person: the advices stay unnamed; answered, named', () => {
+    const waiting = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'Q ?', messageId: 'msg_9' } })
+    expect(waiting.advices.every(a => a.agentId === undefined && a.eur === undefined)).toBe(true)
+    const answered = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'Q ?', messageId: 'msg_9', answeredAt: at } })
+    expect(answered.advices[0]?.agentId).toBe('agt_2')
+  })
+})

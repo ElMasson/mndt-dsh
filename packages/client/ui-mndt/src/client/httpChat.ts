@@ -83,6 +83,10 @@ export function createHttpChat(
     cards: async () =>
       (await get<{ approvals: ChatCard[] }>('/approvals?state=all')).approvals,
     agents: async () => (await get<{ agents: ChatAgent[] }>('/agents')).agents,
+    unattributedEur: async () => {
+      const eur = (await get<{ eurUnattributedThisMonth?: unknown }>('/agents')).eurUnattributedThisMonth
+      return typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? eur : undefined
+    },
     addAgents: async (channelId, agentIds) =>
       (
         await post<{ channel: ChatChannel }>(
@@ -113,13 +117,14 @@ export function createHttpChat(
       return (Array.isArray(body.escalations) ? body.escalations : []).flatMap((row: unknown): OpenEscalation[] => {
         const e = row as Partial<Record<keyof OpenEscalation, unknown>> | null
         if (e === null || typeof e !== 'object') return []
-        const { channelId, turnId, messageId, questionMessageId, question, summary, at } = e
+        const { channelId, turnId, messageId, questionMessageId, question, summary, at, kind } = e
         if (typeof channelId !== 'string' || typeof turnId !== 'string' || typeof messageId !== 'string'
           || typeof questionMessageId !== 'string' || typeof question !== 'string' || question.trim() === '') return []
         return [{
           channelId, turnId, messageId, questionMessageId, question: question.slice(0, 2000),
           ...(typeof summary === 'string' && summary.trim() !== '' ? { summary: summary.slice(0, 4000) } : {}),
           ...(typeof at === 'string' ? { at } : {}),
+          ...(kind === 'help' || kind === 'council' ? { kind } : {}),
         }]
       })
     },

@@ -23,7 +23,7 @@ const AGENTS = [
 ]
 
 /** @param role - the reader's role. @returns the page on Agents, over a double. */
-async function open(role: string, agents: readonly ChatAgent[] = AGENTS) {
+async function open(role: string, agents: readonly ChatAgent[] = AGENTS, unattributedEur?: number) {
   const page: PageStateRow = { you, canWrite: true, canAdmin: role !== 'operator', role, missions: [], briefs: [], approvals: [], memories: [] }
   const api = new Proxy({}, {
     get: (_t, key) => key === 'state' ? async () => page : key === 'members' || key === 'search' ? async () => [] : async () => { throw new Error('non utilise') },
@@ -31,6 +31,7 @@ async function open(role: string, agents: readonly ChatAgent[] = AGENTS) {
   const chat = createMockChat({
     you, agents, channels: [],
     mounted: [{ module: 'm', server: 'qonto', enabled: true }, { module: 'm', server: 'dolibarr', enabled: false }],
+    ...(unattributedEur === undefined ? {} : { unattributedEur }),
   }, () => Date.parse(at))
   render(<CollabPage api={api} chat={chat} tc={chatFrench} team={{}} />)
   const nav = await screen.findByTestId('side-nav')
@@ -177,5 +178,20 @@ describe('the agent sheet, after review of #81', { timeout: 20_000 }, () => {
     expect(purpose instanceof HTMLTextAreaElement && purpose.maxLength).toBe(2000)
     type(form, 'À quoi il sert', 'abc')
     expect(within(form).getByText('3 / 2000')).toBeTruthy()
+  })
+})
+
+describe('councils not named, at the level of the space (#119)', { timeout: 20_000 }, () => {
+  it('shown in the Agents view when above zero, never on an agent\'s sheet', async () => {
+    const { view } = await open('owner', AGENTS, 0.12)
+    expect((await within(view).findByTestId('agents-unattributed')).textContent).toMatch(/dont 0,12\s€ de conseils non nommés/u)
+    fireEvent.click(within(view).getByRole('button', { name: 'Voir Analyste' }))
+    expect((await screen.findByTestId('agent-sheet')).textContent).not.toMatch(/non nommés/u)
+  })
+
+  it('nothing said at zero', async () => {
+    const { view } = await open('owner', AGENTS, 0)
+    await within(view).findAllByTestId('team-agent')
+    expect(within(view).queryByTestId('agents-unattributed')).toBeNull()
   })
 })
