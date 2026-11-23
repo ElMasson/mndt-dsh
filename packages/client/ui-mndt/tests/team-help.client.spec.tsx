@@ -156,3 +156,19 @@ describe('closed by a person during the reading (#113, dd6922e2c9)', () => {
     expect(screen.getByTestId('help-skipped').textContent).toContain('avis non obtenu : plafond')
   })
 })
+
+describe('a help ended without a reading (#116)', () => {
+  it('says « close sans lecture » with the core\'s reason, and offers no field', () => {
+    const help = read({ state: 'done', request, advices: [], skipped: [{ reason: 'redémarrage' }] })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} originMessageId="msg_1" canAnswer t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('close sans lecture : redémarrage')
+    expect(screen.queryByRole('button', { name: 'Répondre et clore ce fil' })).toBeNull()
+    const steps = screen.getByTestId('help-steps')
+    expect(steps instanceof HTMLDetailsElement && steps.open).toBe(false)
+  })
+
+  it('without a reason: « close sans lecture »', () => {
+    render(<HelpThread help={read({ state: 'done', request, advices })} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('close sans lecture')
+  })
+})
