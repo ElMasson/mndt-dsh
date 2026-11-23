@@ -338,6 +338,8 @@ export function ChannelThread(props: {
   readonly mounted?: readonly MountedConnector[] | undefined
   /** Whether the reader owns the team (the mndt-web look). */
   readonly isOwner?: boolean | undefined
+  /** Whether the reader's answer to an agent counts (workflows.write). */
+  readonly canAnswer?: boolean | undefined
   /** A text to put in the composer from elsewhere (the panel's « Demander à @agent »). */
   readonly seed?: { readonly text: string; readonly at: number } | undefined
   /** An empty lane's welcome (the mndt-web look): the team channels open to the person, the cards waiting. */
@@ -477,6 +479,7 @@ export function ChannelThread(props: {
                 offered={props.offered}
                 channel={channel}
                 onAnswer={answer}
+                canAnswer={props.canAnswer}
                 t={t}
               />
             </div>

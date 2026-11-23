@@ -148,8 +148,9 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
     const text = textOf(a?.text)
     if (a === undefined || slot === undefined || text === undefined) continue
     const round = typeof a.round === 'number' && Number.isInteger(a.round) && a.round >= 1 ? a.round : 1
-    const eur = amountOf(a.eur)
-    const tokens = tokensOf(a.tokens)
+    // Before the asking agent has read them, nothing per advice beyond its text: no cost, no author.
+    const eur = reading === undefined ? undefined : amountOf(a.eur)
+    const tokens = reading === undefined ? undefined : tokensOf(a.tokens)
     const agentId = reading === undefined ? undefined : textOf(a.agentId)
     const model = reading === undefined ? undefined : textOf(a.model)
     advices.push({
@@ -207,8 +208,12 @@ function stateWord(help: TurnHelp, t: ChatTranslate): string {
 export function HelpThread(props: {
   readonly help: TurnHelp
   readonly agents: ReadonlyMap<string, ChatAgent>
-  /** Post the person's answer in the thread, as a reply to the published question. */
+  /** Post the person's answer in the thread, as a reply to the message given. */
   readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
+  /** The message whose turn asked: a reply to it closes a help still running. */
+  readonly originMessageId?: string | undefined
+  /** Whether the reader's answer counts (workflows.write): a viewer is offered no field. */
+  readonly canAnswer?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { help, t } = props
@@ -222,13 +227,33 @@ export function HelpThread(props: {
   const total = help.eur ?? help.advices.reduce((sum, a) => sum + (a.eur ?? 0), 0)
   const name = (id: string): string => `@${props.agents.get(id)?.handle ?? id}`
   const send = async (): Promise<void> => {
-    if (props.onAnswer === undefined || escalation?.messageId === undefined || answer.trim() === '' || busy) return
+    if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
     setBusy(true)
-    const refused = await props.onAnswer(answer.trim(), escalation.messageId)
+    const refused = await props.onAnswer(answer.trim(), target)
     setError(refused)
     if (refused === undefined) setAnswer('')
     setBusy(false)
   }
+  // Where a person's answer goes: the published question when the agent asks; the turn's own message
+  // while the help runs (it closes it). Only an answer that counts is offered.
+  const target = props.canAnswer !== true ? undefined
+    : waiting ? escalation.messageId
+      : running ? props.originMessageId : undefined
+  const answerField = props.onAnswer === undefined || target === undefined ? undefined : (
+    <div className="mw-help-answer">
+      <textarea
+        className="mw-input"
+        rows={2}
+        aria-label={t('helpAnswerLabel')}
+        value={answer}
+        onChange={(event) => { setAnswer(event.target.value) }}
+      />
+      <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>
+        {t('helpAnswer')}
+      </button>
+      {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
+    </div>
+  )
   return (
     <div className="mw-help" data-testid="turn-help" data-state={running ? 'running' : 'done'}>
       <p className="mw-help-line">
@@ -241,23 +266,10 @@ export function HelpThread(props: {
         <div className="mw-turn-unchecked mw-help-question" role="note" data-testid="help-question">
           <p className="mw-help-question-text">{t('helpQuestionFor', { question: escalation.question })}</p>
           {escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(escalation.summary, { plainHeadings: true })}</div>}
-          {props.onAnswer === undefined || escalation.messageId === undefined ? undefined : (
-            <div className="mw-help-answer">
-              <textarea
-                className="mw-input"
-                rows={2}
-                aria-label={t('helpAnswerLabel')}
-                value={answer}
-                onChange={(event) => { setAnswer(event.target.value) }}
-              />
-              <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>
-                {t('helpAnswer')}
-              </button>
-              {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
-            </div>
-          )}
+          {answerField}
         </div>
       ) : undefined}
+      {running ? answerField : undefined}
       <details className="mw-turn-steps" data-testid="help-steps" open={running}>
         <summary>{t('helpDetail')}</summary>
         <dl className="mw-sheet-view" data-testid="help-request">

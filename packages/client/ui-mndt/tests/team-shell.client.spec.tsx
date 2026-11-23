@@ -671,3 +671,23 @@ describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20
     expect(arrival.textContent).toContain('un owner ou un admin ouvre votre accès')
   })
 })
+
+describe('À traiter lists the agents\' open questions (GET /escalations)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-23T08:00:00.000Z'
+  const team = { id: 'chn_1', name: 'compta', title: 'compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  it('each question with its summary and a link to its channel; counted in the badge', async () => {
+    const chat = createMockChat({
+      you, agents: [], channels: [team],
+      escalations: [{ channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: 'msg_2', question: 'Quel montant retenir ?', summary: 'A dit 1 640 €, B dit 1 460 €.', at }],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ approvals: [] }))} chat={chat} tc={chatFrench} team={{}} />)
+    const nav = await screen.findByTestId('side-nav')
+    await waitFor(() => { expect(within(nav).getByLabelText('1 en attente')).toBeTruthy() })
+    fireEvent.click(within(nav).getByRole('button', { name: /À traiter/u }))
+    const question = await screen.findByTestId('pending-question')
+    expect(question.textContent).toContain('Question pour vous : Quel montant retenir ?')
+    fireEvent.click(within(question).getByRole('button', { name: 'Répondre dans # compta' }))
+    expect(await screen.findByRole('heading', { name: '# compta' })).toBeTruthy()
+  })
+})

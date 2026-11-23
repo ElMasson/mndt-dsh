@@ -295,6 +295,8 @@ export function WebMessage(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly mounted?: readonly MountedConnector[] | undefined
   readonly isOwner?: boolean | undefined
+  /** Whether the reader's answer to an agent counts (workflows.write). */
+  readonly canAnswer?: boolean | undefined
   /** Post a person's answer to an agent's question, as a reply to it. */
   readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
   readonly channel?: ChatChannel | undefined
@@ -352,7 +354,9 @@ export function WebMessage(props: {
         return (
           <Fragment key={turn.id}>
             <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
-            {help === undefined ? undefined : <HelpThread help={help} agents={agents} onAnswer={props.onAnswer} t={t} />}
+            {help === undefined ? undefined : (
+              <HelpThread help={help} agents={agents} onAnswer={props.onAnswer} originMessageId={m.id} canAnswer={props.canAnswer} t={t} />
+            )}
           </Fragment>
         )
       })}

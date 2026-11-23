@@ -83,7 +83,7 @@ describe('the help under a turn', () => {
     const onAnswer = vi.fn(async () => undefined)
     const help = read({ state: 'done', request, advices, reading: { verdict: 'escalate', retained: '', why: 'avis divergents' },
       escalation: { question: 'Quel montant retenir ?', summary: 'A dit 1 640 €, B dit 1 460 €.', messageId: 'msg_9' } })
-    render(<HelpThread help={help} agents={agents} onAnswer={onAnswer} t={chatFrench} />)
+    render(<HelpThread help={help} agents={agents} onAnswer={onAnswer} canAnswer t={chatFrench} />)
     expect(screen.getByTestId('help-state').textContent).toBe('une question pour vous')
     const question = screen.getByTestId('help-question')
     expect(question.textContent).toContain('Question pour vous : Quel montant retenir ?')
@@ -94,7 +94,7 @@ describe('the help under a turn', () => {
 
   it('answered, or closed by a person: said; no field any more', () => {
     const answered = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'Q ?', answeredAt: at, messageId: 'msg_9' } })
-    const { unmount } = render(<HelpThread help={answered} agents={agents} onAnswer={vi.fn()} t={chatFrench} />)
+    const { unmount } = render(<HelpThread help={answered} agents={agents} onAnswer={vi.fn()} canAnswer t={chatFrench} />)
     expect(screen.getByTestId('help-state').textContent).toBe('répondu par une personne')
     expect(screen.queryByTestId('help-question')).toBeNull()
     unmount()
@@ -117,5 +117,28 @@ describe('a card born of a mutual help', () => {
     const card = { id: 'apr_h', kind: 'send-email', title: 'Relancer Sodiac', requestedBy: you, requestedAt: at, state: 'pending' as const, canDecide: true }
     render(<WebCard card={card} canDecide onDecide={vi.fn()} fromHelp t={chatFrench} />)
     expect(screen.getByTestId('card-from-help').textContent).toBe('d\'une entraide')
+  })
+})
+
+describe('who answers, and when (#113)', () => {
+  it('a viewer, whose answer would not count, is offered no field', () => {
+    const help = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'Q ?', messageId: 'msg_9' } })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} canAnswer={false} t={chatFrench} />)
+    expect(screen.getByTestId('help-question').textContent).toContain('Q ?')
+    expect(screen.queryByRole('button', { name: 'Répondre et clore ce fil' })).toBeNull()
+  })
+
+  it('while the help runs, a member closes it by answering the turn\'s own message', async () => {
+    const onAnswer = vi.fn(async () => undefined)
+    render(<HelpThread help={read({ state: 'advising', request, advices })} agents={agents} onAnswer={onAnswer} originMessageId="msg_1" canAnswer t={chatFrench} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Votre réponse' }), { target: { value: 'Prenez 1 640 €.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Répondre et clore ce fil' }))
+    await waitFor(() => { expect(onAnswer).toHaveBeenCalledWith('Prenez 1 640 €.', 'msg_1') })
+  })
+
+  it('before reading, no cost per advice is read, even if served; the total is', () => {
+    const h = read({ state: 'advising', request, advices, eur: 0.003 })
+    expect(h.advices.every(a => a.eur === undefined && a.tokens === undefined)).toBe(true)
+    expect(h.eur).toBe(0.003)
   })
 })
