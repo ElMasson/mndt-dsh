@@ -116,7 +116,11 @@ export const MAX_EUR_PER_MONTH = 50
 export const MAX_INSTRUCTIONS = 2000
 /** The longest name of an agent: it enters the turn prompt of every agent of its channels. */
 export const MAX_AGENT_NAME = 60
-/** The propose_agent cards one requester may have pending at once. */
+/**
+ * The propose_agent cards that may wait at once, per person who asked and,
+ * for a card asked during a turn, per agent too: an agent mentioned by several
+ * members must not file three cards for each of them.
+ */
 export const MAX_PENDING_PROPOSALS = 3
 
 /** An MCP server name, as the MCP client accepts it. */
@@ -495,9 +499,15 @@ export class WorkbenchService {
     }
     return this.#write((state) => {
       if (approval.kind === 'propose_agent') {
-        const pending = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending' && card.requestedBy === approval.requestedBy)
-        if (pending.length >= MAX_PENDING_PROPOSALS) {
+        const waiting = state.approvals.filter(card => card.kind === 'propose_agent' && card.state === 'pending')
+        // Both limits hold together: per person who asked, and per agent when the
+        // card was asked during a turn (requestedByAgent, set by the server).
+        if (waiting.filter(card => card.requestedBy === approval.requestedBy).length >= MAX_PENDING_PROPOSALS) {
           throw new Error(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
+        }
+        const agent = approval.requestedByAgent
+        if (agent !== undefined && waiting.filter(card => card.requestedByAgent?.id === agent.id).length >= MAX_PENDING_PROPOSALS) {
+          throw new Error(`@${agent.handle} already has ${MAX_PENDING_PROPOSALS} agent proposals waiting for a decision: decide them first`)
         }
       }
       return {
