@@ -18,6 +18,9 @@ set -uo pipefail
 die() { echo "KO $1  $2"; exit 1; }
 image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
+# The checks a full run makes, by name, each printed once OK or KO (the exit
+# trap compares): change the list with the checks.
+EXPECTED_CHECKS=$here/expected-checks-rehearse.txt
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 project=mndt-rehearsal
@@ -54,7 +57,21 @@ cleanup() {
   if [ -n "${tee_pid:-}" ]; then exec 1>&3 2>&4; wait "$tee_pid" 2>/dev/null; fi
   total_ok=$(grep -acE '^OK ' "$root/output.log" 2>/dev/null) || total_ok=0
   total_ko=$(grep -acE '^KO ' "$root/output.log" 2>/dev/null) || total_ko=0
-  echo "TOTAL ok=$total_ok ko=$total_ko"
+  # Every check the run must make, by name: a check skipped without an error
+  # (a condition that jumps a block, an early return) prints neither OK nor KO,
+  # and a check printed twice would hide it in a mere count. The KO lines
+  # about the run itself are not checks.
+  grep -aE '^(OK|KO) ' "$root/output.log" 2>/dev/null \
+    | grep -avE '^KO +(aborted|drive-exit|missing-checks|duplicate-check|unexpected-check) ' \
+    | awk '{ print $2 }' > "$root/checks-seen.txt"
+  grep -v '^#' "$EXPECTED_CHECKS" | sort -u > "$root/checks-expected.txt"
+  expected=$(grep -c . "$root/checks-expected.txt") || expected=0
+  missing=$(sort -u "$root/checks-seen.txt" | comm -23 "$root/checks-expected.txt" - | tr '\n' ' ')
+  unexpected=$(sort -u "$root/checks-seen.txt" | comm -13 "$root/checks-expected.txt" - | tr '\n' ' ')
+  if [ -n "$missing" ]; then echo "KO missing-checks ${missing% }"; total_ko=$((total_ko + 1)); fi
+  for name in $(sort "$root/checks-seen.txt" | uniq -d); do echo "KO duplicate-check $name"; total_ko=$((total_ko + 1)); done
+  if [ -n "$unexpected" ]; then echo "KO unexpected-check ${unexpected% }  printed, not declared in $(basename "$EXPECTED_CHECKS")"; total_ko=$((total_ko + 1)); fi
+  echo "TOTAL ok=$total_ok ko=$total_ko expected=$expected"
   echo "rehearsal root: $root"
   if [ "$total_ko" -gt 0 ] || [ "${verdict:-1}" != 0 ]; then exit 1; fi
 }
@@ -130,6 +147,20 @@ deposit() {
   echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
   [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
 }
+# The managed route answered by the fake model, in this rehearsal's copy of the
+# patch only: the coordinated turns need models of their own, priced as on the
+# instance. The tenant's own rendering keeps the real URL: checked below.
+fake_scaleway() {
+  sed -i 's#baseURL: https://api.scaleway.ai/[^ ]*#baseURL: http://fakellm:8000/v1#' "$data/home/cordis.patch.yml"
+  real=$(MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" --print | grep -c 'baseURL: https://api.scaleway.ai/') || real=0
+  copied=$(grep -c 'baseURL: http://fakellm:8000/v1' "$data/home/cordis.patch.yml") || copied=0
+  template=$(grep -c 'api.scaleway.ai' "$deploy/llm/routes.patch.yml.template") || template=0
+  if [ "$real" -ge 1 ] && [ "$template" -ge 1 ] && [ "$copied" -ge 2 ]; then
+    echo "OK  routes-real-scaleway  the tenant's rendering keeps https://api.scaleway.ai/ ($real), the rehearsal's copy alone points both routes at the fake model ($copied)"
+  else
+    echo "KO  routes-real-scaleway  rendering $real, template $template, rehearsal copy $copied: the fake URL must stay in the rehearsal's copy"
+  fi
+}
 step() { last_step=$*; printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
@@ -154,6 +185,7 @@ CANARY_SECRET_MODEL_ENV=CANARY_SECRET_model_env_value
 MNDT_PROBE_DSN=postgres://team:CANARY_SECRET_innocuous_live@db:5432/team
 ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || die routes "the LLM routes were not written"
+fake_scaleway
 # An admin who is not the owner: missions and automations stay closed to them.
 printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
@@ -253,6 +285,9 @@ if page_ready 150; then echo "the page is ready (launch token published)"; else 
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
 MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+# A drive that dies prints no KO for the checks it never reached: say it, or
+# the TOTAL reads ko=0 over a run cut short.
+[ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"
 # The model.env canary is in the workbench's environment (env_file): the probe

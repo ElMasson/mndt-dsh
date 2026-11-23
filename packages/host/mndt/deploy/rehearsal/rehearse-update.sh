@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# The update of an instance installed before the shared patch guard, rehearsed on
-# this machine, as the guide's step 13 does it on the server:
-#   A. the instance of 13/11: the tenant scripts of OLD_REF (before #27..#36) and
-#      their image; seed-team.sh appends its block after the `[]` dsh writes, the
-#      workbench restarts in a loop; repaired by hand as on the instance (the `[]`
-#      line removed), the old installed renderer left in place;
+# The update of an installed instance, rehearsed on this machine, as the
+# guide's step 13 does it on the server:
+#   A. the instance as installed at OLD_REF: that commit's tenant scripts and
+#      its image, its own seed-team.sh, an automation briefing run by the owner;
 #   B. step 13 with this checkout: create-tenant.sh with the same arguments, the
 #      LLM routes, the containers recreated on the new image, seed-team.sh, the
 #      installed renderer run as install-connectors.sh runs it, a restart, both
@@ -13,11 +11,13 @@
 # by the identity header given to the gateway.
 #
 #   rehearse-update.sh <old image> <new image> [rehearsal root]
-# OLD_REF (default 96d2801d8a, the 13/11 breakage) names the old tenant scripts. OLD_STATE=installed
-# starts instead from an instance installed and working at OLD_REF, required then
-# (47169065bf, the one of 14/11): no 13/11 breakage to reproduce; an automation briefing runs
-# on it first, so the update must stop serving that old shared brief to the
-# team. KEEP=1 leaves the containers running.
+# OLD_REF (required) names the commit the instance runs: the rehearsal starts
+# from an instance installed and working there, with that commit's tenant
+# scripts; an automation briefing runs on it first, so the update must stop
+# serving an old shared brief to the team. OLD_STATE, if given, must be
+# « installed »: the departure from the broken 13/11 instance (OLD_STATE=broken)
+# was retired on 23/11, the instance having left it behind and its reference
+# image being gone. KEEP=1 leaves the containers running.
 # NEW_REF names the new version's tenant scripts (phase B: create-tenant.sh,
 # seed-team.sh, the tools copied to tools/, the patch checks), extracted from
 # that commit as OLD_REF's are; the harness (deploy/rehearsal) stays the
@@ -32,9 +32,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 . "$here/checks.sh"
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
-old_ref=${OLD_REF:-96d2801d8a}
-old_state=${OLD_STATE:-broken}
-if [ "$old_state" = installed ] && [ -z "${OLD_REF:-}" ]; then echo "refused: OLD_STATE=installed needs OLD_REF, the commit the instance runs (47169065bf on 16/11)" >&2; exit 2; fi
+old_state=${OLD_STATE:-installed}
+if [ "$old_state" != installed ]; then echo "KO unknown-old-state  OLD_STATE=$old_state: only « installed » is rehearsed (the 13/11 departure was retired on 23/11)" >&2; exit 2; fi
+if [ -z "${OLD_REF:-}" ]; then echo "refused: OLD_REF is required, the commit the instance runs (9979d2532e before the second jump)" >&2; exit 2; fi
+old_ref=$OLD_REF
+# The checks a full run makes, by name, each printed once OK or KO (the exit
+# trap compares): change the list with the checks.
+EXPECTED_CHECKS=$here/expected-checks-update.txt
 project=mndt-rehearsal
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
@@ -69,7 +73,21 @@ cleanup() {
   if [ -n "${tee_pid:-}" ]; then exec 1>&3 2>&4; wait "$tee_pid" 2>/dev/null; fi
   total_ok=$(grep -acE '^OK ' "$root/output.log" 2>/dev/null) || total_ok=0
   total_ko=$(grep -acE '^KO ' "$root/output.log" 2>/dev/null) || total_ko=0
-  echo "TOTAL ok=$total_ok ko=$total_ko"
+  # Every check the run must make, by name: a check skipped without an error
+  # (a condition that jumps a block, an early return) prints neither OK nor KO,
+  # and a check printed twice would hide it in a mere count. The KO lines
+  # about the run itself are not checks.
+  grep -aE '^(OK|KO) ' "$root/output.log" 2>/dev/null \
+    | grep -avE '^KO +(aborted|drive-exit|missing-checks|duplicate-check|unexpected-check) ' \
+    | awk '{ print $2 }' > "$root/checks-seen.txt"
+  grep -v '^#' "$EXPECTED_CHECKS" | sort -u > "$root/checks-expected.txt"
+  expected=$(grep -c . "$root/checks-expected.txt") || expected=0
+  missing=$(sort -u "$root/checks-seen.txt" | comm -23 "$root/checks-expected.txt" - | tr '\n' ' ')
+  unexpected=$(sort -u "$root/checks-seen.txt" | comm -13 "$root/checks-expected.txt" - | tr '\n' ' ')
+  if [ -n "$missing" ]; then echo "KO missing-checks ${missing% }"; total_ko=$((total_ko + 1)); fi
+  for name in $(sort "$root/checks-seen.txt" | uniq -d); do echo "KO duplicate-check $name"; total_ko=$((total_ko + 1)); done
+  if [ -n "$unexpected" ]; then echo "KO unexpected-check ${unexpected% }  printed, not declared in $(basename "$EXPECTED_CHECKS")"; total_ko=$((total_ko + 1)); fi
+  echo "TOTAL ok=$total_ok ko=$total_ko expected=$expected"
   echo "rehearsal root: $root"
   if [ "$total_ko" -gt 0 ] || [ "${verdict:-1}" != 0 ]; then exit 1; fi
 }
@@ -146,6 +164,20 @@ deposit() {
   echo "deposit of 4 MiB (3 MiB of content): HTTP $code (the API answers: 404 for a channel that does not exist)"
   [ "$code" != 413 ] && [ "$code" != 401 ] && [ "$code" != 000 ]
 }
+# The managed route answered by the fake model, in this rehearsal's copy of the
+# patch only: the coordinated turns need models of their own, priced as on the
+# instance. The tenant's own rendering keeps the real URL: checked below.
+fake_scaleway() {
+  sed -i 's#baseURL: https://api.scaleway.ai/[^ ]*#baseURL: http://fakellm:8000/v1#' "$data/home/cordis.patch.yml"
+  real=$(MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" --print | grep -c 'baseURL: https://api.scaleway.ai/') || real=0
+  copied=$(grep -c 'baseURL: http://fakellm:8000/v1' "$data/home/cordis.patch.yml") || copied=0
+  template=$(grep -c 'api.scaleway.ai' "$deploy/llm/routes.patch.yml.template") || template=0
+  if [ "$real" -ge 1 ] && [ "$template" -ge 1 ] && [ "$copied" -ge 2 ]; then
+    echo "OK  routes-real-scaleway  the tenant's rendering keeps https://api.scaleway.ai/ ($real), the rehearsal's copy alone points both routes at the fake model ($copied)"
+  else
+    echo "KO  routes-real-scaleway  rendering $real, template $template, rehearsal copy $copied: the fake URL must stay in the rehearsal's copy"
+  fi
+}
 step() { last_step=$*; printf '\n== %s\n' "$*"; }
 health() {
   for _ in $(seq 1 "${1:-80}"); do
@@ -175,7 +207,7 @@ seed() { # <deploy dir>
     bash "$1/tenant/seed-team.sh" datanalysis --owner $owner
 }
 
-step "A1. the instance of 13/11: tenant scripts of $old_ref, image $old_image (root $root)"
+step "A1. the instance as installed: tenant scripts of $old_ref, image $old_image (root $root)"
 git -C "$repo" archive "$old_ref" packages/host/mndt/deploy | tar -x -C "$root/old" || die old-archive "cannot extract the tenant scripts of $old_ref"
 old=$root/old/packages/host/mndt/deploy
 if [ -n "${NEW_REF:-}" ]; then
@@ -201,24 +233,9 @@ done
 # An admin who is not the owner too: the drive checks that missions stay closed to them.
 printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
 compose_for "$old_image"
-# An installed instance (OLD_STATE=installed) has the tenant topology since #56:
-# the gateway listens on the ingress network only, behind the signing proxy.
-# The direct port below is the 13/11 instance's (OLD_STATE=broken) alone; with
-# it, an installed instance answers nowhere and phase A proves nothing.
-if [ "$old_state" = installed ]; then signed_override; else
-cat > "$root/compose.override.yml" <<YML
-services:
-  gateway:
-    ports: ["127.0.0.1:18080:8080"]
-  workbench:
-    # Nothing leaves this machine: the managed endpoint answers nowhere.
-    extra_hosts: ["api.scaleway.ai:127.0.0.1"]
-  fakellm:
-    image: node:22-bookworm-slim
-    command: ["node", "/opt/fake/fake-llm.mjs"]
-    volumes: ["$here:/opt/fake:ro"]
-YML
-fi
+# An installed instance has the tenant topology since #56: the gateway listens
+# on the ingress network only, behind the signing proxy.
+signed_override
 # Readable by the containers, but never under home/: the workbench refuses a
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
@@ -226,59 +243,35 @@ node "$here/up-run.mjs" "$root/compose.yml" "$root/compose.override.yml" $projec
 if health 80; then echo "first start: the API answers"; else
   echo "KO first-start-api  no API after the first start"
   # An installed starting point that does not answer: nothing after it would prove anything.
-  if [ "$old_state" = installed ]; then exit 1; fi
+  exit 1
 fi
 
-if [ "$old_state" = installed ]; then
-  step "A2. the instance as installed at $old_ref: its own seed-team.sh, then an automation briefing run by the owner"
-  own
-  seed "$old"; echo "old seed-team.sh exit $?"
-  if health 80; then echo "installed: the API answers"; else echo "KO installed-api  the installed instance does not answer"; exit 1; fi
-  # On the old version a briefing is the team's (createdBy « scheduler »,
-  # visibility team): after the update it must no longer reach a non-owner.
-  old_run=$(curl -s -m 200 -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' -d '{}' \
-    http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
-  old_seen=$(curl -s -m 20 -H "x-forwarded-email: $viewer" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
-  old_own=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
-  echo "old briefing run by the owner: $old_run; briefs on the old version: the viewer reads $old_seen, the owner $old_own"
-  # The starting point this rehearsal needs: an old shared brief the team reads
-  # (the update must stop serving it). Without it, the update proves nothing.
-  # Briefs became private in 9979d2532e (canReadMission): from 47169065bf the
-  # old brief is shared and the update must stop serving it; from a later
-  # version it is already private, and the owner must read it.
-  if [ "$old_run" != 200 ]; then echo "KO old-briefing-run  the old briefing did not run ($old_run): no starting point"; exit 1; fi
-  if [ "$old_seen" -ge 1 ]; then broke=1; echo "OK old-brief-shared  the viewer reads $old_seen old brief(s): the update must stop serving them"
-  elif [ "$old_own" -ge 1 ]; then broke=1; echo "OK old-brief-private  already private on the old version: the owner reads $old_own, the viewer none"
-  else broke=0; echo "KO old-brief-missing  nobody reads the old brief: no starting point"; exit 1; fi
-else
-step "A2. the old seed-team.sh: its block lands after the [] (expected to break)"
+step "A2. the instance as installed at $old_ref: its own seed-team.sh, then an automation briefing run by the owner"
 own
 seed "$old"; echo "old seed-team.sh exit $?"
-sleep 15
-echo "workbench: $(state)"
-# Refused because it does not parse, not because it is absent (exit 1 either way).
-if [ -f "$web_patch" ]; then python3 "$deploy/patchfile.py" "$web_patch" --check; broke=$?; else echo "absent: $web_patch"; broke=0; fi
-echo "check exit $broke (1 expected: the 13/11 breakage)"
-# The update proves something only if the old instance really broke.
-# The breakage is what this mode expects: seen, it is an OK; not seen, a KO.
-if [ "$broke" = 1 ]; then echo "OK breakage-reproduced  the 13/11 breakage is there (the web patch does not parse), as expected"
-else echo "KO breakage-not-reproduced  the 13/11 breakage was not reproduced, the update below would prove nothing"; fi
-
-step "A3. repaired by hand, as on the instance: the [] line removed, the old renderer left installed"
-own
-sed -i '/^\[\][[:space:]]*$/d' "$web_patch"
-docker restart $project-workbench >/dev/null
-if health 80; then echo "repaired: the API answers"; else echo "KO repaired-api  no API after the hand repair"; fi
-own
-seed "$old"; echo "old seed-team.sh (agents) exit $?"
-echo "installed renderer before step 13: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile (0 = before the guard)"
-
-fi
+if health 80; then echo "installed: the API answers"; else echo "KO installed-api  the installed instance does not answer"; exit 1; fi
+# On the old version a briefing is the team's (createdBy « scheduler »,
+# visibility team): after the update it must no longer reach a non-owner.
+old_run=$(curl -s -m 200 -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' -d '{}' \
+  http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
+old_seen=$(curl -s -m 20 -H "x-forwarded-email: $viewer" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+old_own=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+echo "old briefing run by the owner: $old_run; briefs on the old version: the viewer reads $old_seen, the owner $old_own"
+# The starting point this rehearsal needs: an old shared brief the team reads
+# (the update must stop serving it). Without it, the update proves nothing.
+# Briefs became private in 9979d2532e (canReadMission): from 47169065bf the
+# old brief is shared and the update must stop serving it; from a later
+# version it is already private, and the owner must read it.
+if [ "$old_run" != 200 ]; then echo "KO old-briefing-run  the old briefing did not run ($old_run): no starting point"; exit 1; fi
+if [ "$old_seen" -ge 1 ]; then broke=1; echo "OK old-brief-shared  the viewer reads $old_seen old brief(s): the update must stop serving them"
+elif [ "$old_own" -ge 1 ]; then broke=1; echo "OK old-brief-private  already private on the old version: the owner reads $old_own, the viewer none"
+else broke=0; echo "KO old-brief-missing  nobody reads the old brief: no starting point"; exit 1; fi
 
 step "B1. step 13: create-tenant.sh with the same arguments, the LLM routes"
 own
 tenant "$deploy" || die tenant "create-tenant.sh of this version failed"
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || die routes "the LLM routes of this version were not written"
+fake_scaleway
 # As rehearse.sh: a mission runs on the default model, here the fake one, and a
 # second MCP server is mounted that no channel allows (the drive's tool probe).
 for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
@@ -316,9 +309,7 @@ approvals_after=$(approvals_print)
 # When neither changed (an instance whose catalog is already this one's), no
 # restart is the right answer: the check does not assume the update changes it.
 restarted=0
-if [ "$old_state" = installed ]; then
-  seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
-fi
+seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
 own
 patch_before=$(sha256sum < "$web_patch" 2>/dev/null)
 MNDT_HOME=$data python3 "$app/gateway/render-connectors.py"; rendered=$?; echo "installed renderer exit $rendered"
@@ -353,6 +344,9 @@ if page_ready 150; then echo "the page is ready (launch token published)"; else 
 playwright=$(ls -d "$repo"/node_modules/.pnpm/playwright@*/node_modules/playwright 2>/dev/null | sort -V | head -1)
 if [ -z "$playwright" ]; then echo "KO playwright  Playwright is not installed in $repo/node_modules (pnpm install)"; exit 1; fi
 MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$playwright/index.mjs" $project "$root/shots"; driven=$?
+# A drive that dies prints no KO for the checks it never reached: say it, or
+# the TOTAL reads ko=0 over a run cut short.
+[ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
 [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?

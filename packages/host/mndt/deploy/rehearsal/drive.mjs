@@ -227,8 +227,62 @@ for (let index = 0; index < 4; index += 1) {
   await sleep(300)
   socket.resetAndDestroy()
 }
+// The coordination modes of a channel (#84, #85), end to end in the image. Both
+// routes answer from the fake model here (the rehearsal's copy of the routes),
+// with the price grid of the instance: a turn costs something.
+const byHandle = handle => agents.find(a => a.handle === handle)
+const [assistant, analyste] = [byHandle('assistant'), byHandle('analyste')]
+/** @param channelId - a channel. @param text - a message. @returns the turn it starts, once settled. */
+async function turnIn(channelId, text) {
+  const asked = (await api('POST', `/channels/${channelId}/messages`, { text })).body.message
+  let turn
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    turn = ((await api('GET', `/channels/${channelId}/messages`)).body.messages ?? []).find(m => m.id === asked?.id)?.turns?.[0]
+    if (turn !== undefined && !['queued', 'running'].includes(turn.status)) break
+    await sleep(2000)
+  }
+  return turn
+}
+if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
+  const room = (await api('POST', '/channels', { name: 'coordination', agents: [assistant.id, analyste.id, qwen.id], members: [] })).body.channel
+  // « Auteur puis vérificateur »: @assistant writes, @analyste (another model) checks.
+  const pair = await api('POST', `/channels/${room.id}/coordination`, { mode: 'author-verifier', author: assistant.id, verifier: analyste.id })
+  const checked = await turnIn(room.id, '@assistant fais le point du trimestre')
+  const steps = checked?.steps ?? []
+  const revision = steps.find(step => step.role === 'revision')
+  check('coord-author-verifier', pair.status === 200 && checked?.status === 'done' && steps.length <= 3
+    && steps.some(step => step.role === 'verifier' && step.verdict === 'issues') && revision?.replaced === true,
+  `status ${checked?.status}, steps ${steps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}${step.replaced === undefined ? '' : `:replaced=${step.replaced}`}`).join(' ')}, reason ${checked?.reason ?? '-'}`)
+  // « En parallèle puis synthèse »: @assistant and @qwen answer, @analyste assembles.
+  const bound = 1
+  const fanout = await api('POST', `/channels/${room.id}/coordination`, { mode: 'parallel-synthesis', workers: [assistant.id, qwen.id], synthesizer: analyste.id, maxEurPerTurn: bound })
+  const together = await turnIn(room.id, '@analyste fais la synthèse du trimestre')
+  const parts = (together?.steps ?? []).filter(step => step.role === 'worker' && typeof step.text === 'string')
+  check('coord-parallel', fanout.status === 200 && together?.status === 'done' && parts.length === 2
+    && (together?.steps ?? []).some(step => step.role === 'synthesis' && step.verdict === undefined)
+    && typeof together?.eur === 'number' && together.eur > 0 && together.eur <= bound,
+  `status ${together?.status}, ${parts.length} part(s), steps ${(together?.steps ?? []).map(step => step.role).join(' ')}, eur ${together?.eur} (bound ${bound} €)`)
+  // The bound held once: a bound one worker fits under and the next does not.
+  // Its reservation (prompt + 8192 output tokens at glm-5.3's 5.5 €/M, about
+  // 0.05 €) passes 0.03 €, @assistant's (deepseek, about 0.02 €) does not.
+  const tight = 0.03
+  const capped = await api('POST', `/channels/${room.id}/coordination`, { mode: 'parallel-synthesis', workers: [assistant.id, analyste.id], synthesizer: qwen.id, maxEurPerTurn: tight })
+  const held = await turnIn(room.id, '@qwen fais la synthèse du trimestre')
+  const heldSteps = held?.steps ?? []
+  const done = heldSteps.filter(step => step.role === 'worker' && typeof step.text === 'string')
+  const stopped = heldSteps.find(step => step.role === 'worker' && step.verdict === 'skipped')
+  // The worker stopped is the one whose reservation would pass the bound,
+  // @analyste, and the part kept is @assistant's: the bound stops the right step.
+  check('coord-bound', capped.status === 200 && done.length === 1 && done[0].agentId === assistant.id
+    && stopped?.agentId === analyste.id && /borne/.test(stopped?.notes?.[0] ?? '')
+    && typeof held?.eur === 'number' && held.eur > 0 && held.eur <= tight,
+  `status ${held?.status}, steps ${heldSteps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}@${agents.find(a => a.id === step.agentId)?.handle ?? step.agentId}`).join(' ')}, « ${stopped?.notes?.[0] ?? '-'} », eur ${held?.eur} (bound ${tight} €)`)
+} else {
+  check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
+}
 await browser.close()
 await sleep(2000)
+
 const gatewayAfter = started('gateway')
 const unhandled = (logs('gateway').match(/Unhandled 'error' event/g) ?? []).length
 check('gateway-alive', gatewayBefore === gatewayAfter && unhandled === 0, `before « ${gatewayBefore} », after « ${gatewayAfter} », unhandled errors ${unhandled}`)
