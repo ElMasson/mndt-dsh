@@ -33,7 +33,7 @@ import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
-import { warnOperator } from './operator-log.ts'
+import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -324,9 +324,11 @@ export class WorkbenchGateway extends TypertRemoteService {
           const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            warnOperator(ctx, 'mndt: automations skipped: the role table names no owner, or cannot be read')
+            // Said once, not at every pass of the tick (every 30 s).
+            warnOperatorOnce(ctx, 'automations-owner', 'mndt: automations skipped: the role table names no owner, or cannot be read')
             return
           }
+          clearOperatorWarning('automations-owner')
           if (team) {
             // On a team instance an automation runs once an owner enabled it. One
             // enabled otherwise (the deployment default auto_briefing included) is
@@ -347,8 +349,10 @@ export class WorkbenchGateway extends TypertRemoteService {
             // The run is the owner's who enabled it (team), private.
             fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
           }
+          clearOperatorWarning('automations-read')
         } catch (error) {
-          warnOperator(ctx, `mndt: could not read the automations: ${error instanceof Error ? error.message : String(error)}`)
+          // Its shape only: a JSON error quotes the start of the file, a prompt.
+          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations: ${errorShape(error)}`)
         }
       })()
     }
