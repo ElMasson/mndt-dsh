@@ -89,7 +89,8 @@ if (qwen !== undefined && channel !== undefined) {
 // server's open tools and nothing else, though workbench_facts is mounted. A
 // mission of the owner on a team instance: every MCP tool, never the engine's.
 // A tool more or a tool less fails.
-const APPROVALS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
+// propose_agent since #82: an agent proposes the creation of another on a card.
+const APPROVALS = ['mcp__approvals__list_pending_approvals', 'mcp__approvals__propose_agent', 'mcp__approvals__read_approval', 'mcp__approvals__request_approval']
 const EXPECTED = { '-': APPROVALS, tour: APPROVALS, mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts'].sort() }
 const witness = () => docker('exec', `${project}-workbench`, 'sh', '-c', 'find /state /tmp -name policy-witness.txt 2>/dev/null | head -3')
 
