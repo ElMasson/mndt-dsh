@@ -98,8 +98,8 @@ describe('the help under a turn', () => {
     expect(screen.getByTestId('help-state').textContent).toBe('répondu par une personne')
     expect(screen.queryByTestId('help-question')).toBeNull()
     unmount()
-    render(<HelpThread help={read({ state: 'done', request, advices: [], closedBy: { by: you, at } })} agents={agents} t={chatFrench} />)
-    expect(screen.getByTestId('help-state').textContent).toBe('répondu par une personne')
+    render(<HelpThread help={read({ state: 'done', request, advices: [], closedBy: { by: you, at } })} agents={agents} names={{ [you]: 'Stéphane Masson' }} t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('close par Stéphane Masson')
     expect(screen.getByTestId('help-closed')).toBeTruthy()
   })
 
@@ -140,5 +140,19 @@ describe('who answers, and when (#113)', () => {
     const h = read({ state: 'advising', request, advices, eur: 0.003 })
     expect(h.advices.every(a => a.eur === undefined && a.tokens === undefined)).toBe(true)
     expect(h.eur).toBe(0.003)
+  })
+})
+
+describe('closed by a person during the reading (#113, dd6922e2c9)', () => {
+  it('a reading may be there, nothing is published: the screen says who closed it, no field', () => {
+    const help = read({ state: 'done', request, advices, reading: { verdict: 'unblocked', retained: 'x', why: 'y' }, closedBy: { by: you, at } })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} originMessageId="msg_1" canAnswer names={{}} t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('close par stephane')
+    expect(screen.queryByRole('button', { name: 'Répondre et clore ce fil' })).toBeNull()
+  })
+
+  it('a category reason before reading is shown as served', () => {
+    render(<HelpThread help={read({ state: 'advising', request, advices: [advices[0]], skipped: [{ slot: 'B', reason: 'avis non obtenu : plafond' }] })} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-skipped').textContent).toContain('avis non obtenu : plafond')
   })
 })

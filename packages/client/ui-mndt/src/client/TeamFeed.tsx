@@ -355,7 +355,15 @@ export function WebMessage(props: {
           <Fragment key={turn.id}>
             <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
             {help === undefined ? undefined : (
-              <HelpThread help={help} agents={agents} onAnswer={props.onAnswer} originMessageId={m.id} canAnswer={props.canAnswer} t={t} />
+              <HelpThread
+                help={help}
+                agents={agents}
+                onAnswer={props.onAnswer}
+                originMessageId={m.id}
+                canAnswer={props.canAnswer}
+                names={props.names}
+                t={t}
+              />
             )}
           </Fragment>
         )

@@ -13,6 +13,7 @@ import type { ChatAgent, ChatTurn } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { euros, when } from './format.ts'
 import { renderBrief } from './markdown.tsx'
+import { shownName } from './TeamFeed.tsx'
 
 /** What the asking agent needs from its peers. */
 export type HelpNeed = 'fact' | 'opinion' | 'check' | 'choice'
@@ -192,9 +193,13 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
 
 const NEED_WORDS = { fact: 'helpNeedFact', opinion: 'helpNeedOpinion', check: 'helpNeedCheck', choice: 'helpNeedChoice' } as const
 
-/** @param help - a turn's help. @param t - the copy. @returns its state in words. */
-function stateWord(help: TurnHelp, t: ChatTranslate): string {
-  if (help.closedBy !== undefined || help.escalation?.answeredAt !== undefined) return t('helpClosedByHuman')
+/** @param help - a turn's help. @param t - the copy. @param names - the team's names. @returns its state in words. */
+function stateWord(help: TurnHelp, t: ChatTranslate, names?: Readonly<Record<string, string>>): string {
+  // Closed by a person: the core publishes nothing then, so the screen says who closed it.
+  if (help.closedBy !== undefined) {
+    return help.closedBy.by === undefined ? t('helpClosedByHuman') : t('helpClosedByWho', { who: shownName(help.closedBy.by, names) })
+  }
+  if (help.escalation?.answeredAt !== undefined) return t('helpClosedByHuman')
   if (help.reading === undefined) return help.state === 'reading' ? t('helpReading') : t('helpRunning')
   return help.reading.verdict === 'unblocked' ? t('helpUnblocked')
     : help.reading.verdict === 'card' ? t('helpCard') : t('helpQuestion')
@@ -214,11 +219,13 @@ export function HelpThread(props: {
   readonly originMessageId?: string | undefined
   /** Whether the reader's answer counts (workflows.write): a viewer is offered no field. */
   readonly canAnswer?: boolean | undefined
+  /** The team's names by lower-case address, where they are served. */
+  readonly names?: Readonly<Record<string, string>> | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { help, t } = props
   const escalation = help.escalation
-  const running = help.state !== 'done' && help.reading === undefined && help.closedBy === undefined
+  const running = help.state !== 'done' && help.closedBy === undefined
   const waiting = escalation !== undefined && escalation.answeredAt === undefined
   const [answer, setAnswer] = useState('')
   const [busy, setBusy] = useState(false)
@@ -259,7 +266,7 @@ export function HelpThread(props: {
       <p className="mw-help-line">
         <span>{t(asked <= 1 ? 'helpAskedOne' : 'helpAskedMany', { n: asked })}</span>
         {' · '}
-        <b data-testid="help-state">{stateWord(help, t)}</b>
+        <b data-testid="help-state">{stateWord(help, t, props.names)}</b>
         {total > 0 ? ` · ${help.capEur === undefined ? euros(total) : t('helpCost', { eur: euros(total), cap: euros(help.capEur) })}` : ''}
       </p>
       {waiting ? (
