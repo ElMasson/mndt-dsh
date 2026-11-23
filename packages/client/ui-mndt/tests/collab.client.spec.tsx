@@ -462,6 +462,8 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     await admin('owner', 'duke@datanalysis.re')
     fireEvent.click(within(group('rôle de smarion@datanalysis.re')).getByRole('button', { name: 'Admin' }))
     expect(screen.getByTestId('role-confirm').textContent).toContain('Faire de smarion@datanalysis.re un Admin ?')
+    // The address is never cut: not in the line, not in the question.
+    expect(screen.getByText('smarion@datanalysis.re', { selector: '.mndt-tag' }).getAttribute('title')).toBe('smarion@datanalysis.re')
     fireEvent.click(within(screen.getByTestId('role-confirm')).getByRole('button', { name: 'Annuler' }))
     expect(screen.queryByTestId('role-confirm')).toBeNull()
     expect(grantMember).not.toHaveBeenCalled()
@@ -520,6 +522,60 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     await admin('owner', 'duke@datanalysis.re')
     fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
     expect(await screen.findByTestId('roles-from-file')).toBeTruthy()
+  })
+
+  it('grants-unreadable and the authority\'s 504 are errors in words, the buttons stay', async () => {
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'line 4: unknown role', status: 503, code: 'grants-unreadable' }) as never)
+    await admin('owner', 'duke@datanalysis.re')
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect(await screen.findByText('La table des rôles est illisible : line 4: unknown role')).toBeTruthy()
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'the authority did not answer within 10 s', status: 504 }) as never)
+    fireEvent.click(within(group('rôle de lecteur@datanalysis.re')).getByRole('button', { name: 'Opérateur' }))
+    expect(await screen.findByText('L\'autorité d\'équipe n\'a pas répondu en 10 s : le rôle est inchangé.')).toBeTruthy()
+    expect(screen.queryByTestId('roles-from-file')).toBeNull()
+  })
+
+  it('an address with accents is refused in words', async () => {
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'subject must be a plain ASCII e-mail', status: 400 }) as never)
+    await admin('owner', 'duke@datanalysis.re')
+    fireEvent.change(screen.getByLabelText('adresse de la personne à accorder'), { target: { value: 'hélène@datanalysis.re' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
+    expect(await screen.findByText('L\'adresse doit être une adresse e-mail simple, sans accent ni espace.')).toBeTruthy()
+  })
+
+  it('a rolesFrom the page does not know offers no button: closed by default', async () => {
+    for (const rolesFrom of ['Authority', 'files', '', 3, null]) {
+      const api = fakeFace({
+        state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom }),
+        members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
+        grantMember,
+      })
+      render(<CollabPage api={api} />)
+      fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+      expect(await screen.findByTestId('roles-from-file')).toBeTruthy()
+      expect(screen.queryByRole('group', { name: /^rôle de /u })).toBeNull()
+      cleanup()
+    }
+    // « authority » offers them.
+    const api = fakeFace({
+      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'authority' }),
+      members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
+      grantMember,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    expect(await screen.findByRole('group', { name: 'rôle de lecteur@datanalysis.re' })).toBeTruthy()
+  })
+
+  it('/state rolesFrom « local »: a solo station, said, and no button', async () => {
+    const api = fakeFace({
+      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'local' }),
+      members: async () => [{ subject: 'duke@datanalysis.re', role: 'owner' }],
+      grantMember,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    expect((await screen.findByTestId('roles-from-file')).textContent).toBe('Ce poste n\'a qu\'un owner : il n\'y a pas de rôle à changer ici.')
   })
 
   it('/state says it ahead: no role button from the start', async () => {

@@ -37,6 +37,7 @@ const chat = createMockChat({
     },
     { id: 'msg_3', channelId: 'chn_1', author: { kind: 'agent', agentId: 'agt_1' }, replyTo: 'msg_2', text: 'Brouillon prêt :\n\n| Facture | Montant | Échéance |\n|---|---:|---|\n| FA2610-031 | 1 640,00 € | 02/10 |\n\nLa carte attend votre décision : rien ne part sans elle.', mentions: [], createdAt: at(4), updatedAt: at(4) },
   ],
+  models: [{ provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' }, { provider: 'scaleway-genapi', model: 'glm-5.3' }],
   mounted: [
     { module: 'office365', server: 'office365', enabled: true },
     { module: 'qonto', server: 'qonto', enabled: true },
@@ -53,7 +54,7 @@ const chat = createMockChat({
 }, () => t0 + 10 * 60000)
 
 const page: PageStateRow = {
-  you, canWrite: true, canAdmin: true, role: 'owner', missions: [], briefs: [],
+  you, canWrite: true, canAdmin: true, role: 'owner', rolesFrom: 'authority', missions: [], briefs: [],
   approvals: [{ id: 'apr_1', kind: 'send-email', title: 'Envoyer la relance de la facture FA2610-031 à la comptabilité de Sodiac', requestedBy: 'assistant', requestedAt: at(4) }],
   memories: [
     { id: 'mem_1', scope: 'team', kind: 'fact', text: 'Sodiac paie à 60 jours fin de mois ; relancer la comptabilité, pas l\'acheteur.', createdBy: you },
@@ -62,10 +63,14 @@ const page: PageStateRow = {
 }
 const api = new Proxy({}, {
   get: (_t, key) => key === 'state' ? async () => page
-    : key === 'members' ? async () => [{ subject: you, role: 'owner' }, { subject: 'smarion@datanalysis.re', role: 'operator' }]
-      : key === 'search' ? async () => []
-        : key === 'decide' ? async () => ({ ok: true })
-          : async () => { throw new Error('harnais') },
+    : key === 'members' ? async () => [
+      { subject: you, role: 'owner' }, { subject: 'jlebon@datanalysis.re', role: 'admin' },
+      { subject: 'smarion@datanalysis.re', role: 'operator' }, { subject: 'stagiaire@datanalysis.re', role: 'viewer' },
+    ]
+      : key === 'grantMember' ? async (subject: string, role: string) => ({ ok: true, value: { subject, role } })
+        : key === 'search' ? async () => []
+          : key === 'decide' ? async () => ({ ok: true })
+            : async () => { throw new Error('harnais') },
 }) as MndtFace
 
 const documents = createMockDocuments({
