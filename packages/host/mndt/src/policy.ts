@@ -35,6 +35,17 @@ export function can(grants: readonly Grant[], subject: string, capability: Capab
     : { allowed: false, reason: `${subject} is ${role} and does not hold ${capability}` }
 }
 
+/** A row of the role table set aside: its number (from 1) and why. */
+export interface SkippedGrant {
+  readonly row: number
+  readonly reason: string
+}
+
+/** The grant table as read: the grants and the rows set aside, or why it could not be read. */
+export type GrantTable =
+  | { readonly ok: true; readonly grants: readonly Grant[]; readonly skipped?: readonly SkippedGrant[] }
+  | { readonly ok: false; readonly reason: string }
+
 /** A source of the grant table: the authority when in team mode, a file otherwise. */
 export interface GrantSource {
   /**
@@ -42,6 +53,9 @@ export interface GrantSource {
    * A name is shown only; it never grants anything.
    */
   names?(): Promise<Readonly<Record<string, string>>>
-  /** @returns the grants, or the reason they could not be read. */
-  grants(): Promise<{ readonly ok: true; readonly grants: readonly Grant[] } | { readonly ok: false; readonly reason: string }>
+  /**
+   * @returns the grants, or the reason they could not be read. `skipped` names the
+   * rows set aside (an invalid row grants nothing, the others are still served).
+   */
+  grants(): Promise<GrantTable>
 }

@@ -5,7 +5,9 @@ This file pins the launcher's externally observable behavior — the cross-repo 
 ## Invocation grammar
 
 ```text
-landlock-run [--ro <path>]... [--rw <path>]... -- <argv>...
+landlock-run [--ro <path>]... [--rw <path>]...
+             [--keep-env <name>]... [--keep-env-prefix <prefix>]...
+             [--set-env <name>=<value>]... -- <argv>...
 landlock-run --probe
 ```
 
@@ -13,7 +15,9 @@ landlock-run --probe
 - `--rw <path>`: grant full filesystem access beneath `<path>` (every access the negotiated kernel ABI can govern).
 - Everything not granted is denied — Landlock rulesets are allow-lists.
 - A grant on a non-directory keeps only its file-compatible access bits (this is how a `--rw /dev/null` grant works).
-- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvp` with the launcher's environment unchanged.
+- `--keep-env <name>`, `--keep-env-prefix <prefix>`: the environment allow-list. As soon as one is given, the command receives only the variables of the launcher's own environment whose name equals a kept name or starts with a kept prefix. A name or prefix containing `=`, or empty, is a usage error.
+- `--set-env <name>=<value>`: a variable set for the command, over any of the same name; repeated, the last value of a name wins (an empty name is a usage error).
+- `--`: mandatory separator; everything after it is the command argv, exec'd via `execvpe`. With an environment allow-list (`--keep-env*`), the command is resolved in the fixed system `PATH` `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, never in a `PATH` the caller's environment, the kept variables or a `--set-env` carry; the command still receives its filtered `PATH`. Without the list, the launcher's own `PATH`. Under the list, a tool outside the system directories (`node_modules/.bin`, `/opt/mndt-tools`) is called by its absolute path. Without `--keep-env*` the command gets the launcher's environment unchanged, plus any `--set-env`.
 - `--probe`: mutually exclusive with grants and a command.
 - No other flags, no environment-variable inputs.
 

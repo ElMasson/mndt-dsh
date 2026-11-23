@@ -4,16 +4,77 @@
  * @module @deepseek-ai/dsh-sandbox-local/profiles
  */
 
+import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-system/landlock-run'
-import { writableRoots } from '@deepseek-ai/dsh-sandbox'
+import { SandboxUnavailableError, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+
+/** Names what a confined command may read; unset, it reads all of `/` (the default). */
+export const READ_ROOTS_ENV = 'DSH_SANDBOX_READ_ROOTS'
+
+/**
+ * What a read allow-list may never open, whatever a root's spelling or a link
+ * leads to: the instance's state and secrets (`/state`, `/data`, `/run`,
+ * `/root`) and the other processes (`/proc`: their environment holds the
+ * model keys). A root inside one of them, or above one of them, is refused.
+ */
+export const NEVER_READABLE: readonly string[] = ['/state', '/data', '/run', '/root', '/proc']
+
+/** @param root - a resolved path. @param guarded - a guarded one. @returns whether either holds the other. */
+function overlaps(root: string, guarded: string): boolean {
+  return root === guarded || root.startsWith(`${guarded}/`) || guarded.startsWith(`${root}/`)
+}
+
+/**
+ * The read allow-list a deployment sets (`DSH_SANDBOX_READ_ROOTS`, colon-separated
+ * absolute paths, directories or single files such as `/dev/null`): a team
+ * workbench keeps its secrets, its state and other channels out of an agent's
+ * reach. Unset, nothing changes: the default reads `/`.
+ *
+ * Fails closed, never a silent fall back to reading `/`:
+ * - set but blank: refused (a value meant to restrict that restricts nothing);
+ * - a relative path or a `..`;
+ * - a root that resolves (links followed, as the launcher follows them) to `/`,
+ *   or that overlaps a path of NEVER_READABLE;
+ * - a list left empty once the paths missing on this host are dropped.
+ * @param env - the environment to read (the process's by default).
+ * @returns the readable roots, resolved, or undefined when no allow-list is set.
+ */
+export function readRoots(env: Readonly<Record<string, string | undefined>> = process.env): readonly string[] | undefined {
+  const raw = env[READ_ROOTS_ENV]
+  if (raw === undefined) return undefined
+  if (raw.trim() === '') {
+    throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} is set but blank: unset it to read /, or name what may be read`)
+  }
+  const roots: string[] = []
+  for (const entry of raw.split(':').map(part => part.trim()).filter(part => part !== '')) {
+    if (!isAbsolute(entry) || entry.split('/').includes('..')) {
+      throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names "${entry}": an absolute path without ..`)
+    }
+    if (!existsSync(entry)) continue
+    // The launcher follows a link: the root is what it leads to.
+    const resolved = realpathSync(entry)
+    if (resolved === '/' || NEVER_READABLE.some(guarded => overlaps(resolved, guarded))) {
+      throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names "${entry}" (${resolved}): / and ${NEVER_READABLE.join(', ')} are never readable`)
+    }
+    if (!roots.includes(resolved)) roots.push(resolved)
+  }
+  if (roots.length === 0) throw new SandboxUnavailableError('workspace-write', `${READ_ROOTS_ENV} names nothing present on this host`)
+  return roots
+}
 
 /**
  * Build the bwrap profile arguments for one file-effect policy.
  * @param policy - file-effect policy to express as bwrap mounts.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
+export function bwrapProfileArgs(policy: SandboxPolicy, roots: readonly string[] | null = readRoots() ?? null): string[] {
+  // bwrap here binds all of / read-only: it cannot honour a read allow-list, so it refuses.
+  // `null` says « no allow-list » explicitly: an `undefined` would take the default.
+  if (roots !== null) {
+    throw new SandboxUnavailableError(policy.mode, `${READ_ROOTS_ENV} is set and the bwrap runner does not apply a read allow-list; use Landlock`)
+  }
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
@@ -25,14 +86,55 @@ export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
 /**
  * Build the Landlock launcher grants for one file-effect policy.
  * @param policy - file-effect policy to express as Landlock allow-list grants.
+ * @param roots - the read allow-list, or `null` for none (reads `/`, writes the shared `/tmp`).
+ * @param privateTemp - with a read allow-list under workspace-write, the run's
+ *   own temp directory, granted instead of `/tmp`; required in that case.
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
-export function landlockProfileArgs(policy: SandboxPolicy): string[] {
+/**
+ * The ambient variables a confined command keeps under a read allow-list: the
+ * shell's ordinary context and what the shell executors set for every command
+ * (bash-local ENV_OVERRIDES), plus NODE_OPTIONS (the image's heap setting for
+ * the code runtimes). Every other variable, the ones a caller adds included,
+ * is dropped by the launcher itself, right before exec.
+ */
+export const KEPT_ENV: readonly string[] = [
+  'PATH', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'NODE_VERSION', 'NODE_OPTIONS',
+  'NO_COLOR', 'PAGER', 'GIT_PAGER',
+]
+
+/**
+ * Name prefixes kept the same way: the locale, and the DSH_* facts set for the
+ * command (the subprocess layer drops every ambient DSH_*).
+ */
+export const KEPT_ENV_PREFIXES: readonly string[] = ['LC_', 'DSH_']
+
+export function landlockProfileArgs(
+  policy: SandboxPolicy,
+  roots: readonly string[] | null = readRoots() ?? null,
+  privateTemp?: string,
+): string[] {
   const readWrite = ['/dev/null']
   if (policy.mode === 'workspace-write') {
-    readWrite.push('/tmp', policy.workspaceRoot)
+    if (roots === null) {
+      readWrite.push('/tmp', policy.workspaceRoot)
+    } else {
+      // Under a read allow-list the shared /tmp is never granted: what one
+      // confined run leaves there would be readable by the next one, whoever
+      // started it. The run gets its own directory (TMPDIR) instead.
+      if (privateTemp === undefined) {
+        throw new SandboxUnavailableError(policy.mode, `${READ_ROOTS_ENV} is set and no private temp directory was provided`)
+      }
+      readWrite.push(privateTemp, policy.workspaceRoot)
+    }
   }
-  return landlockGrantArgs({ readOnly: ['/'], readWrite })
+  if (roots === null) return landlockGrantArgs({ readOnly: ['/'], readWrite })
+  // Under a read allow-list the launcher filters the command's final environment
+  // to KEPT_ENV and points the temp variables and HOME at the private directory.
+  const setEnv = privateTemp === undefined || policy.mode !== 'workspace-write'
+    ? {}
+    : { TMPDIR: privateTemp, TMP: privateTemp, TEMP: privateTemp, HOME: privateTemp }
+  return landlockGrantArgs({ readOnly: [...roots], readWrite, keepEnv: KEPT_ENV, keepEnvPrefixes: KEPT_ENV_PREFIXES, setEnv })
 }
 
 /** Quote one path as an SBPL string literal. */

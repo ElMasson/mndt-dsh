@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
+import type { DecideOptions } from './face.ts'
 import type { ApprovalRow } from './face.ts'
 import { completeMention, mentionAt, mentionChoices } from './mention.ts'
 import type { MentionQuery } from './mention.ts'
@@ -40,6 +41,8 @@ export interface ThreadCard extends ApprovalRow {
   readonly reason?: string
   /** Whether the reader may decide it, as the API says for them. */
   readonly canDecide?: boolean
+  /** What the card proposes to declare, when an agent proposes an agent. */
+  readonly proposal?: unknown
   /** The mission that asked for it, when one did. */
   readonly missionId?: string
   /** The agent whose turn asked for it, when one did. */
@@ -195,7 +198,7 @@ function TurnLine(props: {
 export function CardView(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -251,7 +254,7 @@ function MessageView(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   readonly t: ChatTranslate
 }): ReactNode {
@@ -312,7 +315,7 @@ export function ChannelThread(props: {
   readonly agents: readonly ChatAgent[]
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly openTrace?: ((sessionId: string) => void) | undefined
   /** Why the cards could not be read: said in the thread, never shown as « no card ». */
   readonly cardsError?: string | undefined
@@ -329,10 +332,20 @@ export function ChannelThread(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   /** Open À traiter, where the waiting cards are (the mndt-web look). */
   readonly onPending?: (() => void) | undefined
+  /** The connectors mounted, for a card that proposes an agent (the mndt-web look). */
+  readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether the reader owns the team (the mndt-web look). */
+  readonly isOwner?: boolean | undefined
+  /** An empty lane's welcome (the mndt-web look): the team channels open to the person, the cards waiting. */
+  readonly arrival?: LaneArrival | undefined
+  /** The models the core offers, for a card that proposes an agent (the mndt-web look). */
+  readonly offered?: readonly OfferedModel[] | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const web = props.look === 'mndt-web'
   const [thread, setThread] = useState<readonly ChatMessage[] | undefined>(undefined)
+  // A text the lane's welcome puts in the composer (« @assistant »): a new one each click.
+  const [seed, setSeed] = useState<{ readonly text: string; readonly at: number } | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const cursor = useRef<string | undefined>(undefined)
   // The feed follows the newest message while the reader is at the bottom; scrolled up, it stays put.
@@ -419,7 +432,14 @@ export function ChannelThread(props: {
         {thread === undefined ? (
           error === undefined ? <p className="mndt-hint">{t('loading')}</p> : undefined
         ) : thread.length === 0 ? (
-          <p className={web ? 'mw-feed-empty' : 'mndt-hint'} data-testid="chat-empty">{web ? t('emptyChannel') : t('empty')}</p>
+          web && channel.kind === 'solo' && props.arrival !== undefined ? (
+            <LaneWelcome
+              agents={props.agents.filter(a => channel.agents.includes(a.id) && a.retiredAt === undefined)}
+              arrival={props.arrival}
+              onAgent={(handle) => { setSeed({ text: `@${handle} `, at: Date.now() }) }}
+              t={t}
+            />
+          ) : <p className={web ? 'mw-feed-empty' : 'mndt-hint'} data-testid="chat-empty">{web ? t('emptyChannel') : t('empty')}</p>
         ) : web ? thread.map((m, index) => {
           const place = placeOf(thread[index - 1], m)
           return (
@@ -435,6 +455,9 @@ export function ChannelThread(props: {
                 onRemove={removeOf(m)}
                 onPending={props.onPending}
                 names={props.names}
+                mounted={props.mounted}
+                isOwner={props.isOwner}
+                offered={props.offered}
                 t={t}
               />
             </div>
@@ -453,8 +476,60 @@ export function ChannelThread(props: {
           />
         ))}
       </div>
-      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} look={props.look} />
+      <Composer chat={chat} channel={channel} agents={props.agents} onPosted={posted} t={t} look={props.look} seed={seed} />
     </section>
+  )
+}
+
+/** What an empty lane says to whoever arrives: their team channels, the cards waiting on them. */
+export interface LaneArrival {
+  readonly channels: readonly { readonly id: string; readonly label: string }[]
+  readonly onChannel: (id: string) => void
+  readonly pending: number
+  readonly onPending: () => void
+}
+
+/**
+ * An empty lane, as a first screen: what the lane is, one click per agent to start a message to it
+ * (the composer takes « @handle »), the team channels open to the person, the cards waiting on them.
+ * Nothing is invented: an agent, a channel or a card is shown only when the workspace serves it.
+ */
+function LaneWelcome(props: {
+  readonly agents: readonly ChatAgent[]
+  readonly arrival: LaneArrival
+  readonly onAgent: (handle: string) => void
+  readonly t: ChatTranslate
+}): ReactNode {
+  const { arrival, t } = props
+  return (
+    <div className="mw-welcome" data-testid="lane-welcome">
+      <p className="mw-welcome-title">{t('laneWelcomeTitle')}</p>
+      <p className="mw-welcome-text">{t('laneWelcomeText')}</p>
+      {props.agents.length === 0 ? <p className="mw-welcome-text">{t('laneWelcomeNoAgent')}</p> : (
+        <div className="mw-pills" role="group" aria-label={t('laneWelcomeAsk')}>
+          {props.agents.map(a => (
+            <button key={a.id} type="button" className="mw-pill" onClick={() => { props.onAgent(a.handle) }} aria-label={t('laneWelcomeAskOne', { handle: a.handle })}>
+              @{a.handle}
+            </button>
+          ))}
+        </div>
+      )}
+      {arrival.channels.length === 0 ? <p className="mw-welcome-text" data-testid="welcome-no-channel">{t('laneWelcomeNoChannel')}</p> : (
+        <>
+          <p className="mw-welcome-text">{t('laneWelcomeChannels')}</p>
+          <div className="mw-pills" role="group" aria-label={t('laneWelcomeChannels')}>
+            {arrival.channels.map(c => (
+              <button key={c.id} type="button" className="mw-pill" onClick={() => { arrival.onChannel(c.id) }}># {c.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+      {arrival.pending === 0 ? undefined : (
+        <button type="button" className="mw-ctx-link" onClick={arrival.onPending} data-testid="welcome-pending">
+          {t(arrival.pending === 1 ? 'laneWelcomePendingOne' : 'laneWelcomePendingMany', { n: arrival.pending })}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -471,9 +546,32 @@ function Composer(props: {
   readonly onPosted: (message: ChatMessage) => void
   readonly t: ChatTranslate
   readonly look?: 'mndt-web' | undefined
+  /** A text to start from, put in by one click elsewhere (a new `at` each time). */
+  readonly seed?: { readonly text: string; readonly at: number } | undefined
 }): ReactNode {
   const { chat, channel, t } = props
   const [text, setText] = useState('')
+  const seededAt = useRef<number | undefined>(undefined)
+  // The text as it is now, for a seed applied once per click without depending on every keystroke.
+  const current = useRef('')
+  current.current = text
+  useEffect(() => {
+    const seed = props.seed
+    if (seed === undefined || seed.at === seededAt.current) return
+    seededAt.current = seed.at
+    // A draft already begun is kept: the mention goes in front of it, never twice.
+    const mention = seed.text.trim()
+    const draft = current.current
+    const already = draft.split(/\s+/u).includes(mention)
+    const next = already ? draft : `${seed.text}${draft}`
+    const at = already ? next.length : seed.text.length
+    setText(next)
+    setCaret(at)
+    requestAnimationFrame(() => {
+      box.current?.focus()
+      box.current?.setSelectionRange(at, at)
+    })
+  }, [props.seed])
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
   const [busy, setBusy] = useState(false)

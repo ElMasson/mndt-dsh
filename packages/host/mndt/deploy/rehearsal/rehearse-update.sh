@@ -22,6 +22,7 @@ set -uo pipefail
 old_image=${1:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/checks.sh"
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 old_ref=${OLD_REF:-96d2801d8a}
@@ -255,15 +256,20 @@ echo "gateway: $(docker inspect -f '{{.State.StartedAt}}' $project-gateway), cod
 
 step "B3. seed-team.sh right away (it restarts the workbench itself when approvals changed), then the installed renderer"
 started_before=$(docker inspect -f '{{.State.StartedAt}}' $project-workbench)
+# What seed-team.sh restarts on: the approvals descriptor and the patch it renders.
+approvals_print() { for f in "$data/connectors/approvals.json" "$web_patch"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
+approvals_before=$(approvals_print)
 own
 seed "$deploy"; seeded=$?; echo "seed-team.sh exit $seeded"
 started_after=$(docker inspect -f '{{.State.StartedAt}}' $project-workbench)
-# From the instance as installed the approvals descriptor is rewritten: seed-team.sh
+approvals_after=$(approvals_print)
+# When seed-team.sh changed the approvals descriptor or its rendered patch, it
 # must have restarted the workbench on its own (no restart of ours hides it).
+# When neither changed (an instance whose catalog is already this one's), no
+# restart is the right answer: the check does not assume the update changes it.
 restarted=0
 if [ "$old_state" = installed ]; then
-  if [ "$started_before" != "$started_after" ]; then echo "OK  seed-restart   seed-team.sh restarted the workbench after rewriting approvals"
-  else echo "KO  seed-restart   seed-team.sh rewrote approvals but did not restart the workbench"; restarted=1; fi
+  seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
 fi
 own
 patch_before=$(sha256sum < "$web_patch" 2>/dev/null)

@@ -9,8 +9,10 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatMessage, ChatTurn } from './chat.ts'
+import type { ChatAgent, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
+import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
+import type { DecideOptions } from './face.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
 import { Icon } from './Icons.tsx'
@@ -127,12 +129,31 @@ function StatusBadge(props: { readonly state: ThreadCard['state']; readonly t: C
 export function WebCard(props: {
   readonly card: ThreadCard
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   readonly names?: Readonly<Record<string, string>> | undefined
+  /** The connectors mounted, to say which ones a proposed agent would carry but cannot use. */
+  readonly mounted?: readonly MountedConnector[] | undefined
+  /** Whether the reader owns the team: only the owner validates a proposed ceiling above 5 EUR. */
+  readonly isOwner?: boolean | undefined
+  /** The models the core offers (`GET /models`); undefined while unknown. */
+  readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
   const state = card.state ?? 'pending'
+  const proposal = card.kind === 'propose_agent' ? proposalOf(card.proposal) : undefined
+  // The core accepts a proposed ceiling above 5 EUR only from the owner: an admin is told before
+  // clicking, and only « Refuser » stays offered to them.
+  const ownerOnly = proposal !== undefined && (proposal.eurPerMonth ?? 0) > ADMIN_CEILING_EUR && props.isOwner !== true
+  // A proposal the page cannot read is never validated blind: only « Refuser » is offered, and why.
+  const unreadable = card.kind === 'propose_agent' && proposal === undefined
+  // What the proposal needs and the workbench no longer has: the core would refuse it, so only
+  // « Refuser » is offered, and why. Unknown lists block nothing; the core still checks.
+  const modelGone = proposal !== undefined && props.offered !== undefined
+    && !props.offered.some(m => m.provider === proposal.provider && m.model === proposal.model)
+  const unmountedNow = proposal === undefined || props.mounted === undefined ? []
+    : (proposal.connectors ?? []).filter(server => !props.mounted?.some(m => m.server === server && m.enabled))
+  const refuseOnly = unreadable || modelGone || unmountedNow.length > 0
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -150,16 +171,22 @@ export function WebCard(props: {
     }
     setMissing(false)
     setBusy(true)
-    setError(await props.onDecide(card.id, decision, decision === 'rejected' ? reason.trim() : undefined))
+    // The sheet above is the whole proposal: only then does the page say it shows it.
+    const why = decision === 'rejected' ? reason.trim() : undefined
+    setError(await (proposal === undefined
+      ? props.onDecide(card.id, decision, why)
+      : props.onDecide(card.id, decision, why, { showsProposal: true })))
     setBusy(false)
   }
   return (
     <article className="mw-card-box" data-testid="chat-card" data-state={state}>
       <div className="mw-card-head">
-        <p className="mw-card-title">{card.title}</p>
+        <p className="mw-card-title">{proposal === undefined ? card.title : t('proposeAgentTitle', { name: proposal.name })}</p>
         <StatusBadge state={card.state} t={t} />
       </div>
       <p className="mw-card-meta">{askedBy} · {when(card.requestedAt)}</p>
+      {/* An agent proposes an agent: the whole sheet, read-only, so one click validates what was read. */}
+      {proposal === undefined ? undefined : <AgentSheetView proposal={proposal} mounted={props.mounted ?? []} t={t} />}
       {state !== 'pending' ? (
         <div className="mw-decided" data-testid="chat-card-decision">
           <p>
@@ -180,8 +207,18 @@ export function WebCard(props: {
             />
           </label>
           {missing ? <p role="alert" className="mw-decide-error">{t('webReasonMissing')}</p> : undefined}
+          {unreadable ? <p className="mw-decide-error" data-testid="proposal-unreadable">{t('proposeAgentUnreadable')}</p> : undefined}
+          {modelGone ? (
+            <p className="mw-decide-error" data-testid="proposal-model-gone">{t('proposeAgentModelGone', { model: `${proposal.provider}/${proposal.model}` })}</p>
+          ) : undefined}
+          {unmountedNow.length === 0 ? undefined : (
+            <p className="mw-decide-error" data-testid="proposal-unmounted">{t('proposeAgentUnmounted', { names: unmountedNow.join(', ') })}</p>
+          )}
+          {ownerOnly ? <p className="mw-decide-error" data-testid="proposal-owner-only">{t('proposeAgentOwnerOnly', { max: ADMIN_CEILING_EUR })}</p> : undefined}
           <div className="mw-decide-buttons">
-            <button type="button" className="mw-primary" disabled={busy} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
+            {refuseOnly ? undefined : (
+              <button type="button" className="mw-primary" disabled={busy || ownerOnly} onClick={() => { void decide('approved') }}>{t('webValidate')}</button>
+            )}
             <button type="button" className="mw-secondary" disabled={busy} onClick={() => { void decide('rejected') }}>{t('webRefuse')}</button>
           </div>
           {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
@@ -200,12 +237,15 @@ export function WebMessage(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
   readonly canDecide: boolean
-  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string) => Promise<string | undefined>
+  readonly onDecide: (id: string, decision: 'approved' | 'rejected', reason?: string, options?: DecideOptions) => Promise<string | undefined>
   /** The author may delete their own message; the Host still decides. */
   readonly onRemove?: (() => Promise<string | undefined>) | undefined
   /** Open À traiter, where the waiting cards are. */
   readonly onPending?: (() => void) | undefined
   readonly names?: Readonly<Record<string, string>> | undefined
+  readonly mounted?: readonly MountedConnector[] | undefined
+  readonly isOwner?: boolean | undefined
+  readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { message: m, agents, t } = props
@@ -267,6 +307,9 @@ export function WebMessage(props: {
           canDecide={card.canDecide ?? props.canDecide}
           onDecide={props.onDecide}
           names={props.names}
+          mounted={props.mounted}
+          isOwner={props.isOwner}
+          offered={props.offered}
           t={t}
         />
       ))}
