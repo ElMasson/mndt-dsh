@@ -502,7 +502,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const roleRefusal = (result: { readonly status?: number; readonly code?: string; readonly error?: string }, fallback: string): string =>
     result.status === 504 ? t('ui.autorite-sans-reponse')
       : result.code === 'grants-unreadable' ? t('ui.roles-illisibles', { reason: result.error ?? '' })
-        : result.error ?? fallback
+        // The core's sentence for an address with accents or spaces; to read by its code once served.
+        : (result.error ?? '').startsWith('subject must be a plain ASCII e-mail') ? t('ui.adresse-ascii')
+          : result.error ?? fallback
   /** @param from - the role now, if any. @param to - the role chosen. @returns whether to ask first. */
   const asksFirst = (from: MemberRole | undefined, to: MemberRole): boolean =>
     to === 'admin' || to === 'owner' || (from !== undefined && RANK[to] < RANK[from])

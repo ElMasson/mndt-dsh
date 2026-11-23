@@ -535,6 +535,14 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     expect(screen.queryByTestId('roles-from-file')).toBeNull()
   })
 
+  it('an address with accents is refused in words', async () => {
+    grantMember.mockImplementationOnce(async () => ({ ok: false, error: 'subject must be a plain ASCII e-mail', status: 400 }) as never)
+    await admin('owner', 'duke@datanalysis.re')
+    fireEvent.change(screen.getByLabelText('adresse de la personne à accorder'), { target: { value: 'hélène@datanalysis.re' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Accorder' }))
+    expect(await screen.findByText('L\'adresse doit être une adresse e-mail simple, sans accent ni espace.')).toBeTruthy()
+  })
+
   it('/state rolesFrom « local »: a solo station, said, and no button', async () => {
     const api = fakeFace({
       state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'local' }),

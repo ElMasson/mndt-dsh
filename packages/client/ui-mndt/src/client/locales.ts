@@ -353,6 +353,7 @@ export const en = {
   'ui.roles-poste-seul': 'This station has a single owner: there is no role to change here.',
   'ui.autorite-sans-reponse': 'The team authority did not answer within 10 s: the role is unchanged.',
   'ui.roles-illisibles': 'The role table cannot be read: {reason}',
+  'ui.adresse-ascii': 'The address must be a plain e-mail address, without accents or spaces.',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -710,6 +711,7 @@ export const fr: Record<MndtKey, string> = {
   'ui.roles-poste-seul': 'Ce poste n\'a qu\'un owner : il n\'y a pas de rôle à changer ici.',
   'ui.autorite-sans-reponse': 'L\'autorité d\'équipe n\'a pas répondu en 10 s : le rôle est inchangé.',
   'ui.roles-illisibles': 'La table des rôles est illisible : {reason}',
+  'ui.adresse-ascii': 'L\'adresse doit être une adresse e-mail simple, sans accent ni espace.',
 }
 
 /** Substitution values for a message. */
