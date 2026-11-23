@@ -91,7 +91,7 @@ export interface MemoryNote {
 }
 
 /** An action that touches the outside world, so a person must decide it. */
-export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent'
+export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent' | 'propose_context'
 
 /** Where an approval stands. */
 export type ApprovalState = 'pending' | 'approved' | 'rejected'
@@ -134,6 +134,12 @@ export interface Approval {
    * the card, never from what a page sends.
    */
   readonly proposal?: AgentProposal
+  /**
+   * A propose_context card: the channel's new context, against the version it
+   * was written from. Applied, when approved, only if the context is still at
+   * that version (another change in between: 409, the card stays pending).
+   */
+  readonly contextProposal?: ContextProposal
   /** The agent the approval created. */
   readonly agentId?: string
 }
@@ -227,6 +233,32 @@ export interface Channel {
   readonly createdAt: string
   /** How a turn of this channel is coordinated; absent, each agent answers alone. */
   readonly coordination?: Coordination
+  /**
+   * What the channel's agents should know about it, written by its people: the
+   * one source (no AGENTS.md mirror). Given to each turn as data, never as an
+   * order: it changes neither the tools nor the agent's own framing.
+   */
+  readonly context?: ChannelContext
+}
+
+/**
+ * A channel's context. `version` grows by one at every change, an erasure
+ * included (the text is then empty): a page writes from the version it read,
+ * and a change in between is refused (409 context-changed), never overwritten.
+ */
+export interface ChannelContext {
+  readonly text: string
+  readonly version: number
+  readonly updatedBy: string
+  readonly updatedAt: string
+}
+
+/** What a propose_context card proposes. */
+export interface ContextProposal {
+  /** The new text, trimmed; empty erases the context. */
+  readonly text: string
+  /** The context version it was written from (0: the channel had none). */
+  readonly baseVersion: number
 }
 
 /**
@@ -376,5 +408,5 @@ export function isMissionStatus(value: unknown): value is MissionStatus {
 
 /** @param value - the candidate action. @returns true when it leaves the building. */
 export function needsApproval(value: string): value is ApprovalAction {
-  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent'
+  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent' || value === 'propose_context'
 }

@@ -123,6 +123,18 @@ const tools = [
     },
   },
   {
+    name: 'propose_context',
+    description: 'Propose a new context for this channel (what its agents should know about it), as a card an owner or an admin approves. Nothing changes by this tool: approving the card writes exactly this text, and only if the context has not changed since baseVersion.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The whole new context, 4 000 characters at most; empty to erase it. Facts about the channel, never orders.' },
+        baseVersion: { type: 'number', description: 'The version of the channel information shown in your instructions (0 when the channel has none)' },
+      },
+      required: ['text', 'baseVersion'],
+    },
+  },
+  {
     name: 'list_pending_approvals',
     description: 'List the decisions currently waiting for a person.',
     inputSchema: { type: 'object', properties: {} },
@@ -173,6 +185,13 @@ async function run(name, args) {
       body: JSON.stringify({ kind: 'propose_agent', ...(args.title === undefined ? {} : { title: args.title }), payload: {}, proposal }),
     })
     return `pending approval ${body.approval.id} (propose_agent): ${body.approval.title}. An owner or an admin must approve it; no agent was created.`
+  }
+  if (name === 'propose_context') {
+    const body = await call('/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'propose_context', payload: {}, contextProposal: { text: args.text, baseVersion: args.baseVersion } }),
+    })
+    return `pending approval ${body.approval.id} (propose_context): ${body.approval.title}. An owner or an admin must approve it; the context did not change.`
   }
   if (name === 'list_pending_approvals') {
     const body = await call('/approvals?state=pending')

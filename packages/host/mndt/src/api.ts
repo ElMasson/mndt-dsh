@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, CoordinationRefusal, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -338,6 +338,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       }
       const reason = messageOf(error)
       if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
+      if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
@@ -467,6 +468,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const message = await service.deleteMessage(channel.id, parts[3] ?? '', identity)
       options.turns?.stop({ messageId: message.id })
       return respond(200, { message })
+    }
+
+    if (request.method === 'POST' && parts.length === 3 && parts[2] === 'context') {
+      // What the channel's agents are told about it reaches every turn: owners
+      // and admins only, as for its connectors and its coordination.
+      const denied = await authorise(identity, 'rights.write')
+      if (denied !== undefined) return denied
+      const version = input.version
+      if (typeof input.text !== 'string' || typeof version !== 'number' || !Number.isInteger(version) || version < 0) {
+        return respond(400, { error: 'a context needs text (a string, empty to erase) and version (the version read, 0 for none)', code: 'missing-fields' })
+      }
+      return respond(200, { channel: await service.setChannelContext(channel.id, input.text, version, identity) })
     }
 
     if (request.method === 'POST' && parts.length === 3 && parts[2] === 'coordination') {
@@ -904,7 +917,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
         const kind = input.kind
-        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent') {
+        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent' && kind !== 'propose_context') {
           return respond(400, { error: `unknown approval kind: ${String(kind)}` })
         }
         // A propose_agent card carries the agent to create: the fields of POST /agents,
@@ -935,23 +948,38 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const run = request.headers?.['x-mndt-run']
         const turn = options.turns?.current()
         const thread = turn !== undefined && run !== undefined && run === turn.turnId ? turn : undefined
+        // A propose_context card carries the new text and the version it was
+        // written from; its channel is the running turn's, never what a request says.
+        const rawContext = typeof input.contextProposal === 'object' && input.contextProposal !== null ? input.contextProposal as Record<string, unknown> : undefined
+        const contextProposal = kind !== 'propose_context' || rawContext === undefined
+          || typeof rawContext.text !== 'string' || typeof rawContext.baseVersion !== 'number'
+          || !Number.isInteger(rawContext.baseVersion) || rawContext.baseVersion < 0
+          ? undefined
+          : { text: rawContext.text, baseVersion: rawContext.baseVersion }
+        if (kind === 'propose_context' && contextProposal === undefined) {
+          return respond(400, { error: 'a propose_context card needs contextProposal { text, baseVersion }', code: 'missing-fields' })
+        }
+        if (kind === 'propose_context' && thread === undefined) {
+          return respond(400, { error: 'a propose_context card is asked from a channel turn' })
+        }
         const asked = service.requestApproval({
           kind,
           title: typeof input.title === 'string' && input.title.trim() !== ''
             ? input.title
-            : proposal === undefined ? '' : `Créer l'agent ${proposal.name}`,
+            : proposal !== undefined ? `Créer l'agent ${proposal.name}` : kind === 'propose_context' ? 'Contexte du canal' : '',
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
           // The turn's agent, from the running turn itself: never what a request says.
           ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId, requestedByAgent: thread.agent }),
           ...(proposal === undefined ? {} : { proposal }),
+          ...(contextProposal === undefined ? {} : { contextProposal }),
         })
         // A card refused as asked (an invalid proposal, no title) is the caller's mistake.
         try {
           return respond(201, { approval: await asked })
         } catch (error) {
-          return respond(400, { error: messageOf(error) })
+          return respond(400, { error: messageOf(error), ...(error instanceof ContextRefusal ? { code: error.code } : {}) })
         }
       }
 
@@ -988,6 +1016,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           try {
             return respond(200, await service.approveAgentProposal(id, identity, role))
           } catch (error) {
+            return respond(400, { error: messageOf(error) })
+          }
+        }
+        if (card.kind === 'propose_context' && decision === 'approved') {
+          // As for an agent: approved only from a screen that shows the whole text
+          // (and the version it replaces). A screen guard, not a barrier.
+          if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
+            return respond(409, { error: 'this card proposes a channel context: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
+          }
+          try {
+            return respond(200, await service.approveContextProposal(id, identity))
+          } catch (error) {
+            if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: messageOf(error), code: error.code })
             return respond(400, { error: messageOf(error) })
           }
         }
