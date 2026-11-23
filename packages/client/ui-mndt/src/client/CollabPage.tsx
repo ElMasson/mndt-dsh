@@ -492,8 +492,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   // the authority's 504 stay errors, said with their reason: the owner must see them.
   const [refusedForFile, setRefusedForFile] = useState(false)
   const rolesFrom: unknown = state?.rolesFrom
-  const rolesFixed: 'file' | 'local' | undefined = rolesFrom === 'file' || rolesFrom === 'local' ? rolesFrom
-    : rolesFrom === undefined && refusedForFile ? 'file' : undefined
+  // Closed by default: only « authority » offers buttons; an absent field offers them until a 503
+  // no-authority (an older Host); any other value, known or not, shows the role file's note.
+  const rolesFixed: 'file' | 'local' | undefined = rolesFrom === 'authority' ? undefined
+    : rolesFrom === undefined ? (refusedForFile ? 'file' : undefined)
+      : rolesFrom === 'local' ? 'local' : 'file'
   const rolesFromFile = rolesFixed !== undefined
   /** @param result - a refused grant or revoke. @returns whether it says the roles live in the file. */
   const noAuthority = (result: { readonly status?: number; readonly code?: string; readonly error?: string }): boolean =>

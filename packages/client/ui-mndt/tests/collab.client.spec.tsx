@@ -543,6 +543,30 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     expect(await screen.findByText('L\'adresse doit être une adresse e-mail simple, sans accent ni espace.')).toBeTruthy()
   })
 
+  it('a rolesFrom the page does not know offers no button: closed by default', async () => {
+    for (const rolesFrom of ['Authority', 'files', '', 3, null]) {
+      const api = fakeFace({
+        state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom }) as never,
+        members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
+        grantMember,
+      })
+      render(<CollabPage api={api} />)
+      fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+      expect(await screen.findByTestId('roles-from-file')).toBeTruthy()
+      expect(screen.queryByRole('group', { name: /^rôle de /u })).toBeNull()
+      cleanup()
+    }
+    // « authority » offers them.
+    const api = fakeFace({
+      state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'authority' }) as never,
+      members: async () => [{ subject: 'lecteur@datanalysis.re', role: 'viewer' }],
+      grantMember,
+    })
+    render(<CollabPage api={api} />)
+    fireEvent.click(within(await rail()).getByRole('button', { name: /Administration/ }))
+    expect(await screen.findByRole('group', { name: 'rôle de lecteur@datanalysis.re' })).toBeTruthy()
+  })
+
   it('/state rolesFrom « local »: a solo station, said, and no button', async () => {
     const api = fakeFace({
       state: async () => state({ you: 'duke@datanalysis.re', role: 'owner', rolesFrom: 'local' }),
