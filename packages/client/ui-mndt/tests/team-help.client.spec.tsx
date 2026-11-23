@@ -172,3 +172,12 @@ describe('a help ended without a reading (#116)', () => {
     expect(screen.getByTestId('help-state').textContent).toBe('close sans lecture')
   })
 })
+
+describe('a question waiting is never hidden by « close sans lecture »', () => {
+  it('done without a reading but with an unanswered escalation: « une question pour vous » and its field', () => {
+    const help = read({ state: 'done', request, advices: [], skipped: [{ reason: 'redémarrage' }], escalation: { question: 'Que faire ?', messageId: 'msg_9' } })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} originMessageId="msg_1" canAnswer t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('une question pour vous')
+    expect(screen.getByRole('button', { name: 'Répondre et clore ce fil' })).toBeTruthy()
+  })
+})
