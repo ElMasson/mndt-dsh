@@ -46,6 +46,10 @@ status() { get "$@" | cut -d' ' -f1; }
 grants() { printf '%s\n' "$1" > "$data/grants.json"; }
 # What the workbench said: dsh writes to its web log (DSH_MNDT_WEB_LOG on a team
 # tenant, /state/web.log otherwise), not to the container's output.
+# Never « … | grep -q » here: under pipefail, grep -q closes the pipe at its
+# first match and a producer still writing gets SIGPIPE, so the pipeline fails
+# although the line was found (mandate-self-retired, 23/11). Count instead, or
+# give grep the text without a pipe (<<<).
 workbench_log() {
   docker exec $project-workbench sh -c 'cat "${DSH_MNDT_WEB_LOG:-/state/web.log}" 2>/dev/null'
   docker logs $project-workbench 2>&1
@@ -63,19 +67,19 @@ me_owner=$(get $owner /me); me_viewer=$(get $viewer /me)
 after=$(set_aside_lines)
 check grants-typo "$([ "$v" = 200 ] && [ "$o" = 200 ] && echo 1)" "a « viewr » row: viewer $v, owner $o"
 check grants-said-once "$([ $((after - before)) = 1 ] && echo 1)" "$((after - before)) log line(s) for 5 requests"
-check grants-skipped-owner "$(echo "$me_owner" | grep -q '"grantsSkipped":\[{"row":3' && echo 1)" "owner /me: $(echo "$me_owner" | grep -o '"grantsSkipped":[^]]*]' | head -1)"
-check grants-skipped-viewer "$(echo "$me_viewer" | grep -vq grantsSkipped && echo 1)" "viewer /me without grantsSkipped"
+check grants-skipped-owner "$(grep -q '"grantsSkipped":\[{"row":3' <<<"$me_owner" && echo 1)" "owner /me: $(echo "$me_owner" | grep -o '"grantsSkipped":[^]]*]' | head -1)"
+check grants-skipped-viewer "$(grep -vq grantsSkipped <<<"$me_viewer" && echo 1)" "viewer /me without grantsSkipped"
 
 # 2. The owner's own row set aside: no role, but the gateway's owner still sees why.
 grants "{ \"grants\": [ { \"subject\": \"$owner\", \"role\": \"ownr\" }, { \"subject\": \"$viewer\", \"role\": \"viewer\" } ] }"
 me_owner=$(get $owner /me)
-check grants-owner-row "$(echo "$me_owner" | grep -q '"shell":true' && echo "$me_owner" | grep -q '"grantsSkipped"' && [ "$(status $owner /channels)" = 403 ] && echo 1)" "owner /me: shell and grantsSkipped, /channels $(status $owner /channels)"
+check grants-owner-row "$(grep -q '"shell":true' <<<"$me_owner" && grep -q '"grantsSkipped"' <<<"$me_owner" && [ "$(status $owner /channels)" = 403 ] && echo 1)" "owner /me: shell and grantsSkipped, /channels $(status $owner /channels)"
 
 # 3. A broken file: 503 everywhere, the reason told to the owner only.
 printf '{ "grants": [ ' > "$data/grants.json"
 c_owner=$(status $owner /channels); c_viewer=$(status $viewer /channels)
 me_owner=$(get $owner /me); me_viewer=$(get $viewer /me)
-check grants-broken "$([ "$c_owner" = 503 ] && [ "$c_viewer" = 503 ] && echo "$me_owner" | grep -q '"grantsError"' && echo "$me_viewer" | grep -vq grantsError && echo 1)" "/channels $c_owner/$c_viewer, the reason in the owner's /me only"
+check grants-broken "$([ "$c_owner" = 503 ] && [ "$c_viewer" = 503 ] && grep -q '"grantsError"' <<<"$me_owner" && grep -vq grantsError <<<"$me_viewer" && echo 1)" "/channels $c_owner/$c_viewer, the reason in the owner's /me only"
 
 # 4. Every row invalid: 403 everywhere but /me and /org.
 grants "{ \"grants\": [ { \"subject\": \"$owner\", \"role\": \"boss\" }, { \"role\": \"viewer\" } ] }"
@@ -85,10 +89,10 @@ check grants-all-invalid "$([ "$codes" = '200 200 403 403 403' ] && echo 1)" "/m
 # 5. Headers a browser forges: no shell, no thread.
 grants "{ \"grants\": [ $base_rows ] }"
 forged=$(get $viewer /me -H 'x-mndt-shell: 1')
-check forged-shell "$(echo "$forged" | grep -q '"shell":false' && echo 1)" "viewer /me with x-mndt-shell: 1: $(echo "$forged" | grep -o '"shell":[a-z]*')"
+check forged-shell "$(grep -q '"shell":false' <<<"$forged" && echo 1)" "viewer /me with x-mndt-shell: 1: $(echo "$forged" | grep -o '"shell":[a-z]*')"
 card=$(curl -s -X POST -H "x-forwarded-email: $owner" -H 'x-mndt-run: trn_forged' -H 'content-type: application/json' \
   --data '{"kind":"publish","title":"Carte forgee","payload":{}}' "$base/approvals")
-check forged-run "$(echo "$card" | grep -q '"approval"' && echo "$card" | grep -vq 'requestedByAgent' && echo "$card" | grep -vq '"channelId"' && echo 1)" "a card with a forged x-mndt-run names no agent, no thread"
+check forged-run "$(grep -q '"approval"' <<<"$card" && grep -vq 'requestedByAgent' <<<"$card" && grep -vq '"channelId"' <<<"$card" && echo 1)" "a card with a forged x-mndt-run names no agent, no thread"
 
 # 6. /metrics, read by a viewer and by the owner: the owner's private card of
 # step 5 (outside any channel) is counted and dated for the owner, not for the
@@ -98,7 +102,7 @@ pending_owner=$(echo "$m_owner" | grep -o '"approvalsPending":[0-9]*' | cut -d: 
 pending_viewer=$(echo "$m_viewer" | grep -o '"approvalsPending":[0-9]*' | cut -d: -f2)
 last_owner=$(echo "$m_owner" | grep -o '"lastEventAt":[^,}]*' | cut -d: -f2-)
 last_viewer=$(echo "$m_viewer" | grep -o '"lastEventAt":[^,}]*' | cut -d: -f2-)
-check metrics-reader "$(echo "$m_owner" | grep -q '^200 ' && echo "$m_viewer" | grep -q '^200 ' && [ "${pending_owner:-0}" -gt "${pending_viewer:-0}" ] && [ "$last_owner" != "$last_viewer" ] && echo 1)" \
+check metrics-reader "$(grep -q '^200 ' <<<"$m_owner" && grep -q '^200 ' <<<"$m_viewer" && [ "${pending_owner:-0}" -gt "${pending_viewer:-0}" ] && [ "$last_owner" != "$last_viewer" ] && echo 1)" \
   "approvalsPending owner $pending_owner / viewer $pending_viewer, lastEventAt owner $last_owner / viewer $last_viewer"
 
 # 7. A mandate to oneself in other capitals, loaded at start: retired, no crash.
@@ -121,7 +125,7 @@ docker start $project-workbench >/dev/null
 # The workbench's own API, not only the gateway: /mandates answers once it loaded the state.
 for _ in $(seq 1 90); do [ "$(status $owner /mandates)" = 200 ] && break; sleep 2; done
 mandates=$(get $owner /mandates)
-check mandate-self-retired "$(echo "$mandates" | grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"retired"' && workbench_log | grep -q 'mnd_rehearsal_self retired on load' && echo 1)" \
+check mandate-self-retired "$(grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"retired"' <<<"$mandates" && [ "$(workbench_log | grep -c 'mnd_rehearsal_self retired on load')" -gt 0 ] && echo 1)" \
   "$(echo "$mandates" | grep -o '"id":"mnd_rehearsal_self"[^}]*"state":"[a-z]*"' | grep -o '"state":"[a-z]*"' | head -1), said in the log"
 
 echo "grants-checks exit $ko"
