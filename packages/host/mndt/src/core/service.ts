@@ -1413,6 +1413,42 @@ export class WorkbenchService {
   }
 
   /**
+   * Close the councils a previous process left open (deliberating, critiquing,
+   * deciding): nothing will ever run them. Each is done, with a skipped entry
+   * « redémarrage », and no decision, so no member is ever named for it.
+   * Only what predates this process: a council started since is never touched.
+   * @param before - when this process started (ISO).
+   * @returns how many were closed.
+   */
+  async closeInterruptedCouncils(before: string): Promise<number> {
+    const stale = (turn: Turn): boolean => turn.council !== undefined && turn.council.state !== 'done' && turn.council.startedAt < before
+    if (!((await this.snapshot()).messages ?? []).some(message => (message.turns ?? []).some(stale))) return 0
+    return this.#write((state) => {
+      let closed = 0
+      const at = this.#at()
+      const messages = (state.messages ?? []).map((message) => {
+        if (!(message.turns ?? []).some(stale)) return message
+        return {
+          ...message,
+          updatedAt: at,
+          turns: (message.turns ?? []).map((turn) => {
+            if (turn.council === undefined || !stale(turn)) return turn
+            closed += 1
+            // Done without a decision: what is served keeps its members withheld.
+            const { decision: _none, ...council } = turn.council
+            return { ...turn, council: { ...council, state: 'done' as const, skipped: [...council.skipped, { reason: 'redémarrage' }] } }
+          }),
+        }
+      })
+      return {
+        state: { ...state, messages },
+        event: { at, actor: 'mndt', action: 'turn.council-closed', subject: 'restart', detail: `${closed} council(s) left open by a previous process` },
+        value: closed,
+      }
+    })
+  }
+
+  /**
    * Close the helps a previous process left open (asked, advising, reading):
    * nothing will ever run them. Each is done, with a skipped entry
    * « redémarrage », and no reading, so no peer is ever named for it.
