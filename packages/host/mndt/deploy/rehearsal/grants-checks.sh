@@ -10,14 +10,32 @@ base=http://127.0.0.1:18080/mndt-api
 ko=0
 saved=$(mktemp); cp "$data/grants.json" "$saved"
 state_saved=$(mktemp); cp "$data/state.json" "$state_saved"
+# What the restore must give back: the content, the owner and the mode.
+state_was="$(stat -c '%u:%g %a' "$data/state.json") $(sha256sum < "$data/state.json" | cut -c1-16)"
+# state.json belongs to the workbench's user, not to the one running this
+# script (a write from here is « Permission denied », 23/11): it is changed
+# from a throwaway container of the same image, as root on the data folder,
+# and keeps its owner and mode. Usage: state_py [args] <<'PY' ... PY
+image=$(docker inspect -f '{{.Config.Image}}' $project-workbench)
+state_py() {
+  docker run --rm -i --user 0 --network none -v "$data:/state" -v "$state_saved:/saved:ro" \
+    --entrypoint python3 "$image" - /state/state.json "$@"
+}
 # The role file and the state are put back as they were, whatever happens.
 # The state is put back with the workbench stopped, for the same reason as in 7.
 restore() {
   cp "$saved" "$data/grants.json"
   docker stop $project-workbench >/dev/null
-  cp "$state_saved" "$data/state.json"
+  state_py <<'PY'
+import os, shutil, sys
+path = sys.argv[1]; st = os.stat(path)
+shutil.copyfile("/saved", path); os.chown(path, st.st_uid, st.st_gid); os.chmod(path, st.st_mode & 0o777)
+PY
   docker start $project-workbench >/dev/null
   for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/health")" = 200 ] && break; sleep 2; done
+  state_is="$(stat -c '%u:%g %a' "$data/state.json") $(sha256sum < "$data/state.json" | cut -c1-16)"
+  if [ "$state_is" = "$state_was" ]; then echo "OK  state-restored  state.json back as it was: owner:group mode sha $state_is"
+  else echo "KO  state-restored  state.json was « $state_was », is « $state_is »"; fi
   rm -f "$saved" "$state_saved"
 }
 trap restore EXIT
@@ -87,17 +105,21 @@ check metrics-reader "$(echo "$m_owner" | grep -q '^200 ' && echo "$m_viewer" | 
 # The workbench is stopped first: running, it keeps the state in memory and may
 # write it back over an edit made beside it.
 docker stop $project-workbench >/dev/null
-python3 - "$data/state.json" "$owner" <<'PY'
-import json, sys
+state_py "$owner" <<'PY'
+import json, os, sys
 path, owner = sys.argv[1], sys.argv[2]
+st = os.stat(path)
 state = json.load(open(path, encoding="utf-8"))
 state.setdefault("mandates", []).insert(0, {"id": "mnd_rehearsal_self", "delegant": owner.upper(), "delegataire": owner,
   "purpose": "p", "connectors": ["office365"], "missionKinds": ["briefing"], "dailyCap": 1, "expiresOn": "2099-01-01",
   "state": "active", "createdAt": "2026-11-15T00:00:00Z"})
 json.dump(state, open(path, "w", encoding="utf-8"))
+os.chown(path, st.st_uid, st.st_gid); os.chmod(path, st.st_mode & 0o777)
+print("mandate written")
 PY
 docker start $project-workbench >/dev/null
-for _ in $(seq 1 90); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/health")" = 200 ] && break; sleep 2; done
+# The workbench's own API, not only the gateway: /mandates answers once it loaded the state.
+for _ in $(seq 1 90); do [ "$(status $owner /mandates)" = 200 ] && break; sleep 2; done
 mandates=$(get $owner /mandates)
 check mandate-self-retired "$(echo "$mandates" | grep -q '"id":"mnd_rehearsal_self"[^}]*"state":"retired"' && workbench_log | grep -q 'mnd_rehearsal_self retired on load' && echo 1)" \
   "$(echo "$mandates" | grep -o '"id":"mnd_rehearsal_self"[^}]*"state":"[a-z]*"' | grep -o '"state":"[a-z]*"' | head -1), said in the log"
