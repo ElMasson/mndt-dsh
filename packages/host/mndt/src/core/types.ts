@@ -91,7 +91,7 @@ export interface MemoryNote {
 }
 
 /** An action that touches the outside world, so a person must decide it. */
-export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent'
+export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent' | 'propose_context'
 
 /** Where an approval stands. */
 export type ApprovalState = 'pending' | 'approved' | 'rejected'
@@ -134,6 +134,12 @@ export interface Approval {
    * the card, never from what a page sends.
    */
   readonly proposal?: AgentProposal
+  /**
+   * A propose_context card: the channel's new context, against the version it
+   * was written from. Applied, when approved, only if the context is still at
+   * that version (another change in between: 409, the card stays pending).
+   */
+  readonly contextProposal?: ContextProposal
   /** The agent the approval created. */
   readonly agentId?: string
 }
@@ -227,6 +233,32 @@ export interface Channel {
   readonly createdAt: string
   /** How a turn of this channel is coordinated; absent, each agent answers alone. */
   readonly coordination?: Coordination
+  /**
+   * What the channel's agents should know about it, written by its people: the
+   * one source (no AGENTS.md mirror). Given to each turn as data, never as an
+   * order: it changes neither the tools nor the agent's own framing.
+   */
+  readonly context?: ChannelContext
+}
+
+/**
+ * A channel's context. `version` grows by one at every change, an erasure
+ * included (the text is then empty): a page writes from the version it read,
+ * and a change in between is refused (409 context-changed), never overwritten.
+ */
+export interface ChannelContext {
+  readonly text: string
+  readonly version: number
+  readonly updatedBy: string
+  readonly updatedAt: string
+}
+
+/** What a propose_context card proposes. */
+export interface ContextProposal {
+  /** The new text, trimmed; empty erases the context. */
+  readonly text: string
+  /** The context version it was written from (0: the channel had none). */
+  readonly baseVersion: number
 }
 
 /**
@@ -311,8 +343,74 @@ export interface Turn {
   readonly reason?: string
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
   readonly steps?: readonly TurnStep[]
+  /**
+   * A help its agent asked its peers during this turn (ask_peers): the peers'
+   * advices, then its reading. Its cost counts in this turn's eur, for the
+   * agent that asked. Served without the peers' identities until `reading`.
+   */
+  readonly help?: TurnHelp
   readonly startedAt?: string
   readonly finishedAt?: string
+}
+
+/** What a blocked agent needs from its peers. */
+export type HelpNeed = 'fact' | 'opinion' | 'check' | 'choice'
+
+/** A help request, structured: refused when a field is missing. */
+export interface HelpRequest {
+  readonly task: string
+  readonly tried: string
+  readonly blocker: string
+  readonly options: readonly string[]
+  readonly need: HelpNeed
+}
+
+/** One peer's advice. `agentId` and `model` are served only once the asker has read them. */
+export interface HelpAdvice {
+  readonly slot: 'A' | 'B'
+  readonly round: 1 | 2
+  readonly text: string
+  readonly eur?: number
+  readonly tokens?: Mission['tokens']
+  readonly agentId?: string
+  readonly model?: string
+}
+
+/** What the asker made of the advices. */
+export interface HelpReading {
+  /** The slots retained (« A », « B », « A+B ») or « aucun ». */
+  readonly retained: string
+  readonly why: string
+  readonly verdict: 'unblocked' | 'card' | 'escalate'
+}
+
+/** A question put to the channel's people when the peers did not unblock the asker. */
+export interface HelpEscalation {
+  readonly question: string
+  readonly summary: string
+  readonly at: string
+  /** The asker's message that publishes the question: a person answers it by replying to it. */
+  readonly messageId?: string
+  readonly answeredAt?: string
+  readonly answeredBy?: string
+}
+
+/** A help asked during a turn, and where it stands. */
+export interface TurnHelp {
+  readonly state: 'asked' | 'advising' | 'reading' | 'done'
+  readonly request: HelpRequest
+  /** The peers asked, slot A first: served only once `reading` is set. */
+  readonly peerIds: readonly string[]
+  readonly advices: readonly HelpAdvice[]
+  readonly reading?: HelpReading
+  readonly escalation?: HelpEscalation
+  /** A person who answered in the thread while the help ran: it ended there, without reading. */
+  readonly closedBy?: { readonly by: string; readonly at: string }
+  /** What the help cost (advices and reading), counted for the asker. */
+  readonly eur?: number
+  readonly capEur: number
+  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string }[]
+  readonly askedAt: string
 }
 
 /** One message of a channel. */
@@ -376,5 +474,5 @@ export function isMissionStatus(value: unknown): value is MissionStatus {
 
 /** @param value - the candidate action. @returns true when it leaves the building. */
 export function needsApproval(value: string): value is ApprovalAction {
-  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent'
+  return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent' || value === 'propose_context'
 }

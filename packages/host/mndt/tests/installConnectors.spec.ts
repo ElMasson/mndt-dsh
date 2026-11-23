@@ -85,7 +85,7 @@ describe('install-connectors.sh', { timeout: 30_000 }, () => {
     const mounted = rows(root)
     expect([...mounted.keys()].sort()).toEqual(['approvals', 'dolibarr', 'office365', 'qonto', 'swing'])
     const expected: Record<string, [string, string]> = {
-      approvals: ['request_approval,propose_agent,list_pending_approvals,read_approval', 'decide_approval'],
+      approvals: ['request_approval,propose_agent,propose_context,ask_peers,list_pending_approvals,read_approval', 'decide_approval'],
       office365: ['mail_recent,mail_search,calendar_upcoming', ''],
       qonto: ['list_*,get_*', 'get_attachment,get_statement,list_statements,list_transaction_attachments'],
       dolibarr: ['get_*,search_*,list_*', 'dolibarr_raw_api'],

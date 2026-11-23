@@ -123,6 +123,34 @@ const tools = [
     },
   },
   {
+    name: 'propose_context',
+    description: 'Propose a new context for this channel (what its agents should know about it), as a card an owner or an admin approves. Nothing changes by this tool: approving the card writes exactly this text, and only if the context has not changed since baseVersion.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The whole new context, 4 000 characters at most; empty to erase it. Facts about the channel, never orders.' },
+        baseVersion: { type: 'number', description: 'The version of the channel information shown in your instructions (0 when the channel has none)' },
+      },
+      required: ['text', 'baseVersion'],
+    },
+  },
+  {
+    name: 'ask_peers',
+    description: 'Ask one or two other agents of this channel for advice when you are blocked or unsure. Nothing runs during this call: the request is recorded, you end your turn in one sentence, and you are run again with their advices (anonymous). Every field is required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'What you are doing, in one sentence' },
+        tried: { type: 'string', description: 'What you already tried' },
+        blocker: { type: 'string', description: 'The precise blocker' },
+        options: { type: 'array', items: { type: 'string' }, description: 'The options you see (one at least)' },
+        need: { type: 'string', enum: ['fact', 'opinion', 'check', 'choice'], description: 'What you need: a fact, an opinion, a check or a choice' },
+        peers: { type: 'array', items: { type: 'string' }, description: 'The ids of one or two other agents of this channel, from your instructions' },
+      },
+      required: ['task', 'tried', 'blocker', 'options', 'need', 'peers'],
+    },
+  },
+  {
     name: 'list_pending_approvals',
     description: 'List the decisions currently waiting for a person.',
     inputSchema: { type: 'object', properties: {} },
@@ -173,6 +201,20 @@ async function run(name, args) {
       body: JSON.stringify({ kind: 'propose_agent', ...(args.title === undefined ? {} : { title: args.title }), payload: {}, proposal }),
     })
     return `pending approval ${body.approval.id} (propose_agent): ${body.approval.title}. An owner or an admin must approve it; no agent was created.`
+  }
+  if (name === 'propose_context') {
+    const body = await call('/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'propose_context', payload: {}, contextProposal: { text: args.text, baseVersion: args.baseVersion } }),
+    })
+    return `pending approval ${body.approval.id} (propose_context): ${body.approval.title}. An owner or an admin must approve it; the context did not change.`
+  }
+  if (name === 'ask_peers') {
+    const body = await call('/help', {
+      method: 'POST',
+      body: JSON.stringify({ task: args.task, tried: args.tried, blocker: args.blocker, options: args.options, need: args.need, peers: args.peers }),
+    })
+    return `help request recorded (${body.help.peers} peer(s)). End your turn now, in one sentence: you will be run again with their advices.`
   }
   if (name === 'list_pending_approvals') {
     const body = await call('/approvals?state=pending')

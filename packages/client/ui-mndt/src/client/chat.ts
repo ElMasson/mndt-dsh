@@ -41,6 +41,8 @@ export interface ChatChannel {
   readonly createdAt: string
   /** « Auteur puis vérificateur » (#84), read through `coordinationOf`, never trusted as is. */
   readonly coordination?: unknown
+  /** What the channel's agents read before answering (lot 3), read through `contextOf`. Members only. */
+  readonly context?: unknown
 }
 
 /** Who wrote a message. */
@@ -81,6 +83,8 @@ export interface ChatTurn {
   readonly finishedAt?: string
   /** The steps of a coordinated turn (#84), read through `stepsOf`, never trusted as is. */
   readonly steps?: unknown
+  /** Its agent's help from its peers (`ask_peers`), read through `helpOf`, never trusted as is. */
+  readonly help?: unknown
 }
 
 /** One message of a channel. */
@@ -124,6 +128,8 @@ export interface ChatCard {
    * read through `proposalOf`, never trusted as is.
    */
   readonly proposal?: unknown
+  /** What a propose_context card proposes (`{ text, baseVersion }`, #109), read through `contextProposalOf`. */
+  readonly contextProposal?: unknown
   /** The mission that asked for it, when one did (such a card belongs to no channel). */
   readonly missionId?: string
   /** The agent whose turn asked for it; `requestedBy` stays the person accountable for the turn. */
@@ -190,8 +196,15 @@ export interface ChatFace {
    * then a verifier of another model. Optional: the team page only.
    */
   setCoordination?(channelId: string, change: CoordinationChange): Promise<ChatChannel>
+  /**
+   * Write the channel's context (`POST /channels/:id/context`, owners and admins): the text, and the
+   * version it replaces (a change since is refused 409 `context-changed`). Optional: the team page only.
+   */
+  setContext?(channelId: string, change: { readonly text: string; readonly version: number }): Promise<ChatChannel>
   /** The connectors mounted on this workbench (`GET /connectors`). Optional: the team page only. */
   mounted?(): Promise<readonly MountedConnector[]>
+  /** The open questions of agents after their peers' help, in the reader's channels (`GET /escalations`). */
+  escalations?(): Promise<readonly OpenEscalation[]>
   /** The models offered to agents (`GET /models`, #82). Optional: the team page only. */
   models?(): Promise<readonly OfferedModel[]>
   /** Declare an agent (`POST /agents`, agents.write). Optional: the team page only. */
@@ -211,6 +224,19 @@ export interface AgentInput {
   readonly connectors?: readonly string[]
   /** The monthly ceiling, in euros (5 by default on the server). */
   readonly eurPerMonth?: number
+}
+
+/** An agent's open question after its peers' help, as `GET /escalations` serves it. */
+export interface OpenEscalation {
+  readonly channelId: string
+  readonly turnId: string
+  /** The message whose turn asked. */
+  readonly messageId: string
+  /** The message that publishes the question: a reply to it answers. */
+  readonly questionMessageId: string
+  readonly question: string
+  readonly summary?: string
+  readonly at?: string
 }
 
 /** A model the core offers to agents: one line of `GET /models`. */

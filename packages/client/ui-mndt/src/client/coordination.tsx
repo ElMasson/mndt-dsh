@@ -425,7 +425,7 @@ function parallelTurn(turn: ChatTurn, steps: readonly TurnStep[], agents: Readon
   const synthesised = synthesis !== undefined && synthesis.verdict === undefined
   const parts = [
     t('coordParallelBy', { handles: workers.map(s => handle(s.agentId)).join(', ') }),
-    received.length === workers.length ? undefined : t('coordPartsOf', { got: received.length, total: workers.length }),
+    received.length === workers.length ? undefined : t(received.length <= 1 ? 'coordPartOf' : 'coordPartsOf', { got: received.length, total: workers.length }),
     synthesised ? t('coordSynthBy', { handle: handle(synthesis.agentId) }) : undefined,
     turn.eur === undefined ? undefined : euros(turn.eur),
   ].filter((part): part is string => part !== undefined)

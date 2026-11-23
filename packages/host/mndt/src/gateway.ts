@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import { JsonFileStore, WorkbenchService } from './core/index.ts'
+import { reconcileInterrupted } from './reconcile.ts'
 import type { ApprovalState, MissionKind } from './core/index.ts'
 import type { Mission, PageState } from './types.ts'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -163,6 +164,9 @@ export class WorkbenchGateway extends TypertRemoteService {
    * @param ctx - owning context.
    * @param config - deployment configuration.
    */
+  /** When this process started: what a previous one left is older. */
+  readonly #startedAt = new Date().toISOString()
+
   constructor(ctx: Context, config: MndtConfig = {}) {
     super(ctx, 'mndt')
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
@@ -187,7 +191,11 @@ export class WorkbenchGateway extends TypertRemoteService {
         : localGrants(config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? this.identity)
 
     this.#scheduleAutomations(ctx)
-    this.#reconcileInterrupted(ctx)
+    // What a previous process left unfinished is settled BEFORE the API opens,
+    // and only what predates this start: a mention posted in the first seconds
+    // is never cancelled as if it were left over.
+    const reconciled = reconcileInterrupted(this.service, this.#startedAt,
+      (message) => { warnOperator(ctx, message) }, (message) => { ctx.logger.error(message) })
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
@@ -211,7 +219,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
       warnOperator(ctx, 'mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
     }
-    const ready = (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile)).then(tokens =>
+    const ready = reconciled.then(() => (this.tokensFile === undefined ? Promise.resolve({}) : loadTokens(this.tokensFile))).then(tokens =>
       startMndtApi({
         service: this.service,
         runner,
@@ -254,30 +262,6 @@ export class WorkbenchGateway extends TypertRemoteService {
       })
       return () => { server?.close() }
     }, 'mndt: product API')
-  }
-
-  /**
-   * Mark missions left `running` by a previous process as failed.
-   *
-   * A workbench restart kills the agent turn that owned the mission, so nothing
-   * will ever finish it. Leaving it running would let the page show work that is
-   * not happening: the mission is failed with the reason that actually occurred.
-   * @param ctx - the host context, used for the log line.
-   */
-  #reconcileInterrupted(ctx: Context): void {
-    void (async () => {
-      try {
-        const stuck = await this.service.listMissions({ status: 'running' })
-        for (const mission of stuck) {
-          await this.service.failMission(mission.id, 'interrupted by a workbench restart; no result was produced')
-        }
-        if (stuck.length > 0) {
-          warnOperator(ctx, `mndt: ${stuck.length} mission(s) left running by a previous process were marked failed`)
-        }
-      } catch (error) {
-        ctx.logger.error(`mndt: could not reconcile interrupted missions: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    })()
   }
 
   /**

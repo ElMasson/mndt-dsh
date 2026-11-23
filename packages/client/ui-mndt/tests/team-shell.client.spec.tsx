@@ -292,7 +292,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
     expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
     expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
     // Members by the part before @, the address kept as title.
@@ -584,7 +584,9 @@ describe('the channel panel, by pills', () => {
   it('a reader without the right sees every pill inert but reachable, and why', async () => {
     const panel = await open(double(), false)
     await within(panel).findByRole('button', { name: /qonto/u })
-    for (const button of within(panel).getAllByRole('button').filter(b => b.classList.contains('mw-pill'))) {
+    // The agent and connector pills; asking an agent for the context stays open to everyone.
+    const pills = [...within(panel).getByTestId('agent-pills').querySelectorAll('.mw-pill'), ...within(panel).getByTestId('connector-pills').querySelectorAll('.mw-pill')]
+    for (const button of pills) {
       expect(button.getAttribute('aria-disabled')).toBe('true')
       expect((button as HTMLButtonElement).disabled).toBe(false)
     }
@@ -667,5 +669,25 @@ describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20
     const arrival = await screen.findByTestId('team-arrival', {}, { timeout: 5000 })
     expect(within(arrival).getByRole('heading').textContent).toBe('Bienvenue, Sophie Marion')
     expect(arrival.textContent).toContain('un owner ou un admin ouvre votre accès')
+  })
+})
+
+describe('À traiter lists the agents\' open questions (GET /escalations)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-23T08:00:00.000Z'
+  const team = { id: 'chn_1', name: 'compta', title: 'compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  it('each question with its summary and a link to its channel; counted in the badge', async () => {
+    const chat = createMockChat({
+      you, agents: [], channels: [team],
+      escalations: [{ channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: 'msg_2', question: 'Quel montant retenir ?', summary: 'A dit 1 640 €, B dit 1 460 €.', at }],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ approvals: [] }))} chat={chat} tc={chatFrench} team={{}} />)
+    const nav = await screen.findByTestId('side-nav')
+    await waitFor(() => { expect(within(nav).getByLabelText('1 en attente')).toBeTruthy() })
+    fireEvent.click(within(nav).getByRole('button', { name: /À traiter/u }))
+    const question = await screen.findByTestId('pending-question')
+    expect(question.textContent).toContain('Question pour vous : Quel montant retenir ?')
+    fireEvent.click(within(question).getByRole('button', { name: 'Répondre dans # compta' }))
+    expect(await screen.findByRole('heading', { name: '# compta' })).toBeTruthy()
   })
 })

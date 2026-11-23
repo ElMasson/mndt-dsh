@@ -97,6 +97,8 @@
     "allow": [
       "request_approval",
       "propose_agent",
+      "propose_context",
+      "ask_peers",
       "list_pending_approvals",
       "read_approval"
     ],

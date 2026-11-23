@@ -5,7 +5,7 @@
  */
 import { ChatRefusal } from './chat.ts'
 import { readWithin } from './deadline.ts'
-import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, MountedConnector, OfferedModel } from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 
 /** Where the gateway mounts the API on the page origin. */
 const BASE = '/mndt-api'
@@ -92,6 +92,8 @@ export function createHttpChat(
       ).channel,
     removeAgents: async (channelId, agentIds) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/agents`, { remove: agentIds })).channel,
+    setContext: async (channelId, change) =>
+      (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/context`, change)).channel,
     setCoordination: async (channelId, change) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/coordination`, change)).channel,
     setConnectors: async (channelId, servers) =>
@@ -104,6 +106,22 @@ export function createHttpChat(
         const m = row as Partial<OfferedModel> | null
         return m !== null && typeof m === 'object' && typeof m.provider === 'string' && typeof m.model === 'string'
       }).map(m => ({ provider: m.provider, model: m.model }))
+    },
+    escalations: async () => {
+      const body = await get<{ escalations?: unknown }>('/escalations')
+      // A row of another shape is dropped: the page shows only what it can read.
+      return (Array.isArray(body.escalations) ? body.escalations : []).flatMap((row: unknown): OpenEscalation[] => {
+        const e = row as Partial<Record<keyof OpenEscalation, unknown>> | null
+        if (e === null || typeof e !== 'object') return []
+        const { channelId, turnId, messageId, questionMessageId, question, summary, at } = e
+        if (typeof channelId !== 'string' || typeof turnId !== 'string' || typeof messageId !== 'string'
+          || typeof questionMessageId !== 'string' || typeof question !== 'string' || question.trim() === '') return []
+        return [{
+          channelId, turnId, messageId, questionMessageId, question: question.slice(0, 2000),
+          ...(typeof summary === 'string' && summary.trim() !== '' ? { summary: summary.slice(0, 4000) } : {}),
+          ...(typeof at === 'string' ? { at } : {}),
+        }]
+      })
     },
     mounted: async () => {
       const body = await get<{ connectors?: unknown }>('/connectors')
