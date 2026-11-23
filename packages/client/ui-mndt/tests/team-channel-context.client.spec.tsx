@@ -141,3 +141,17 @@ describe('an erased context and an erase proposal (#109)', () => {
     expect(screen.getByRole('button', { name: 'Valider' })).toBeTruthy()
   })
 })
+
+describe('a proposed context is read whole before it is validated', () => {
+  it('a 30-line proposal is rendered in full on the card; what it replaces stays folded', () => {
+    const text = Array.from({ length: 30 }, (_, i) => `Ligne ${i + 1}`).join('\n')
+    const long = Array.from({ length: 12 }, (_, i) => `Ancienne ${i + 1}`).join('\n')
+    const now = { ...channel, context: { text: long, version: 3 } }
+    render(<WebCard card={card({ contextProposal: { text, baseVersion: 3 } })} canDecide onDecide={vi.fn()} channel={now} t={chatFrench} />)
+    const proposed = screen.getByTestId('context-proposed')
+    expect(proposed.textContent).toContain('Ligne 1')
+    expect(proposed.textContent).toContain('Ligne 30')
+    expect(within(proposed).queryByRole('button', { name: 'Tout lire' })).toBeNull()
+    expect(screen.getByTestId('context-current').textContent).not.toContain('Ancienne 12')
+  })
+})

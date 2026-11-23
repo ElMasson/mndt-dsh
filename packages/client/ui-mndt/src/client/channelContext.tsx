@@ -85,10 +85,12 @@ export function ContextFrame(props: {
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly t: ChatTranslate
   readonly testId?: string
+  /** Shown whole, never folded: a text to approve is read in full (a proposal on a card). */
+  readonly whole?: boolean
 }): ReactNode {
   const { context, t } = props
   const [open, setOpen] = useState(false)
-  const long = context.text.split('\n').length > FOLD_LINES
+  const long = props.whole !== true && context.text.split('\n').length > FOLD_LINES
   const who = context.updatedBy === undefined ? undefined : shownName(context.updatedBy, props.names)
   return (
     <div className="mw-quoted" data-testid={props.testId ?? 'channel-context'}>

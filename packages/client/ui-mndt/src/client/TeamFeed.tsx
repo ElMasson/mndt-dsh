@@ -219,6 +219,7 @@ export function WebCard(props: {
               names={props.names}
               t={t}
               testId="context-proposed"
+              whole
             />
           )}
           {props.channel === undefined ? undefined : (
