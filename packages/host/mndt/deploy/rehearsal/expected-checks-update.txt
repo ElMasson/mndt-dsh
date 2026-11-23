@@ -6,11 +6,17 @@ admin-no-owner-brief
 agent-turn
 briefing-private
 channel
+context-injected
 coord-author-verifier
 coord-bound
 coord-parallel
+council-answered
+council-tie-escalated
+council-vote
 french
 gateway-alive
+help-escalated-anonymous
+help-revealed
 landing-text
 llm-called
 member-no-mission
@@ -21,6 +27,8 @@ no-modal
 old-brief-private
 page
 probe-turn
+restart-closes
+restart-closes-council
 routes-real-scaleway
 scheduler-first-pass
 seed-restart

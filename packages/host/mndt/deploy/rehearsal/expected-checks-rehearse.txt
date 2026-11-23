@@ -6,9 +6,13 @@ agent-turn
 briefing-private
 channel
 complete
+context-injected
 coord-author-verifier
 coord-bound
 coord-parallel
+council-answered
+council-tie-escalated
+council-vote
 counter-proof
 e2e-in-image
 env-names
@@ -23,6 +27,8 @@ grants-said-once
 grants-skipped-owner
 grants-skipped-viewer
 grants-typo
+help-escalated-anonymous
+help-revealed
 image-clean
 landing-text
 live-no-leak
@@ -40,6 +46,8 @@ no-modal
 page
 probe-sees
 probe-turn
+restart-closes
+restart-closes-council
 routes-real-scaleway
 scan-witness
 scheduler-first-pass

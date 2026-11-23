@@ -245,6 +245,8 @@ async function turnIn(channelId, text) {
 }
 if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
   const room = (await api('POST', '/channels', { name: 'coordination', agents: [assistant.id, analyste.id, qwen.id], members: [] })).body.channel
+  // The channel's context (#109, #110): each kind of prompt below reads it between its own mark.
+  const contexted = await api('POST', `/channels/${room.id}/context`, { text: 'Contexte de répétition : les montants sont HT.', version: 0 })
   // « Auteur puis vérificateur »: @assistant writes, @analyste (another model) checks.
   const pair = await api('POST', `/channels/${room.id}/coordination`, { mode: 'author-verifier', author: assistant.id, verifier: analyste.id })
   const checked = await turnIn(room.id, '@assistant fais le point du trimestre')
@@ -277,6 +279,68 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
     && stopped?.agentId === analyste.id && /borne/.test(stopped?.notes?.[0] ?? '')
     && typeof held?.eur === 'number' && held.eur > 0 && held.eur <= tight,
   `status ${held?.status}, steps ${heldSteps.map(step => `${step.role}${step.verdict ? `:${step.verdict}` : ''}@${agents.find(a => a.id === step.agentId)?.handle ?? step.agentId}`).join(' ')}, « ${stopped?.notes?.[0] ?? '-'} », eur ${held?.eur} (bound ${tight} €)`)
+  const contexts = [...logs('fakellm').matchAll(/fake-llm context \d+: (\w+) (ok|ko|-)/g)].map(m => [m[1], m[2]])
+  const bounded = kind => contexts.some(([k, v]) => k === kind && v === 'ok')
+  check('context-injected', contexted.status === 200 && bounded('turn') && bounded('verifier') && bounded('synthesis') && !contexts.some(([, v]) => v === 'ko'),
+    `context ${contexted.status}; ${['turn', 'verifier', 'synthesis'].map(k => `${k} ${bounded(k) ? 'bounded' : 'MISSING'}`).join(', ')}, ${contexts.filter(([, v]) => v === 'ko').length} unbounded`)
+
+  /** @param channelId - a channel. @param messageId - a message. @returns its first turn, as served. */
+  const turnOf = async (channelId, messageId) =>
+    ((await api('GET', `/channels/${channelId}/messages`)).body.messages ?? []).find(m => m.id === messageId)?.turns?.[0]
+  /** @param probe - what to wait for. @returns its value once truthy, or the last one after a minute. */
+  const until = async (probe) => {
+    let value
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      value = await probe()
+      if (value) return value
+      await sleep(1000)
+    }
+    return value
+  }
+  const escalations = async () => (await api('GET', '/escalations')).body.escalations ?? []
+
+  // Peer help (#113): @qwen asks @assistant and @analyste, reads them, escalates; the
+  // question waiting, nobody is named; a person answers, they are.
+  const helpRoom = (await api('POST', '/channels', { name: 'entraide', agents: [assistant.id, analyste.id, qwen.id], members: [] })).body.channel
+  const helped = await turnIn(helpRoom.id, '@qwen sonde-entraide le point du trimestre ?')
+  const help = helped?.help
+  const waiting = (await escalations()).find(e => e.turnId === helped?.id)
+  check('help-escalated-anonymous', helped?.status === 'done' && help?.state === 'done' && help.reading?.verdict === 'escalate'
+    && help.advices.length === 2 && help.peerIds.length === 0 && help.advices.every(a => a.agentId === undefined && a.model === undefined && a.eur === undefined)
+    && typeof help.escalation?.messageId === 'string' && waiting?.kind === 'help',
+  `turn ${helped?.status}, help ${help?.state}, verdict ${help?.reading?.verdict}, ${help?.advices.length ?? 0} advice(s), peers served ${help?.peerIds.length ?? '-'}, named ${help?.advices.filter(a => a.agentId !== undefined).length ?? '-'}, listed ${waiting?.kind ?? 'no'}`)
+  const answer = help?.escalation?.messageId === undefined ? undefined
+    : (await api('POST', `/channels/${helpRoom.id}/messages`, { text: 'Oui, elle est HT.', replyTo: help.escalation.messageId })).body.message
+  const relaunched = answer === undefined ? undefined
+    : await until(async () => { const t = await turnOf(helpRoom.id, answer.id); return t !== undefined && !['queued', 'running'].includes(t.status) ? t : undefined })
+  const revealed = (await turnOf(helpRoom.id, (await api('GET', `/channels/${helpRoom.id}/messages`)).body.messages?.find(m => m.turns?.[0]?.help !== undefined)?.id))?.help
+  check('help-revealed', revealed?.escalation?.answeredAt !== undefined && revealed.advices.every(a => [assistant.id, analyste.id].includes(a.agentId))
+    && relaunched?.agentId === qwen.id && !(await escalations()).some(e => e.turnId === helped?.id),
+  `answered ${revealed?.escalation?.answeredAt !== undefined}, advices by ${revealed?.advices.map(a => agents.find(x => x.id === a.agentId)?.handle ?? '?').join(' ')}, @qwen relaunched ${relaunched?.status ?? 'no'}`)
+
+  // « Conseil » (#119): a vote that decides, then a tie that escalates and a person who answers.
+  const councilRoom = (await api('POST', '/channels', { name: 'conseil', agents: [qwen.id, assistant.id, analyste.id], members: [] })).body.channel
+  const convened = await api('POST', `/channels/${councilRoom.id}/coordination`, { mode: 'council', members: [qwen.id, assistant.id, analyste.id] })
+  const voted = await turnIn(councilRoom.id, '@qwen conseil-vote HT ou TTC ?')
+  check('council-vote', convened.status === 200 && voted?.status === 'done' && voted.council?.decision?.kind === 'vote' && voted.council.decision.chosen === 1
+    && voted.council.options.at(-1) === 'aucune de ces options' && voted.council.positions.length === 3 && voted.council.positions.every(p => p.agentId !== undefined),
+  `coordination ${convened.status}, turn ${voted?.status}, decision ${JSON.stringify(voted?.council?.decision ?? null)}, ${voted?.council?.positions.length ?? 0} position(s)`)
+  // Every call the fake model receives: none may follow a person's answer to a council.
+  const framings = () => (logs('fakellm').match(/fake-llm call \d+:/g) ?? []).length
+  const tied = await turnIn(councilRoom.id, '@qwen conseil-egalite HT ou TTC ?')
+  const tiedListed = (await escalations()).find(e => e.turnId === tied?.id)
+  check('council-tie-escalated', tied?.council?.decision?.kind === 'vote' && tied.council.decision.chosen === undefined
+    && typeof tied.council.escalation?.messageId === 'string' && tied.council.positions.every(p => p.agentId === undefined && p.eur === undefined)
+    && tiedListed?.kind === 'council',
+  `decision ${JSON.stringify(tied?.council?.decision ?? null)}, escalation ${tied?.council?.escalation?.messageId ?? 'none'}, named ${tied?.council?.positions.filter(p => p.agentId !== undefined).length ?? '-'}, listed ${tiedListed?.kind ?? 'no'}`)
+  const callsBefore = framings()
+  if (tied?.council?.escalation?.messageId !== undefined) {
+    await api('POST', `/channels/${councilRoom.id}/messages`, { text: 'HT.', replyTo: tied.council.escalation.messageId })
+  }
+  const answered = await until(async () => { const t = await turnOf(councilRoom.id, (await api('GET', `/channels/${councilRoom.id}/messages`)).body.messages?.find(m => m.turns?.[0]?.id === tied?.id)?.id); return t?.council?.escalation?.answeredAt === undefined ? undefined : t })
+  await sleep(3000)
+  check('council-answered', answered?.council?.positions.every(p => p.agentId !== undefined) === true && framings() === callsBefore,
+    `answered ${answered?.council?.escalation?.answeredAt ?? 'no'}, named ${answered?.council?.positions.filter(p => p.agentId !== undefined).length ?? '-'}, calls after the answer ${framings() - callsBefore}`)
 } else {
   check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
 }
@@ -290,5 +354,67 @@ const workbenchAfter = started('workbench')
 check('workbench-alive', workbenchBefore === workbenchAfter, `before « ${workbenchBefore} », after « ${workbenchAfter} »`)
 const health = await fetch(`${BASE}/mndt-api/health`).then(r => r.status, () => 0)
 check('still-serves', health === 200, `health ${health}`)
+
+// A help left open by a restart (#115, #116): the guide's count (§13.4) reads 1,
+// the workbench restarts, its start closes the help and cancels the turn, the
+// count reads 0. Last, since it restarts the workbench (after workbench-alive).
+const asOwner = async (method, path, body) => {
+  const answer = await fetch(`${BASE}/mndt-api${path}`, {
+    method, headers: { 'x-forwarded-email': OWNER, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }).catch(() => undefined)
+  return { status: answer?.status ?? 0, body: answer === undefined ? {} : await answer.json().catch(() => ({})) }
+}
+/** @returns the guide's count of helps and councils not done, run with jq on a copy of state.json. */
+const openCount = () => {
+  const copy = `/tmp/${project}-state-${Date.now()}.json`
+  docker('cp', `${project}-workbench:/state/state.json`, copy)
+  return execFileSync('jq', ['[.messages[]?.turns[]? | select((.help != null and .help.state != "done") or (.council != null and .council.state != "done"))] | length', copy], { encoding: 'utf8' }).trim()
+}
+const entraide = ((await asOwner('GET', '/channels')).body.channels ?? []).find(c => c.name === 'entraide')
+const slow = entraide === undefined ? undefined : (await asOwner('POST', `/channels/${entraide.id}/messages`, { text: '@qwen sonde-entraide sonde-lente encore ?' })).body.message
+let advising
+for (let attempt = 0; attempt < 60 && slow !== undefined; attempt += 1) {
+  advising = ((await asOwner('GET', `/channels/${entraide.id}/messages`)).body.messages ?? []).find(m => m.id === slow.id)?.turns?.[0]
+  if (advising?.help?.state === 'advising') break
+  await sleep(1000)
+}
+const before = advising?.help?.state === 'advising' ? openCount() : 'no help open'
+docker('restart', `${project}-workbench`)
+let back = 0
+for (let attempt = 0; attempt < 90 && back !== 200; attempt += 1) {
+  await sleep(2000)
+  back = (await asOwner('GET', '/me')).status
+}
+const after = back === 200 ? openCount() : 'no API'
+const closed = slow === undefined ? undefined : ((await asOwner('GET', `/channels/${entraide.id}/messages`)).body.messages ?? []).find(m => m.id === slow.id)?.turns?.[0]
+check('restart-closes', before === '1' && after === '0' && closed?.status === 'cancelled' && closed.reason === 'interrompu par un redémarrage'
+  && closed.help?.state === 'done' && closed.help.skipped.some(s => s.reason === 'avis non obtenu : redémarrage'),
+`count before ${before}, after ${after}, turn ${closed?.status} « ${closed?.reason ?? '-'} », help ${closed?.help?.state ?? '-'}, API back ${back}`)
+
+// The same for a council left open (#119): turns run one at a time, so the
+// help and the council are left open one after the other.
+const conseil = ((await asOwner('GET', '/channels')).body.channels ?? []).find(c => c.name === 'conseil')
+const slowCouncil = conseil === undefined ? undefined : (await asOwner('POST', `/channels/${conseil.id}/messages`, { text: '@qwen sonde-lente HT ou TTC ?' })).body.message
+let deliberating
+for (let attempt = 0; attempt < 60 && slowCouncil !== undefined; attempt += 1) {
+  deliberating = ((await asOwner('GET', `/channels/${conseil.id}/messages`)).body.messages ?? []).find(m => m.id === slowCouncil.id)?.turns?.[0]
+  if (deliberating?.council?.state === 'deliberating' && deliberating.council.options.length > 0) break
+  await sleep(1000)
+}
+const councilBefore = deliberating?.council?.state === 'deliberating' ? openCount() : 'no council open'
+docker('restart', `${project}-workbench`)
+let councilBack = 0
+for (let attempt = 0; attempt < 90 && councilBack !== 200; attempt += 1) {
+  await sleep(2000)
+  councilBack = (await asOwner('GET', '/me')).status
+}
+const councilAfter = councilBack === 200 ? openCount() : 'no API'
+const closedCouncil = slowCouncil === undefined ? undefined
+  : ((await asOwner('GET', `/channels/${conseil.id}/messages`)).body.messages ?? []).find(m => m.id === slowCouncil.id)?.turns?.[0]
+check('restart-closes-council', councilBefore === '1' && councilAfter === '0' && closedCouncil?.status === 'cancelled'
+  && closedCouncil.council?.state === 'done' && closedCouncil.council.decision === undefined
+  && closedCouncil.council.skipped.some(s => s.reason === 'avis non obtenu : redémarrage')
+  && closedCouncil.council.positions.every(p => p.agentId === undefined),
+`count before ${councilBefore}, after ${councilAfter}, turn ${closedCouncil?.status}, council ${closedCouncil?.council?.state ?? '-'}, API back ${councilBack}`)
 console.log(`\nTOTAL ok=${results.filter(r => r.ok).length} ko=${results.filter(r => !r.ok).length}`)
 process.exit(results.some(r => !r.ok) ? 1 : 0)
