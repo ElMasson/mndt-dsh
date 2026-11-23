@@ -17,6 +17,7 @@ import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './Ch
 import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
 import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
+import { TeamAgentSheet } from './TeamAgentSheet.tsx'
 import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
@@ -347,6 +348,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const canManageAgents = chat?.createAgent !== undefined && (state?.role === 'owner' || state?.role === 'admin')
   const [editing, setEditing] = useState<ChatAgent | 'new' | undefined>(undefined)
   // An agent's sheet opens on the agent as it is now, read again, not as the list last showed it.
+  // The agent whose readable sheet is open in the Agents view (lot 3), for everyone.
+  const [viewing, setViewing] = useState<ChatAgent | undefined>(undefined)
   const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
     if (chat === undefined) return
     try {
@@ -1827,6 +1830,19 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   t={tc}
                 />
               )}
+              {viewing === undefined || editing !== undefined ? undefined : (
+                <TeamAgentSheet
+                  key={viewing.id}
+                  agent={chatAgents.find(a => a.id === viewing.id) ?? viewing}
+                  agents={chatAgents}
+                  channels={chatChannels ?? []}
+                  mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
+                  names={team.names}
+                  onEdit={canManageAgents ? () => { const agent = viewing; setViewing(undefined); void openAgent(agent) } : undefined}
+                  onClose={() => { setViewing(undefined) }}
+                  t={tc}
+                />
+              )}
               {chatAgents.filter(a => a.retiredAt === undefined).length === 0 ? (
                 <div className="mw-empty-state"><p>{t('shell.agents-none')}</p></div>
               ) : (
@@ -1841,16 +1857,15 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     )
                     return (
                       <li key={agent.id} data-testid="team-agent">
-                        {canManageAgents ? (
-                          <button
-                            type="button"
-                            className="mw-tile mw-tile-link"
-                            aria-label={tc('agentEdit', { name: agent.name })}
-                            onClick={() => { void openAgent(agent) }}
-                          >
-                            {body}
-                          </button>
-                        ) : <div className="mw-tile">{body}</div>}
+                        <button
+                          type="button"
+                          className="mw-tile mw-tile-link"
+                          aria-label={tc('sheetOpen', { name: agent.name })}
+                          aria-expanded={viewing?.id === agent.id}
+                          onClick={() => { setEditing(undefined); setViewing(held => (held?.id === agent.id ? undefined : agent)) }}
+                        >
+                          {body}
+                        </button>
                       </li>
                     )
                   })}
