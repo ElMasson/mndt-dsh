@@ -264,7 +264,7 @@ describe('a parallel turn in the feed (#85)', () => {
       { role: 'worker', agentId: 'agt_2', verdict: 'skipped', notes: ['plafond mensuel'] },
       { role: 'synthesis', agentId: 'agt_3', verdict: 'skipped', notes: ['le coût du tour atteindrait sa borne (1 €)'] },
     ]), byId, chatFrench)}</>)
-    expect(screen.getByTestId('chat-turn-cost').textContent).toContain('1 parts sur 2')
+    expect(screen.getByTestId('chat-turn-cost').textContent).toContain('1 sur 2 parts')
     expect(screen.getByTestId('chat-turn-cost').textContent).not.toContain('synthèse par')
     expect(screen.getByTestId('turn-not-synthesised').textContent).toBe('Non synthétisé : le coût du tour atteindrait sa borne (1 €). Les parts sont dans le détail ci-dessous.')
     const steps = screen.getByTestId('turn-steps')
