@@ -16,6 +16,8 @@ const viewer = 'contact@datanalysis.re'
 const asOwner = { authorization: 'Bearer tok-owner' }
 const asAdmin = { authorization: 'Bearer tok-admin' }
 const asViewer = { authorization: 'Bearer tok-viewer' }
+const operator = 'operateur@datanalysis.re'
+const asOperator = { authorization: 'Bearer tok-operator' }
 
 const PRICES: PriceGrid = {
   'scaleway-genapi/deepseek-v4.1-flash': { input: 100, output: 100 },
@@ -47,6 +49,8 @@ const noMissions: MissionRunner = {
 
 /** An API with a real service in memory, a fake engine and three people. */
 function bench(prices: PriceGrid = PRICES) {
+  // The connectors mounted on the host; a test may unmount one.
+  const mounted = new Set(['office365', 'qonto', 'dolibarr', 'swing'])
   const service = new WorkbenchService({ store: new MemoryStore() })
   const engine = new FakeEngine()
   const turns = new TurnScheduler({
@@ -64,6 +68,7 @@ function bench(prices: PriceGrid = PRICES) {
         'tok-owner': { user: owner },
         'tok-admin': { user: admin },
         'tok-viewer': { user: viewer },
+        'tok-operator': { user: operator },
       },
     },
     grants: {
@@ -73,11 +78,12 @@ function bench(prices: PriceGrid = PRICES) {
           { subject: owner, role: 'owner' },
           { subject: admin, role: 'admin' },
           { subject: viewer, role: 'viewer' },
+          { subject: operator, role: 'operator' },
         ],
       }),
     },
     connectors: async () =>
-      ['office365', 'qonto', 'dolibarr', 'swing'].map(server => ({
+      [...mounted].map(server => ({
         module: `mcp-${server}`,
         server,
         enabled: true,
@@ -95,7 +101,7 @@ function bench(prices: PriceGrid = PRICES) {
       ...who,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-  return { api, service, engine, turns, call }
+  return { api, service, engine, turns, call, mounted }
 }
 
 type Bench = ReturnType<typeof bench>
@@ -415,12 +421,28 @@ describe('channels, mentions and agent turns', () => {
         kind: 'send-email',
         title: 'Relance',
         payload: {},
+        // A request cannot name the agent: the server reads it from the running turn.
+        requestedByAgent: { id: 'agt_forged', handle: 'forged' },
       }),
     })
-    expect((card.body as { approval: object }).approval).toMatchObject({
+    const approval = (card.body as { approval: { requestedBy: string; requestedByAgent?: { id: string; handle: string } } }).approval
+    expect(approval).toMatchObject({
       channelId: general,
       messageId: asked.id,
     })
+    // The person who mentioned the agent stays the requester; the turn's agent is served beside them.
+    expect(approval.requestedBy).toBe(owner)
+    expect(approval.requestedByAgent).toEqual({ id: assistant, handle: 'assistant' })
+    // A card asked outside any turn names no agent.
+    const plain = await b.api({ method: 'POST', path: '/approvals', ...asOwner,
+      body: JSON.stringify({ kind: 'send-email', title: 'Hors tour', payload: {}, requestedByAgent: { id: 'agt_forged', handle: 'forged' } }) })
+    expect((plain.body as { approval: object }).approval).not.toHaveProperty('requestedByAgent')
+    // A run that is not the running turn (a forged or stale x-mndt-run) files nothing in the thread.
+    const wrongRun = await b.api({ method: 'POST', path: '/approvals', ...asOwner, headers: { 'x-mndt-run': 'trn_not_this_one' },
+      body: JSON.stringify({ kind: 'send-email', title: 'Autre tour', payload: {} }) })
+    const stray = (wrongRun.body as { approval: Record<string, unknown> }).approval
+    expect(stray).not.toHaveProperty('requestedByAgent')
+    expect(stray).not.toHaveProperty('channelId')
     release()
     await b.turns.settled()
   })
@@ -525,5 +547,59 @@ describe('channels, mentions and agent turns', () => {
   it('names the MCP server of a tool', () => {
     expect(mcpServerOf('mcp__qonto__list_transactions')).toBe('qonto')
     expect(mcpServerOf('read_file')).toBeUndefined()
+  })
+})
+
+describe('the connectors of a channel, added and removed one at a time', () => {
+  it('applies two concurrent toggles on the server\'s current list: neither undoes the other', async () => {
+    const b = bench()
+    const id = await channel(b, 'finance', [], ['office365'])
+    const [first, second] = await Promise.all([
+      b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['qonto'] }),
+      b.call('POST', `/channels/${id}/connectors`, asAdmin, { remove: ['office365'] }),
+    ])
+    expect([first.status, second.status]).toEqual([200, 200])
+    const listed = await b.call('GET', '/channels', asOwner)
+    const finance = (listed.body as { channels: { id: string; connectors?: string[] }[] }).channels.find(c => c.id === id)
+    expect(finance?.connectors).toEqual(['qonto'])
+  })
+
+  it('never lets a connector already on the channel, since unmounted, block a change', async () => {
+    const b = bench()
+    // swing is on the channel, then unmounted from the host.
+    const id = await channel(b, 'projets', [], ['swing'])
+    b.mounted.delete('swing')
+    expect((await b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['qonto'] })).status).toBe(200)
+    expect((await b.call('POST', `/channels/${id}/connectors`, asOwner, { connectors: ['swing', 'office365'] })).status).toBe(200)
+    // What is ADDED must be mounted.
+    const refused = await b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['gmail'] })
+    expect(refused.status).toBe(400)
+    expect((refused.body as { error: string }).error).toContain('connector not mounted: gmail')
+  })
+
+  it('journals each change of connectors, with who, what and when, for the channel\'s members only', async () => {
+    const b = bench()
+    const id = await channel(b, 'compta', [], ['office365'])
+    await b.call('POST', `/channels/${id}/connectors`, asAdmin, { add: ['qonto'], remove: ['office365'] })
+    const events = (await b.call('GET', '/events', asOwner)).body as { events: { action: string; actor: string; subject: string; detail?: string; at: string }[] }
+    const change = events.events.find(event => event.action === 'channel.connectors')
+    expect(change).toMatchObject({ actor: admin, subject: id, detail: '+qonto -office365' })
+    expect(change?.at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    const seenByViewer = (await b.call('GET', '/events', asViewer)).body as { events: { action: string }[] }
+    expect(seenByViewer.events.some(event => event.action === 'channel.connectors')).toBe(false)
+  })
+
+  it('is reserved to owners and admins: an operator or a viewer of the channel changes nothing', async () => {
+    const b = bench()
+    const id = await channel(b, 'lecture', [], [], [admin, viewer, operator])
+    for (const who of [asOperator, asViewer]) {
+      const denied = await b.call('POST', `/channels/${id}/connectors`, who, { add: ['qonto'] })
+      expect(denied.status).toBe(403)
+      expect((denied.body as { error: string }).error).toContain('rights.write')
+      expect((await b.call('POST', `/channels/${id}/connectors`, who, { connectors: ['qonto'] })).status).toBe(403)
+    }
+    // The operator still manages the channel's agents and members (workflows.write).
+    expect((await b.call('POST', `/channels/${id}/members`, asOperator, { add: [owner] })).status).toBe(200)
+    expect((await b.call('POST', `/channels/${id}/connectors`, asAdmin, { add: ['qonto'] })).status).toBe(200)
   })
 })

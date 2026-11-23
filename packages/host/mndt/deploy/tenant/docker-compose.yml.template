@@ -46,6 +46,11 @@ services:
       - "--trusted-proxy-ip=__TRUSTED_PROXY__"
     # OAUTH2_PROXY_SIGNATURE_KEY (sha256:<key>): the proxy signs each request it
     # relays; the value stays in a 0400 file, never in this compose.
+    environment:
+      # The fingerprint of oauth2.cfg and of the sign-in list, written by
+      # create-tenant.sh: `up -d` recreates the proxy when either changed (it
+      # reads the configuration once; it also watches the list).
+      MNDT_PROXY_CONF: "__PROXY_CONF__"
     env_file:
       - __CONF__/proxy_signature.env
     volumes:
@@ -76,6 +81,16 @@ services:
       DSH_MNDT_WEB_TOKEN_FILE: /run/mndt-launch/web-token
       # The shell's log prints that token too: kept beside it, never under /state.
       DSH_MNDT_WEB_LOG: /run/mndt-launch/web.log
+      # What an agent's commands may read: the system and the image, and four
+      # device files; never /state (secrets, roles, other channels, sessions),
+      # /opt/mndt-tools (the tools folder is mounted from inside /state and holds
+      # connector data such as facts.md; the MCP servers run outside the sandbox),
+      # /run (the shell's launch token and its log, the gateway secret), /root,
+      # /tmp (other sessions' output), /proc (the other processes' environment
+      # holds the model keys) nor the rest of /dev (the owner's terminals). They
+      # write in their channel's folder and their session's private temp, which is
+      # also their HOME, with an allow-listed environment. Fails closed (sandbox-local).
+      DSH_SANDBOX_READ_ROOTS: "/usr:/lib:/lib64:/bin:/sbin:/etc:/app:/dev/null:/dev/zero:/dev/urandom:/dev/random"
       # The organisation the team screen names, and its environment when declared.
       DSH_MNDT_ORG_SLUG: __SLUG__
       DSH_MNDT_ORG_NAME: "__ORG_NAME__"

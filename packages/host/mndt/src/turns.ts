@@ -128,6 +128,8 @@ interface Running {
   readonly messageId: string
   readonly channelId: string
   readonly agentId: string
+  /** The agent's handle as the turn started, for the cards it asks. */
+  readonly agentHandle: string
   readonly controller: AbortController
 }
 
@@ -149,6 +151,8 @@ export class TurnScheduler {
       readonly turnId: string
       readonly messageId: string
       readonly channelId: string
+      /** The agent whose turn it is. */
+      readonly agent: { readonly id: string; readonly handle: string }
     }
     | undefined {
     const [entry] = this.#running.entries()
@@ -158,6 +162,7 @@ export class TurnScheduler {
         turnId: entry[0],
         messageId: entry[1].messageId,
         channelId: entry[1].channelId,
+        agent: { id: entry[1].agentId, handle: entry[1].agentHandle },
       }
   }
 
@@ -410,6 +415,7 @@ export class TurnScheduler {
       messageId,
       channelId: channel.id,
       agentId: agent.id,
+      agentHandle: agent.handle,
       controller,
     })
     await service.updateTurn(messageId, turn.id, {

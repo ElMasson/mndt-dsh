@@ -5,16 +5,7 @@
  */
 import { ChatRefusal } from './chat.ts'
 import { readWithin } from './deadline.ts'
-import type {
-  MountedConnector,
-  ChannelCreate,
-  ChatAgent,
-  ChatCard,
-  ChatChannel,
-  ChatChanges,
-  ChatFace,
-  ChatMessage,
-} from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, MountedConnector, OfferedModel } from './chat.ts'
 
 /** Where the gateway mounts the API on the page origin. */
 const BASE = '/mndt-api'
@@ -100,6 +91,15 @@ export function createHttpChat(
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/agents`, { remove: agentIds })).channel,
     setConnectors: async (channelId, servers) =>
       (await post<{ channel: ChatChannel }>(`/channels/${id(channelId)}/connectors`, { connectors: servers })).channel,
+    createAgent: async input => (await post<{ agent: ChatAgent }>('/agents', input)).agent,
+    updateAgent: async (agentId, patch) => (await post<{ agent: ChatAgent }>(`/agents/${id(agentId)}`, patch)).agent,
+    models: async () => {
+      const body = await get<{ models?: unknown }>('/models')
+      return (Array.isArray(body.models) ? body.models : []).filter((row): row is OfferedModel => {
+        const m = row as Partial<OfferedModel> | null
+        return m !== null && typeof m === 'object' && typeof m.provider === 'string' && typeof m.model === 'string'
+      }).map(m => ({ provider: m.provider, model: m.model }))
+    },
     mounted: async () => {
       const body = await get<{ connectors?: unknown }>('/connectors')
       // A row of another shape is dropped: the page never offers what it cannot read.

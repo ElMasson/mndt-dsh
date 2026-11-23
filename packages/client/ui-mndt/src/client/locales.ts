@@ -341,6 +341,15 @@ export const en = {
   'shell.settings-automations': 'The workspace\'s scheduled tasks.',
   'shell.settings-legacy': 'Missions and briefs, the owner\'s.',
   'shell.owner-only': 'Reserved to the owner of the workspace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Operator',
+  'shell.role-viewer': 'Reader',
+  'ui.confirmer': 'Confirm',
+  'ui.confirmer-le-role': 'Confirm the role',
+  'ui.confirmer-promotion': 'Make {name} {role}?',
+  'ui.confirmer-retrogradation': 'Move {name} from {from} to {to}?',
+  'ui.roles-par-fichier': 'The roles of this workspace are managed in the role file, by the owner.',
 } as const
 
 /** The same slot, mirrored: the registry requires zh. */
@@ -686,6 +695,15 @@ export const fr: Record<MndtKey, string> = {
   'shell.settings-automations': 'Les tâches planifiées de l\'espace.',
   'shell.settings-legacy': 'Missions et briefs, réservés au propriétaire.',
   'shell.owner-only': 'Réservé au propriétaire de l\'espace.',
+  'shell.role-owner': 'Owner',
+  'shell.role-admin': 'Admin',
+  'shell.role-operator': 'Opérateur',
+  'shell.role-viewer': 'Lecteur',
+  'ui.confirmer': 'Confirmer',
+  'ui.confirmer-le-role': 'Confirmer le rôle',
+  'ui.confirmer-promotion': 'Faire de {name} un {role} ?',
+  'ui.confirmer-retrogradation': 'Passer {name} de {from} à {to} ?',
+  'ui.roles-par-fichier': 'Les rôles de cet espace se gèrent dans le fichier des rôles, par l\'owner.',
 }
 
 /** Substitution values for a message. */
