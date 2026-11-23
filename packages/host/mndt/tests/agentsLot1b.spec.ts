@@ -391,3 +391,43 @@ describe('the framing of an agent, bounded so it cannot pass for the rules', () 
     await expect(service.createAgent({ ...draft, provider: 'p'.repeat(129) }, owner, 'owner')).rejects.toThrow('one line of 128 characters')
   })
 })
+
+describe('pending agent proposals: per person and per agent, and a model gone before the decision', () => {
+  const proposal = { name: 'Recouvrement', handle: 'recouvrement', provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash', instructions: 'Suit les impayés.' }
+  const card = (requestedBy: string, agent?: { id: string; handle: string }) => ({
+    kind: 'propose_agent' as const,
+    title: 't',
+    requestedBy,
+    proposal,
+    ...(agent === undefined ? {} : { requestedByAgent: agent }),
+  })
+
+  it('an agent mentioned by several members files three cards at most, all members together', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const agent = { id: 'agt_assistant', handle: 'assistant' }
+    for (const member of ['a@datanalysis.re', 'b@datanalysis.re', 'c@datanalysis.re']) await service.requestApproval(card(member, agent))
+    await expect(service.requestApproval(card('d@datanalysis.re', agent))).rejects.toThrow('@assistant already has 3 agent proposals waiting')
+    // Another agent, and a card asked outside any turn, are not held by this one's limit.
+    await expect(service.requestApproval(card('d@datanalysis.re', { id: 'agt_autre', handle: 'autre' }))).resolves.toMatchObject({ state: 'pending' })
+    await expect(service.requestApproval(card('d@datanalysis.re'))).resolves.toMatchObject({ state: 'pending' })
+  })
+
+  it('the per-person limit holds too, whatever the agents', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    for (const id of ['agt_1', 'agt_2', 'agt_3']) await service.requestApproval(card('a@datanalysis.re', { id, handle: id }))
+    await expect(service.requestApproval(card('a@datanalysis.re', { id: 'agt_4', handle: 'agt_4' }))).rejects.toThrow('3 agent proposals already wait')
+  })
+
+  it('a model removed from the grid between the card and the decision: 400, the card stays pending, no agent', async () => {
+    const { call, models } = bench()
+    const made = await call('POST', '/approvals', 'owner', { kind: 'propose_agent', payload: {}, proposal })
+    expect(made.status).toBe(201)
+    const id = (made.body.approval as { id: string }).id
+    models.splice(0, models.length)
+    const decided = await call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, SHOWS)
+    expect(decided.status).toBe(400)
+    const approvals = (await call('GET', '/approvals', 'owner')).body.approvals as { id: string; state: string }[]
+    expect(approvals.find(item => item.id === id)?.state).toBe('pending')
+    expect(((await call('GET', '/agents', 'owner')).body.agents as unknown[]).length).toBe(0)
+  })
+})

@@ -151,6 +151,8 @@ export class WorkbenchGateway extends TypertRemoteService {
   private readonly proxyUserHeader: string | undefined
   private readonly identity: string
   private readonly grants: GrantSource
+  /** Where the roles come from: see PageState.rolesFrom. */
+  private readonly rolesFrom: 'authority' | 'file' | 'local'
   private readonly statePath: string
   /** Where the editable briefing schedule lives; the API writes it, the poller reads it. */
   private readonly schedulePath: string
@@ -175,6 +177,9 @@ export class WorkbenchGateway extends TypertRemoteService {
     // Who holds which role: the team authority when one is configured, else the
     // tenant's own role file, else the local owner alone (solo mode).
     const grantsFile = process.env.DSH_MNDT_GRANTS_FILE
+    this.rolesFrom = baseUrl !== undefined && baseUrl !== '' && token !== undefined
+      ? 'authority'
+      : grantsFile !== undefined && grantsFile !== '' ? 'file' : 'local'
     this.grants = baseUrl !== undefined && baseUrl !== '' && token !== undefined
       ? authorityGrants({ baseUrl, token }, (message) => { warnOperator(ctx, message) })
       : grantsFile !== undefined && grantsFile !== ''
@@ -221,7 +226,9 @@ export class WorkbenchGateway extends TypertRemoteService {
         ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
           ? {}
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
-        ...(baseUrl === undefined || baseUrl === '' || token === undefined ? {} : { authority: { baseUrl, token } }),
+        ...(this.rolesFrom === 'authority' && baseUrl !== undefined && token !== undefined
+          ? { authority: { baseUrl, token } }
+          : { rolesFrom: this.rolesFrom === 'file' ? 'file' as const : 'local' as const }),
         connectors: () => Promise.resolve(this.connectorRows()),
         models: () => Promise.resolve(modelChoices(prices, process.env.VLLM_QWEN_MODEL)),
         turns,
@@ -428,6 +435,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         canWrite: decision.allowed,
         ...(role === undefined ? {} : { role }),
         canAdmin: table.ok && can(table.grants, this.identity, 'rights.write').allowed,
+        rolesFrom: this.rolesFrom,
         canShare: table.ok && can(table.grants, this.identity, 'sharing.write').allowed,
         missions: snapshot.missions.slice(0, 30),
         briefs: snapshot.briefs.slice(0, 30),
