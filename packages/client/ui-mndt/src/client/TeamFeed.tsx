@@ -37,6 +37,8 @@ export function shownName(email: string, names: Readonly<Record<string, string>>
 
 /** @param m - a message. @returns who wrote it, as a stable key (to group messages). */
 function authorKey(m: ChatMessage): string {
+  // A mission's report never joins the row above: its origin label must show on each one.
+  if (m.author.kind === 'system' && 'mission' in m) return `m:${m.id}`
   return m.author.kind === 'human' ? `h:${m.author.email}` : m.author.kind === 'agent' ? `a:${m.author.agentId}` : 's'
 }
 
@@ -303,6 +305,35 @@ export function WebCard(props: {
 }
 
 /** One message of the feed, its turns and the cards they asked for. */
+/** A mission's report published in a lane, as the page reads it. */
+interface PublishedMission {
+  readonly title: string
+  readonly failed: boolean
+  readonly eur?: number
+  readonly servers: readonly string[]
+}
+
+/**
+ * The mission a system message publishes (a briefing's report in its owner's lane), read defensively.
+ * Absent: an ordinary system message. Present but unreadable: still a model's text, never the host's.
+ * @param m - a message. @returns what it publishes, or undefined.
+ */
+export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined {
+  if (m.author.kind !== 'system' || !('mission' in m)) return undefined
+  const raw: unknown = (m as { readonly mission?: unknown }).mission
+  const at = (key: string): unknown => (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)[key] : undefined)
+  const title = at('title')
+  const eur = at('eur')
+  const tools = at('toolsUnavailable')
+  return {
+    title: typeof title === 'string' && title.trim() !== '' && title.length <= 120 ? title.trim() : '',
+    failed: at('status') === 'failed',
+    ...(typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? { eur } : {}),
+    // Server names only (a technical format), as on a turn.
+    servers: Array.isArray(tools) ? tools.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s)) : [],
+  }
+}
+
 export function WebMessage(props: {
   readonly message: ChatMessage
   readonly header: boolean
@@ -333,9 +364,12 @@ export function WebMessage(props: {
   // The cards a turn of this message asked for after reading its peers' help.
   const fromHelp = (m.turns ?? []).some(turn => helpOf(turn)?.reading?.verdict === 'card')
   const agent = m.author.kind === 'agent' ? agents.get(m.author.agentId) : undefined
+  // A mission's report is a model's text: labelled by its origin, never shown as the host's word.
+  const published = publishedMissionOf(m)
   const name = m.author.kind === 'human'
     ? shownName(m.author.email, props.names)
-    : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}` : 'mndt'
+    : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}`
+      : published !== undefined ? (published.title === '' ? t('briefingLabel') : published.title) : 'mndt'
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const waiting = props.cards.filter(card => (card.state ?? 'pending') === 'pending').length
@@ -359,9 +393,11 @@ export function WebMessage(props: {
       )}
       {!props.header ? undefined : (
         <div className="mw-message-head">
-          <Icon name={m.author.kind === 'agent' ? 'Bot' : m.author.kind === 'human' ? 'User' : 'ShieldCheck'} className="mw-slate" />
-          <span className="mw-message-name">{name}</span>
+          <Icon name={m.author.kind === 'agent' || published !== undefined ? 'Bot' : m.author.kind === 'human' ? 'User' : 'ShieldCheck'} className="mw-slate" />
+          <span className="mw-message-name" title={published === undefined ? undefined : t('briefingByModel')}>{name}</span>
           {m.author.kind === 'agent' ? <span className="mw-chip mw-chip-strong">{t('webAgent')}</span> : undefined}
+          {published === undefined ? undefined : <span className="mw-chip" data-testid="mission-origin">{t('briefingChip')}</span>}
+          {published?.eur === undefined ? undefined : <span className="mw-message-time" data-testid="mission-eur">{euros(published.eur)}</span>}
           <span className="mw-message-time">{clock(m.createdAt)}</span>
         </div>
       )}
@@ -371,8 +407,21 @@ export function WebMessage(props: {
       ) : m.author.kind === 'agent' ? (
         // An agent writes Markdown (tables, lists, bold): read, never shown as raw markers.
         <div className="mw-message-body mw-agent-text" data-testid="chat-markdown">{renderBrief(m.text)}</div>
+      ) : published !== undefined && published.failed ? (
+        // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
+        <p className="mw-message-body mw-decide-error" data-testid="mission-failed">{m.text}</p>
+      ) : published !== undefined ? (
+        // A model wrote it: read as an agent's text, its headings kept plain.
+        m.text.trim() === ''
+          ? <p className="mw-message-body mw-ctx-muted">{t('briefingEmpty')}</p>
+          : <div className="mw-message-body mw-agent-text" data-testid="mission-report">{renderBrief(m.text, { plainHeadings: true })}</div>
       ) : (
         <p className="mw-message-body">{m.text}</p>
+      )}
+      {published === undefined || published.servers.length === 0 ? undefined : (
+        <p className="mw-turn-unchecked" role="note" data-testid="mission-tools-unavailable">
+          {t('missionToolsUnavailable', { servers: published.servers.join(', ') })}
+        </p>
       )}
       {props.asks === undefined ? undefined : (
         <PendingQuestion

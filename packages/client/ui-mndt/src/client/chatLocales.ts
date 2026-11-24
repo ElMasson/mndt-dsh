@@ -391,6 +391,11 @@ export const chatEn = {
   answerEmpty: 'Write your answer before sending it.',
   laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
   skillAttachChanged: 'This agent\'s skills were changed meanwhile: read them again.',
+  briefingLabel: 'Briefing',
+  briefingByModel: 'Written by a model, from a mission of the space',
+  briefingChip: 'Mission',
+  briefingEmpty: 'Briefing without content.',
+  missionToolsUnavailable: 'Ran without: {servers}. The briefing did not consult them.',
 } as const
 
 /** One copy key. */
@@ -782,6 +787,11 @@ export const chatFr: Record<ChatKey, string> = {
   answerEmpty: 'Écrivez votre réponse avant de l\'envoyer.',
   laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
   skillAttachChanged: 'Les compétences de cet agent ont été modifiées entre-temps : relisez.',
+  briefingLabel: 'Briefing',
+  briefingByModel: 'Écrit par un modèle, d\'après une mission de l\'espace',
+  briefingChip: 'Mission',
+  briefingEmpty: 'Briefing sans contenu.',
+  missionToolsUnavailable: 'Exécuté sans : {servers}. Le briefing ne les a pas consultés.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
