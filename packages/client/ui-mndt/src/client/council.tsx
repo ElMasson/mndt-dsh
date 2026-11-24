@@ -227,7 +227,11 @@ export function CouncilThread(props: {
           : ended ? endedWords : t('councilRunning')
   const target = props.canAnswer === true && waiting ? c.escalation.messageId : undefined
   const send = async (): Promise<void> => {
-    if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
+    if (props.onAnswer === undefined || target === undefined || busy) return
+    if (answer.trim() === '') {
+      setError(t('answerEmpty'))
+      return
+    }
     setBusy(true)
     const refused = await props.onAnswer(answer.trim(), target)
     setError(refused)
@@ -256,7 +260,7 @@ export function CouncilThread(props: {
           {props.onAnswer === undefined || target === undefined ? undefined : (
             <div className="mw-help-answer">
               <textarea className="mw-input" rows={2} aria-label={t('helpAnswerLabel')} value={answer} onChange={(event) => { setAnswer(event.target.value) }} />
-              <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>{t('helpAnswer')}</button>
+              <button type="button" className="mw-primary" disabled={busy} onClick={() => { void send() }}>{t('helpAnswer')}</button>
               {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
             </div>
           )}

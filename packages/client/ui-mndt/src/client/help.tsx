@@ -245,7 +245,11 @@ export function HelpThread(props: {
   const total = help.eur ?? help.advices.reduce((sum, a) => sum + (a.eur ?? 0), 0)
   const name = (id: string): string => `@${props.agents.get(id)?.handle ?? id}`
   const send = async (): Promise<void> => {
-    if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
+    if (props.onAnswer === undefined || target === undefined || busy) return
+    if (answer.trim() === '') {
+      setError(t('answerEmpty'))
+      return
+    }
     setBusy(true)
     const refused = await props.onAnswer(answer.trim(), target)
     setError(refused)
@@ -266,7 +270,7 @@ export function HelpThread(props: {
         value={answer}
         onChange={(event) => { setAnswer(event.target.value) }}
       />
-      <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>
+      <button type="button" className="mw-primary" disabled={busy} onClick={() => { void send() }}>
         {t('helpAnswer')}
       </button>
       {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}

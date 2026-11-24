@@ -691,3 +691,35 @@ describe('À traiter lists the agents\' open questions (GET /escalations)', { ti
     expect(await screen.findByRole('heading', { name: '# compta' })).toBeTruthy()
   })
 })
+
+describe('an open question answered where it is read (À traiter)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-24T08:00:00.000Z'
+  const team = { id: 'chn_1', name: 'compta', title: 'compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const escalations = [{ channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: 'msg_2', question: 'HT ou TTC ?', at, kind: 'council' as const }]
+
+  it('its channel and hour first; one field; the answer replies to the published question', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [team], escalations }, () => Date.parse(at))
+    const post = vi.spyOn(chat, 'post')
+    render(<CollabPage api={face(state({ approvals: [] }))} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const item = await screen.findByTestId('pending-question')
+    expect(within(item).getByTestId('pending-question-where').textContent).toMatch(/^# compta · /u)
+    // The button stays active: an empty answer is said.
+    fireEvent.click(within(item).getByRole('button', { name: 'Répondre et clore ce fil' }))
+    expect(within(item).getByRole('alert').textContent).toBe('Écrivez votre réponse avant de l\'envoyer.')
+    expect(post).not.toHaveBeenCalled()
+    fireEvent.change(within(item).getByRole('textbox', { name: 'Votre réponse' }), { target: { value: 'HT.' } })
+    fireEvent.click(within(item).getByRole('button', { name: 'Répondre et clore ce fil' }))
+    await waitFor(() => { expect(post).toHaveBeenCalledWith('chn_1', 'HT.', 'msg_2') })
+  })
+
+  it('a reader whose answer would not count gets the channel only', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [team], escalations }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ approvals: [], canWrite: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const item = await screen.findByTestId('pending-question')
+    expect(within(item).queryByRole('textbox')).toBeNull()
+    expect(within(item).getByRole('button', { name: 'Répondre dans # compta' })).toBeTruthy()
+  })
+})
