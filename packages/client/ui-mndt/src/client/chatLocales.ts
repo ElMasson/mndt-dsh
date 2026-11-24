@@ -369,6 +369,10 @@ export const chatEn = {
   skillsThreeAtMost: 'three skills at most',
   skillChanged: 'This skill was changed meanwhile: read it again before changing it.',
   skillTooMany: 'An agent reads three skills at most.',
+  skillMissing: 'A SKILL.md needs a front matter with a name, and a text.',
+  skillTooLong: 'A skill\'s text is 6,000 characters at most.',
+  skillExists: 'A skill already has this name.',
+  skillUnknown: 'This skill no longer exists: read the list again.',
 } as const
 
 /** One copy key. */
@@ -738,6 +742,10 @@ export const chatFr: Record<ChatKey, string> = {
   skillsThreeAtMost: 'trois compétences au plus',
   skillChanged: 'Cette compétence a été modifiée entre-temps : relisez-la avant de la changer.',
   skillTooMany: 'Un agent lit trois compétences au plus.',
+  skillMissing: 'Un SKILL.md demande un en-tête avec un nom, et un texte.',
+  skillTooLong: 'Le texte d\'une compétence fait 6 000 caractères au plus.',
+  skillExists: 'Une compétence porte déjà ce nom.',
+  skillUnknown: 'Cette compétence n\'existe plus : relisez la liste.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

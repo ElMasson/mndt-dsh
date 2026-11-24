@@ -107,3 +107,23 @@ describe('ticking an agent\'s skills in its form', { timeout: 20_000 }, () => {
     expect((await chat.agents())[0]?.skills).toEqual(['relances', 'devis'])
   })
 })
+
+describe('the core\'s refusals of a skill, in words', { timeout: 20_000 }, () => {
+  it('a name already taken (skill-exists) is said', async () => {
+    const { section } = await open('owner')
+    fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), {
+      target: { value: '---\nname: Devis\ndescription: encore\n---\nx' },
+    })
+    fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('Une compétence porte déjà ce nom.')
+  })
+
+  it('a SKILL.md without front matter (missing-fields) is said', async () => {
+    const { section } = await open('owner')
+    fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), { target: { value: 'juste du texte' } })
+    fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('Un SKILL.md demande un en-tête avec un nom, et un texte.')
+  })
+})

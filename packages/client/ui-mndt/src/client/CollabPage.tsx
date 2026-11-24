@@ -88,6 +88,7 @@ export function decisionRefusal(message: string, t: ChatTranslate): string {
 function agentRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
     if (failure.code === 'too-many-skills') return t('skillTooMany')
+    if (failure.code === 'unknown-skill') return t('skillUnknown')
     const taken = /^the handle @(\S+) is taken$/u.exec(failure.message)
     if (failure.status === 409 && taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
     if (failure.message.startsWith('only the owner raises the ceiling')) return t('agentOnlyOwnerRaises')
@@ -389,6 +390,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
         void loadSkills()
         return tc('skillChanged')
       }
+      // The core's other codes (A1), said in French; an unknown code keeps the core's sentence.
+      if (failure instanceof ChatRefusal && failure.code === 'missing-fields') return tc('skillMissing')
+      if (failure instanceof ChatRefusal && failure.code === 'skill-too-long') return tc('skillTooLong')
+      if (failure instanceof ChatRefusal && failure.code === 'skill-exists') return tc('skillExists')
+      if (failure instanceof ChatRefusal && failure.code === 'unknown-skill') return tc('skillUnknown')
       return reasonOf(failure, tc)
     }
   }, [loadSkills, tc])
