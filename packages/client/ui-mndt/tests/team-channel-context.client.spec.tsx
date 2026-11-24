@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatAgent, ChatChannel } from '../src/client/chat.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
@@ -81,6 +83,52 @@ describe('the panel\'s section « Ce qu\'il faut savoir ici »', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Le contexte a été modifié entre-temps : relisez-le avant de le changer.')
     expect(onSave).toHaveBeenCalledWith('Ma version.', 3)
     expect(contextOf((await chat.channels())[0] ?? channel)?.text).toBe('Changé ailleurs.')
+  })
+
+  it('after a 409 the channel is read again: said with who and the new text; a second click writes nothing', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [channel] }, () => Date.parse(at))
+    const sent = vi.fn()
+    /** The section over the double, re-drawn on the channel read again after a refusal. */
+    function Panel(): ReactNode {
+      const [current, setCurrent] = useState(channel)
+      return (
+        <ContextSection
+          channel={current}
+          agents={[assistant]}
+          canEdit
+          names={{ [you]: 'Stéphane Masson' }}
+          onSave={async (text, version) => {
+            sent(version)
+            try {
+              await chat.setContext?.('chn_1', { text, version })
+              return undefined
+            } catch {
+              setCurrent((await chat.channels())[0] ?? current)
+              return 'Le contexte a été modifié entre-temps : relisez-le avant de le changer.'
+            }
+          }}
+          t={chatFrench}
+        />
+      )
+    }
+    render(<Panel />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
+    await chat.setContext?.('chn_1', { text: 'Changé ailleurs.', version: 3 })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Ce qu\'il faut savoir ici' }), { target: { value: 'Ma version.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
+    const stale = await screen.findByTestId('context-stale')
+    expect(stale.textContent).toContain('Modifié entre-temps par Stéphane Masson : relisez avant d\'enregistrer.')
+    expect(stale.textContent).toContain('Changé ailleurs.')
+    const save = screen.getByRole('button', { name: 'Enregistrer' })
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect(sent).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveBeenLastCalledWith(3)
+    expect(contextOf((await chat.channels())[0] ?? channel)?.text).toBe('Changé ailleurs.')
+    // Reopened on the new version: saving sends the version now read.
+    fireEvent.click(screen.getByRole('button', { name: 'Reprendre sur la nouvelle version' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
+    await waitFor(() => { expect(sent).toHaveBeenLastCalledWith(4) })
   })
 
   it('the double refuses a context over 4 000 characters with its code', async () => {
