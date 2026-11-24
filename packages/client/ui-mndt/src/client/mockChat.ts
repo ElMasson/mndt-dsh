@@ -64,6 +64,8 @@ export interface MockSeed {
 export interface MockChat extends ChatFace {
   /** Move every open turn one step. */
   tick(): void
+  /** The double always serves the single-skill route (#145). */
+  changeSkill: NonNullable<ChatFace['changeSkill']>
 }
 
 /**
@@ -355,6 +357,28 @@ export function createMockChat(
         }
         agents.set(agent.id, agent)
         return agent
+      })
+    },
+    changeSkill(agentId, change) {
+      return settle(() => {
+        const agent = agents.get(agentId)
+        if (agent === undefined || agent.retiredAt !== undefined) throw new ChatRefusal(`no agent ${agentId}`, 404, 'unknown-agent')
+        const held = agent.skills ?? []
+        // As the core (#145): applied on the agent as it is now; adding a held skill or removing an
+        // absent one changes nothing; a fourth is refused.
+        if ('add' in change) {
+          if (!skills.has(change.add)) throw new ChatRefusal(`no skill ${change.add}`, 404, 'unknown-skill')
+          if (held.includes(change.add)) return agent
+          if (held.length >= 3) throw new ChatRefusal('an agent uses 3 skills at most', 409, 'too-many-skills')
+          const next = { ...agent, skills: [...held, change.add] }
+          agents.set(agentId, next)
+          return next
+        }
+        const kept = held.filter(slug => slug !== change.remove)
+        const { skills: _old, ...rest } = agent
+        const next = kept.length === 0 ? rest : { ...agent, skills: kept }
+        agents.set(agentId, next)
+        return next
       })
     },
     skills() {

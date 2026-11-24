@@ -230,6 +230,12 @@ export interface ChatFace {
   createAgent?(input: AgentInput): Promise<ChatAgent>
   /** Change an agent; its handle never changes (`POST /agents/:id`). Optional: the team page only. */
   updateAgent?(id: string, patch: Partial<Omit<AgentInput, 'handle'>>): Promise<ChatAgent>
+  /**
+   * Attach one skill to an agent or detach it (`POST /agents/:id/skills`, #145): applied by the core
+   * on the agent as it is when written, so two changes at once never undo each other.
+   * Optional: the team page only.
+   */
+  changeSkill?(agentId: string, change: { readonly add: string } | { readonly remove: string }): Promise<ChatAgent>
   /** The space's skills (`GET /skills`). Optional: the team page only. */
   skills?(): Promise<readonly ChatSkill[]>
   /** Add a skill from a pasted SKILL.md (owners and admins). */
