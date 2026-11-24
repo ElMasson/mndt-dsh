@@ -199,3 +199,27 @@ describe('an agent without instructions of its own', () => {
     expect(screen.getByLabelText('À quoi il sert').getAttribute('placeholder')).toBe('Suit les factures impayées et prépare les relances.')
   })
 })
+
+describe('attaching from a card never erases a change made meanwhile (#144)', { timeout: 20_000 }, () => {
+  it('another skill attached by someone else since: said, nothing sent; read again, it works', async () => {
+    const { chat, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    // Someone else attaches « rapports » to the agent; this page still shows only « relances ».
+    await chat.updateAgent?.('agt_1', { skills: ['relances', 'rapports'] })
+    const update = vi.spyOn(chat, 'updateAgent')
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('Les compétences de cet agent ont été modifiées entre-temps : relisez.')
+    expect(update).not.toHaveBeenCalled()
+    expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports'])
+    // The agents were read again: the next click adds to the list as it is.
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports', 'devis']) })
+  })
+
+  it('a name over 60 characters is said before sending', async () => {
+    const { skillProblem } = await import('../src/client/skills.tsx')
+    expect(skillProblem(`---\nname: ${'x'.repeat(61)}\n---\ntexte`, chatFrench)).toBe('Le nom d\'une compétence fait 60 caractères au plus.')
+  })
+})

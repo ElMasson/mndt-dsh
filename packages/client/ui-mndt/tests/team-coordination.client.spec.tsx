@@ -52,6 +52,7 @@ describe('the coordination of a channel, in its panel (#84)', () => {
   it('« Auteur puis vérificateur » in three clicks: the mode, the author, the verifier', async () => {
     const sent = vi.fn()
     render(<Panel onChange={sent} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     expect(screen.getByRole('button', { name: 'Seul' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Auteur puis vérificateur' }))
     fireEvent.click(within(screen.getByTestId('coord-author')).getByRole('button', { name: '@redacteur' }))
@@ -62,7 +63,10 @@ describe('the coordination of a channel, in its panel (#84)', () => {
     expect(within(verifiers).getByRole('button', { name: /@redacteur/u }).getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(within(verifiers).getByRole('button', { name: '@relecteur' }))
     await waitFor(() => { expect(sent).toHaveBeenCalledWith({ mode: 'author-verifier', author: 'agt_1', verifier: 'agt_2' }) })
-    await waitFor(() => { expect(within(screen.getByTestId('coord-verifier')).getByRole('button', { name: '@relecteur' }).getAttribute('aria-pressed')).toBe('true') })
+    // Saved: folded again to its one line.
+    await waitFor(() => { expect(screen.getByTestId('coordination-read').textContent).toBe('Rédigé par @redacteur, vérifié par @relecteur.') })
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
+    expect(within(screen.getByTestId('coord-verifier')).getByRole('button', { name: '@relecteur' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Seul' }))
     await waitFor(() => { expect(sent).toHaveBeenLastCalledWith({ mode: 'solo' }) })
     await waitFor(() => { expect(screen.queryByTestId('coord-author')).toBeNull() })
@@ -77,6 +81,7 @@ describe('the coordination of a channel, in its panel (#84)', () => {
 
   it('fewer than two agents: the mode is greyed, and why', () => {
     render(<Panel channel={{ ...CHANNEL, agents: ['agt_1'] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     expect(screen.getByRole('button', { name: 'Auteur puis vérificateur' }).getAttribute('aria-disabled')).toBe('true')
     expect(screen.getByText('Il faut deux agents dans le canal.')).toBeTruthy()
   })
@@ -208,6 +213,7 @@ describe('« en parallèle puis synthèse » (#85)', () => {
       )
     }
     render(<Wide />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     fireEvent.click(screen.getByRole('button', { name: 'En parallèle puis synthèse' }))
     const save = (): HTMLElement => screen.getByRole('button', { name: 'Enregistrer' })
     const saveOff = (): boolean => {
@@ -224,7 +230,8 @@ describe('« en parallèle puis synthèse » (#85)', () => {
     fireEvent.click(within(screen.getByTestId('coord-budget')).getByRole('button', { name: /^2/u }))
     fireEvent.click(save())
     await waitFor(() => { expect(sent).toHaveBeenCalledWith({ mode: 'parallel-synthesis', workers: ['agt_1', 'agt_2'], synthesizer: 'agt_4', maxEurPerTurn: 2 }) })
-    await waitFor(() => { expect(saveOff()).toBe(true) })
+    // Saved: folded again to its one line, which says it.
+    await waitFor(() => { expect(screen.getByTestId('coordination-read').textContent).toMatch(/^En parallèle : @redacteur, @relecteur, puis synthèse par @synthese/u) })
   })
 
   it('a reader reads it; fewer than three agents greys the mode; a malformed one reads as alone', () => {
@@ -233,6 +240,7 @@ describe('« en parallèle puis synthèse » (#85)', () => {
     expect(screen.getByTestId('coordination-read').textContent).toMatch(/^En parallèle : @redacteur, @relecteur, puis synthèse par @jumeau \(1/u)
     cleanup()
     render(<Panel channel={{ ...CHANNEL, agents: ['agt_1', 'agt_2'] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     expect(screen.getByRole('button', { name: 'En parallèle puis synthèse' }).getAttribute('aria-disabled')).toBe('true')
     for (const coordination of [
       { mode: 'parallel-synthesis', workerIds: ['agt_1'], synthesizerId: 'agt_3', maxEurPerTurn: 1 },
@@ -390,5 +398,18 @@ describe('the parts counted, agreed with the first number', () => {
     unmount()
     render(<>{coordinatedTurn(parts(2), byId, chatFrench)}</>)
     expect(screen.getByTestId('chat-turn-cost').textContent).toContain('2 parts sur 3')
+  })
+})
+
+describe('the coordination folded to one line by default', () => {
+  it('a manager reads it in one line with « Modifier »; the choice opens on it and folds back with « Fermer »', () => {
+    const coordinated = { ...CHANNEL, coordination: { mode: 'author-verifier', authorId: 'agt_1', verifierId: 'agt_2' } }
+    render(<CoordinationSection channel={coordinated} agents={AGENTS} canManage onChange={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('coordination-read').textContent).toBe('Rédigé par @redacteur, vérifié par @relecteur.')
+    expect(screen.queryByRole('group', { name: 'Comment les agents répondent ici' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
+    expect(screen.getByRole('group', { name: 'Comment les agents répondent ici' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Fermer' }))
+    expect(screen.getByTestId('coordination-read')).toBeTruthy()
   })
 })

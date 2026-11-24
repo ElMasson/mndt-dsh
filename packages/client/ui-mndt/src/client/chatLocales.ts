@@ -388,6 +388,8 @@ export const chatEn = {
   skillAttach: 'Attach to @{handle}',
   skillDetach: 'Detach from @{handle}',
   skillAgentFull: '@{handle} already reads three skills',
+  laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
+  skillAttachChanged: 'This agent\'s skills were changed meanwhile: read them again.',
 } as const
 
 /** One copy key. */
@@ -776,6 +778,8 @@ export const chatFr: Record<ChatKey, string> = {
   skillAttach: 'Attacher à @{handle}',
   skillDetach: 'Détacher de @{handle}',
   skillAgentFull: '@{handle} lit déjà trois compétences',
+  laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
+  skillAttachChanged: 'Les compétences de cet agent ont été modifiées entre-temps : relisez.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

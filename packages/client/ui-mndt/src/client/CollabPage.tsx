@@ -1391,6 +1391,13 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     onChannel: (id) => { setChatId(id) },
                     pending: pendingCards.length,
                     onPending: () => { setView('pending') },
+                    // Owners and admins add an agent to their own lane in one click.
+                    ...(state.canWrite && current.kind === 'solo' ? {
+                      addable: {
+                        agents: chatAgents.filter(a => a.retiredAt === undefined && !current.agents.includes(a.id)),
+                        onAdd: (agentId: string) => toggleChatAgent(agentId, true),
+                      },
+                    } : {}),
                   }}
                   look="mndt-web"
                 />
@@ -1954,9 +1961,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   onUpdate={chat.updateSkill === undefined ? undefined
                     : (slug, markdown, version) => writeSkill(() => chat.updateSkill?.(slug, { markdown, version }) ?? Promise.reject(new Error('no route')))}
                   agents={chatAgents}
-                  onAttach={chat.updateAgent === undefined ? undefined : async (agentId, chosen) => {
-                    // From the skill's card: the agent's skills as they will be, three at most.
+                  onAttach={chat.updateAgent === undefined ? undefined : async (agentId, slug, attach, seen) => {
+                    // From the skill's card. The agent is read again just before: a list changed
+                    // meanwhile (someone attached or detached another skill) is said, never overwritten.
                     try {
+                      const all = await chat.agents()
+                      const fresh = all.find(a => a.id === agentId)
+                      if (fresh === undefined) {
+                        setChatAgents(all)
+                        return tc('agentGone')
+                      }
+                      const now = fresh.skills ?? []
+                      if ([...now].sort().join(',') !== [...seen].sort().join(',')) {
+                        setChatAgents(all)
+                        return tc('skillAttachChanged')
+                      }
+                      const chosen = attach ? [...now, slug] : now.filter(s => s !== slug)
                       await chat.updateAgent?.(agentId, { skills: chosen })
                       setChatAgents(await chat.agents())
                       return undefined

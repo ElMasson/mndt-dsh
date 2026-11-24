@@ -14,7 +14,7 @@ import { renderBrief } from './markdown.tsx'
 export const MAX_SKILLS = 3
 
 /** The longest skill name the core takes. */
-const MAX_NAME = 80
+const MAX_NAME = 60
 /** The longest skill text the core takes. */
 const MAX_BODY = 6000
 
@@ -57,8 +57,11 @@ export function SkillsSection(props: {
   readonly onDelete?: ((slug: string) => Promise<string | undefined>) | undefined
   /** The space's agents, to show and change which ones read each skill. */
   readonly agents?: readonly ChatAgent[] | undefined
-  /** Attach the skill to an agent or detach it (three skills at most per agent). */
-  readonly onAttach?: ((agentId: string, skills: readonly string[]) => Promise<string | undefined>) | undefined
+  /**
+   * Attach the skill to an agent or detach it (three skills at most per agent). `seen` is the agent's
+   * list as the pill read it: the page reads the agent again and refuses if it changed meanwhile.
+   */
+  readonly onAttach?: ((agentId: string, slug: string, attach: boolean, seen: readonly string[]) => Promise<string | undefined>) | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { t } = props
@@ -268,7 +271,7 @@ export function SkillPills(props: {
 function AttachedTo(props: {
   readonly skill: ChatSkill
   readonly agents: readonly ChatAgent[]
-  readonly onAttach?: ((agentId: string, skills: readonly string[]) => Promise<string | undefined>) | undefined
+  readonly onAttach?: ((agentId: string, slug: string, attach: boolean, seen: readonly string[]) => Promise<string | undefined>) | undefined
   readonly onError: (reason: string | undefined) => void
   readonly t: ChatTranslate
 }): ReactNode {
@@ -303,8 +306,7 @@ function AttachedTo(props: {
             onClick={() => {
               if (busy || full || props.onAttach === undefined) return
               setBusy(true)
-              const next = on ? held.filter(s => s !== skill.slug) : [...held, skill.slug]
-              void props.onAttach(a.id, next).then((reason) => { props.onError(reason); setBusy(false) })
+              void props.onAttach(a.id, skill.slug, !on, held).then((reason) => { props.onError(reason); setBusy(false) })
             }}
           >
             @{a.handle}
