@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DshMissionRunner, DshTurnRunner } from '../src/runner.ts'
-import { ToolsReadiness } from '../src/tools-ready.ts'
+import { REQUIRED_TOOLS, ToolsReadiness } from '../src/tools-ready.ts'
 import { soloWorkstation } from '../src/gateway.ts'
 import {
   ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, channelPolicy, hideOutsidePolicy, isServerName, mcpServerOf,
@@ -318,6 +318,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
   /** @param names - the tools registered now. @returns a readiness over them, with a short bound. */
   const readinessOver = (names: string[], warned: string[] = []) =>
     new ToolsReadiness(() => ({ schemas: () => names.map(name => ({ name })) }), () => () => undefined, (m) => { warned.push(m) }, 30)
+  /** The approvals' six card tools, registered. */
+  const APPROVALS = REQUIRED_TOOLS.approvals!.map(tool => `mcp__approvals__${tool}`)
 
   it('the approvals not registered at the bound: the turn does not start, and says why', async () => {
     const { ctx, seen } = fakeCtx()
@@ -328,10 +330,45 @@ describe('the runners scope it before the agent exists, and lift it after', () =
 
   it('a channel connector not registered: the turn runs with the tools ready, told so, and records it', async () => {
     const { ctx, seen } = fakeCtx()
-    const output = await new DshTurnRunner(ctx, readinessOver(['mcp__approvals__request_approval'])).run(turn())
+    const output = await new DshTurnRunner(ctx, readinessOver(APPROVALS)).run(turn())
     expect(output.text).toBe('Réponse.')
     expect(output.toolsUnavailable).toEqual(['qonto'])
     expect(seen.script).toContain('Outils indisponibles pour ce tour : qonto (démarrage en cours ou connecteur en panne). Ne prétends pas les avoir consultés.')
+  })
+
+  it('the approvals with one card tool still missing count as not ready: a partial list would freeze a partial allow-list', async () => {
+    const { ctx, seen } = fakeCtx()
+    await expect(new DshTurnRunner(ctx, readinessOver([...APPROVALS.slice(1), 'mcp__qonto__list'])).run(turn()))
+      .rejects.toThrow('outils indisponibles : approvals')
+    expect(seen.root).toBeUndefined()
+  })
+
+  it('a mission waits too: without the approvals it does not start; a briefing needs the facts as well', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const custom = { ...briefing, id: 'msn_2', kind: 'custom' } as unknown as Mission
+    const none = fakeCtx()
+    await expect(new DshMissionRunner(none.ctx, { tools: TEAM_MISSION_POLICY, readiness: readinessOver(['mcp__workbench_facts__get_facts']) }).run(briefing))
+      .rejects.toThrow('outils indisponibles : approvals (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée')
+    expect(none.seen.root).toBeUndefined()
+    const noFacts = fakeCtx()
+    await expect(new DshMissionRunner(noFacts.ctx, { tools: TEAM_MISSION_POLICY, readiness: readinessOver(APPROVALS) }).run(briefing))
+      .rejects.toThrow('outils indisponibles : workbench_facts')
+    expect(noFacts.seen.root).toBeUndefined()
+    const other = fakeCtx()
+    await new DshMissionRunner(other.ctx, { tools: TEAM_MISSION_POLICY, readiness: readinessOver(APPROVALS) }).run(custom)
+    expect(other.seen.root).toBeDefined()
+  })
+
+  it('a turn stopped while it waits leaves at once, and does not start', async () => {
+    const { ctx, seen } = fakeCtx()
+    const controller = new AbortController()
+    const slow = new ToolsReadiness(() => ({ schemas: () => [] }), () => () => undefined, () => undefined, 60_000)
+    const started = Date.now()
+    const running = new DshTurnRunner(ctx, slow).run({ ...turn(), signal: controller.signal })
+    setTimeout(() => { controller.abort() }, 20)
+    await expect(running).rejects.toThrow('turn stopped')
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(seen.root).toBeUndefined()
   })
 
   it('a reading step (no server) waits for nothing', async () => {

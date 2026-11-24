@@ -26,7 +26,8 @@ import type { GrantSource } from './policy.ts'
 import { can, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
 import { authorityGrants, fileGrants, localGrants } from './grants.ts'
-import { DshMissionRunner, DshTurnRunner } from './runner.ts'
+import { DshMissionRunner, DshTurnRunner, toolsReadinessOf } from './runner.ts'
+import type { ToolsReadiness } from './tools-ready.ts'
 import { TEAM_MISSION_POLICY } from './tool-policy.ts'
 import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
@@ -209,7 +210,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
     const turns = new TurnScheduler({
       service: this.service,
-      engine: new DshTurnRunner(ctx),
+      engine: new DshTurnRunner(ctx, this.readinessFor(ctx)),
       prices,
       dataDir: dirname(this.statePath),
     })
@@ -399,7 +400,17 @@ export class WorkbenchGateway extends TypertRemoteService {
    * team instance): a missing or mistyped setting never opens the whole engine.
    */
   private missionRunner(ctx: Context): DshMissionRunner {
-    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader) ? {} : { tools: TEAM_MISSION_POLICY })
+    const readiness = this.readinessFor(ctx)
+    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader) ? { readiness } : { tools: TEAM_MISSION_POLICY, readiness })
+  }
+
+  /** One readiness for turns and missions: a server's unavailability is remembered once. */
+  private readiness: ToolsReadiness | undefined
+
+  /** @param ctx - the host context. @returns the servers' readiness, made once. */
+  private readinessFor(ctx: Context): ToolsReadiness {
+    this.readiness ??= toolsReadinessOf(ctx)
+    return this.readiness
   }
 
   private closedToTeam(): string | undefined {

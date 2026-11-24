@@ -35,6 +35,28 @@ export interface DshRunnerOptions {
    * engine's whole composition, as on a solo workstation.
    */
   readonly tools?: ToolPolicy
+  /** Whether the servers have registered their tools; shared with the turns (one memory of a server's unavailability). */
+  readonly readiness?: ToolsReadiness
+}
+
+/**
+ * @param ctx - the host context.
+ * @returns the servers' readiness read from its tool registry, its warnings in the operator's log.
+ */
+export function toolsReadinessOf(ctx: Context): ToolsReadiness {
+  return new ToolsReadiness(
+    () => ctx.get('tools') as ToolsRegistryLike | undefined,
+    listener => ctx.on('tools/change' as never, listener as never),
+    (message) => { warnOperator(ctx, message) },
+  )
+}
+
+/**
+ * @param mission - a mission.
+ * @returns the servers it cannot run without: the approvals, and the facts for a briefing.
+ */
+export function missionRequiredServers(mission: Pick<Mission, 'kind'>): string[] {
+  return [...ALWAYS_SERVERS, ...(mission.kind === 'briefing' ? ['workbench_facts'] : [])]
 }
 
 /** Default framing: the product's voice and its evidence discipline. */
@@ -156,11 +178,13 @@ async function createUnderPolicy<T extends { agent: { session: { header: { id: s
 export class DshMissionRunner {
   readonly #ctx: Context
   readonly #options: DshRunnerOptions
+  readonly #readiness: ToolsReadiness
 
   /** @param ctx - the host context. @param options - optional framing. */
   constructor(ctx: Context, options: DshRunnerOptions = {}) {
     this.#ctx = ctx
     this.#options = options
+    this.#readiness = options.readiness ?? toolsReadinessOf(ctx)
   }
 
   /**
@@ -186,6 +210,14 @@ export class DshMissionRunner {
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
     const selection = model === undefined ? undefined : model.currentSelection()
     if (this.#options.tools !== undefined) assertInProcessChildren(this.#ctx, engine)
+    // As a turn: the servers' tools before the agent (its policy copies the
+    // visible names once). The first automation tick runs at start-up, while
+    // the servers are still starting. Without its required servers, a mission
+    // does not start, and says why.
+    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission))
+    if (missing.length > 0) {
+      throw new Error(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
+    }
     const { created, unscope } = await createUnderPolicy(this.#ctx, this.#options.tools, mission.id, () => this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
       sessionId: mission.id as never,
@@ -261,14 +293,21 @@ export class DshTurnRunner implements TurnEngine {
   /** Whether a turn's servers have registered their tools: kept across turns (a server's unavailability is remembered). */
   readonly #readiness: ToolsReadiness
 
-  /** @param ctx - the host context. @param readiness - for tests: how the servers' readiness is read. */
+  /** @param ctx - the host context. @param readiness - the servers' readiness (shared with the missions; for tests, a fake). */
   constructor(ctx: Context, readiness?: ToolsReadiness) {
     this.#ctx = ctx
-    this.#readiness = readiness ?? new ToolsReadiness(
-      () => ctx.get('tools') as ToolsRegistryLike | undefined,
-      listener => ctx.on('tools/change' as never, listener as never),
-      (message) => { warnOperator(ctx, message) },
-    )
+    this.#readiness = readiness ?? toolsReadinessOf(ctx)
+  }
+
+  /**
+   * Wait, outside the scheduler's queue, until a turn's servers are ready (or
+   * the bound, or the turn's stop): a server slow to start delays its turn, not
+   * every channel's.
+   * @param servers - the servers the turn will use.
+   * @param signal - the turn's stop.
+   */
+  async ready(servers: readonly string[], signal: AbortSignal): Promise<void> {
+    await this.#readiness.waitFor([...new Set([...servers, ...ALWAYS_SERVERS])], signal)
   }
 
   /**
@@ -290,7 +329,8 @@ export class DshTurnRunner implements TurnEngine {
     // turn does not start. A channel's connector may be missing: the turn runs
     // without it, and is told so.
     const needed = input.tools === 'none' ? [] : input.tools === 'no-cards' ? [...input.servers] : [...new Set([...input.servers, ...ALWAYS_SERVERS])]
-    const { missing } = await this.#readiness.waitFor(needed)
+    const { missing } = await this.#readiness.waitFor(needed, input.signal)
+    if (input.signal.aborted) throw new Error('turn stopped')
     const required = missing.filter(server => input.tools !== 'no-cards' && ALWAYS_SERVERS.includes(server))
     if (required.length > 0) {
       throw new Error(`outils indisponibles : ${required.join(', ')} (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé`)

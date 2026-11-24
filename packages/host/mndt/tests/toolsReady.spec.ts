@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { ToolsReadiness } from '../src/tools-ready.ts'
+import { readFileSync } from 'node:fs'
+import { REQUIRED_TOOLS, ToolsReadiness } from '../src/tools-ready.ts'
 
 /** @returns a registry the test fills, with the change listeners it calls. */
+/** The approvals' card tools, all registered. */
+const APPROVALS = REQUIRED_TOOLS.approvals!.map(tool => `mcp__approvals__${tool}`)
+
 function registry() {
   const names: string[] = []
   const listeners = new Set<() => void>()
@@ -17,7 +21,7 @@ function registry() {
 describe('a turn waits for its servers\' tools, bounded', () => {
   it('already registered: no wait, nothing missing', async () => {
     const r = registry()
-    r.add('mcp__approvals__request_approval')
+    for (const name of APPROVALS) r.add(name)
     const started = Date.now()
     expect(await new ToolsReadiness(r.read, r.onChange, () => undefined, 1000).waitFor(['approvals'])).toEqual({ missing: [] })
     expect(Date.now() - started).toBeLessThan(25)
@@ -26,7 +30,7 @@ describe('a turn waits for its servers\' tools, bounded', () => {
   it('registered while it waits: the turn goes on as soon as the registry says so', async () => {
     const r = registry()
     const waiting = new ToolsReadiness(r.read, r.onChange, () => undefined, 5000).waitFor(['approvals', 'dolibarr'])
-    setTimeout(() => { r.add('mcp__approvals__read_approval') }, 20)
+    setTimeout(() => { for (const name of APPROVALS) r.add(name) }, 20)
     setTimeout(() => { r.add('mcp__dolibarr__get_invoices') }, 40)
     const started = Date.now()
     expect(await waiting).toEqual({ missing: [] })
@@ -36,7 +40,7 @@ describe('a turn waits for its servers\' tools, bounded', () => {
 
   it('still absent at the bound: missing, said once; the next turn does not wait for it; it is back once registered', async () => {
     const r = registry()
-    r.add('mcp__approvals__request_approval')
+    for (const name of APPROVALS) r.add(name)
     const warned: string[] = []
     const readiness = new ToolsReadiness(r.read, r.onChange, (m) => { warned.push(m) }, 60)
     expect(await readiness.waitFor(['approvals', 'dolibarr'])).toEqual({ missing: ['dolibarr'] })
@@ -51,6 +55,34 @@ describe('a turn waits for its servers\' tools, bounded', () => {
     r.names.splice(0)
     expect((await readiness.waitFor(['dolibarr'])).missing).toEqual(['dolibarr'])
     expect(warned).toHaveLength(2)
+  })
+
+  it('the approvals are ready only with every card tool; the list is the catalog\'s allow-list', async () => {
+    const catalog = JSON.parse(readFileSync(new URL('../deploy/connectors/catalog.json', import.meta.url), 'utf8')) as { approvals: { allow: string[] } }
+    expect([...REQUIRED_TOOLS.approvals!].sort()).toEqual([...catalog.approvals.allow].sort())
+    const r = registry()
+    const readiness = new ToolsReadiness(r.read, r.onChange, () => undefined, 5000)
+    const waiting = readiness.waitFor(['approvals'])
+    for (const tool of REQUIRED_TOOLS.approvals!.slice(0, -1)) r.add(`mcp__approvals__${tool}`)
+    let settled = false
+    void waiting.then(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(settled).toBe(false)
+    r.add(`mcp__approvals__${REQUIRED_TOOLS.approvals!.at(-1)!}`)
+    expect(await waiting).toEqual({ missing: [] })
+  })
+
+  it('stopped while it waits: it leaves at once, and marks nothing unavailable', async () => {
+    const r = registry()
+    const warned: string[] = []
+    const readiness = new ToolsReadiness(r.read, r.onChange, (m) => { warned.push(m) }, 60_000)
+    const controller = new AbortController()
+    setTimeout(() => { controller.abort() }, 20)
+    const started = Date.now()
+    expect(await readiness.waitFor(['dolibarr'], controller.signal)).toEqual({ missing: ['dolibarr'] })
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(warned).toEqual([])
+    expect(r.listeners.size).toBe(0)
   })
 
   it('a server whose name only starts like another one is not taken for it', async () => {
