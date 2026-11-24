@@ -61,7 +61,18 @@ describe('the space\'s skills in the Agents view', { timeout: 20_000 }, () => {
     if (devis === undefined) throw new Error('no skill')
     fireEvent.click(within(devis).getByRole('button', { name: 'Modifier' }))
     fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
-    expect((await within(section).findByRole('alert')).textContent).toBe('Cette compétence a été modifiée entre-temps : relisez-la avant de la changer.')
+    // Said in the editor, with who and the new text; « Enregistrer » off: a second click writes nothing.
+    const stale = await within(section).findByTestId('skill-stale')
+    expect(stale.textContent).toContain('Modifiée entre-temps par stephane@datanalysis.re : relisez avant d\'enregistrer.')
+    expect(stale.textContent).toContain('autre')
+    const save = within(section).getByRole('button', { name: 'Enregistrer' })
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect((await chat.skills?.())?.find(k => k.slug === 'devis')?.version).toBe(2)
+    // Reopened on the new version, saving writes over the version read.
+    fireEvent.click(within(stale).getByRole('button', { name: 'Reprendre sur la nouvelle version' }))
+    fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
+    await waitFor(async () => { expect((await chat.skills?.())?.find(k => k.slug === 'devis')?.version).toBe(3) })
   })
 
   it('removing is asked once, naming the skill', async () => {

@@ -373,6 +373,8 @@ export const chatEn = {
   skillTooLong: 'A skill\'s text is 6,000 characters at most.',
   skillExists: 'A skill already has this name.',
   skillUnknown: 'This skill no longer exists: read the list again.',
+  skillChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
+  skillReopen: 'Edit the new version',
 } as const
 
 /** One copy key. */
@@ -746,6 +748,8 @@ export const chatFr: Record<ChatKey, string> = {
   skillTooLong: 'Le texte d\'une compétence fait 6 000 caractères au plus.',
   skillExists: 'Une compétence porte déjà ce nom.',
   skillUnknown: 'Cette compétence n\'existe plus : relisez la liste.',
+  skillChangedBy: 'Modifiée entre-temps par {who} : relisez avant d\'enregistrer.',
+  skillReopen: 'Reprendre sur la nouvelle version',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -34,6 +34,8 @@ export function SkillsSection(props: {
   const { t } = props
   // The skill being written: « new », or a slug being changed.
   const [editing, setEditing] = useState<string | undefined>(undefined)
+  // The version read when the edit opened: always the one sent, never a list read again since.
+  const [editVersion, setEditVersion] = useState<number | undefined>(undefined)
   const [draft, setDraft] = useState('')
   const [deleting, setDeleting] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -55,7 +57,11 @@ export function SkillsSection(props: {
     busy.current = false
     setPending(false)
   }
-  const editor = (onSave: () => void): ReactNode => (
+  /**
+   * @param onSave - the write. @param stale - the skill as it is now when it changed since the edit
+   * opened: « Enregistrer » stays off until the edit is opened again on it.
+   */
+  const editor = (onSave: () => void, stale?: ChatSkill): ReactNode => (
     <div className="mw-context-edit" data-testid="skill-editor">
       <textarea
         className="mw-input"
@@ -65,8 +71,17 @@ export function SkillsSection(props: {
         value={draft}
         onChange={(event) => { setDraft(event.target.value) }}
       />
+      {stale === undefined ? undefined : (
+        <div className="mw-turn-unchecked" role="note" data-testid="skill-stale">
+          <p>{stale.updatedBy === undefined ? t('skillChanged') : t('skillChangedBy', { who: stale.updatedBy })}</p>
+          <div className="mw-quoted"><div className="mw-agent-text">{renderBrief(stale.body, { plainHeadings: true })}</div></div>
+          <button type="button" className="mw-secondary" onClick={() => { setDraft(markdownOf(stale)); setEditVersion(stale.version); setError(undefined) }}>
+            {t('skillReopen')}
+          </button>
+        </div>
+      )}
       <div className="mw-decide-buttons">
-        <button type="button" className="mw-primary" disabled={pending || draft.trim() === ''} onClick={onSave}>{t('agentSave')}</button>
+        <button type="button" className="mw-primary" disabled={pending || draft.trim() === '' || stale !== undefined} onClick={onSave}>{t('agentSave')}</button>
         <button type="button" className="mw-secondary" disabled={pending} onClick={() => { setEditing(undefined); setError(undefined) }}>{t('cancel')}</button>
       </div>
     </div>
@@ -92,8 +107,10 @@ export function SkillsSection(props: {
                 <p className="mw-ctx-strong">{skill.name} <span className="mw-model-tech">v{skill.version}</span></p>
                 <p className="mw-ctx-small">{skill.description}</p>
                 {editing === skill.slug ? editor(() => {
-                  void run(() => props.onUpdate?.(skill.slug, draft, skill.version) ?? Promise.resolve(undefined))
-                }) : (
+                  const version = editVersion
+                  if (version === undefined) return
+                  void run(() => props.onUpdate?.(skill.slug, draft, version) ?? Promise.resolve(undefined))
+                }, editVersion !== undefined && skill.version !== editVersion ? skill : undefined) : (
                   <details className="mw-turn-steps">
                     <summary>{t('skillRead')}</summary>
                     <div className="mw-quoted"><div className="mw-agent-text">{renderBrief(skill.body, { plainHeadings: true })}</div></div>
@@ -108,7 +125,19 @@ export function SkillsSection(props: {
                 ) : (
                   <div className="mw-decide-buttons">
                     {props.onUpdate === undefined ? undefined : (
-                      <button type="button" className="mw-secondary" onClick={() => { setDraft(markdownOf(skill)); setEditing(skill.slug); setError(undefined); setIgnored([]) }}>{t('sheetEdit')}</button>
+                      <button
+                        type="button"
+                        className="mw-secondary"
+                        onClick={() => {
+                          setDraft(markdownOf(skill))
+                          setEditVersion(skill.version)
+                          setEditing(skill.slug)
+                          setError(undefined)
+                          setIgnored([])
+                        }}
+                      >
+                        {t('sheetEdit')}
+                      </button>
                     )}
                     {props.onDelete === undefined ? undefined : (
                       <button type="button" className="mw-secondary" onClick={() => { setDeleting(skill.slug); setError(undefined) }}>{t('skillDelete')}</button>
@@ -119,7 +148,10 @@ export function SkillsSection(props: {
             ))}
           </ul>
         )}
-      {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
+      {/* A change made meanwhile is said in its editor, with the new text; not twice. */}
+      {error === undefined || (editing !== undefined && editing !== 'new' && props.skills?.find(k => k.slug === editing)?.version !== editVersion)
+        ? undefined
+        : <p role="alert" className="mw-ctx-error">{error}</p>}
     </section>
   )
 }
