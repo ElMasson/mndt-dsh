@@ -10,7 +10,7 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { JsonFileStore, WorkbenchService } from './core/index.ts'
+import { instanceTimeZone, JsonFileStore, WorkbenchService } from './core/index.ts'
 import { reconcileInterrupted } from './reconcile.ts'
 import type { ApprovalState, MissionKind } from './core/index.ts'
 import type { Mission, PageState } from './types.ts'
@@ -238,6 +238,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       prices,
       dataDir: dirname(this.statePath),
       warn: (message) => { warnOperator(ctx, message) },
+      timeZone: this.timeZoneFor(ctx),
     })
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
     // without it, the API never believes the proxy's identity header.
@@ -442,6 +443,16 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   private requiredConfigured(): (server: string) => boolean {
     return requiredServersRule(this.proxyUserHeader, dirname(this.statePath))
+  }
+
+  /**
+   * @param ctx - the host context, for the operator's warning.
+   * @returns the instance's time zone (DSH_MNDT_TIME_ZONE), or the process's when unset or invalid (said once).
+   */
+  private timeZoneFor(ctx: Context): string {
+    const { timeZone, refused } = instanceTimeZone(process.env.DSH_MNDT_TIME_ZONE)
+    if (refused !== undefined) warnOperator(ctx, refused)
+    return timeZone
   }
 
   /** One readiness for turns and missions: a server's unavailability is remembered once. */
