@@ -111,7 +111,7 @@ const tools = [
         handle: { type: 'string', description: 'a-z, 0-9, dashes; 2-32' },
         provider: { type: 'string', description: 'From GET /models' },
         model: { type: 'string', description: 'From GET /models' },
-        instructions: { type: 'string', description: '≤ 2 000 chars: « ## Rôle », « ## Objectif », « ## Ne décide pas »' },
+        instructions: { type: 'string', description: '≤ 2 000 chars: « ## Rôle », « ## Objectif », « ## Ne décide pas » (what it leaves to a person: sending, paying, deciding for the team)' },
         connectors: { type: 'array', items: { type: 'string' } },
         eurPerMonth: { type: 'number', description: 'Monthly ceiling, € (default 5; above 5, owner only)' },
         title: { type: 'string' },

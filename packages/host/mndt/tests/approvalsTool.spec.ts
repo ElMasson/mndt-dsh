@@ -135,7 +135,7 @@ test('asks propose_agent for instructions in three sections, in order: Rôle, Ob
 
 test('the card tools stay short, and each says what it does not do', async () => {
   // Their schemas go out with every call of every turn: 4 225 characters
-  // before 24/11 (45 % of a « bonjour »), 2 713 after. The long explanations
+  // before 24/11 (45 % of a « bonjour »), 2 782 after. The long explanations
   // belong in the server's refusals, not in the schema.
   const harness = await start(false)
   const tools = (harness.messages().find(message => message.id === 2)?.result?.tools ?? []) as { name: string; description?: string }[]
@@ -149,4 +149,7 @@ test('the card tools stay short, and each says what it does not do', async () =>
   expect(said('propose_context')).toContain('Changes nothing')
   expect(said('propose_context')).toContain('unchanged since baseVersion')
   expect(said('ask_peers')).toContain('end your turn in one sentence')
+  // What a proposed agent leaves to a person: the server does not check it, the schema must say it.
+  const instructions = JSON.stringify(tools.find(tool => tool.name === 'propose_agent'))
+  for (const word of ['## Ne décide pas', 'sending', 'paying', 'deciding for the team']) expect(instructions).toContain(word)
 })
