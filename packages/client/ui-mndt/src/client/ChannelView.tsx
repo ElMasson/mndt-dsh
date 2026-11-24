@@ -509,6 +509,11 @@ export interface LaneArrival {
   readonly onChannel: (id: string) => void
   readonly pending: number
   readonly onPending: () => void
+  /** The agents the person may add to their lane in one click (owners and admins), and how. */
+  readonly addable?: {
+    readonly agents: readonly ChatAgent[]
+    readonly onAdd: (agentId: string) => Promise<string | undefined>
+  } | undefined
 }
 
 /**
@@ -527,7 +532,25 @@ function LaneWelcome(props: {
     <div className="mw-welcome" data-testid="lane-welcome">
       <p className="mw-welcome-title">{t('laneWelcomeTitle')}</p>
       <p className="mw-welcome-text">{t('laneWelcomeText')}</p>
-      {props.agents.length === 0 ? <p className="mw-welcome-text">{t('laneWelcomeNoAgent')}</p> : (
+      {props.agents.length === 0 && arrival.addable !== undefined && arrival.addable.agents.length > 0 ? (
+        // The person can add one: a gesture, not a sentence sending them to themselves.
+        <>
+          <p className="mw-welcome-text">{t('laneWelcomeAddAgent')}</p>
+          <div className="mw-pills" role="group" aria-label={t('laneWelcomeAddAgent')} data-testid="lane-add-agents">
+            {arrival.addable.agents.map(a => (
+              <button
+                key={a.id}
+                type="button"
+                className="mw-pill"
+                aria-label={t('pillAddAgent', { handle: a.handle })}
+                onClick={() => { void arrival.addable?.onAdd(a.id) }}
+              >
+                @{a.handle}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : props.agents.length === 0 ? <p className="mw-welcome-text">{t('laneWelcomeNoAgent')}</p> : (
         <div className="mw-pills" role="group" aria-label={t('laneWelcomeAsk')}>
           {props.agents.map(a => (
             <button key={a.id} type="button" className="mw-pill" onClick={() => { props.onAgent(a.handle) }} aria-label={t('laneWelcomeAskOne', { handle: a.handle })}>
