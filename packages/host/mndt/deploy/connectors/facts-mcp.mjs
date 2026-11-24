@@ -45,6 +45,8 @@ lines.on('line', (line) => {
     return
   }
   const { id, method, params } = message
+  // A message without an id is a notification: never answered, whatever its method.
+  if (id === undefined || id === null) return
   if (method === 'initialize') {
     answer(id, {
       protocolVersion: '2024-11-05',
@@ -71,7 +73,7 @@ lines.on('line', (line) => {
     answer(id, { content: [{ type: 'text', text: facts() }] })
     return
   }
-  if (id !== undefined) {
-    answer(id, {})
-  }
+  // Any other request: « method not found », never an empty result that could
+  // pass for a successful answer to the newer protocol's probe (server/discover).
+  process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: `workbench-facts: method not found: ${String(method).slice(0, 64)}` } })}\n`)
 })

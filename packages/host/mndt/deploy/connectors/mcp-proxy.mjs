@@ -103,9 +103,19 @@ function refusal(id, name) {
 
 /**
  * @param message - one client message.
- * @returns the message to forward, or a refusal to answer locally.
+ * @returns the message to forward, a refusal or an answer given locally, or dropped (a probe without id).
  */
 function screen(message) {
+  // The newer protocol's probe is answered here, never relayed: a server behind
+  // the proxy (Attio, Dolibarr, Qonto…) that leaves it unanswered would make the
+  // MCP client wait its whole request timeout (60 s) before the classic
+  // handshake, at every start; « method not found » makes it fall back at once.
+  // Only this method: everything else reaches the server as before. A
+  // notification (no id) is dropped.
+  if (message !== null && typeof message === 'object' && message.method === 'server/discover') {
+    if (message.id === undefined || message.id === null) return { dropped: true }
+    return { refused: { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'mcp-proxy: method not found: server/discover' } } }
+  }
   if (message !== null && typeof message === 'object' && message.method === 'tools/call') {
     const name = message.params?.name
     if (!allowed(name)) return { refused: refusal(message.id, name) }
@@ -130,6 +140,7 @@ incoming.on('line', (line) => {
     const forward = []
     for (const item of message) {
       const decision = screen(item)
+      if (decision.dropped === true) continue
       if (decision.refused !== undefined) process.stdout.write(`${JSON.stringify(decision.refused)}\n`)
       else forward.push(decision.forward)
     }
@@ -137,6 +148,7 @@ incoming.on('line', (line) => {
     return
   }
   const decision = screen(message)
+  if (decision.dropped === true) return
   if (decision.refused !== undefined) {
     process.stdout.write(`${JSON.stringify(decision.refused)}\n`)
     return
