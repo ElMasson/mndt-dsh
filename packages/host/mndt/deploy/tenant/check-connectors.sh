@@ -13,8 +13,10 @@
 # (office365: calendar_upcoming of the owner's mailbox; qonto: get_organization;
 # dolibarr: get_status; swing: list_projects) and prints only the size of the
 # answer, never its content. --discover times each connector's answer to the
-# newer protocol's probe (server/discover) and fails past 2 s: read-only, it
-# can run on a live instance after each update. No secret is printed: the env file is sourced
+# newer protocol's probe (server/discover) and fails past 2 s: it sends only
+# server/discover, initialize and tools/list (no refused call, no actor file,
+# no live read, even with --live), so it can run on a live instance after each
+# update. No secret is printed: the env file is sourced
 # inside the container by the connector's own row.
 # Environment: MNDT_ROOT prefixes every absolute path, as in create-tenant.sh;
 # MNDT_CHECK_EXEC replaces the `docker compose exec` prefix (tests).
@@ -59,7 +61,9 @@ print(module.script_for(data, data.get('serverName', 'connector')))
 PY
 )
   options=()
-  if [ "$discover" = 1 ]; then options+=(--discover); fi
+  # --discover: the probe and the tool list only. No --refuse (a real tools/call,
+  # even refused), no --actor (it writes a file), no --call.
+  if [ "$discover" = 1 ]; then options+=(--discover); else
   case $name in
     office365) options+=(--refuse send_mail --actor "$owner" --actor-file /tmp/mcp-check-actor.json); if [ "$live" = 1 ]; then options+=(--call calendar_upcoming); fi ;;
     qonto) options+=(--refuse create_transfer_request); if [ "$live" = 1 ]; then options+=(--call get_organization); fi ;;
@@ -67,6 +71,7 @@ PY
     swing) options+=(--refuse create_task); if [ "$live" = 1 ]; then options+=(--call list_projects); fi ;;
     approvals) options+=(--refuse decide_approval) ;;
   esac
+  fi
   echo "== $name"
   if ! "${exec_prefix[@]}" node /opt/mndt-tools/mcp-check.mjs "${options[@]}" -- sh -lc "$script" | sed 's/^/   /'; then
     failed=1

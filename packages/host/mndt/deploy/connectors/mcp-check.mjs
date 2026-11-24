@@ -79,9 +79,14 @@ function request(method, params) {
 /** @param answer - a tools/call answer. @returns its text, joined. */
 const textOf = (answer) => (answer.result?.content ?? []).map(part => part?.text ?? '').join(' ')
 
+/** @returns the connector's last stderr lines, never in --discover mode (they can carry a secret). */
+const stderrNote = () => {
+  if (discover) return '  voir le journal du workbench'
+  return stderr.trim() === '' ? '' : `  dernier message du serveur : ${stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`
+}
 const timer = setTimeout(() => {
   console.log(`echec : pas de reponse en ${Math.round(timeoutMs / 1000)} s`)
-  if (stderr.trim() !== '') console.log(`  dernier message du serveur : ${stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`)
+  if (stderrNote() !== '') console.log(stderrNote())
   child.kill()
   process.exit(1)
 }, timeoutMs)
@@ -106,8 +111,8 @@ if (discover) {
 }
 const init = await request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mcp-check', version: '1' } })
 if (init.error !== undefined || init.result === undefined) {
-  console.log(`echec : initialize : ${init.error?.message ?? 'pas de resultat'}`)
-  if (stderr.trim() !== '') console.log(`  dernier message du serveur : ${stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`)
+  console.log(discover ? 'echec : initialize a echoue, voir le journal du workbench' : `echec : initialize : ${init.error?.message ?? 'pas de resultat'}`)
+  if (!discover && stderrNote() !== '') console.log(stderrNote())
   process.exit(1)
 }
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)

@@ -6,7 +6,7 @@
  * waits longer itself.
  */
 import { spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -64,7 +64,61 @@ describe('mcp-check --discover', () => {
   })
 })
 
+describe('mcp-check --discover never prints the connector\'s stderr', () => {
+  it('initialize failing: a fixed line, not the server\'s last words (they can carry a secret); without --discover they stay shown', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mndt-check-'))
+    dirs.push(dir)
+    const path = join(dir, 'failing.mjs')
+    writeFileSync(path, [
+      "import { createInterface } from 'node:readline'",
+      "process.stderr.write('token=SECRET-42 refused\\n')",
+      "createInterface({ input: process.stdin }).on('line', (line) => {",
+      '  const m = JSON.parse(line)',
+      "  if (m.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, error: { code: -32000, message: 'auth failed' } }) + '\\n')",
+      '})',
+    ].join('\n'))
+    const probed = check(['--discover', '--', process.execPath, path])
+    expect(probed.status).toBe(1)
+    expect(probed.out).toContain('echec : initialize a echoue, voir le journal du workbench')
+    expect(probed.out).not.toContain('SECRET-42')
+    const plain = check(['--', process.execPath, path])
+    expect(plain.out).toContain('SECRET-42')
+  })
+})
+
 describe('check-connectors.sh --discover', () => {
+  it('sends the probe and the tool list only: no refused call, no actor file, no live read', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mndt-tenant-'))
+    dirs.push(root)
+    const app = join(root, 'opt', 'mndt', 'acme')
+    const data = join(root, 'data', 'mndt', 'acme', 'live')
+    mkdirSync(join(app, 'gateway'), { recursive: true })
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    writeFileSync(join(app, 'docker-compose.yml'), 'services:\n  workbench:\n    environment:\n      DSH_MNDT_IDENTITY: duke@datanalysis.re\n')
+    copyFileSync(join(deploy, 'connectors', 'render-connectors.py'), join(app, 'gateway', 'render-connectors.py'))
+    copyFileSync(join(deploy, 'patchfile.py'), join(app, 'gateway', 'patchfile.py'))
+    const server = fakeServer(true)
+    for (const name of ['office365', 'qonto', 'approvals']) {
+      writeFileSync(join(data, 'connectors', `${name}.json`), JSON.stringify({ serverName: name, command: [process.execPath, server] }))
+    }
+    const argsLog = join(root, 'args.log')
+    const shim = join(root, 'exec-shim.sh')
+    writeFileSync(shim, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${argsLog}\nargs=()\nfor a in "$@"; do [ "$a" = /opt/mndt-tools/mcp-check.mjs ] && a=${CHECK}; args+=("$a"); done\nexec "\${args[@]}"\n`)
+    chmodSync(shim, 0o755)
+    const run = spawnSync('bash', [join(deploy, 'tenant', 'check-connectors.sh'), 'acme', '--live', '--discover'], {
+      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MNDT_ROOT: root, MNDT_CHECK_EXEC: shim },
+    })
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('all checks passed')
+    const calls = readFileSync(argsLog, 'utf8').trim().split('\n')
+    expect(calls).toHaveLength(3)
+    for (const line of calls) {
+      expect(line).toContain('--discover')
+      expect(line).not.toMatch(/--refuse|--actor|--call/)
+    }
+    expect(existsSync('/tmp/mcp-check-actor.json') && statSync('/tmp/mcp-check-actor.json').mtimeMs > Date.now() - 30_000).toBe(false)
+  })
+
   it('passes --discover to the check of every mounted connector', () => {
     const root = mkdtempSync(join(tmpdir(), 'mndt-tenant-'))
     dirs.push(root)
