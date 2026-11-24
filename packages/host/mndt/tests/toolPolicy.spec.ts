@@ -247,7 +247,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     const engine = {
       ...(provider === 'unreadable' ? {} : { config: { provider: provider.name ?? 'spawn' } }),
       start: (spec?: { script?: string }) => {
-        seen.script = spec?.script
+        if (spec?.script !== undefined) seen.script = spec.script
         // The workflow child: the agent that actually calls the model.
         const child = agentOf('child_1', seen.root!.session.header.id)
         announce(child)
