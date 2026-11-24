@@ -37,6 +37,12 @@ export interface DshRunnerOptions {
   readonly tools?: ToolPolicy
   /** Whether the servers have registered their tools; shared with the turns (one memory of a server's unavailability). */
   readonly readiness?: ToolsReadiness
+  /**
+   * Whether a server is configured for this space. A required server (the
+   * approvals, the facts) that is not configured is neither waited for nor
+   * required: a solo workstation mounts none. Omitted, every server is.
+   */
+  readonly configured?: (server: string) => boolean
 }
 
 /**
@@ -214,7 +220,8 @@ export class DshMissionRunner {
     // visible names once). The first automation tick runs at start-up, while
     // the servers are still starting. Without its required servers, a mission
     // does not start, and says why.
-    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission))
+    const configured = this.#options.configured ?? (() => true)
+    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission).filter(configured))
     if (missing.length > 0) {
       throw new Error(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
     }
@@ -293,10 +300,22 @@ export class DshTurnRunner implements TurnEngine {
   /** Whether a turn's servers have registered their tools: kept across turns (a server's unavailability is remembered). */
   readonly #readiness: ToolsReadiness
 
-  /** @param ctx - the host context. @param readiness - the servers' readiness (shared with the missions; for tests, a fake). */
-  constructor(ctx: Context, readiness?: ToolsReadiness) {
+  readonly #configured: (server: string) => boolean
+
+  /**
+   * @param ctx - the host context.
+   * @param readiness - the servers' readiness (shared with the missions; for tests, a fake).
+   * @param configured - whether a server is configured for this space (see DshRunnerOptions.configured).
+   */
+  constructor(ctx: Context, readiness?: ToolsReadiness, configured: (server: string) => boolean = () => true) {
     this.#ctx = ctx
     this.#readiness = readiness ?? toolsReadinessOf(ctx)
+    this.#configured = configured
+  }
+
+  /** @returns the servers every turn needs that this space configures: the approvals, unless none are mounted. */
+  #always(): string[] {
+    return ALWAYS_SERVERS.filter(server => this.#configured(server))
   }
 
   /**
@@ -307,7 +326,7 @@ export class DshTurnRunner implements TurnEngine {
    * @param signal - the turn's stop.
    */
   async ready(servers: readonly string[], signal: AbortSignal): Promise<void> {
-    await this.#readiness.waitFor([...new Set([...servers, ...ALWAYS_SERVERS])], signal)
+    await this.#readiness.waitFor([...new Set([...servers, ...this.#always()])], signal)
   }
 
   /**
@@ -328,7 +347,7 @@ export class DshTurnRunner implements TurnEngine {
     // hidden for the whole turn. The approvals are required: without them the
     // turn does not start. A channel's connector may be missing: the turn runs
     // without it, and is told so.
-    const needed = input.tools === 'none' ? [] : input.tools === 'no-cards' ? [...input.servers] : [...new Set([...input.servers, ...ALWAYS_SERVERS])]
+    const needed = input.tools === 'none' ? [] : input.tools === 'no-cards' ? [...input.servers] : [...new Set([...input.servers, ...this.#always()])]
     const { missing } = await this.#readiness.waitFor(needed, input.signal)
     if (input.signal.aborted) throw new Error('turn stopped')
     const required = missing.filter(server => input.tools !== 'no-cards' && ALWAYS_SERVERS.includes(server))

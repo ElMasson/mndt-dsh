@@ -192,11 +192,14 @@ const SKILL_FIELDS = ['name', 'description']
 export function parseSkill(markdown: string): { name: string; description: string; body: string; ignoredFields: string[] } {
   const text = markdown.replace(/\r\n/g, '\n').trim()
   if (!text.startsWith('---\n')) throw new SkillRefusal('missing-fields', 'a SKILL.md starts with its front matter: « --- », « name: … », « --- »')
-  const end = text.indexOf('\n---', 4)
+  // The front matter ends at the first line that is exactly « --- » (trailing
+  // blanks aside): « ---x » or « ----- » inside it is not its end.
+  const lines = text.split('\n')
+  const end = lines.findIndex((line, index) => index > 0 && line.trimEnd() === '---')
   if (end < 0) throw new SkillRefusal('missing-fields', 'the front matter of a SKILL.md ends with a « --- » line')
   const fields = new Map<string, string>()
   const ignored: string[] = []
-  for (const line of text.slice(4, end).split('\n')) {
+  for (const line of lines.slice(1, end)) {
     const found = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line)
     if (found === null) continue
     const key = (found[1] ?? '').toLowerCase()
@@ -204,7 +207,7 @@ export function parseSkill(markdown: string): { name: string; description: strin
     else if (!ignored.includes(key)) ignored.push(key)
   }
   const name = fields.get('name') ?? ''
-  const body = text.slice(end + 4).trim()
+  const body = lines.slice(end + 1).join('\n').trim()
   if (name === '') throw new SkillRefusal('missing-fields', 'a SKILL.md names its skill (« name: … » in its front matter)')
   if (name.length > MAX_SKILL_NAME) throw new SkillRefusal('missing-fields', `a skill's name is ${MAX_SKILL_NAME} characters at most`)
   if (body === '') throw new SkillRefusal('missing-fields', 'a SKILL.md has a body after its front matter')
