@@ -2,27 +2,31 @@
 # Check the mounted connectors of a tenant inside its running workbench, the way
 # a turn runs them (same row, same proxy, same env file), without any model.
 #
-#   check-connectors.sh <slug> [--live] [connector...]
+#   check-connectors.sh <slug> [--live] [--discover] [connector...]
 #   check-connectors.sh datanalysis
 #   check-connectors.sh datanalysis --live office365
+#   check-connectors.sh datanalysis --discover
 #
 # For each connector (default: every mounted one): the tools the proxy lets an
 # agent see, then one write tool asked for on purpose, which the proxy must
 # refuse before it reaches the server. --live adds one real read per connector
 # (office365: calendar_upcoming of the owner's mailbox; qonto: get_organization;
 # dolibarr: get_status; swing: list_projects) and prints only the size of the
-# answer, never its content. No secret is printed: the env file is sourced
+# answer, never its content. --discover times each connector's answer to the
+# newer protocol's probe (server/discover) and fails past 2 s: read-only, it
+# can run on a live instance after each update. No secret is printed: the env file is sourced
 # inside the container by the connector's own row.
 # Environment: MNDT_ROOT prefixes every absolute path, as in create-tenant.sh;
 # MNDT_CHECK_EXEC replaces the `docker compose exec` prefix (tests).
 set -euo pipefail
 
-[ $# -ge 1 ] || { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+[ $# -ge 1 ] || { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 slug=$1; shift
-live=0; names=()
+live=0; discover=0; names=()
 while [ $# -gt 0 ]; do
   case $1 in
     --live) live=1; shift ;;
+    --discover) discover=1; shift ;;
     *) names+=("$1"); shift ;;
   esac
 done
@@ -55,6 +59,7 @@ print(module.script_for(data, data.get('serverName', 'connector')))
 PY
 )
   options=()
+  if [ "$discover" = 1 ]; then options+=(--discover); fi
   case $name in
     office365) options+=(--refuse send_mail --actor "$owner" --actor-file /tmp/mcp-check-actor.json); if [ "$live" = 1 ]; then options+=(--call calendar_upcoming); fi ;;
     qonto) options+=(--refuse create_transfer_request); if [ "$live" = 1 ]; then options+=(--call get_organization); fi ;;

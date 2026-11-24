@@ -2,7 +2,7 @@
 /**
  * Check one mounted connector the way the workbench runs it, without a model.
  *
- *   node mcp-check.mjs [--refuse <tool>] [--call <tool>] [--actor <email> --actor-file <path>] -- <command...>
+ *   node mcp-check.mjs [--discover] [--refuse <tool>] [--call <tool>] [--actor <email> --actor-file <path>] -- <command...>
  *
  * Starts the command (the connector's own `sh -lc` row, proxy included), sends
  * initialize then tools/list, and prints the visible tool names. --refuse asks
@@ -10,6 +10,13 @@
  * reaches the server. --call makes one real read and prints only its size or
  * its error, never its content. --actor writes the person a turn would act for
  * into --actor-file first (Office 365 in application mode reads that mailbox).
+ *
+ * --discover first sends the newer protocol's probe (server/discover), as the
+ * engine's MCP client does at every start, and prints how long the connector
+ * took to answer it. Unanswered within 2 s (MCP_CHECK_DISCOVER_MS) it fails:
+ * the engine would wait its whole request timeout (60 s) before the classic
+ * handshake, so the connector's tools would arrive a minute after each start.
+ * The check itself never waits more than those 2 s for it.
  *
  * Nothing secret is printed: the env file is sourced by the command itself.
  * Exit 0 when every step passed, 1 otherwise.
@@ -31,10 +38,12 @@ const refuse = option('--refuse')
 const call = option('--call')
 const actor = option('--actor')
 const actorFile = option('--actor-file')
+const discover = options.includes('--discover')
+const discoverMs = Number(process.env.MCP_CHECK_DISCOVER_MS ?? 2000)
 const timeoutMs = Number(process.env.MCP_CHECK_TIMEOUT_MS ?? 90_000)
 
 if (command.length === 0) {
-  process.stderr.write('usage: mcp-check.mjs [--refuse <tool>] [--call <tool>] [--actor <email> --actor-file <f>] -- <command...>\n')
+  process.stderr.write('usage: mcp-check.mjs [--discover] [--refuse <tool>] [--call <tool>] [--actor <email> --actor-file <f>] -- <command...>\n')
   process.exit(2)
 }
 if (actor !== '' && actorFile !== '') writeFileSync(actorFile, JSON.stringify({ actor }), { mode: 0o600 })
@@ -78,6 +87,23 @@ const timer = setTimeout(() => {
 }, timeoutMs)
 
 let ok = true
+if (discover) {
+  const started = Date.now()
+  const answer = await Promise.race([
+    request('server/discover', { _meta: {} }),
+    new Promise(resolve => { setTimeout(() => { resolve(undefined) }, discoverMs) }),
+  ])
+  const took = Date.now() - started
+  if (answer === undefined) {
+    console.log(`sonde server/discover : ECHEC, pas de reponse en ${Math.round(discoverMs / 1000)} s : le moteur attendrait 60 s a chaque demarrage avant de charger les outils de ce connecteur`)
+    ok = false
+  } else if (answer.error?.message === 'the connector exited') {
+    console.log('sonde server/discover : ECHEC, le connecteur s\'est arrete')
+    ok = false
+  } else {
+    console.log(`sonde server/discover : ok, reponse en ${took} ms (${answer.error === undefined ? 'resultat' : `erreur ${answer.error.code ?? ''}`.trim()})`)
+  }
+}
 const init = await request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mcp-check', version: '1' } })
 if (init.error !== undefined || init.result === undefined) {
   console.log(`echec : initialize : ${init.error?.message ?? 'pas de resultat'}`)
