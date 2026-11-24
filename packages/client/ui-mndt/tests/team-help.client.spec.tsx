@@ -226,3 +226,17 @@ describe('a question shown once, under the message that publishes it', () => {
     await waitFor(() => { expect(onAnswer).toHaveBeenCalledWith('Oui.', 'msg_9') })
   })
 })
+
+describe('a question never becomes invisible', { timeout: 20_000 }, () => {
+  it('when its published message is not in the thread, it stays under its turn', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const help = { state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'HT ?', messageId: 'msg_absent' } }
+    const asking = { id: 'msg_1', channelId: 'chn_1', author: { kind: 'human' as const, email: 'stephane@datanalysis.re' }, text: '@qwen ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'done' as const, help }] }
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: ['stephane@datanalysis.re'], agents: ['agt_2'], connectors: [], createdBy: 'stephane@datanalysis.re', createdAt: at }
+    const chat = createMockChat({ you: 'stephane@datanalysis.re', agents: [...agents.values()], channels: [channel], messages: [asking] }, () => Date.parse(at))
+    render(<ChannelThread chat={chat} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" canAnswer />)
+    expect((await screen.findByTestId('help-question')).textContent).toContain('HT ?')
+  })
+})
