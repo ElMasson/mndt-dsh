@@ -71,6 +71,10 @@ describe('the space\'s skills in the Agents view', { timeout: 20_000 }, () => {
     expect((await chat.skills?.())?.find(k => k.slug === 'devis')?.version).toBe(2)
     // Reopened on the new version, saving writes over the version read.
     fireEvent.click(within(stale).getByRole('button', { name: 'Reprendre sur la nouvelle version' }))
+    // The person's text is kept beside, read-only, to copy from.
+    const kept = within(section).getByTestId('skill-kept').querySelector('textarea')
+    expect(kept?.readOnly).toBe(true)
+    expect(kept?.value).toContain('name: Devis')
     fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
     await waitFor(async () => { expect((await chat.skills?.())?.find(k => k.slug === 'devis')?.version).toBe(3) })
   })

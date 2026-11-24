@@ -91,3 +91,19 @@ describe('a turn waits for its servers\' tools, bounded', () => {
     expect((await new ToolsReadiness(r.read, r.onChange, () => undefined, 30).waitFor(['approvals'])).missing).toEqual(['approvals'])
   })
 })
+
+describe('a server configured for the space', () => {
+  it('is one whose descriptor mount-connector.sh wrote, beside state.json', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { configuredInSpace } = await import('../src/gateway.ts')
+    const dir = mkdtempSync(join(tmpdir(), 'mndt-space-'))
+    const configured = configuredInSpace(dir)
+    expect(configured('approvals')).toBe(false)
+    mkdirSync(join(dir, 'connectors'))
+    writeFileSync(join(dir, 'connectors', 'approvals.json'), '{}')
+    expect(configured('approvals')).toBe(true)
+    expect(configured('workbench_facts')).toBe(false)
+  })
+})

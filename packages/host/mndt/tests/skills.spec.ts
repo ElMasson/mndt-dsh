@@ -161,3 +161,12 @@ describe('a skill in the prompt', () => {
     expect(b.warned).toEqual(["mndt: @alpha's skills grosse-3 left out of its prompt (no longer in the library, or past the per-turn budget)"])
   })
 })
+
+describe('the front matter of a SKILL.md', () => {
+  it('ends only at a line that is exactly « --- »: « ---x » inside it is not its end', async () => {
+    const { parseSkill } = await import('../src/core/index.ts')
+    const parsed = parseSkill('---\nname: Relance\n---x: y\ndescription: d\n---  \nLe corps.')
+    expect([parsed.name, parsed.description, parsed.body]).toEqual(['Relance', 'd', 'Le corps.'])
+    expect(() => parseSkill('---\nname: Relance\n---x\nLe corps.')).toThrow('ends with a « --- » line')
+  })
+})

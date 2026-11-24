@@ -95,6 +95,8 @@ export interface ChatTurn {
   readonly steps?: unknown
   /** Its agent's help from its peers (`ask_peers`), read through `helpOf`, never trusted as is. */
   readonly help?: unknown
+  /** The channel's servers whose tools were not ready when the turn ran (#126): it ran without them. */
+  readonly toolsUnavailable?: unknown
   /** A council's deliberation on this turn, read through `councilOf`, never trusted as is. */
   readonly council?: unknown
 }

@@ -375,6 +375,8 @@ export const chatEn = {
   skillUnknown: 'This skill no longer exists: read the list again.',
   skillChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
   skillReopen: 'Edit the new version',
+  toolsUnavailable: 'Tools unavailable for this turn: {servers}. The answer did not consult them.',
+  keptDraft: 'Your text not saved (to copy from)',
 } as const
 
 /** One copy key. */
@@ -750,6 +752,8 @@ export const chatFr: Record<ChatKey, string> = {
   skillUnknown: 'Cette compétence n\'existe plus : relisez la liste.',
   skillChangedBy: 'Modifiée entre-temps par {who} : relisez avant d\'enregistrer.',
   skillReopen: 'Reprendre sur la nouvelle version',
+  toolsUnavailable: 'Outils indisponibles pour ce tour : {servers}. La réponse ne les a pas consultés.',
+  keptDraft: 'Votre texte non enregistré (à recopier)',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

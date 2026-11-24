@@ -36,6 +36,8 @@ export function SkillsSection(props: {
   const [editing, setEditing] = useState<string | undefined>(undefined)
   // The version read when the edit opened: always the one sent, never a list read again since.
   const [editVersion, setEditVersion] = useState<number | undefined>(undefined)
+  // The person's text not saved, kept beside the new version when they take it up again: never lost.
+  const [kept, setKept] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
   const [deleting, setDeleting] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -51,6 +53,7 @@ export function SkillsSection(props: {
     else {
       setError(undefined)
       setEditing(undefined)
+      setKept(undefined)
       setDeleting(undefined)
       setIgnored(result?.ignoredFields ?? [])
     }
@@ -75,14 +78,20 @@ export function SkillsSection(props: {
         <div className="mw-turn-unchecked" role="note" data-testid="skill-stale">
           <p>{stale.updatedBy === undefined ? t('skillChanged') : t('skillChangedBy', { who: stale.updatedBy })}</p>
           <div className="mw-quoted"><div className="mw-agent-text">{renderBrief(stale.body, { plainHeadings: true })}</div></div>
-          <button type="button" className="mw-secondary" onClick={() => { setDraft(markdownOf(stale)); setEditVersion(stale.version); setError(undefined) }}>
+          <button type="button" className="mw-secondary" onClick={() => { setKept(draft); setDraft(markdownOf(stale)); setEditVersion(stale.version); setError(undefined) }}>
             {t('skillReopen')}
           </button>
         </div>
       )}
+      {kept === undefined ? undefined : (
+        <label className="mw-field" data-testid="skill-kept">
+          {t('keptDraft')}
+          <textarea className="mw-input" rows={5} readOnly value={kept} />
+        </label>
+      )}
       <div className="mw-decide-buttons">
         <button type="button" className="mw-primary" disabled={pending || draft.trim() === '' || stale !== undefined} onClick={onSave}>{t('agentSave')}</button>
-        <button type="button" className="mw-secondary" disabled={pending} onClick={() => { setEditing(undefined); setError(undefined) }}>{t('cancel')}</button>
+        <button type="button" className="mw-secondary" disabled={pending} onClick={() => { setEditing(undefined); setKept(undefined); setError(undefined) }}>{t('cancel')}</button>
       </div>
     </div>
   )

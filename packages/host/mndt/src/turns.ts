@@ -177,6 +177,15 @@ export class TurnScheduler {
   readonly #running = new Map<string, Running>()
   /** Turns waiting for their servers, before the queue: a stop reaches them too. */
   readonly #waiting = new Map<string, Running>()
+  /** Every turn launched and not yet settled, wherever it is (waiting, queued, running). */
+  readonly #launched = new Map<string, { readonly messageId: string; readonly channelId: string; readonly agentId: string }>()
+  /**
+   * Turns stop() was called for: set by stop() itself, so a turn stopped while
+   * waiting or queued never starts, whatever the cause (not only one the state shows).
+   */
+  readonly #stopped = new Set<string>()
+  /** Per channel, the last turn's wait for its servers: a channel's turns keep their order. */
+  readonly #gates = new Map<string, Promise<unknown>>()
 
   /** @param options - service, engine, prices and data folder. */
   constructor(options: TurnSchedulerOptions) {
@@ -209,18 +218,24 @@ export class TurnScheduler {
    * @param message - the message just posted.
    */
   launch(message: Message): void {
-    // A message's turns keep their order: each waits for its servers after the previous one.
-    let gate: Promise<unknown> = Promise.resolve()
+    const channelId = message.channelId
     for (const turn of message.turns ?? []) {
+      this.#launched.set(turn.id, { messageId: message.id, channelId, agentId: turn.agentId })
       // The turn waits for its servers BEFORE the queue (it stays queued
-      // meanwhile): a slow or broken connector delays its own turn, never
-      // the other channels'. Then it takes its place, ready or at the bound.
-      const ready = gate.then(() => this.#ready(message.id, turn)).catch(() => undefined)
-      gate = ready
+      // meanwhile): a slow or broken connector delays its own channel's
+      // turns, never the other channels'. A channel's turns keep their order:
+      // each waits behind the previous one of the same channel, then takes
+      // its place in the queue, ready or at the bound.
+      const ready = (this.#gates.get(channelId) ?? Promise.resolve())
+        .then(() => this.#ready(message.id, turn))
+        .catch(() => undefined)
+      this.#gates.set(channelId, ready)
+      void ready.then(() => { if (this.#gates.get(channelId) === ready) this.#gates.delete(channelId) })
+      const settle = (): void => { this.#launched.delete(turn.id); this.#stopped.delete(turn.id) }
       const next = ready.then(() => {
         const run = this.#queue.then(
-          () => this.#run(message.id, turn),
-          () => this.#run(message.id, turn),
+          () => this.#run(message.id, turn).finally(settle),
+          () => this.#run(message.id, turn).finally(settle),
         )
         this.#queue = run.catch(() => undefined)
         return run
@@ -244,14 +259,17 @@ export class TurnScheduler {
       | { readonly channelId: string; readonly agentId: string }
       | { readonly agentId: string },
   ): void {
+    const matches = (turn: { readonly messageId: string; readonly channelId: string; readonly agentId: string }): boolean =>
+      'messageId' in filter
+        ? turn.messageId === filter.messageId
+        : 'channelId' in filter
+          ? turn.channelId === filter.channelId && turn.agentId === filter.agentId
+          : turn.agentId === filter.agentId
+    // Marked first, in memory: a waiting or queued turn will not start, even
+    // if the state does not show why.
+    for (const [turnId, turn] of this.#launched) if (matches(turn)) this.#stopped.add(turnId)
     for (const running of [...this.#running.values(), ...this.#waiting.values()]) {
-      const matches =
-        'messageId' in filter
-          ? running.messageId === filter.messageId
-          : 'channelId' in filter
-            ? running.channelId === filter.channelId && running.agentId === filter.agentId
-            : running.agentId === filter.agentId
-      if (matches) running.controller.abort()
+      if (matches(running)) running.controller.abort()
     }
   }
 
@@ -901,6 +919,12 @@ export class TurnScheduler {
         finishedAt: now,
       })
       await service.reply(channel.id, messageId, { kind: 'system' }, refusal)
+      return
+    }
+    // Stopped while it waited or was queued: it does not start. Checked with no
+    // await before it is registered as running, so no stop() falls in between.
+    if (this.#stopped.has(turn.id)) {
+      await cancel('Tour arrêté avant son départ.')
       return
     }
     const controller = new AbortController()
