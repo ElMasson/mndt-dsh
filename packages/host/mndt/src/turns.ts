@@ -42,6 +42,8 @@ import {
   parseHelpReading,
   parseVerdict,
   reasonKind,
+  dateLine,
+  instanceTimeZone,
   skillsOf,
   priceOf,
   revisionPrompt,
@@ -152,6 +154,10 @@ export interface TurnSchedulerOptions {
   readonly dataDir: string
   /** The operator's log line (a skill left out of a prompt, its budget passed). */
   readonly warn?: (message: string) => void
+  /** The instance's IANA time zone, for the date line of every prompt (default: the process's). */
+  readonly timeZone?: string
+  /** The clock (tests). */
+  readonly now?: () => Date
 }
 
 /** @param dataDir - the data root. @param channelId - the channel. @returns its folder. */
@@ -964,7 +970,8 @@ export class TurnScheduler {
           agent: who,
           channel,
           actor,
-          prompt: text,
+          // Every prompt opens with the date and time, computed at this very call.
+          prompt: `${dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)}\n\n${text}`,
           cwd: channelFolder(dataDir, channel.id),
           servers: tools === 'none' ? [] : turnServers(who, channel),
           ...(tools === 'all' ? {} : { tools }),
