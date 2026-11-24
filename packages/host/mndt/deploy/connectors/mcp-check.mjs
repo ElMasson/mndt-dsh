@@ -34,6 +34,24 @@ const option = (name) => {
   const at = options.indexOf(name)
   return at < 0 ? '' : (options[at + 1] ?? '')
 }
+// Every option is known, or the check does not run: an option ignored in
+// silence (an older copy of this file did so with --discover) passes for a
+// check that was never made. Code 2, the option named, nothing started.
+const WITH_VALUE = ['--refuse', '--call', '--actor', '--actor-file']
+const FLAGS = ['--discover']
+for (let at = 0; at < options.length; at += 1) {
+  const name = options[at]
+  if (WITH_VALUE.includes(name)) {
+    if (at + 1 >= options.length) {
+      process.stderr.write(`mcp-check: option ${name} needs a value: nothing was sent\n`)
+      process.exit(2)
+    }
+    at += 1
+  } else if (!FLAGS.includes(name)) {
+    process.stderr.write(`mcp-check: unknown option ${String(name).slice(0, 64)}: nothing was sent\n`)
+    process.exit(2)
+  }
+}
 const refuse = option('--refuse')
 const call = option('--call')
 const actor = option('--actor')

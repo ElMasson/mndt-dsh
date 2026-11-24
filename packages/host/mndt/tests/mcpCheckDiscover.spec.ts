@@ -176,3 +176,27 @@ describe('mcp-check refuses --discover mixed with a call or a write', () => {
     expect(run.stdout).toContain('outils visibles (1) : list_things')
   })
 })
+
+describe('mcp-check refuses an option it does not know', () => {
+  it.each([
+    [['--dicsover'], 'mcp-check: unknown option --dicsover: nothing was sent'],
+    [['--discover', '--live'], 'mcp-check: unknown option --live: nothing was sent'],
+    [['--refuse'], 'mcp-check: option --refuse needs a value: nothing was sent'],
+  ])('%j: exit 2, the option named, the connector never started', (extra, said) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mndt-unknown-'))
+    dirs.push(dir)
+    const started = join(dir, 'started')
+    const server = join(dir, 'server.mjs')
+    writeFileSync(server, `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(started)}, 'x')\n`)
+    const run = spawnSync(process.execPath, [CHECK, ...extra, '--', process.execPath, server], { encoding: 'utf8', timeout: 30_000 })
+    expect(run.status).toBe(2)
+    expect(run.stderr).toContain(said)
+    expect(existsSync(started)).toBe(false)
+  })
+
+  it('an unknown option is cut to 64 characters in the message', () => {
+    const run = spawnSync(process.execPath, [CHECK, `--${'x'.repeat(300)}`, '--', process.execPath, '-e', '0'], { encoding: 'utf8', timeout: 30_000 })
+    expect(run.status).toBe(2)
+    expect(run.stderr.length).toBeLessThan(140)
+  })
+})
