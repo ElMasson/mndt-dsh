@@ -170,3 +170,68 @@ describe('the front matter of a SKILL.md', () => {
     expect(() => parseSkill('---\nname: Relance\n---x\nLe corps.')).toThrow('ends with a « --- » line')
   })
 })
+
+describe('one skill attached or detached at a time (POST /agents/:id/skills)', () => {
+  it('two additions at the same time give two skills', async () => {
+    const b = bench()
+    for (const n of [1, 2]) await b.call('POST', '/skills', 'owner', { markdown: `---\nname: Méthode ${n}\n---\ncorps ${n}` })
+    const id = await b.agent('alpha')
+    const [first, second] = await Promise.all([
+      b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-1' }),
+      b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-2' }),
+    ])
+    expect([first.status, second.status]).toEqual([200, 200])
+    const agent = ((await b.call('GET', '/agents', 'owner')).body.agents as Agent[]).find(a => a.id === id)
+    expect([...(agent?.skills ?? [])].sort()).toEqual(['methode-1', 'methode-2'])
+  })
+
+  it('what it fixes: two whole lists sent from the same read, the second erases the first', async () => {
+    const b = bench()
+    for (const n of [1, 2]) await b.call('POST', '/skills', 'owner', { markdown: `---\nname: Méthode ${n}\n---\ncorps ${n}` })
+    const id = await b.agent('alpha')
+    // Both screens read « no skill », each sends its own complete list.
+    await Promise.all([
+      b.call('POST', `/agents/${id}`, 'owner', { skills: ['methode-1'] }),
+      b.call('POST', `/agents/${id}`, 'owner', { skills: ['methode-2'] }),
+    ])
+    const agent = ((await b.call('GET', '/agents', 'owner')).body.agents as Agent[]).find(a => a.id === id)
+    expect(agent?.skills).toHaveLength(1)
+  })
+
+  it('detaches one, keeps the others; attaching twice or detaching an absent one changes nothing', async () => {
+    const b = bench()
+    for (const n of [1, 2]) await b.call('POST', '/skills', 'owner', { markdown: `---\nname: Méthode ${n}\n---\ncorps ${n}` })
+    const id = await b.agent('alpha')
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-1' })
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-2' })
+    expect(((await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-1' })).body.agent as Agent).skills).toEqual(['methode-1', 'methode-2'])
+    expect(((await b.call('POST', `/agents/${id}/skills`, 'owner', { remove: 'methode-1' })).body.agent as Agent).skills).toEqual(['methode-2'])
+    expect(((await b.call('POST', `/agents/${id}/skills`, 'owner', { remove: 'methode-1' })).body.agent as Agent).skills).toEqual(['methode-2'])
+    const last = (await b.call('POST', `/agents/${id}/skills`, 'owner', { remove: 'methode-2' })).body.agent as Agent
+    expect(last.skills).toBeUndefined()
+  })
+
+  it('the ceiling of three is checked in the write itself, even for additions at the same time', async () => {
+    const b = bench()
+    for (const n of [1, 2, 3, 4]) await b.call('POST', '/skills', 'owner', { markdown: `---\nname: Méthode ${n}\n---\ncorps ${n}` })
+    const id = await b.agent('alpha')
+    const answers = await Promise.all([1, 2, 3, 4].map(n => b.call('POST', `/agents/${id}/skills`, 'owner', { add: `methode-${n}` })))
+    expect(answers.map(a => a.status).sort()).toEqual([200, 200, 200, 409])
+    expect(answers.find(a => a.status === 409)?.body.code).toBe('too-many-skills')
+    const agent = ((await b.call('GET', '/agents', 'owner')).body.agents as Agent[]).find(a => a.id === id)
+    expect(agent?.skills).toHaveLength(3)
+  })
+
+  it('refuses with a code: neither or both fields, an unknown skill, an unknown agent; an operator cannot', async () => {
+    const b = bench()
+    await b.call('POST', '/skills', 'owner', { markdown: SKILL })
+    const id = await b.agent('alpha')
+    expect((await b.call('POST', `/agents/${id}/skills`, 'owner', {})).body.code).toBe('missing-fields')
+    expect((await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'relance-des-impayes', remove: 'x' })).body.code).toBe('missing-fields')
+    const unknown = await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'inconnue' })
+    expect([unknown.status, unknown.body.code]).toEqual([404, 'unknown-skill'])
+    const nobody = await b.call('POST', '/agents/agt_nobody/skills', 'owner', { add: 'relance-des-impayes' })
+    expect([nobody.status, nobody.body.code]).toEqual([404, 'unknown-agent'])
+    expect((await b.call('POST', `/agents/${id}/skills`, 'operator', { add: 'relance-des-impayes' })).status).toBe(403)
+  })
+})
