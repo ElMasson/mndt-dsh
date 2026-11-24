@@ -41,6 +41,7 @@ still-serves
 team-no-mux
 team-page
 tools-after-restart
+tools-current
 turn-card
 turn-no-bash
 turn-no-facts

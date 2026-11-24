@@ -134,7 +134,14 @@ fingerprint() { sha256sum "$1" | cut -c1-16; }
 gateway_code=$(fingerprint "$here/gateway/server.mjs")
 # Everything this script puts in the tools folder, which the workbench runs from
 # disk: the entrypoint and the connector tools. One aggregated fingerprint.
-tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs)
+# facts-mcp.mjs is among them: it used to reach the folder only through an old
+# tools archive, so an update never refreshed it.
+tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs facts-mcp.mjs)
+# Copied too, but not in the fingerprint: the operator's check
+# (check-connectors.sh runs it inside the workbench), which the workbench never
+# runs itself. A change to it must not recreate the workbench; left stale, it
+# would ignore an option it does not know (« --discover ») and print a success.
+checks=(mcp-check.mjs)
 tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
 render_with_proxy() { render "$1" | sed -e "s|__PROXY_CONF__|$proxy_conf|g"; }
 render() {
@@ -160,12 +167,24 @@ cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
 cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
-for tool in "${tools[@]}"; do
-  cp "$here/connectors/$tool" "$root$data/tools/$tool"
+# Each one replaced atomically: written beside it, then renamed over it, so an
+# MCP server started meanwhile, or a check-connectors.sh running, never reads a
+# half-written file (cp rewrote the file in place). Mode 0644, owned by root on
+# the server: the workbench runs as root and mounts the folder read-only. A
+# failure leaves no .tmp behind and stops the script.
+install_tool() {
+  local src=$1 dst=$2 tmp="$2.tmp.$$"
+  if install -m 0644 "$src" "$tmp" && { [ "$(id -u)" != 0 ] || chown 0:0 "$tmp"; } && mv -f "$tmp" "$dst"; then return 0; fi
+  rm -f "$tmp"
+  echo "could not install $dst: the tools folder was left as it was" >&2
+  exit 1
+}
+for tool in "${tools[@]}" "${checks[@]}"; do
+  install_tool "$here/connectors/$tool" "$root$data/tools/$tool"
 done
 # The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,
 # and /opt/mndt-tools is this tools folder: without it the workbench never starts.
-cp "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
+install_tool "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
 mkdir -p "$root$data/home/profiles/web"
 
 # The team tenant's defaults, in the home patch (DSH_HOME=/state/home), between

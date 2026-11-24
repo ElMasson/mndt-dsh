@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
@@ -134,9 +134,9 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const composePath = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
     const compose = readFileSync(composePath, 'utf8')
     expect(compose).toContain(`MNDT_GATEWAY_CODE: "${sha(join(deploy, 'gateway', 'server.mjs'))}"`)
-    // One fingerprint of everything put in the tools folder: the three connector tools, then the entrypoint.
+    // One fingerprint of everything the workbench runs from the tools folder: the four connector tools, then the entrypoint.
     const toolsCode = (dir: string): string => createHash('sha256')
-      .update(Buffer.concat([...['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs'].map(tool => readFileSync(join(dir, 'connectors', tool))), readFileSync(join(dir, 'workbench-entrypoint.sh'))]))
+      .update(Buffer.concat([...['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs', 'facts-mcp.mjs'].map(tool => readFileSync(join(dir, 'connectors', tool))), readFileSync(join(dir, 'workbench-entrypoint.sh'))]))
       .digest('hex').slice(0, 16)
     expect(compose).toContain(`MNDT_TOOLS_CODE: "${toolsCode(deploy)}"`)
     // The 13/11 update: only server.mjs changed on disk; the rendered compose must change with it.
@@ -153,6 +153,68 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const third = readFileSync(composePath, 'utf8')
     expect(third).toContain(`MNDT_TOOLS_CODE: "${toolsCode(copy)}"`)
     expect(toolsCode(copy)).not.toBe(toolsCode(deploy))
+    // facts-mcp.mjs is in it too: an update now refreshes it, and recreates the workbench when it changed.
+    writeFileSync(join(copy, 'connectors', 'facts-mcp.mjs'), `${readFileSync(join(deploy, 'connectors', 'facts-mcp.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    const fourth = readFileSync(composePath, 'utf8')
+    expect(fourth).toContain(`MNDT_TOOLS_CODE: "${toolsCode(copy)}"`)
+    expect(fourth).not.toBe(third)
+    // mcp-check.mjs is copied but not fingerprinted: the workbench never runs it.
+    writeFileSync(join(copy, 'connectors', 'mcp-check.mjs'), `${readFileSync(join(deploy, 'connectors', 'mcp-check.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    expect(readFileSync(composePath, 'utf8')).toBe(fourth)
+  })
+
+  it('replaces each tool atomically: a new file renamed over the old one, mode 0644, no .tmp left', () => {
+    const root = rootWithEntra()
+    const tools = join(root, 'data/mndt/datanalysis/live/tools')
+    const names = ['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs', 'facts-mcp.mjs', 'mcp-check.mjs', 'workbench-entrypoint.sh']
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const first = new Map(names.map(name => [name, statSync(join(tools, name)).ino]))
+    // A file left with another mode (an older copy) gets 0644 back.
+    chmodSync(join(tools, 'mcp-proxy.mjs'), 0o600)
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    for (const name of names) {
+      const info = statSync(join(tools, name))
+      expect(info.mode & 0o777, name).toBe(0o644)
+      // Owner: the user who ran it (root on the server, where it is also set to 0:0 explicitly).
+      expect(info.uid, name).toBe(process.getuid?.())
+      // Renamed over, never rewritten in place: a reader of the old file keeps a whole file.
+      expect(info.ino, name).not.toBe(first.get(name))
+    }
+    expect(readdirSync(tools).filter(name => name.includes('.tmp'))).toEqual([])
+  })
+
+  it('a tool that cannot be installed stops the run, leaves the old file whole and no .tmp', () => {
+    const root = rootWithEntra()
+    const tools = join(root, 'data/mndt/datanalysis/live/tools')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const before = readFileSync(join(tools, 'approvals-mcp.mjs'), 'utf8')
+    // The folder read-only: the new file cannot be written beside the old one.
+    chmodSync(tools, 0o555)
+    try {
+      expect(() => create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')).toThrow(/could not install/)
+      expect(readFileSync(join(tools, 'approvals-mcp.mjs'), 'utf8')).toBe(before)
+      expect(readdirSync(tools).filter(name => name.includes('.tmp'))).toEqual([])
+    } finally {
+      chmodSync(tools, 0o755)
+    }
+  })
+
+  it('installs the operator\'s check and the facts server in the tools folder, refreshed on each run', () => {
+    const deploy = join(import.meta.dirname, '..', 'deploy')
+    const root = rootWithEntra()
+    const tools = join(root, 'data/mndt/datanalysis/live/tools')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    for (const tool of ['mcp-check.mjs', 'facts-mcp.mjs', 'approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs']) {
+      expect(readFileSync(join(tools, tool), 'utf8')).toBe(readFileSync(join(deploy, 'connectors', tool), 'utf8'))
+    }
+    // A stale copy (left by an earlier version) is replaced by the next run.
+    writeFileSync(join(tools, 'mcp-check.mjs'), '// an older mcp-check.mjs\n')
+    writeFileSync(join(tools, 'facts-mcp.mjs'), '// an older facts-mcp.mjs\n')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    expect(readFileSync(join(tools, 'mcp-check.mjs'), 'utf8')).toContain('sonde server/discover')
+    expect(readFileSync(join(tools, 'facts-mcp.mjs'), 'utf8')).toBe(readFileSync(join(deploy, 'connectors', 'facts-mcp.mjs'), 'utf8'))
   })
 
   it('refuses a tenant without an owner, a bad slug or a bad domain', () => {
