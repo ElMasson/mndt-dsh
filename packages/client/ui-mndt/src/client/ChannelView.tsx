@@ -528,6 +528,8 @@ function LaneWelcome(props: {
   readonly t: ChatTranslate
 }): ReactNode {
   const { arrival, t } = props
+  // A refused addition is said to the person, never dropped.
+  const [addError, setAddError] = useState<string | undefined>(undefined)
   return (
     <div className="mw-welcome" data-testid="lane-welcome">
       <p className="mw-welcome-title">{t('laneWelcomeTitle')}</p>
@@ -543,12 +545,13 @@ function LaneWelcome(props: {
                 type="button"
                 className="mw-pill"
                 aria-label={t('pillAddAgent', { handle: a.handle })}
-                onClick={() => { void arrival.addable?.onAdd(a.id) }}
+                onClick={() => { void arrival.addable?.onAdd(a.id).then(setAddError) }}
               >
                 @{a.handle}
               </button>
             ))}
           </div>
+          {addError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{addError}</p>}
         </>
       ) : props.agents.length === 0 ? <p className="mw-welcome-text">{t('laneWelcomeNoAgent')}</p> : (
         <div className="mw-pills" role="group" aria-label={t('laneWelcomeAsk')}>

@@ -378,6 +378,7 @@ export const chatEn = {
   toolsUnavailable: 'Tools unavailable for this turn: {servers}. The answer did not consult them.',
   contextChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
   keptDraft: 'Your text not saved (to copy from)',
+  answerEmpty: 'Write your answer before sending it.',
   laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
 } as const
 
@@ -757,6 +758,7 @@ export const chatFr: Record<ChatKey, string> = {
   toolsUnavailable: 'Outils indisponibles pour ce tour : {servers}. La réponse ne les a pas consultés.',
   contextChangedBy: 'Modifié entre-temps par {who} : relisez avant d\'enregistrer.',
   keptDraft: 'Votre texte non enregistré (à recopier)',
+  answerEmpty: 'Écrivez votre réponse avant de l\'envoyer.',
   laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
 }
 
