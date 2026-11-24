@@ -79,7 +79,7 @@ export function SkillsSection(props: {
           <p>{stale.updatedBy === undefined ? t('skillChanged') : t('skillChangedBy', { who: stale.updatedBy })}</p>
           <div className="mw-quoted"><div className="mw-agent-text">{renderBrief(stale.body, { plainHeadings: true })}</div></div>
           <button type="button" className="mw-secondary" onClick={() => { setKept(draft); setDraft(markdownOf(stale)); setEditVersion(stale.version); setError(undefined) }}>
-            {t('skillReopen')}
+            {t('editNewVersion')}
           </button>
         </div>
       )}

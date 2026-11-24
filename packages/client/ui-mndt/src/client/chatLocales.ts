@@ -374,8 +374,9 @@ export const chatEn = {
   skillExists: 'A skill already has this name.',
   skillUnknown: 'This skill no longer exists: read the list again.',
   skillChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
-  skillReopen: 'Edit the new version',
+  editNewVersion: 'Edit the new version',
   toolsUnavailable: 'Tools unavailable for this turn: {servers}. The answer did not consult them.',
+  contextChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
   keptDraft: 'Your text not saved (to copy from)',
 } as const
 
@@ -751,8 +752,9 @@ export const chatFr: Record<ChatKey, string> = {
   skillExists: 'Une compétence porte déjà ce nom.',
   skillUnknown: 'Cette compétence n\'existe plus : relisez la liste.',
   skillChangedBy: 'Modifiée entre-temps par {who} : relisez avant d\'enregistrer.',
-  skillReopen: 'Reprendre sur la nouvelle version',
+  editNewVersion: 'Reprendre sur la nouvelle version',
   toolsUnavailable: 'Outils indisponibles pour ce tour : {servers}. La réponse ne les a pas consultés.',
+  contextChangedBy: 'Modifié entre-temps par {who} : relisez avant d\'enregistrer.',
   keptDraft: 'Votre texte non enregistré (à recopier)',
 }
 
