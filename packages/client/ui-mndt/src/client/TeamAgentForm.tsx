@@ -7,8 +7,9 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AgentInput, ChatAgent, MountedConnector } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatSkill, MountedConnector } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
+import { SkillPills } from './skills.tsx'
 
 /** A model an agent can use: a provider and a model, as the core names them. */
 export interface ModelChoice {
@@ -72,6 +73,8 @@ export interface TeamAgentFormProps {
   readonly mounted: readonly MountedConnector[]
   /** Only the owner raises a ceiling (the core refuses anyone else). */
   readonly canRaiseCeiling: boolean
+  /** The space's skills, to tick (three at most); absent, the field is not shown. */
+  readonly skills?: readonly ChatSkill[] | undefined
   /** Resolves to the API's reason when it refuses. */
   readonly onSave: (input: AgentInput) => Promise<string | undefined>
   readonly onCancel: () => void
@@ -95,6 +98,7 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
   const [model, setModel] = useState<ModelChoice | undefined>(editing ? { provider: agent.provider, model: agent.model } : first)
   const usable = props.mounted.filter(m => m.enabled).map(m => m.server)
   const [connectors, setConnectors] = useState<readonly string[]>(agent?.connectors ?? [])
+  const [chosenSkills, setChosenSkills] = useState<readonly string[]>(agent?.skills ?? [])
   const [ceiling, setCeiling] = useState(String(agent?.eurPerMonth ?? 5))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -121,6 +125,7 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
       instructions: purpose.trim(),
       connectors,
       eurPerMonth: euros,
+      ...(props.skills === undefined ? {} : { skills: chosenSkills }),
     }))
     setBusy(false)
   }
@@ -194,6 +199,12 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
           </div>
         )}
       </div>
+      {props.skills === undefined || props.skills.length === 0 ? undefined : (
+        <div className="mw-field">
+          <span>{t('skillsTitle')}</span>
+          <SkillPills skills={props.skills} chosen={chosenSkills} onChange={setChosenSkills} t={t} />
+        </div>
+      )}
       <div className="mw-field-row">
         <label className="mw-field mw-field-narrow">
           {t('agentCeiling')}

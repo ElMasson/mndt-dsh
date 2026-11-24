@@ -355,6 +355,20 @@ export const chatEn = {
   councilSynthChose: '{option} (synthesis by {who})',
   councilQuestionFor: 'A council asks you: {question}',
   agentsMonthUnattributed: 'This month: {total}, of which {councils} of councils not named.',
+  skillsTitle: 'Skills',
+  skillsWhat: 'Know-how the agents read when they take it: three at most per agent.',
+  skillAdd: 'Add',
+  skillPaste: 'The skill\'s SKILL.md',
+  skillPasteHint: 'Paste a SKILL.md: a front matter (name, description), then its text.',
+  skillIgnored: 'These fields have no effect here: {fields}.',
+  skillsNone: 'No skill yet.',
+  skillRead: 'Read the skill',
+  skillDelete: 'Remove',
+  skillDeleteAsk: 'Remove the skill « {name} »? The agents that read it no longer will.',
+  skillsNoneChosen: 'none',
+  skillsThreeAtMost: 'three skills at most',
+  skillChanged: 'This skill was changed meanwhile: read it again before changing it.',
+  skillTooMany: 'An agent reads three skills at most.',
 } as const
 
 /** One copy key. */
@@ -710,6 +724,20 @@ export const chatFr: Record<ChatKey, string> = {
   councilSynthChose: '{option} (synthèse par {who})',
   councilQuestionFor: 'Un conseil vous demande : {question}',
   agentsMonthUnattributed: 'Ce mois-ci : {total}, dont {councils} de conseils non nommés.',
+  skillsTitle: 'Compétences',
+  skillsWhat: 'Des savoir-faire que les agents lisent quand ils les prennent : trois au plus par agent.',
+  skillAdd: 'Ajouter',
+  skillPaste: 'Le SKILL.md de la compétence',
+  skillPasteHint: 'Collez un SKILL.md : un en-tête (name, description), puis son texte.',
+  skillIgnored: 'Ces champs n\'ont aucun effet ici : {fields}.',
+  skillsNone: 'Pas encore de compétence.',
+  skillRead: 'Lire la compétence',
+  skillDelete: 'Supprimer',
+  skillDeleteAsk: 'Supprimer la compétence « {name} » ? Les agents qui la lisent ne la liront plus.',
+  skillsNoneChosen: 'aucune',
+  skillsThreeAtMost: 'trois compétences au plus',
+  skillChanged: 'Cette compétence a été modifiée entre-temps : relisez-la avant de la changer.',
+  skillTooMany: 'Un agent lit trois compétences au plus.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

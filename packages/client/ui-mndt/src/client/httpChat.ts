@@ -5,7 +5,7 @@
  */
 import { ChatRefusal } from './chat.ts'
 import { readWithin } from './deadline.ts'
-import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatSkill, MountedConnector, OfferedModel, OpenEscalation, SkillWritten } from './chat.ts'
 
 /** Where the gateway mounts the API on the page origin. */
 const BASE = '/mndt-api'
@@ -128,6 +128,13 @@ export function createHttpChat(
         }]
       })
     },
+    skills: async () => {
+      const body = await get<{ skills?: unknown }>('/skills')
+      return (Array.isArray(body.skills) ? body.skills : []).flatMap(skillOf)
+    },
+    createSkill: async markdown => writtenOf(await post<Record<string, unknown>>('/skills', { markdown })),
+    updateSkill: async (slug, change) => writtenOf(await post<Record<string, unknown>>(`/skills/${id(slug)}`, change)),
+    deleteSkill: async (slug) => { await post<Record<string, unknown>>(`/skills/${id(slug)}/delete`, {}) },
     mounted: async () => {
       const body = await get<{ connectors?: unknown }>('/connectors')
       // A row of another shape is dropped: the page never offers what it cannot read.
@@ -137,4 +144,26 @@ export function createHttpChat(
       })
     },
   }
+}
+
+/** @param row - a skill as served. @returns it when well-formed, else nothing (never a made-up skill). */
+function skillOf(row: unknown): ChatSkill[] {
+  const k = row as Partial<Record<keyof ChatSkill, unknown>> | null
+  if (k === null || typeof k !== 'object') return []
+  const { slug, name, description, body, version, updatedBy, updatedAt } = k
+  if (typeof slug !== 'string' || slug === '' || typeof name !== 'string' || typeof description !== 'string'
+    || typeof body !== 'string' || typeof version !== 'number' || !Number.isInteger(version)) return []
+  return [{
+    slug, name, description, body, version,
+    ...(typeof updatedBy === 'string' ? { updatedBy } : {}),
+    ...(typeof updatedAt === 'string' ? { updatedAt } : {}),
+  }]
+}
+
+/** @param body - a skill write's answer. @returns the skill and the fields ignored. */
+function writtenOf(body: Record<string, unknown>): SkillWritten {
+  const skill = skillOf(body.skill)[0]
+  if (skill === undefined) throw new ChatRefusal('the skill could not be read', 502)
+  const ignored = Array.isArray(body.ignoredFields) ? body.ignoredFields.filter((f): f is string => typeof f === 'string') : []
+  return { skill, ignoredFields: ignored }
 }

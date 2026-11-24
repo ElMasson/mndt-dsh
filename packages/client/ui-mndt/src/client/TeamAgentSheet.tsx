@@ -7,11 +7,12 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatChannel, MountedConnector } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatSkill, MountedConnector } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { euros, when } from './format.ts'
 import { renderBrief } from './markdown.tsx'
 import { modelLabel } from './TeamAgentForm.tsx'
+import { SkillPills } from './skills.tsx'
 import { shownName } from './TeamFeed.tsx'
 
 /** Beyond this many lines the instructions are folded. */
@@ -26,6 +27,8 @@ export interface TeamAgentSheetProps {
   readonly channels: readonly ChatChannel[]
   /** The connectors mounted; undefined while unknown (no « non branché » is said then). */
   readonly mounted?: readonly MountedConnector[] | undefined
+  /** The space's skills, to show the agent's by name and version. */
+  readonly skills?: readonly ChatSkill[] | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
   /** Change the agent: owners and admins, and never a retired one. */
@@ -80,6 +83,9 @@ export function TeamAgentSheet(props: TeamAgentSheetProps): ReactNode {
             </span>
           )}
         </dd>
+        {props.skills === undefined ? undefined : (
+          <><dt>{t('skillsTitle')}</dt><dd><SkillPills skills={props.skills} chosen={a.skills ?? []} t={t} /></dd></>
+        )}
         <dt>{t('agentCeiling')}</dt>
         <dd>{t('agentMonth', { spent: euros(a.eurThisMonth ?? 0), ceiling: euros(a.eurPerMonth) })}</dd>
         <dt>{t('sheetChannels')}</dt>

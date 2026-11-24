@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
-import type { AgentInput, ChatAgent, ChatChannel, ChatFace, CoordinationChange, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
+import type { AgentInput, ChatAgent, ChatChannel, ChatFace, ChatSkill, CoordinationChange, MountedConnector, OfferedModel, OpenEscalation, SkillWritten } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
 import type { ChatKey, ChatTranslate } from './chatLocales.ts'
 import { ChannelAgents, ChannelList, ChannelThread, euros, reasonOf } from './ChannelView.tsx'
@@ -18,6 +18,7 @@ import { TeamShell } from './TeamShell.tsx'
 import { TeamContext } from './TeamContext.tsx'
 import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { TeamAgentSheet } from './TeamAgentSheet.tsx'
+import { SkillsSection } from './skills.tsx'
 import { WebCard, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
@@ -86,6 +87,7 @@ export function decisionRefusal(message: string, t: ChatTranslate): string {
  */
 function agentRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
+    if (failure.code === 'too-many-skills') return t('skillTooMany')
     const taken = /^the handle @(\S+) is taken$/u.exec(failure.message)
     if (failure.status === 409 && taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
     if (failure.message.startsWith('only the owner raises the ceiling')) return t('agentOnlyOwnerRaises')
@@ -99,6 +101,7 @@ function agentChanged(before: ChatAgent, now: ChatAgent): boolean {
   return before.name !== now.name || before.provider !== now.provider || before.model !== now.model
     || (before.instructions ?? '') !== (now.instructions ?? '') || before.eurPerMonth !== now.eurPerMonth
     || [...before.connectors].sort().join(',') !== [...now.connectors].sort().join(',')
+    || [...(before.skills ?? [])].sort().join(',') !== [...(now.skills ?? [])].sort().join(',')
 }
 
 /** The memory's columns, one per scope the core keeps (there is no company scope to show). */
@@ -364,6 +367,31 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     if (view !== 'agents' || chat?.unattributedEur === undefined) return
     void chat.unattributedEur().then(setUnattributed, () => { setUnattributed(undefined) })
   }, [view, chat])
+  // The space's skills (lot 3), read with the Agents view; undefined while unknown or not served.
+  const [skills, setSkills] = useState<readonly ChatSkill[] | undefined>(undefined)
+  const loadSkills = useCallback(async () => {
+    if (chat?.skills === undefined) return
+    try {
+      setSkills(await chat.skills())
+    } catch {
+      setSkills(undefined)
+    }
+  }, [chat])
+  useEffect(() => { if (view === 'agents') void loadSkills() }, [view, loadSkills])
+  /** @param work - a skill write. @returns its result, or its refusal in words (a change meanwhile said). */
+  const writeSkill = useCallback(async (work: () => Promise<SkillWritten>): Promise<SkillWritten | string> => {
+    try {
+      const written = await work()
+      void loadSkills()
+      return written
+    } catch (failure) {
+      if (failure instanceof ChatRefusal && failure.code === 'skill-changed') {
+        void loadSkills()
+        return tc('skillChanged')
+      }
+      return reasonOf(failure, tc)
+    }
+  }, [loadSkills, tc])
   // The agent whose readable sheet is open in the Agents view (lot 3), for everyone.
   const [viewing, setViewing] = useState<ChatAgent | undefined>(undefined)
   const openAgent = useCallback(async (agent: ChatAgent): Promise<void> => {
@@ -1892,6 +1920,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   models={modelsOf(chatAgents)}
                   mounted={mounted === undefined || mounted === 'absent' ? [] : mounted}
                   canRaiseCeiling={state.role === 'owner'}
+                  skills={skills}
                   onSave={saveAgent}
                   onCancel={() => { setEditing(undefined) }}
                   t={tc}
@@ -1902,11 +1931,32 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   key={viewing.id}
                   agent={chatAgents.find(a => a.id === viewing.id) ?? viewing}
                   agents={chatAgents}
+                  skills={skills}
                   channels={chatChannels ?? []}
                   mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
                   names={team.names}
                   onEdit={canManageAgents ? () => { const agent = viewing; setViewing(undefined); void openAgent(agent) } : undefined}
                   onClose={() => { setViewing(undefined) }}
+                  t={tc}
+                />
+              )}
+              {chat?.skills === undefined ? undefined : (
+                <SkillsSection
+                  skills={skills}
+                  canManage={canManageAgents}
+                  onCreate={chat.createSkill === undefined ? undefined : markdown => writeSkill(() => chat.createSkill?.(markdown) ?? Promise.reject(new Error('no route')))}
+                  onUpdate={chat.updateSkill === undefined ? undefined
+                    : (slug, markdown, version) => writeSkill(() => chat.updateSkill?.(slug, { markdown, version }) ?? Promise.reject(new Error('no route')))}
+                  onDelete={chat.deleteSkill === undefined ? undefined : async (slug) => {
+                    try {
+                      await chat.deleteSkill?.(slug)
+                      void loadSkills()
+                      void chat.agents().then(setChatAgents, () => undefined)
+                      return undefined
+                    } catch (failure) {
+                      return reasonOf(failure, tc)
+                    }
+                  }}
                   t={tc}
                 />
               )}
