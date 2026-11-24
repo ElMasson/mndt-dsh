@@ -195,6 +195,8 @@ export function CouncilThread(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
   readonly canAnswer?: boolean | undefined
+  /** The question is shown under the message that publishes it, just below: not here too. */
+  readonly questionBelow?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { council: c, t } = props
@@ -253,7 +255,7 @@ export function CouncilThread(props: {
           {t('councilDissent', { slot: d.slot })}{d.why === undefined ? '' : ` : ${d.why}`}
         </p>
       ))}
-      {waiting ? (
+      {waiting && props.questionBelow !== true ? (
         <div className="mw-turn-unchecked mw-help-question" role="note" data-testid="council-question">
           <p className="mw-help-question-text">{t('helpQuestionFor', { question: c.escalation.question })}</p>
           {c.escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(c.escalation.summary, { plainHeadings: true })}</div>}
