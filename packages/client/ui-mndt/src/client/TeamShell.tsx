@@ -6,7 +6,7 @@
  * Nothing is shown without a function (Stéphane, 15/11): no spaces selector and no chevron on the
  * organisation until spaces and a second organisation exist, a deliberate departure from
  * mndt-web; the organisation shows only where its name is known; the steering
- * entries (Missions, Mandats, Preuves) are greyed with « bientôt » until their screens exist.
+ * section (Missions, Mandats, Preuves) is not shown until one of its screens exists.
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
@@ -235,18 +235,6 @@ function RailLinks(props: TeamShellProps): ReactNode {
       {extra}
     </button>
   )
-  const soon = (icon: IconName, label: string): ReactNode => (
-    <span
-      className="mw-link"
-      data-disabled="true"
-      aria-disabled="true"
-      title={t('shell.soon')}
-    >
-      <Icon name={icon} className="mw-shrink" />
-      <span>{label}</span>
-      <span className="mw-soon">{t('shell.soon')}</span>
-    </span>
-  )
   const subs = (
     items: readonly TeamSubLink[],
     open: (id: string) => void,
@@ -296,11 +284,7 @@ function RailLinks(props: TeamShellProps): ReactNode {
       {subs(props.channels, props.onChannel, true, 'rail-channels')}
       {link('agents', 'Bot', t('shell.agents'))}
       {subs(props.agents, props.onAgent, false, 'rail-agents')}
-      <hr className="mw-rule" />
-      <p className="mw-section">{t('shell.steering')}</p>
-      {soon('Boxes', t('shell.missions'))}
-      {soon('ShieldCheck', t('shell.mandates'))}
-      {soon('FileCheck2', t('shell.evidence'))}
+      {/* No « Pilotage » until one of its places has a function (Stéphane: nothing shown without one). */}
       <div className="mw-foot">
         {link('settings', 'Settings2', t('shell.settings'))}
       </div>

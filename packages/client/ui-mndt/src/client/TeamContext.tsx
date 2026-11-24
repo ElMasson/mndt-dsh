@@ -155,7 +155,8 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         )}
         {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
       </Section>
-      {props.onCoordination === undefined && coordinationOf(channel) === undefined ? undefined : (
+      {/* A private lane has no coordination: only its owner and their agents read it. */}
+      {channel.kind === 'solo' || (props.onCoordination === undefined && coordinationOf(channel) === undefined) ? undefined : (
         <Section title={t('coordTitle')}>
           <CoordinationSection
             channel={channel}
@@ -207,11 +208,12 @@ export function TeamContext(props: TeamContextProps): ReactNode {
           <button type="button" className="mw-ctx-link" onClick={props.onMemory}>{t('ctxAllMemories')}</button>
         </p>
       </Section>
-      <Section title={t('ctxDocuments')}>
-        {props.documents === undefined
-          ? <p className="mw-ctx-muted">{t('ctxDocumentsSoon')}</p>
-          : <TeamDocuments face={props.documents} channelId={channel.id} names={props.names} t={t} />}
-      </Section>
+      {/* Nothing shown without a function: no documents in a lane, no « bientôt » section. */}
+      {channel.kind === 'solo' || props.documents === undefined ? undefined : (
+        <Section title={t('ctxDocuments')}>
+          <TeamDocuments face={props.documents} channelId={channel.id} names={props.names} t={t} />
+        </Section>
+      )}
       <Section title={t('members')}>
         <ul className="mw-ctx-members">
           {channel.members.map(email => (

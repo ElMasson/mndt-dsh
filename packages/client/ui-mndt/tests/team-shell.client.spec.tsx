@@ -35,16 +35,11 @@ function props(over: Partial<TeamShellProps> = {}): TeamShellProps {
 }
 
 describe('the team frame, as mndt-web draws it', () => {
-  it('lists the places of mndt-web in its order, the steering ones greyed « bientôt »', () => {
+  it('lists the places of mndt-web in its order; no « Pilotage » while none of its places works', () => {
     render(<TeamShell {...props()} />)
     const nav = screen.getByTestId('side-nav')
-    expect(nav.textContent).toBe('Ma laneÀ traiterMémoireCanaux# testAgentsAssistantPilotageMissionsbientôtMandatsbientôtPreuvesbientôtRéglages')
-    for (const label of ['Missions', 'Mandats', 'Preuves']) {
-      const entry = within(nav).getByText(label).parentElement as HTMLElement
-      expect(entry.getAttribute('aria-disabled')).toBe('true')
-      // Greyed entries are not buttons: nothing to follow until their screen exists.
-      expect(entry.tagName).toBe('SPAN')
-    }
+    expect(nav.textContent).toBe('Ma laneÀ traiterMémoireCanaux# testAgentsAssistantRéglages')
+    expect(within(nav).queryByText('Pilotage')).toBeNull()
     expect(within(nav).getByRole('button', { name: 'Ma lane' }).getAttribute('aria-current')).toBe('page')
   })
 
@@ -292,10 +287,11 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Membres'])
     // No section without a function: « Mandats : bientôt » is gone from the panel.
     expect(card.textContent).not.toContain('les mandats du canal')
-    expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
+    // No section without a function: no documents route here, no « bientôt » documents section.
+    expect(card.textContent).not.toContain('les documents du canal')
     // Members by the part before @, the address kept as title.
     expect([...card.querySelectorAll('.mw-ctx-member')].map(m => m.textContent)).toEqual(['stephane', 'lecteur'])
   })
@@ -655,7 +651,28 @@ describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20
     render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
     const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
     expect(within(welcome).getByTestId('welcome-no-channel').textContent).toBe('Vous n\'êtes encore dans aucun canal d\'équipe : un owner ou un admin vous y ajoute.')
+    // Someone who may add one gets the gesture, not a sentence sending them to themselves.
+    expect(within(welcome).getByText('Aucun agent ne lit encore votre lane. Ajoutez-en un :')).toBeTruthy()
+    fireEvent.click(within(within(welcome).getByTestId('lane-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' }))
+    await waitFor(async () => { expect((await chat.channels())[0]?.agents).toEqual(['agt_1']) })
+  })
+
+  it('a reader who may not add one is told who does', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [{ ...lane, agents: [] }] }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
     expect(within(welcome).getByText('Aucun agent ne lit encore votre lane : un owner ou un admin en ajoute un.')).toBeTruthy()
+    expect(within(welcome).queryByTestId('lane-add-agents')).toBeNull()
+  })
+
+  it('a private lane\'s panel shows no coordination nor documents', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const card = screen.getByTestId('context-panel')
+    const titles = [...card.querySelectorAll('h3')].map(h => h.textContent)
+    expect(titles).not.toContain('Coordination')
+    expect(titles).not.toContain('Documents')
   })
 
   it('no lane but a team channel: the person lands in it', async () => {
