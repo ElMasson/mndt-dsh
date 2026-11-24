@@ -76,9 +76,24 @@ function readGatewaySecret(path: string | undefined): string | undefined {
  * @param dataDir - the space's data root (beside state.json).
  * @returns whether a server is configured for this space: its descriptor,
  * written by mount-connector.sh, is in <dataDir>/connectors. Read at each call.
+ * Consulted on a declared solo workstation only (see requiredConfigured).
  */
 export function configuredInSpace(dataDir: string): (server: string) => boolean {
   return server => existsSync(join(dataDir, 'connectors', `${server}.json`))
+}
+
+/**
+ * @param proxyUserHeader - the proxy's identity header, if any.
+ * @param dataDir - the space's data root.
+ * @param env - the environment (DSH_MNDT_SOLO_WORKSTATION).
+ * @returns whether a required server (approvals, the facts of a briefing) is
+ * required: on a declared solo workstation, only when its space configures it;
+ * anywhere else, always (a missing descriptor never lifts it).
+ */
+export function requiredServersRule(
+  proxyUserHeader: string | undefined, dataDir: string, env: NodeJS.ProcessEnv = process.env,
+): (server: string) => boolean {
+  return soloWorkstation(proxyUserHeader, env) ? configuredInSpace(dataDir) : () => true
 }
 
 /**
@@ -219,7 +234,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
     const turns = new TurnScheduler({
       service: this.service,
-      engine: new DshTurnRunner(ctx, this.readinessFor(ctx), configuredInSpace(dirname(this.statePath))),
+      engine: new DshTurnRunner(ctx, this.readinessFor(ctx), this.requiredConfigured()),
       prices,
       dataDir: dirname(this.statePath),
       warn: (message) => { warnOperator(ctx, message) },
@@ -411,10 +426,22 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   private missionRunner(ctx: Context): DshMissionRunner {
     const readiness = this.readinessFor(ctx)
-    const configured = configuredInSpace(dirname(this.statePath))
+    const configured = this.requiredConfigured()
     return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
       ? { readiness, configured }
       : { tools: TEAM_MISSION_POLICY, readiness, configured })
+  }
+
+  /**
+   * @returns whether a required server (the approvals, the facts of a
+   * briefing) is to be required here. Only a declared solo workstation
+   * (soloWorkstation: opt-in, always false behind the proxy) mounts no
+   * connector and so requires only those its space configures; anywhere else
+   * they are required whatever is on disk — a missing descriptor never lifts
+   * the requirement in silence.
+   */
+  private requiredConfigured(): (server: string) => boolean {
+    return requiredServersRule(this.proxyUserHeader, dirname(this.statePath))
   }
 
   /** One readiness for turns and missions: a server's unavailability is remembered once. */

@@ -375,6 +375,27 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     await expect(new DshMissionRunner(team.ctx, { readiness: readinessOver([]), configured: () => true }).run(briefing)).rejects.toThrow('outils indisponibles : approvals')
   })
 
+  it('behind the proxy the approvals stay required even with no descriptor; only a declared solo workstation lifts them', async () => {
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { requiredServersRule } = await import('../src/gateway.ts')
+    const empty = mkdtempSync(join(tmpdir(), 'mndt-nodesc-'))
+    const none = () => new ToolsReadiness(() => ({ schemas: () => [] }), () => () => undefined, () => undefined, 30)
+    // A proxy (a tenant), no connectors/approvals.json: the turn fails, said.
+    const tenant = fakeCtx()
+    await expect(new DshTurnRunner(tenant.ctx, none(), requiredServersRule('x-forwarded-email', empty, { DSH_MNDT_SOLO_WORKSTATION: '1' })).run(turn()))
+      .rejects.toThrow('outils indisponibles : approvals')
+    expect(tenant.seen.root).toBeUndefined()
+    // Not declared solo, no proxy either: still required.
+    const undeclared = fakeCtx()
+    await expect(new DshTurnRunner(undeclared.ctx, none(), requiredServersRule(undefined, empty, {})).run(turn()))
+      .rejects.toThrow('outils indisponibles : approvals')
+    // A declared solo workstation without the descriptor: the turn runs.
+    const solo = fakeCtx()
+    const output = await new DshTurnRunner(solo.ctx, none(), requiredServersRule(undefined, empty, { DSH_MNDT_SOLO_WORKSTATION: '1' })).run({ ...turn(), servers: [] })
+    expect(output.text).toBe('Réponse.')
+  })
+
   it('a turn stopped while it waits leaves at once, and does not start', async () => {
     const { ctx, seen } = fakeCtx()
     const controller = new AbortController()
