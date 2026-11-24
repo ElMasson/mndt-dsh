@@ -134,11 +134,33 @@ describe('the core\'s refusals of a skill, in words', { timeout: 20_000 }, () =>
     expect((await within(section).findByRole('alert')).textContent).toBe('Une compétence porte déjà ce nom.')
   })
 
-  it('a SKILL.md without front matter (missing-fields) is said', async () => {
+  it('a SKILL.md without front matter is said precisely', async () => {
     const { section } = await open('owner')
     fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
     fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), { target: { value: 'juste du texte' } })
     fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
-    expect((await within(section).findByRole('alert')).textContent).toBe('Un SKILL.md demande un en-tête avec un nom, et un texte.')
+    expect((await within(section).findByRole('alert')).textContent).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+  })
+})
+
+describe('a pasted SKILL.md: what it lacks, said precisely before sending', () => {
+  it('names each missing part, as the core\'s rules', async () => {
+    const { skillProblem } = await import('../src/client/skills.tsx')
+    const say = (md: string): string | undefined => skillProblem(md, chatFrench)
+    expect(say('name: Litiges\n---\nÉcouter.')).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+    expect(say('---\nname: Litiges\nÉcouter.')).toBe('L\'en-tête doit se terminer par une ligne « --- » seule.')
+    expect(say('---\ndescription: x\n---\nÉcouter.')).toBe('Il manque le nom : ajoutez « name: … » dans l\'en-tête.')
+    expect(say('---\nname: Litiges\n---\n')).toBe('Il manque le texte après l\'en-tête : écrivez ce que l\'agent doit savoir.')
+    expect(say('---\nname: Litiges\n---\nÉcouter.')).toBeUndefined()
+  })
+
+  it('a SKILL.md without its first « --- » is said, and nothing is sent', async () => {
+    const { chat, section } = await open('owner')
+    const create = vi.spyOn(chat, 'createSkill')
+    fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), { target: { value: 'name: Litiges\ndescription: x\n---\nÉcouter.' } })
+    fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+    expect(create).not.toHaveBeenCalled()
   })
 })

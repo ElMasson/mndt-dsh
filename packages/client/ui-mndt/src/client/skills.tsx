@@ -13,6 +13,32 @@ import { renderBrief } from './markdown.tsx'
 /** The most skills an agent reads. */
 export const MAX_SKILLS = 3
 
+/** The longest skill name the core takes. */
+const MAX_NAME = 80
+/** The longest skill text the core takes. */
+const MAX_BODY = 6000
+
+/**
+ * What a pasted SKILL.md lacks, said precisely before anything is sent: the same format rules as
+ * the core's parseSkill (a technical format check, not a judgement of its content). The core
+ * still decides; this only names what is missing.
+ * @param markdown - the pasted file. @param t - the copy. @returns what is missing, or undefined.
+ */
+export function skillProblem(markdown: string, t: ChatTranslate): string | undefined {
+  const text = markdown.replace(/\r\n/gu, '\n').trim()
+  if (!text.startsWith('---\n')) return t('skillNeedsOpening')
+  const lines = text.split('\n')
+  const end = lines.findIndex((line, index) => index > 0 && line.trimEnd() === '---')
+  if (end < 0) return t('skillNeedsClosing')
+  const name = lines.slice(1, end).map(line => /^name\s*:\s*(.*)$/iu.exec(line)?.[1]?.trim() ?? '').find(value => value !== '') ?? ''
+  if (name === '') return t('skillNeedsName')
+  if (name.length > MAX_NAME) return t('skillNameTooLong', { max: MAX_NAME })
+  const body = lines.slice(end + 1).join('\n').trim()
+  if (body === '') return t('skillNeedsBody')
+  if (body.length > MAX_BODY) return t('skillTooLong')
+  return undefined
+}
+
 /** @param skill - a skill. @returns its SKILL.md, as the person may change it. */
 export function markdownOf(skill: ChatSkill): string {
   return `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n${skill.body}\n`
@@ -104,7 +130,7 @@ export function SkillsSection(props: {
         )}
       </div>
       <p className="mw-ctx-small mw-ctx-muted">{t('skillsWhat')}</p>
-      {editing === 'new' ? editor(() => { void run(() => props.onCreate?.(draft) ?? Promise.resolve(undefined)) }) : undefined}
+      {editing === 'new' ? editor(() => { void run(async () => skillProblem(draft, t) ?? await (props.onCreate?.(draft) ?? Promise.resolve(undefined))) }) : undefined}
       {ignored.length === 0 ? undefined : (
         <p className="mw-turn-unchecked" role="note" data-testid="skill-ignored">{t('skillIgnored', { fields: ignored.join(', ') })}</p>
       )}
@@ -118,7 +144,8 @@ export function SkillsSection(props: {
                 {editing === skill.slug ? editor(() => {
                   const version = editVersion
                   if (version === undefined) return
-                  void run(() => props.onUpdate?.(skill.slug, draft, version) ?? Promise.resolve(undefined))
+                  void run(async () => skillProblem(draft, t)
+                    ?? await (props.onUpdate?.(skill.slug, draft, version) ?? Promise.resolve(undefined)))
                 }, editVersion !== undefined && skill.version !== editVersion ? skill : undefined) : (
                   <details className="mw-turn-steps">
                     <summary>{t('skillRead')}</summary>

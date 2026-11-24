@@ -378,6 +378,11 @@ export const chatEn = {
   toolsUnavailable: 'Tools unavailable for this turn: {servers}. The answer did not consult them.',
   contextChangedBy: 'Changed meanwhile by {who}: read it again before saving.',
   keptDraft: 'Your text not saved (to copy from)',
+  skillNeedsOpening: 'The first line must be « --- », then « name: … », then « --- ».',
+  skillNeedsClosing: 'The header must end with a line « --- » alone.',
+  skillNeedsName: 'The name is missing: add « name: … » in the header.',
+  skillNameTooLong: 'A skill\'s name is {max} characters at most.',
+  skillNeedsBody: 'The text is missing after the header: write what the agent should know.',
 } as const
 
 /** One copy key. */
@@ -756,6 +761,11 @@ export const chatFr: Record<ChatKey, string> = {
   toolsUnavailable: 'Outils indisponibles pour ce tour : {servers}. La réponse ne les a pas consultés.',
   contextChangedBy: 'Modifié entre-temps par {who} : relisez avant d\'enregistrer.',
   keptDraft: 'Votre texte non enregistré (à recopier)',
+  skillNeedsOpening: 'La première ligne doit être « --- », puis « name: … », puis « --- ».',
+  skillNeedsClosing: 'L\'en-tête doit se terminer par une ligne « --- » seule.',
+  skillNeedsName: 'Il manque le nom : ajoutez « name: … » dans l\'en-tête.',
+  skillNameTooLong: 'Le nom d\'une compétence fait {max} caractères au plus.',
+  skillNeedsBody: 'Il manque le texte après l\'en-tête : écrivez ce que l\'agent doit savoir.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
