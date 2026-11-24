@@ -6,7 +6,7 @@
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatSkill, SkillWritten } from './chat.ts'
+import type { ChatAgent, ChatSkill, SkillWritten } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { renderBrief } from './markdown.tsx'
 
@@ -55,6 +55,10 @@ export function SkillsSection(props: {
   readonly onCreate?: ((markdown: string) => Promise<SkillWritten | string>) | undefined
   readonly onUpdate?: ((slug: string, markdown: string, version: number) => Promise<SkillWritten | string>) | undefined
   readonly onDelete?: ((slug: string) => Promise<string | undefined>) | undefined
+  /** The space's agents, to show and change which ones read each skill. */
+  readonly agents?: readonly ChatAgent[] | undefined
+  /** Attach the skill to an agent or detach it (three skills at most per agent). */
+  readonly onAttach?: ((agentId: string, skills: readonly string[]) => Promise<string | undefined>) | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { t } = props
@@ -141,6 +145,15 @@ export function SkillsSection(props: {
               <li key={skill.slug} className="mw-skill" data-testid="skill">
                 <p className="mw-ctx-strong">{skill.name} <span className="mw-model-tech">v{skill.version}</span></p>
                 <p className="mw-ctx-small">{skill.description}</p>
+                {props.agents === undefined ? undefined : (
+                  <AttachedTo
+                    skill={skill}
+                    agents={props.agents}
+                    onAttach={props.canManage ? props.onAttach : undefined}
+                    onError={setError}
+                    t={t}
+                  />
+                )}
                 {editing === skill.slug ? editor(() => {
                   const version = editVersion
                   if (version === undefined) return
@@ -240,6 +253,61 @@ export function SkillPills(props: {
           >
             {skill.name}
             <span className="mw-pill-note">v{skill.version}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * « Attachée à : » on a skill's card: one pill per agent, pressed when the agent reads the skill. An
+ * owner or admin attaches or detaches it in one click, three skills at most per agent (an agent
+ * already full is greyed with the reason); anyone else reads which agents take it.
+ */
+function AttachedTo(props: {
+  readonly skill: ChatSkill
+  readonly agents: readonly ChatAgent[]
+  readonly onAttach?: ((agentId: string, skills: readonly string[]) => Promise<string | undefined>) | undefined
+  readonly onError: (reason: string | undefined) => void
+  readonly t: ChatTranslate
+}): ReactNode {
+  const { skill, t } = props
+  const [busy, setBusy] = useState(false)
+  const active = props.agents.filter(a => a.retiredAt === undefined)
+  if (props.onAttach === undefined) {
+    const readers = active.filter(a => a.skills?.includes(skill.slug) === true)
+    return (
+      <p className="mw-ctx-small" data-testid="skill-attached">
+        {t('skillAttachedTo')} {readers.length === 0 ? t('skillsNoneChosen') : readers.map(a => `@${a.handle}`).join(', ')}
+      </p>
+    )
+  }
+  return (
+    <div className="mw-pills" role="group" aria-label={t('skillAttachedTo')} data-testid="skill-attach">
+      <span className="mw-ctx-small">{t('skillAttachedTo')}</span>
+      {active.map((a) => {
+        const held = a.skills ?? []
+        const on = held.includes(skill.slug)
+        const full = !on && held.length >= MAX_SKILLS
+        const label = full ? t('skillAgentFull', { handle: a.handle }) : on ? t('skillDetach', { handle: a.handle }) : t('skillAttach', { handle: a.handle })
+        return (
+          <button
+            key={a.id}
+            type="button"
+            className="mw-pill"
+            aria-pressed={on}
+            aria-disabled={busy || full}
+            aria-label={label}
+            title={full ? label : undefined}
+            onClick={() => {
+              if (busy || full || props.onAttach === undefined) return
+              setBusy(true)
+              const next = on ? held.filter(s => s !== skill.slug) : [...held, skill.slug]
+              void props.onAttach(a.id, next).then((reason) => { props.onError(reason); setBusy(false) })
+            }}
+          >
+            @{a.handle}
           </button>
         )
       })}

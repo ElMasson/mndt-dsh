@@ -143,7 +143,9 @@ export function TeamAgentForm(props: TeamAgentFormProps): ReactNode {
           className="mw-input"
           rows={2}
           maxLength={MAX_PURPOSE}
-          placeholder={t('agentPurposeHint')}
+          // An agent without instructions of its own follows the space's rules: said, never an example
+          // that reads like instructions erased. The example is for a new agent only.
+          placeholder={editing ? t('agentNoOwnInstructions') : t('agentPurposeHint')}
           value={purpose}
           onChange={(event) => { setPurpose(event.target.value) }}
         />

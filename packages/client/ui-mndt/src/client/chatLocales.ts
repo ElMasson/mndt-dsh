@@ -260,7 +260,7 @@ export const chatEn = {
   sheetDeclaredBy: 'by {who}, {at}',
   sheetDoesNotDecide: 'What it does not decide',
   sheetRule: 'Nothing on its own: what it proposes becomes a card, decided by a person. It reaches only the connectors listed here.',
-  sheetNoInstructions: 'No written instructions for this agent.',
+  sheetNoInstructions: 'No instructions of its own: it follows the space\'s rules.',
   sheetUnfold: 'Read all the instructions ({n} lines)',
   sheetFold: 'Fold',
   sheetOpen: 'See {name}',
@@ -383,6 +383,11 @@ export const chatEn = {
   skillNeedsName: 'The name is missing: add « name: … » in the header.',
   skillNameTooLong: 'A skill\'s name is {max} characters at most.',
   skillNeedsBody: 'The text is missing after the header: write what the agent should know.',
+  agentNoOwnInstructions: 'No instructions of its own: it follows the space\'s rules.',
+  skillAttachedTo: 'Attached to:',
+  skillAttach: 'Attach to @{handle}',
+  skillDetach: 'Detach from @{handle}',
+  skillAgentFull: '@{handle} already reads three skills',
 } as const
 
 /** One copy key. */
@@ -643,7 +648,7 @@ export const chatFr: Record<ChatKey, string> = {
   sheetDeclaredBy: 'par {who}, {at}',
   sheetDoesNotDecide: 'Ce qu\'il ne décide pas',
   sheetRule: 'Rien seul : ce qu\'il propose devient une carte, décidée par une personne. Il n\'atteint que les connecteurs listés ici.',
-  sheetNoInstructions: 'Pas de consigne écrite pour cet agent.',
+  sheetNoInstructions: 'Aucune consigne propre : il suit les règles de l\'espace.',
   sheetUnfold: 'Lire toute la consigne ({n} lignes)',
   sheetFold: 'Replier',
   sheetOpen: 'Voir {name}',
@@ -766,6 +771,11 @@ export const chatFr: Record<ChatKey, string> = {
   skillNeedsName: 'Il manque le nom : ajoutez « name: … » dans l\'en-tête.',
   skillNameTooLong: 'Le nom d\'une compétence fait {max} caractères au plus.',
   skillNeedsBody: 'Il manque le texte après l\'en-tête : écrivez ce que l\'agent doit savoir.',
+  agentNoOwnInstructions: 'Aucune consigne propre : il suit les règles de l\'espace.',
+  skillAttachedTo: 'Attachée à :',
+  skillAttach: 'Attacher à @{handle}',
+  skillDetach: 'Détacher de @{handle}',
+  skillAgentFull: '@{handle} lit déjà trois compétences',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

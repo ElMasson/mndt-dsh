@@ -164,3 +164,38 @@ describe('a pasted SKILL.md: what it lacks, said precisely before sending', () =
     expect(create).not.toHaveBeenCalled()
   })
 })
+
+describe('attaching a skill from its card', { timeout: 20_000 }, () => {
+  it('« Attachée à : » one pill per agent; one click attaches, another detaches', async () => {
+    const { chat, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    const attach = within(devis).getByTestId('skill-attach')
+    fireEvent.click(within(attach).getByRole('button', { name: 'Attacher à @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'devis']) })
+    await waitFor(() => { expect(within(attach).getByRole('button', { name: 'Détacher de @analyste' }).getAttribute('aria-pressed')).toBe('true') })
+    fireEvent.click(within(attach).getByRole('button', { name: 'Détacher de @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances']) })
+  })
+
+  it('a reader reads which agents take it', async () => {
+    const { section } = await open('viewer')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    expect(within(within(section).getAllByTestId('skill')[0] as HTMLElement).getByTestId('skill-attached').textContent).toBe('Attachée à : @analyste')
+  })
+})
+
+describe('an agent without instructions of its own', () => {
+  it('its form says it follows the space\'s rules; a new agent keeps the example', async () => {
+    const { TeamAgentForm } = await import('../src/client/TeamAgentForm.tsx')
+    const { instructions: _none, ...bare } = { ...agent, instructions: 'x' }
+    const { unmount } = render(
+      <TeamAgentForm agent={bare} models={[]} mounted={[]} canRaiseCeiling onSave={vi.fn()} onCancel={vi.fn()} t={chatFrench} />,
+    )
+    expect(screen.getByLabelText('À quoi il sert').getAttribute('placeholder')).toBe('Aucune consigne propre : il suit les règles de l\'espace.')
+    unmount()
+    render(<TeamAgentForm models={[]} mounted={[]} canRaiseCeiling onSave={vi.fn()} onCancel={vi.fn()} t={chatFrench} />)
+    expect(screen.getByLabelText('À quoi il sert').getAttribute('placeholder')).toBe('Suit les factures impayées et prépare les relances.')
+  })
+})

@@ -1953,6 +1953,17 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   onCreate={chat.createSkill === undefined ? undefined : markdown => writeSkill(() => chat.createSkill?.(markdown) ?? Promise.reject(new Error('no route')))}
                   onUpdate={chat.updateSkill === undefined ? undefined
                     : (slug, markdown, version) => writeSkill(() => chat.updateSkill?.(slug, { markdown, version }) ?? Promise.reject(new Error('no route')))}
+                  agents={chatAgents}
+                  onAttach={chat.updateAgent === undefined ? undefined : async (agentId, chosen) => {
+                    // From the skill's card: the agent's skills as they will be, three at most.
+                    try {
+                      await chat.updateAgent?.(agentId, { skills: chosen })
+                      setChatAgents(await chat.agents())
+                      return undefined
+                    } catch (failure) {
+                      return agentRefusal(failure, tc)
+                    }
+                  }}
                   onDelete={chat.deleteSkill === undefined ? undefined : async (slug) => {
                     try {
                       await chat.deleteSkill?.(slug)
