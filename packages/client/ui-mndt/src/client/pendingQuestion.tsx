@@ -39,9 +39,11 @@ export function PendingQuestion(props: {
   }
   return (
     <div className="mw-queue-item mw-turn-unchecked mw-help-question" data-testid="pending-question">
-      <p className="mw-ctx-small" data-testid="pending-question-where">
-        {[props.where, e.at === undefined ? undefined : when(e.at)].filter((x): x is string => x !== undefined).join(' · ')}
-      </p>
+      {props.where === undefined && e.at === undefined ? undefined : (
+        <p className="mw-ctx-small" data-testid="pending-question-where">
+          {[props.where, e.at === undefined ? undefined : when(e.at)].filter((x): x is string => x !== undefined).join(' · ')}
+        </p>
+      )}
       <p className="mw-help-question-text">
         {t(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
       </p>

@@ -190,3 +190,39 @@ describe('a help\'s authors only once read and no question waits (#119)', () => 
     expect(answered.advices[0]?.agentId).toBe('agt_2')
   })
 })
+
+describe('a question shown once, under the message that publishes it', () => {
+  it('the turn says « une question pour vous » without its box when the question is shown below', () => {
+    const help = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'HT ?', messageId: 'msg_9' } })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} canAnswer questionBelow t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('une question pour vous')
+    expect(screen.queryByTestId('help-question')).toBeNull()
+  })
+
+  it('the publishing message carries the box; its answer replies to that message', async () => {
+    const { WebMessage } = await import('../src/client/TeamFeed.tsx')
+    const onAnswer = vi.fn(async () => undefined)
+    const published = { id: 'msg_9', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'Je retiens A. Question à l\'équipe : HT ?', mentions: [], createdAt: at, updatedAt: at }
+    const asks = { channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: 'msg_9', question: 'HT ?', kind: 'help' as const }
+    render(
+      <WebMessage
+        message={published}
+        header
+        agents={agents}
+        cards={[]}
+        canDecide
+        onDecide={vi.fn()}
+        onAnswer={onAnswer}
+        canAnswer
+        asks={asks}
+        t={chatFrench}
+      />,
+    )
+    const box = screen.getByTestId('pending-question')
+    expect(box.textContent).toContain('Question pour vous : HT ?')
+    expect(screen.queryByTestId('pending-question-where')).toBeNull()
+    fireEvent.change(within(box).getByRole('textbox', { name: 'Votre réponse' }), { target: { value: 'Oui.' } })
+    fireEvent.click(within(box).getByRole('button', { name: 'Répondre et clore ce fil' }))
+    await waitFor(() => { expect(onAnswer).toHaveBeenCalledWith('Oui.', 'msg_9') })
+  })
+})

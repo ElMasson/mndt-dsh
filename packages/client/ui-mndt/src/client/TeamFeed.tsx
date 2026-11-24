@@ -9,7 +9,7 @@
  */
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ChatAgent, ChatChannel, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatMessage, ChatTurn, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 import { ADMIN_CEILING_EUR, AgentSheetView, proposalOf } from './TeamAgentForm.tsx'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { DecideOptions } from './face.ts'
@@ -17,6 +17,7 @@ import type { ThreadCard } from './ChannelView.tsx'
 import { clock, dayLong, euros, pageLanguage, when } from './format.ts'
 import { ContextFrame, contextOf, contextProposalOf } from './channelContext.tsx'
 import { HelpThread, helpOf } from './help.tsx'
+import { PendingQuestion } from './pendingQuestion.tsx'
 import { CouncilThread, councilOf } from './council.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
@@ -317,6 +318,10 @@ export function WebMessage(props: {
   readonly canAnswer?: boolean | undefined
   /** Post a person's answer to an agent's question, as a reply to it. */
   readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
+  /** The question this message publishes (after a help or a council), answered under it. */
+  readonly asks?: OpenEscalation | undefined
+  /** The messages of the thread that publish a question: a turn whose question is one of them says so, not twice. */
+  readonly askedIds?: ReadonlyMap<string, OpenEscalation> | undefined
   readonly channel?: ChatChannel | undefined
   readonly offered?: readonly OfferedModel[] | undefined
   readonly t: ChatTranslate
@@ -366,6 +371,15 @@ export function WebMessage(props: {
       ) : (
         <p className="mw-message-body">{m.text}</p>
       )}
+      {props.asks === undefined ? undefined : (
+        <PendingQuestion
+          escalation={props.asks}
+          onAnswer={props.onAnswer === undefined || props.canAnswer !== true
+            ? undefined
+            : text => props.onAnswer?.(text, m.id) ?? Promise.resolve(undefined)}
+          t={t}
+        />
+      )}
       {(m.turns ?? []).map((turn) => {
         // A turn whose agent asked its peers: the help shows in place, under the turn's line.
         const help = helpOf(turn)
@@ -376,7 +390,15 @@ export function WebMessage(props: {
             <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
             <ToolsUnavailable turn={turn} t={t} />
             {council === undefined ? undefined : (
-              <CouncilThread turn={turn} council={council} agents={agents} onAnswer={props.onAnswer} canAnswer={props.canAnswer} t={t} />
+              <CouncilThread
+                turn={turn}
+                council={council}
+                agents={agents}
+                onAnswer={props.onAnswer}
+                canAnswer={props.canAnswer}
+                questionBelow={council.escalation?.messageId !== undefined && props.askedIds?.has(council.escalation.messageId) === true}
+                t={t}
+              />
             )}
             {help === undefined ? undefined : (
               <HelpThread
@@ -386,6 +408,7 @@ export function WebMessage(props: {
                 originMessageId={m.id}
                 canAnswer={props.canAnswer}
                 names={props.names}
+                questionBelow={help.escalation?.messageId !== undefined && props.askedIds?.has(help.escalation.messageId) === true}
                 t={t}
               />
             )}
