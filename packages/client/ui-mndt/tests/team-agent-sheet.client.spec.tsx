@@ -55,7 +55,7 @@ describe('an agent\'s readable sheet (lot 3)', () => {
 
   it('no instructions: said, nothing made up', () => {
     render(<TeamAgentSheet agent={agent({ instructions: '   ' })} channels={[]} onClose={vi.fn()} t={chatFrench} />)
-    expect(screen.getByTestId('agent-no-instructions').textContent).toBe('Pas de consigne écrite pour cet agent.')
+    expect(screen.getByTestId('agent-no-instructions').textContent).toBe('Aucune consigne propre : il suit les règles de l\'espace.')
     expect(screen.getByTestId('agent-channels').textContent).toBe('Dans aucun canal d\'équipe')
   })
 

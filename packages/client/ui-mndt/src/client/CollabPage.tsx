@@ -1967,6 +1967,31 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   onCreate={chat.createSkill === undefined ? undefined : markdown => writeSkill(() => chat.createSkill?.(markdown) ?? Promise.reject(new Error('no route')))}
                   onUpdate={chat.updateSkill === undefined ? undefined
                     : (slug, markdown, version) => writeSkill(() => chat.updateSkill?.(slug, { markdown, version }) ?? Promise.reject(new Error('no route')))}
+                  agents={chatAgents}
+                  onAttach={chat.updateAgent === undefined ? undefined : async (agentId, slug, attach, seen) => {
+                    // From the skill's card. The agent is read again just before: a list changed
+                    // meanwhile (someone attached or detached another skill) is said, never overwritten.
+                    try {
+                      const all = await chat.agents()
+                      const fresh = all.find(a => a.id === agentId)
+                      if (fresh === undefined) {
+                        setChatAgents(all)
+                        return tc('agentGone')
+                      }
+                      const now = fresh.skills ?? []
+                      if ([...now].sort().join(',') !== [...seen].sort().join(',')) {
+                        // Refused, and the agents just read are shown: the next click starts from them.
+                        setChatAgents(all)
+                        return tc('skillAttachChanged')
+                      }
+                      const chosen = attach ? [...now, slug] : now.filter(s => s !== slug)
+                      await chat.updateAgent?.(agentId, { skills: chosen })
+                      setChatAgents(await chat.agents())
+                      return undefined
+                    } catch (failure) {
+                      return agentRefusal(failure, tc)
+                    }
+                  }}
                   onDelete={chat.deleteSkill === undefined ? undefined : async (slug) => {
                     try {
                       await chat.deleteSkill?.(slug)

@@ -134,11 +134,98 @@ describe('the core\'s refusals of a skill, in words', { timeout: 20_000 }, () =>
     expect((await within(section).findByRole('alert')).textContent).toBe('Une compétence porte déjà ce nom.')
   })
 
-  it('a SKILL.md without front matter (missing-fields) is said', async () => {
+  it('a SKILL.md without front matter is said precisely', async () => {
     const { section } = await open('owner')
     fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
     fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), { target: { value: 'juste du texte' } })
     fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
-    expect((await within(section).findByRole('alert')).textContent).toBe('Un SKILL.md demande un en-tête avec un nom, et un texte.')
+    expect((await within(section).findByRole('alert')).textContent).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+  })
+})
+
+describe('a pasted SKILL.md: what it lacks, said precisely before sending', () => {
+  it('names each missing part, as the core\'s rules', async () => {
+    const { skillProblem } = await import('../src/client/skills.tsx')
+    const say = (md: string): string | undefined => skillProblem(md, chatFrench)
+    expect(say('name: Litiges\n---\nÉcouter.')).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+    expect(say('---\nname: Litiges\nÉcouter.')).toBe('L\'en-tête doit se terminer par une ligne « --- » seule.')
+    expect(say('---\ndescription: x\n---\nÉcouter.')).toBe('Il manque le nom : ajoutez « name: … » dans l\'en-tête.')
+    expect(say('---\nname: Litiges\n---\n')).toBe('Il manque le texte après l\'en-tête : écrivez ce que l\'agent doit savoir.')
+    expect(say('---\nname: Litiges\n---\nÉcouter.')).toBeUndefined()
+  })
+
+  it('a SKILL.md without its first « --- » is said, and nothing is sent', async () => {
+    const { chat, section } = await open('owner')
+    const create = vi.spyOn(chat, 'createSkill')
+    fireEvent.click(within(section).getByRole('button', { name: 'Ajouter' }))
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Le SKILL.md de la compétence' }), { target: { value: 'name: Litiges\ndescription: x\n---\nÉcouter.' } })
+    fireEvent.click(within(section).getByRole('button', { name: 'Enregistrer' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('La première ligne doit être « --- », puis « name: … », puis « --- ».')
+    expect(create).not.toHaveBeenCalled()
+  })
+})
+
+describe('attaching a skill from its card', { timeout: 20_000 }, () => {
+  it('« Attachée à : » one pill per agent; one click attaches, another detaches', async () => {
+    const { chat, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    const attach = within(devis).getByTestId('skill-attach')
+    fireEvent.click(within(attach).getByRole('button', { name: 'Attacher à @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'devis']) })
+    await waitFor(() => { expect(within(attach).getByRole('button', { name: 'Détacher de @analyste' }).getAttribute('aria-pressed')).toBe('true') })
+    fireEvent.click(within(attach).getByRole('button', { name: 'Détacher de @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances']) })
+  })
+
+  it('a reader reads which agents take it', async () => {
+    const { section } = await open('viewer')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    expect(within(within(section).getAllByTestId('skill')[0] as HTMLElement).getByTestId('skill-attached').textContent).toBe('Attachée à : @analyste')
+  })
+})
+
+describe('an agent without instructions of its own', () => {
+  it('its form says it follows the space\'s rules; a new agent keeps the example', async () => {
+    const { TeamAgentForm } = await import('../src/client/TeamAgentForm.tsx')
+    const { instructions: _none, ...bare } = { ...agent, instructions: 'x' }
+    const { unmount } = render(
+      <TeamAgentForm agent={bare} models={[]} mounted={[]} canRaiseCeiling onSave={vi.fn()} onCancel={vi.fn()} t={chatFrench} />,
+    )
+    expect(screen.getByLabelText('À quoi il sert').getAttribute('placeholder')).toBe('Aucune consigne propre : il suit les règles de l\'espace.')
+    unmount()
+    render(<TeamAgentForm models={[]} mounted={[]} canRaiseCeiling onSave={vi.fn()} onCancel={vi.fn()} t={chatFrench} />)
+    expect(screen.getByLabelText('À quoi il sert').getAttribute('placeholder')).toBe('Suit les factures impayées et prépare les relances.')
+  })
+})
+
+describe('attaching from a card never erases a change made meanwhile (#144)', { timeout: 20_000 }, () => {
+  it('another skill attached by someone else since: said, nothing sent; read again, it works', async () => {
+    const { chat, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    // Someone else attaches « rapports » to the agent; this page still shows only « relances ».
+    await chat.updateAgent?.('agt_1', { skills: ['relances', 'rapports'] })
+    const update = vi.spyOn(chat, 'updateAgent')
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe('Les compétences de cet agent ont été modifiées entre-temps : relisez.')
+    expect(update).not.toHaveBeenCalled()
+    expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports'])
+    // The refusal reloaded the agents: « rapports », attached elsewhere, now shows pressed here.
+    const rapports = within(section).getAllByTestId('skill')[2]
+    if (rapports === undefined) throw new Error('no skill')
+    await waitFor(() => {
+      expect(within(within(rapports).getByTestId('skill-attach')).getByRole('button', { name: 'Détacher de @analyste' }).getAttribute('aria-pressed')).toBe('true')
+    })
+    // The agents were read again: the next click adds to the list as it is.
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports', 'devis']) })
+  })
+
+  it('a name over 60 characters is said before sending', async () => {
+    const { skillProblem } = await import('../src/client/skills.tsx')
+    expect(skillProblem(`---\nname: ${'x'.repeat(61)}\n---\ntexte`, chatFrench)).toBe('Le nom d\'une compétence fait 60 caractères au plus.')
   })
 })
