@@ -8,7 +8,7 @@
  * system message), as the Host would between two reads.
  */
 import { ChatRefusal } from './chat.ts'
-import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
+import type { ChannelCreate, ChatAgent, ChatCard, ChatChanges, ChatChannel, ChatFace, ChatMessage, ChatSkill, ChatTurn, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 
 /**
  * A promise of what `work` returns, or of the error it throws: the double answers like the Host,
@@ -55,6 +55,8 @@ export interface MockSeed {
   readonly escalations?: readonly OpenEscalation[]
   /** This month's spend of councils closed without naming their members, for the space. */
   readonly unattributedEur?: number
+  /** The space's skills; absent, `skills()` answers 404 as an older core does. */
+  readonly skills?: readonly ChatSkill[]
   readonly mounted?: readonly MountedConnector[]
 }
 
@@ -80,6 +82,7 @@ export function createMockChat(
     seed.agents.map(a => [a.id, { ...a, eurThisMonth: a.eurThisMonth ?? 0 }]),
   )
   const channels = new Map(seed.channels.map(c => [c.id, c]))
+  const skills = new Map((seed.skills ?? []).map(k => [k.slug, k]))
   const messages = new Map((seed.messages ?? []).map(m => [m.id, m]))
   const nextId = (prefix: string): string =>
     `${prefix}_${(seq += 1).toString(36)}`
@@ -354,11 +357,59 @@ export function createMockChat(
         return agent
       })
     },
+    skills() {
+      return settle(() => {
+        if (seed.skills === undefined) throw new ChatRefusal('no route', 404)
+        return [...skills.values()]
+      })
+    },
+    createSkill(markdown) {
+      return settle(() => {
+        const read = readSkill(markdown)
+        const slug = read.name.toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '')
+        if (skills.has(slug)) throw new ChatRefusal(`the skill ${slug} exists`, 409, 'skill-exists')
+        const skill = {
+          slug, name: read.name, description: read.description, body: read.body, version: 1, updatedBy: seed.you, updatedAt: now(),
+        }
+        skills.set(slug, skill)
+        return { skill, ignoredFields: read.ignored }
+      })
+    },
+    updateSkill(slug, change) {
+      return settle(() => {
+        const held = skills.get(slug)
+        if (held === undefined) throw new ChatRefusal(`no skill ${slug}`, 404)
+        if (held.version !== change.version) throw new ChatRefusal('the skill changed meanwhile', 409, 'skill-changed')
+        const read = readSkill(change.markdown)
+        const skill = {
+          ...held, name: read.name, description: read.description, body: read.body,
+          version: held.version + 1, updatedBy: seed.you, updatedAt: now(),
+        }
+        skills.set(slug, skill)
+        return { skill, ignoredFields: read.ignored }
+      })
+    },
+    deleteSkill(slug) {
+      return settle(() => {
+        skills.delete(slug)
+        for (const [agentId, agent] of agents) {
+          if (agent.skills?.includes(slug) === true) agents.set(agentId, { ...agent, skills: agent.skills.filter(s => s !== slug) })
+        }
+      })
+    },
     updateAgent(agentId, patch) {
       return settle(() => {
         const agent = agents.get(agentId)
         if (agent === undefined) throw new ChatRefusal(`no agent ${agentId}`, 404)
-        const next = { ...agent, ...patch, ...(patch.connectors === undefined ? {} : { connectors: [...patch.connectors] }) }
+        // As the core: three skills at most, each one of the space's.
+        if (patch.skills !== undefined && (patch.skills.length > 3 || patch.skills.some(slug => !skills.has(slug)))) {
+          throw new ChatRefusal('an agent reads three skills of the space at most', 400, 'too-many-skills')
+        }
+        const next = {
+          ...agent, ...patch,
+          ...(patch.connectors === undefined ? {} : { connectors: [...patch.connectors] }),
+          ...(patch.skills === undefined ? {} : { skills: [...patch.skills] }),
+        }
         agents.set(agentId, next)
         return next
       })
@@ -429,4 +480,24 @@ export function createMockChat(
     },
   }
   return face
+}
+
+/**
+ * A pasted SKILL.md, read as the core is asked to (the double's version): the front matter's name
+ * and description, the body, and the other front matter fields, which have no effect here.
+ * @param markdown - the file. @returns what it says.
+ */
+function readSkill(markdown: string): { name: string; description: string; body: string; ignored: string[] } {
+  const text = markdown.replace(/\r\n/gu, '\n').trim()
+  const head = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u.exec(text)
+  if (head === null) throw new ChatRefusal('a SKILL.md opens with a front matter (name, description)', 400, 'missing-fields')
+  const fields = new Map<string, string>()
+  for (const line of (head[1] ?? '').split('\n')) {
+    const at = line.indexOf(':')
+    if (at > 0 && !line.startsWith(' ')) fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim())
+  }
+  const name = fields.get('name') ?? ''
+  const description = fields.get('description') ?? ''
+  if (name === '' || description === '') throw new ChatRefusal('a SKILL.md needs a name and a description', 400, 'missing-fields')
+  return { name, description, body: (head[2] ?? '').trim(), ignored: [...fields.keys()].filter(k => k !== 'name' && k !== 'description') }
 }
