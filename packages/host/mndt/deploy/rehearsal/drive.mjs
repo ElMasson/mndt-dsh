@@ -483,6 +483,8 @@ for (let attempt = 0; attempt < 90 && councilBack !== 200; attempt += 1) {
   await sleep(2000)
   councilBack = (await asOwner('GET', '/me')).status
 }
+// When /me answered again: the start of the delay tools-after-restart measures.
+const apiBackAt = Date.now()
 // (#126) a turn posted as soon as the API answers after a restart gets the
 // card tools, all of them: it waits for the servers instead of running bare.
 // The browser is closed by now: the probe goes through fetch, as the restarts do.
@@ -496,8 +498,13 @@ if (councilBack === 200 && channel !== undefined && qwen !== undefined) {
   }
 }
 const restartedMarker = markerOf('redemarrage')
-check('tools-after-restart', restarted?.status === 'done' && JSON.stringify(restartedMarker?.tools) === JSON.stringify(APPROVALS) && restarted.toolsUnavailable === undefined,
-  `API back ${councilBack}, turn ${restarted?.status ?? '-'} « ${restarted?.reason ?? '-'} », tools ${restartedMarker === undefined ? 'no call' : JSON.stringify(restartedMarker.tools) === JSON.stringify(APPROVALS) ? `the ${APPROVALS.length} card tools` : JSON.stringify(restartedMarker.tools)}, unavailable ${JSON.stringify(restarted?.toolsUnavailable ?? [])}`)
+// The turn starts once its servers are ready (it waits for them before the
+// queue, #126): from /me answering to that start is how long the approvals
+// took to register after the restart. Under 10 s (it was ~60 s before #132).
+const readyMs = restarted?.startedAt === undefined ? undefined : Date.parse(restarted.startedAt) - apiBackAt
+check('tools-after-restart', restarted?.status === 'done' && JSON.stringify(restartedMarker?.tools) === JSON.stringify(APPROVALS) && restarted.toolsUnavailable === undefined
+  && readyMs !== undefined && readyMs < 10_000,
+  `API back ${councilBack}, approvals ready ${readyMs === undefined ? '-' : `${(readyMs / 1000).toFixed(1)} s`} after /me (bound 10 s), turn ${restarted?.status ?? '-'} « ${restarted?.reason ?? '-'} », tools ${restartedMarker === undefined ? 'no call' : JSON.stringify(restartedMarker.tools) === JSON.stringify(APPROVALS) ? `the ${APPROVALS.length} card tools` : JSON.stringify(restartedMarker.tools)}, unavailable ${JSON.stringify(restarted?.toolsUnavailable ?? [])}`)
 const councilAfter = councilBack === 200 ? openCount() : 'no API'
 const closedCouncil = slowCouncil === undefined ? undefined
   : ((await asOwner('GET', `/channels/${conseil.id}/messages`)).body.messages ?? []).find(m => m.id === slowCouncil.id)?.turns?.[0]
