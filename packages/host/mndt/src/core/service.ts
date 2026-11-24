@@ -1731,6 +1731,8 @@ export class WorkbenchService {
       const wanted = change.add !== undefined
         ? (current.includes(slug) ? current : checkedSkills(state.skills ?? [], [...current, slug]))
         : current.filter(other => other !== slug)
+      // Nothing to change (already attached, or not attached): no write is journaled.
+      if (wanted.length === current.length) return { state, event: [], value: agent }
       const { skills: _previous, ...rest } = agent
       const next: Agent = wanted.length === 0 ? rest : { ...rest, skills: wanted }
       const at = this.#at()
