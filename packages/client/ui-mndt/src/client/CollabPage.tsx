@@ -89,6 +89,7 @@ export function decisionRefusal(message: string, t: ChatTranslate): string {
 function agentRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
     if (failure.code === 'too-many-skills') return t('skillTooMany')
+    if (failure.code === 'unknown-agent') return t('agentGone')
     if (failure.code === 'unknown-skill') return t('skillUnknown')
     const taken = /^the handle @(\S+) is taken$/u.exec(failure.message)
     if (failure.status === 409 && taken !== null) return t('agentHandleTaken', { handle: taken[1] ?? '' })
@@ -1972,6 +1973,13 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     // From the skill's card. The agent is read again just before: a list changed
                     // meanwhile (someone attached or detached another skill) is said, never overwritten.
                     try {
+                      // The core applies one change on the agent as it is (#145): nothing to compare.
+                      if (chat.changeSkill !== undefined) {
+                        await chat.changeSkill(agentId, attach ? { add: slug } : { remove: slug })
+                        setChatAgents(await chat.agents())
+                        return undefined
+                      }
+                      // An older core: the whole list, built from the agent read again just before.
                       const all = await chat.agents()
                       const fresh = all.find(a => a.id === agentId)
                       if (fresh === undefined) {

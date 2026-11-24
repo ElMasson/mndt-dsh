@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CollabPage } from '../src/client/CollabPage.tsx'
 import type { ChatAgent, ChatSkill } from '../src/client/chat.ts'
+import { ChatRefusal } from '../src/client/chat.ts'
 import { chatFrench } from '../src/client/chatLocales.ts'
 import type { MndtFace, PageStateRow } from '../src/client/face.ts'
 import { createMockChat } from '../src/client/mockChat.ts'
@@ -17,17 +18,20 @@ const skill = (slug: string, name: string, version = 1): ChatSkill => ({ slug, n
 const SKILLS = [skill('relances', 'Relances', 3), skill('devis', 'Devis'), skill('rapports', 'Rapports'), skill('veille', 'Veille')]
 
 /** @param role - the reader's role. @returns the Agents view over the double, and the double. */
-async function open(role: string, skills: readonly ChatSkill[] = SKILLS) {
+async function open(role: string, skills: readonly ChatSkill[] = SKILLS, older = false) {
   const page: PageStateRow = { you, canWrite: true, canAdmin: role !== 'viewer', role, missions: [], briefs: [], approvals: [], memories: [] }
   const api = new Proxy({}, {
     get: (_t, key) => key === 'state' ? async () => page : key === 'members' || key === 'search' ? async () => [] : async () => { throw new Error('non utilise') },
   }) as MndtFace
-  const chat = createMockChat({ you, agents: [agent], channels: [], skills }, () => Date.parse(at))
+  const served = createMockChat({ you, agents: [agent], channels: [], skills }, () => Date.parse(at))
+  // An older core has no single-skill route (#145): the page then sends the whole list.
+  const { changeSkill: _route, ...withoutRoute } = served
+  const chat: typeof withoutRoute = older ? withoutRoute : served
   render(<CollabPage api={api} chat={chat} tc={chatFrench} team={{}} />)
   const nav = await screen.findByTestId('side-nav')
   await waitFor(() => { expect(within(nav).getByRole('button', { name: 'Analyste' })).toBeTruthy() })
   fireEvent.click(within(nav).getByRole('button', { name: 'Agents' }))
-  return { chat, section: await screen.findByTestId('skills', {}, { timeout: 5000 }) }
+  return { chat, served, section: await screen.findByTestId('skills', {}, { timeout: 5000 }) }
 }
 
 describe('the space\'s skills in the Agents view', { timeout: 20_000 }, () => {
@@ -201,8 +205,8 @@ describe('an agent without instructions of its own', () => {
 })
 
 describe('attaching from a card never erases a change made meanwhile (#144)', { timeout: 20_000 }, () => {
-  it('another skill attached by someone else since: said, nothing sent; read again, it works', async () => {
-    const { chat, section } = await open('owner')
+  it('an older core: another skill attached by someone else since is said, nothing sent; read again, it works', async () => {
+    const { chat, section } = await open('owner', SKILLS, true)
     await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
     // Someone else attaches « rapports » to the agent; this page still shows only « relances ».
     await chat.updateAgent?.('agt_1', { skills: ['relances', 'rapports'] })
@@ -227,5 +231,40 @@ describe('attaching from a card never erases a change made meanwhile (#144)', { 
   it('a name over 60 characters is said before sending', async () => {
     const { skillProblem } = await import('../src/client/skills.tsx')
     expect(skillProblem(`---\nname: ${'x'.repeat(61)}\n---\ntexte`, chatFrench)).toBe('Le nom d\'une compétence fait 60 caractères au plus.')
+  })
+})
+
+describe('the pill sends one change (#145)', { timeout: 20_000 }, () => {
+  it('a skill attached meanwhile by someone else is kept: the core adds to the agent as it is', async () => {
+    const { chat, served, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    await chat.updateAgent?.('agt_1', { skills: ['relances', 'rapports'] })
+    const change = vi.spyOn(served, 'changeSkill')
+    const update = vi.spyOn(chat, 'updateAgent')
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    await waitFor(() => { expect(change).toHaveBeenCalledWith('agt_1', { add: 'devis' }) })
+    expect(update).not.toHaveBeenCalled()
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports', 'devis']) })
+  })
+
+  it('detaching sends a remove; the last one leaves the agent without skills', async () => {
+    const { chat, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    const relances = within(section).getAllByTestId('skill')[0]
+    if (relances === undefined) throw new Error('no skill')
+    fireEvent.click(within(within(relances).getByTestId('skill-attach')).getByRole('button', { name: 'Détacher de @analyste' }))
+    await waitFor(async () => { expect((await chat.agents())[0]?.skills).toBeUndefined() })
+  })
+
+  it('a fourth skill refused by the core is said', async () => {
+    const { served, section } = await open('owner')
+    await waitFor(() => { expect(within(section).getAllByTestId('skill')).toHaveLength(4) })
+    vi.spyOn(served, 'changeSkill').mockRejectedValue(new ChatRefusal('an agent uses 3 skills at most', 409, 'too-many-skills'))
+    const devis = within(section).getAllByTestId('skill')[1]
+    if (devis === undefined) throw new Error('no skill')
+    fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
+    expect((await within(section).findByRole('alert')).textContent).toBe(chatFrench('skillTooMany'))
   })
 })

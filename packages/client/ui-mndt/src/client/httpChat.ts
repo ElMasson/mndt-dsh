@@ -128,6 +128,8 @@ export function createHttpChat(
         }]
       })
     },
+    changeSkill: async (agentId, change) =>
+      (await post<{ agent: ChatAgent }>(`/agents/${id(agentId)}/skills`, change)).agent,
     skills: async () => {
       const body = await get<{ skills?: unknown }>('/skills')
       return (Array.isArray(body.skills) ? body.skills : []).flatMap(skillOf)
