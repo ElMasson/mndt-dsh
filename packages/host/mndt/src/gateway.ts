@@ -428,9 +428,10 @@ export class WorkbenchGateway extends TypertRemoteService {
   private missionRunner(ctx: Context): DshMissionRunner {
     const readiness = this.readinessFor(ctx)
     const configured = this.requiredConfigured()
+    const timeZone = this.timeZoneFor(ctx)
     return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
-      ? { readiness, configured }
-      : { tools: TEAM_MISSION_POLICY, readiness, configured })
+      ? { readiness, configured, timeZone }
+      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone })
   }
 
   /**
@@ -451,7 +452,8 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   private timeZoneFor(ctx: Context): string {
     const { timeZone, refused } = instanceTimeZone(process.env.DSH_MNDT_TIME_ZONE)
-    if (refused !== undefined) warnOperator(ctx, refused)
+    // Once, whether asked by the turns or by each mission's runner.
+    if (refused !== undefined) warnOperatorOnce(ctx, 'time-zone', refused)
     return timeZone
   }
 
