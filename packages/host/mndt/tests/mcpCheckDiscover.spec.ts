@@ -145,3 +145,58 @@ describe('check-connectors.sh --discover', () => {
     expect(run.status).toBe(1)
   })
 })
+
+describe('mcp-check refuses --discover mixed with a call or a write', () => {
+  it.each([
+    [['--refuse', 'send_mail'], '--refuse'],
+    [['--call', 'get_status'], '--call'],
+    [['--actor', 'duke@datanalysis.re', '--actor-file', 'ACTOR'], '--actor, --actor-file'],
+  ])('with %j: exit 2, said, the connector never started and no file written', (extra, named) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mndt-mixed-'))
+    dirs.push(dir)
+    const started = join(dir, 'started')
+    const server = join(dir, 'server.mjs')
+    writeFileSync(server, `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(started)}, 'x')\n`)
+    const actorFile = join(dir, 'actor.json')
+    const args = (extra as string[]).map(a => (a === 'ACTOR' ? actorFile : a))
+    const run = spawnSync(process.execPath, [CHECK, '--discover', ...args, '--', process.execPath, server], { encoding: 'utf8', timeout: 30_000 })
+    expect(run.status).toBe(2)
+    expect(run.stderr).toContain(`--discover runs alone, without ${named}: nothing was sent`)
+    expect(existsSync(started)).toBe(false)
+    expect(existsSync(actorFile)).toBe(false)
+  })
+
+  it('the same options without --discover still work as before', () => {
+    // The fake server does not answer tools/call: the check's own timeout ends it (1 s here).
+    const run = spawnSync(process.execPath, [CHECK, '--refuse', 'send_mail', '--', process.execPath, fakeServer(true)], {
+      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MCP_CHECK_TIMEOUT_MS: '1000' },
+    })
+    expect(run.status).toBe(1)
+    expect(run.stderr).not.toContain('--discover runs alone')
+    expect(run.stdout).toContain('outils visibles (1) : list_things')
+  })
+})
+
+describe('mcp-check refuses an option it does not know', () => {
+  it.each([
+    [['--dicsover'], 'mcp-check: unknown option --dicsover: nothing was sent'],
+    [['--discover', '--live'], 'mcp-check: unknown option --live: nothing was sent'],
+    [['--refuse'], 'mcp-check: option --refuse needs a value: nothing was sent'],
+  ])('%j: exit 2, the option named, the connector never started', (extra, said) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mndt-unknown-'))
+    dirs.push(dir)
+    const started = join(dir, 'started')
+    const server = join(dir, 'server.mjs')
+    writeFileSync(server, `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(started)}, 'x')\n`)
+    const run = spawnSync(process.execPath, [CHECK, ...extra, '--', process.execPath, server], { encoding: 'utf8', timeout: 30_000 })
+    expect(run.status).toBe(2)
+    expect(run.stderr).toContain(said)
+    expect(existsSync(started)).toBe(false)
+  })
+
+  it('an unknown option is cut to 64 characters in the message', () => {
+    const run = spawnSync(process.execPath, [CHECK, `--${'x'.repeat(300)}`, '--', process.execPath, '-e', '0'], { encoding: 'utf8', timeout: 30_000 })
+    expect(run.status).toBe(2)
+    expect(run.stderr.length).toBeLessThan(140)
+  })
+})
