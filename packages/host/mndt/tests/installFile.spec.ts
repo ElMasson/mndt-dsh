@@ -1,5 +1,5 @@
 /**
- * deploy/lib/install-file.sh: the one rule for every file a tenant script puts
+ * deploy/shared/install-file.sh: the one rule for every file a tenant script puts
  * where a container reads it (the tools folder, the gateway's code and its
  * connector machinery): written beside, renamed over, never rewritten in place.
  */
@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const deploy = join(import.meta.dirname, '..', 'deploy')
-const LIB = join(deploy, 'lib', 'install-file.sh')
+const LIB = join(deploy, 'shared', 'install-file.sh')
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) { chmodSync(dir, 0o755); rmSync(dir, { recursive: true, force: true }) } })
 
@@ -67,15 +67,43 @@ describe('install_file', () => {
 })
 
 describe('the tenant scripts keep the rule', () => {
-  it('no plain cp into the tools folder nor beside the gateway, in create-tenant, install-connectors and seed-team', () => {
+  /** A write: cp, mv, tee, install, rsync, or a redirection. */
+  const WRITE = /(^|[\s;&|(])(cp|mv|tee|install|rsync)\s|>>?\s*"?\$/
+  /** Toward a folder a container mounts: beside the gateway, the tools folder and every connector's place in it. */
+  const MOUNTED = /\$(root\$)?app\/gateway|\$tools\b|\$(root\$)?data\/tools/
+  /**
+   * Named exceptions, to be removed by the change C asked for (versioned
+   * directories and a link swapped atomically): the swap of a connector's
+   * package directory, which leaves a short gap where it is absent.
+   */
+  const LATER = ['mv "$tools/swing/src/mcp.new" "$tools/swing/src/mcp"']
+
+  it('every write into a mounted folder goes through install_file, in create-tenant, install-connectors and seed-team', () => {
     const offending: string[] = []
     for (const script of ['create-tenant.sh', 'tenant/install-connectors.sh', 'tenant/seed-team.sh']) {
-      // grep exits 1 when a script holds no cp at all: that is the goal, not an error.
-      const lines = spawnSync('grep', ['-nE', '(^|[;&|( ]|then |do )cp ', join(deploy, script)], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
-        .filter(line => !line.includes('#'))
-      // The gateway's folder ($app/gateway) and the tools folder ($tools, $data/tools) are mounted in containers.
-      for (const line of lines) if (/\$app\/gateway|\$root\$app\/gateway|\$tools\/\$tool|\$tools\/(approvals|mcp-|office365|facts)|\$data\/tools/.test(line)) offending.push(`${script}: ${line}`)
+      const lines = readFileSync(join(deploy, script), 'utf8').split('\n')
+      lines.forEach((line, index) => {
+        // Only the comments that start a line are left out.
+        if (/^\s*#/.test(line)) return
+        if (!WRITE.test(line) || !MOUNTED.test(line)) return
+        if (/^\s*install_file\s/.test(line) || line.includes('|| exit 1') && /install_file\s/.test(line)) return
+        if (LATER.includes(line.trim())) return
+        offending.push(`${script}:${index + 1}: ${line.trim()}`)
+      })
     }
     expect(offending).toEqual([])
+  })
+
+  it('the guard bites: plain writes of each kind into each mounted folder are found', () => {
+    const samples = [
+      'cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"',
+      'mv "$x" "$app/gateway/catalog.json"',
+      'printf x > "$tools/qonto/package.json"',
+      'echo y >> "$tools/dolibarr-mcp/requirements.txt"',
+      'tee "$tools/swing/requirements.txt" < x',
+      'install -m 0644 a "$root$data/tools/facts-mcp.mjs"',
+      'rsync a "$tools/approvals-mcp.mjs"',
+    ]
+    expect(samples.filter(line => WRITE.test(line) && MOUNTED.test(line))).toEqual(samples)
   })
 })

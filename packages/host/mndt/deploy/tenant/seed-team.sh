@@ -35,8 +35,9 @@ compose=(docker compose -f "$app/docker-compose.yml")
 # (patchfile.py) would append its block after the `[]` dsh writes, and the
 # workbench would no longer start.
 mkdir -p "$app/gateway"
-# Replaced atomically (lib/install-file.sh), as create-tenant.sh does.
-. "$here/../lib/install-file.sh"
+# Replaced atomically (shared/install-file.sh), as create-tenant.sh does.
+f="$here/../shared/install-file.sh"; [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+. "$f"
 for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
   install_file "$here/../$file" "$app/gateway/$(basename "$file")" || exit 1
 done

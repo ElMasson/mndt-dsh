@@ -162,10 +162,11 @@ if [ ! -f "$root$data/grants.json" ]; then
   chmod 600 "$root$data/grants.json"
 fi
 mkdir -p "$root$app/gateway"
-# Every file a container reads, replaced atomically (lib/install-file.sh): the
+# Every file a container reads, replaced atomically (shared/install-file.sh): the
 # gateway runs server.mjs, and a partial file at its restart would make it fall
 # in a loop.
-. "$here/lib/install-file.sh"
+f="$here/shared/install-file.sh"; [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+. "$f"
 install_file "$here/gateway/server.mjs" "$root$app/gateway/server.mjs" || exit 1
 # The connector machinery of the adapters lane, at this tenant's paths: the
 # renderer and the catalog beside the gateway, the tools the workbench runs in
@@ -173,7 +174,7 @@ install_file "$here/gateway/server.mjs" "$root$app/gateway/server.mjs" || exit 1
 for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
   install_file "$here/$file" "$root$app/gateway/$(basename "$file")" || exit 1
 done
-# Each one replaced atomically, as above (lib/install-file.sh): an MCP server
+# Each one replaced atomically, as above (shared/install-file.sh): an MCP server
 # started meanwhile, or a check-connectors.sh running, never reads a
 # half-written file. A failure leaves no .tmp behind and stops the script.
 for tool in "${tools[@]}" "${checks[@]}"; do
