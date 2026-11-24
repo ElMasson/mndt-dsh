@@ -262,6 +262,28 @@ echo "old briefing run by the owner: $old_run; briefs on the old version: the vi
 # Briefs became private in 9979d2532e (canReadMission): from 47169065bf the
 # old brief is shared and the update must stop serving it; from a later
 # version it is already private, and the owner must read it.
+# 5bb9e1ea60 required the facts server for every briefing, and an instance the
+# guide installs mounts none: there its briefings all failed (fixed after it).
+# Said either way, then the facts mounted on the old version, so the
+# rehearsal still has its starting brief.
+old_failed=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/missions | jq -r '[.missions[]? | select(.kind == "briefing")] | last | .error // ""' 2>/dev/null)
+if [ "$old_own" = 0 ] && echo "$old_failed" | grep -q 'outils indisponibles : workbench_facts'; then
+  echo "OK  old-briefing-facts  the old version ($old_ref) requires the facts for a briefing, and the installed instance mounts none: « $old_failed ». The facts server is mounted on the old version for the starting brief"
+  cp "$old/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs" 2>/dev/null || true
+  printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+  own
+  MNDT_HOME=$data RENDER_SCRIPT="$old/connectors/render-connectors.py" bash "$old/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart >/dev/null || echo "KO old-facts-mounted  the facts server could not be mounted on the old version"
+  docker restart $project-workbench >/dev/null
+  if health 80; then echo "the old version restarted with the facts"; else echo "KO old-restart  the old version does not come back"; exit 1; fi
+  sleep 20
+  old_run=$(curl -s -m 200 -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' -d '{}' \
+    http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
+  old_seen=$(curl -s -m 20 -H "x-forwarded-email: $viewer" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+  old_own=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+  echo "old briefing run again, with the facts: $old_run; the viewer reads $old_seen, the owner $old_own"
+else
+  echo "OK  old-briefing-facts  the old version's briefing needed no facts server (briefs read by the owner: $old_own)"
+fi
 if [ "$old_run" != 200 ]; then echo "KO old-briefing-run  the old briefing did not run ($old_run): no starting point"; exit 1; fi
 if [ "$old_seen" -ge 1 ]; then broke=1; echo "OK old-brief-shared  the viewer reads $old_seen old brief(s): the update must stop serving them"
 elif [ "$old_own" -ge 1 ]; then broke=1; echo "OK old-brief-private  already private on the old version: the owner reads $old_own, the viewer none"

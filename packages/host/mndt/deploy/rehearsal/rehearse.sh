@@ -268,17 +268,33 @@ step "3. seed-team.sh, the production script (Compose calls through compose-shim
 # The workbench writes its profile files as root; on the server seed-team.sh runs
 # as root too. Here it runs as this user, so hand the profile files over first.
 docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/profiles || die profiles-chown "the profiles folder could not be given back to this user"
-# A second MCP server, mounted for the tool probe and never allowed in the
-# rehearsal's channel: the turn must neither see nor run it (seed-team.sh
-# restarts the workbench right after, which starts it).
-# facts-mcp.mjs itself: create-tenant.sh installed it (tools-current checks it).
-printf 'Faits de repetition.\n' > "$data/tools/facts.md"
-MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
-  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
 REHEARSAL_DOCKER=$(command -v docker) REHEARSAL_PROJECT=$project MNDT_ROOT=$root PATH="$shim:$PATH" \
   bash "$deploy/tenant/seed-team.sh" datanalysis --owner $owner; seeded=$?
 echo "seed-team.sh exit $seeded"
+# A briefing on a space that mounts no facts server (as every instance the guide
+# installs): it runs, without them, and its prompt says so. Until 65956bcddc the
+# facts were required for every briefing, so each one failed on such an instance.
+if health 80; then
+  briefed=$(curl -s -m 240 -o /dev/null -w '%{http_code}' -X POST -H "x-forwarded-email: $owner" -H 'content-type: application/json' -d '{}' \
+    http://127.0.0.1:18080/mndt-api/automations/auto_briefing/run)
+  last=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/missions | jq -c '[.missions[]? | select(.kind == "briefing")] | last | {status, error: (.error // "")}' 2>/dev/null)
+  briefs=$(curl -s -m 20 -H "x-forwarded-email: $owner" http://127.0.0.1:18080/mndt-api/briefs | grep -o '"id":"brf_[^"]*"' | wc -l)
+  noted=$(docker logs $project-fakellm 2>&1 | grep -c 'fake-llm no-facts-note' || true)
+  if [ "$briefed" = 200 ] && [ "$briefs" -ge 1 ] && [ "$noted" -ge 1 ] && ! echo "$last" | grep -q 'failed'; then
+    echo "OK  briefing-without-facts  no facts server mounted: the owner's briefing ran ($briefed), $briefs brief(s), its prompt says the facts are not mounted"
+  else
+    echo "KO  briefing-without-facts  run $briefed, briefs $briefs, last briefing $last, note in a prompt $noted"
+  fi
+else echo "KO  briefing-without-facts  the API does not answer after seed-team.sh"; fi
+# A second MCP server, mounted for the tool probe and never allowed in the
+# rehearsal's channel: the turn must neither see nor run it. Mounted after the
+# briefing above (which needs none), then the workbench restarts to start it.
+# facts-mcp.mjs itself: create-tenant.sh installed it (tools-current checks it).
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
+docker restart $project-workbench >/dev/null
 echo "--- profiles/web/cordis.patch.yml after the mount:"; cat "$data/home/profiles/web/cordis.patch.yml"
 
 step "4. after the restart"

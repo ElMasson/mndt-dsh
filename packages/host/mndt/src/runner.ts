@@ -24,7 +24,7 @@ import { ALWAYS_SERVERS, channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToo
 import { ToolsReadiness } from './tools-ready.ts'
 import type { ToolsRegistryLike } from './tools-ready.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
-import { warnOperator } from './operator-log.ts'
+import { clearOperatorWarning, warnOperator, warnOperatorOnce } from './operator-log.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -44,6 +44,17 @@ export interface DshRunnerOptions {
    * required: a solo workstation mounts none. Omitted, every server is.
    */
   readonly configured?: (server: string) => boolean
+  /**
+   * Whether the space mounts the facts server (its descriptor
+   * connectors/workbench_facts.json exists). A briefing requires the facts only
+   * then; otherwise it runs without them, told so. Omitted: mounted.
+   *
+   * Unlike the approvals' rule (required whatever is on disk, off a solo
+   * workstation), the descriptor's disappearance lifts the facts' requirement:
+   * so each passage to « no facts » is said once in the operator's log, and the
+   * mission records it (toolsUnavailable) for the screen.
+   */
+  readonly factsConfigured?: () => boolean
   /** The instance's IANA time zone, for the date line the mission's prompt opens with (default: the process's). */
   readonly timeZone?: string
   /** The clock (tests). */
@@ -66,9 +77,18 @@ export function toolsReadinessOf(ctx: Context): ToolsReadiness {
  * @param mission - a mission.
  * @returns the servers it cannot run without: the approvals, and the facts for a briefing.
  */
-export function missionRequiredServers(mission: Pick<Mission, 'kind'>): string[] {
-  return [...ALWAYS_SERVERS, ...(mission.kind === 'briefing' ? ['workbench_facts'] : [])]
+export function missionRequiredServers(mission: Pick<Mission, 'kind'>, factsConfigured = true): string[] {
+  // The facts are required only where the space mounts them: an instance with
+  // no facts server (none of the guide's jumps mounts one) runs its briefings
+  // without them, told so, instead of failing every one of them.
+  return [...ALWAYS_SERVERS, ...(mission.kind === 'briefing' && factsConfigured ? ['workbench_facts'] : [])]
 }
+
+/** The note a briefing's prompt carries when the space mounts no facts server. */
+export const NO_FACTS_NOTE = 'Outils indisponibles pour cette mission : workbench_facts (non monté sur cet espace). Ne prétends pas les avoir consultés.'
+
+/** The operator-log key of the « briefing without facts » warning. */
+const NO_FACTS_WARNING = 'briefing-without-facts'
 
 /** Default framing: the product's voice and its evidence discipline. */
 export function defaultFrame(mission: Mission): string {
@@ -226,7 +246,13 @@ export class DshMissionRunner {
     // the servers are still starting. Without its required servers, a mission
     // does not start, and says why.
     const configured = this.#options.configured ?? (() => true)
-    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission).filter(configured))
+    const facts = this.#options.factsConfigured?.() ?? true
+    if (mission.kind === 'briefing') {
+      // Once per passage to « no facts », never at every briefing; said again after the facts came back.
+      if (facts) clearOperatorWarning(NO_FACTS_WARNING)
+      else warnOperatorOnce(this.#ctx, NO_FACTS_WARNING, 'mndt: briefing sans workbench_facts : descripteur absent (connectors/workbench_facts.json) ; les briefings partent sans les faits')
+    }
+    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission, facts).filter(configured))
     if (missing.length > 0) {
       throw new Error(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
     }
@@ -269,7 +295,8 @@ export class DshMissionRunner {
     try {
       // As every turn's: a briefing or an automation knows the day it runs.
       const dated = dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)
-      const prompt = `${dated}\n\n${(this.#options.frame ?? defaultFrame)(mission)}`
+      const framed = (this.#options.frame ?? defaultFrame)(mission)
+      const prompt = `${dated}\n\n${mission.kind === 'briefing' && !facts ? `${framed}\n\n${NO_FACTS_NOTE}` : framed}`
       run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },
@@ -286,7 +313,10 @@ export class DshMissionRunner {
       const tokens = reported
         ? { input: usageTotals.input, output: usageTotals.output, cacheRead: usageTotals.cacheRead, cacheWrite: usageTotals.cacheWrite }
         : settledTokensOf(settled)
-      return { title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }) }
+      return {
+        title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }),
+        ...(mission.kind === 'briefing' && !facts ? { toolsUnavailable: ['workbench_facts'] } : {}),
+      }
     } finally {
       // The policy is lifted last, and only once the workflow's children and
       // the agent are gone (endRun).

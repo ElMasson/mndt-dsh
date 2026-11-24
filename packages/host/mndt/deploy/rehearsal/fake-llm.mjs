@@ -172,6 +172,8 @@ createServer((req, res) => {
     const answer = answerOf(messages)
     const userText = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
     console.log(`fake-llm context ${calls}: ${contextOf(userText)}`)
+    // A briefing on a space without facts server: its prompt must say so (rehearse.sh briefing-without-facts).
+    if (userText.includes('workbench_facts (non monté sur cet espace)')) console.log(`fake-llm no-facts-note ${calls}`)
     // « sonde-marque-<mot> » in the message that mentions the agent (not in the
     // history): the drive reads what that very call was offered, and how many
     // skill blocks its prompt carried. No tool call follows (tag « - »).
