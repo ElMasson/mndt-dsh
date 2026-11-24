@@ -104,6 +104,8 @@ services:
       DSH_MNDT_IDENTITY: __OWNER__
       DSH_MNDT_LOCAL_OWNER: __OWNER__
       DSH_MNDT_STATE: /state/state.json
+      # The date and time every prompt opens with (the container's clock is UTC).
+      DSH_MNDT_TIME_ZONE: Indian/Reunion
       DSH_MNDT_PORT: "8795"
       # The API must listen on the container's network, or the gateway (another
       # container) is refused and every /mndt-api call answers 502. The front

@@ -29,6 +29,7 @@ import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
 import type { ThreadCard } from './ChannelView.tsx'
 import { renderBrief } from './markdown.tsx'
+import { PendingQuestion } from './pendingQuestion.tsx'
 import { translate } from './locales.ts'
 import type { MndtTranslate } from './locales.ts'
 
@@ -1821,17 +1822,23 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   {escalations.map((e) => {
                     const where = chatChannels?.find(c => c.id === e.channelId)
                     return (
-                      <div key={e.turnId} className="mw-queue-item mw-turn-unchecked mw-help-question" data-testid="pending-question">
-                        <p className="mw-help-question-text">
-                          {tc(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
-                        </p>
-                        {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
-                        {where === undefined ? undefined : (
-                          <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
-                            {tc('helpOpenThread', { where: where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}` })}
-                          </button>
-                        )}
-                      </div>
+                      <PendingQuestion
+                        key={e.turnId}
+                        escalation={e}
+                        where={where === undefined ? undefined : where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
+                        onOpen={where === undefined ? undefined : () => { setChatId(where.id); setView('chat') }}
+                        onAnswer={state.canWrite ? async (text) => {
+                          // Answered in place, as in the channel: a reply to the published question.
+                          try {
+                            await chat?.post(e.channelId, text, e.questionMessageId)
+                            void loadCards()
+                            return undefined
+                          } catch (failure) {
+                            return reasonOf(failure, tc)
+                          }
+                        } : undefined}
+                        t={tc}
+                      />
                     )
                   })}
                 </div>
@@ -1973,6 +1980,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                       }
                       const now = fresh.skills ?? []
                       if ([...now].sort().join(',') !== [...seen].sort().join(',')) {
+                        // Refused, and the agents just read are shown: the next click starts from them.
                         setChatAgents(all)
                         return tc('skillAttachChanged')
                       }

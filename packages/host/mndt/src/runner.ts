@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
 import { mkdir } from 'node:fs/promises'
+import { dateLine, instanceTimeZone } from './core/index.ts'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
@@ -43,6 +44,10 @@ export interface DshRunnerOptions {
    * required: a solo workstation mounts none. Omitted, every server is.
    */
   readonly configured?: (server: string) => boolean
+  /** The instance's IANA time zone, for the date line the mission's prompt opens with (default: the process's). */
+  readonly timeZone?: string
+  /** The clock (tests). */
+  readonly now?: () => Date
 }
 
 /**
@@ -262,7 +267,9 @@ export class DshMissionRunner {
     })
     let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
-      const prompt = (this.#options.frame ?? defaultFrame)(mission)
+      // As every turn's: a briefing or an automation knows the day it runs.
+      const dated = dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)
+      const prompt = `${dated}\n\n${(this.#options.frame ?? defaultFrame)(mission)}`
       run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },

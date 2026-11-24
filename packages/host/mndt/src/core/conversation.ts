@@ -945,3 +945,36 @@ function servedCouncil(council: TurnCouncil): TurnCouncil {
     eur: Math.round(total * 1_000_000) / 1_000_000,
   }
 }
+
+/**
+ * The date and time line the host serves at the head of every prompt it sends
+ * the model (turn, help, council, verifier, synthesis): the model has no other
+ * clock (the engine's time-context does not reach a workflow's agent), and
+ * otherwise guesses the date from what it reads.
+ * @param now - the moment of the call.
+ * @param timeZone - the instance's IANA time zone.
+ * @returns « Nous sommes le mardi 24 novembre 2026, 12:18 (heure de La Réunion). »
+ */
+export function dateLine(now: Date, timeZone: string): string {
+  const when = new Intl.DateTimeFormat('fr-FR', {
+    timeZone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now)
+  const part = (type: Intl.DateTimeFormatPartTypes): string => when.find(entry => entry.type === type)?.value ?? ''
+  const zone = new Intl.DateTimeFormat('fr-FR', { timeZone, timeZoneName: 'long' }).formatToParts(now)
+    .find(entry => entry.type === 'timeZoneName')?.value ?? timeZone
+  return `Nous sommes le ${part('weekday')} ${part('day')} ${part('month')} ${part('year')}, ${part('hour')}:${part('minute')} (${zone}).`
+}
+
+/**
+ * @param asked - the time zone configured for the instance (DSH_MNDT_TIME_ZONE), if any.
+ * @returns it when valid, else the process's own zone; and the reason it was refused.
+ */
+export function instanceTimeZone(asked: string | undefined): { timeZone: string; refused?: string } {
+  const own = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (asked === undefined || asked.trim() === '') return { timeZone: own }
+  try {
+    return { timeZone: new Intl.DateTimeFormat('fr-FR', { timeZone: asked.trim() }).resolvedOptions().timeZone }
+  } catch {
+    return { timeZone: own, refused: `mndt: DSH_MNDT_TIME_ZONE « ${asked.slice(0, 64)} » is not an IANA time zone: the prompts' date uses ${own}` }
+  }
+}

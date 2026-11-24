@@ -190,3 +190,53 @@ describe('a help\'s authors only once read and no question waits (#119)', () => 
     expect(answered.advices[0]?.agentId).toBe('agt_2')
   })
 })
+
+describe('a question shown once, under the message that publishes it', () => {
+  it('the turn says « une question pour vous » without its box when the question is shown below', () => {
+    const help = read({ state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'HT ?', messageId: 'msg_9' } })
+    render(<HelpThread help={help} agents={agents} onAnswer={vi.fn()} canAnswer questionBelow t={chatFrench} />)
+    expect(screen.getByTestId('help-state').textContent).toBe('une question pour vous')
+    expect(screen.queryByTestId('help-question')).toBeNull()
+  })
+
+  it('the publishing message carries the box; its answer replies to that message', async () => {
+    const { WebMessage } = await import('../src/client/TeamFeed.tsx')
+    const onAnswer = vi.fn(async () => undefined)
+    const published = { id: 'msg_9', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'Je retiens A. Question à l\'équipe : HT ?', mentions: [], createdAt: at, updatedAt: at }
+    const asks = { channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: 'msg_9', question: 'HT ?', kind: 'help' as const }
+    render(
+      <WebMessage
+        message={published}
+        header
+        agents={agents}
+        cards={[]}
+        canDecide
+        onDecide={vi.fn()}
+        onAnswer={onAnswer}
+        canAnswer
+        asks={asks}
+        t={chatFrench}
+      />,
+    )
+    const box = screen.getByTestId('pending-question')
+    expect(box.textContent).toContain('Question pour vous : HT ?')
+    expect(screen.queryByTestId('pending-question-where')).toBeNull()
+    fireEvent.change(within(box).getByRole('textbox', { name: 'Votre réponse' }), { target: { value: 'Oui.' } })
+    fireEvent.click(within(box).getByRole('button', { name: 'Répondre et clore ce fil' }))
+    await waitFor(() => { expect(onAnswer).toHaveBeenCalledWith('Oui.', 'msg_9') })
+  })
+})
+
+describe('a question never becomes invisible', { timeout: 20_000 }, () => {
+  it('when its published message is not in the thread, it stays under its turn', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const help = { state: 'done', request, advices, reading: { verdict: 'escalate' }, escalation: { question: 'HT ?', messageId: 'msg_absent' } }
+    const asking = { id: 'msg_1', channelId: 'chn_1', author: { kind: 'human' as const, email: 'stephane@datanalysis.re' }, text: '@qwen ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'done' as const, help }] }
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: ['stephane@datanalysis.re'], agents: ['agt_2'], connectors: [], createdBy: 'stephane@datanalysis.re', createdAt: at }
+    const chat = createMockChat({ you: 'stephane@datanalysis.re', agents: [...agents.values()], channels: [channel], messages: [asking] }, () => Date.parse(at))
+    render(<ChannelThread chat={chat} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" canAnswer />)
+    expect((await screen.findByTestId('help-question')).textContent).toContain('HT ?')
+  })
+})

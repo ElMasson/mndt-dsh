@@ -213,6 +213,12 @@ describe('attaching from a card never erases a change made meanwhile (#144)', { 
     expect((await within(section).findByRole('alert')).textContent).toBe('Les compétences de cet agent ont été modifiées entre-temps : relisez.')
     expect(update).not.toHaveBeenCalled()
     expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports'])
+    // The refusal reloaded the agents: « rapports », attached elsewhere, now shows pressed here.
+    const rapports = within(section).getAllByTestId('skill')[2]
+    if (rapports === undefined) throw new Error('no skill')
+    await waitFor(() => {
+      expect(within(within(rapports).getByTestId('skill-attach')).getByRole('button', { name: 'Détacher de @analyste' }).getAttribute('aria-pressed')).toBe('true')
+    })
     // The agents were read again: the next click adds to the list as it is.
     fireEvent.click(within(within(devis).getByTestId('skill-attach')).getByRole('button', { name: 'Attacher à @analyste' }))
     await waitFor(async () => { expect((await chat.agents())[0]?.skills).toEqual(['relances', 'rapports', 'devis']) })
