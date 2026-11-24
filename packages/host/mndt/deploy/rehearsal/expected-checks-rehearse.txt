@@ -57,11 +57,13 @@ scheduler-first-pass
 searched
 seeded
 shell-ws
+skill-in-prompt
 state-restored
 steps
 still-serves
 team-no-mux
 team-page
+tools-after-restart
 tools-clean
 turn-card
 turn-no-bash

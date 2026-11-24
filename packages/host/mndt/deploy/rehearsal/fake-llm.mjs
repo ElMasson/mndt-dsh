@@ -172,6 +172,11 @@ createServer((req, res) => {
     const answer = answerOf(messages)
     const userText = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
     console.log(`fake-llm context ${calls}: ${contextOf(userText)}`)
+    // « sonde-marque-<mot> » in the message that mentions the agent (not in the
+    // history): the drive reads what that very call was offered, and how many
+    // skill blocks its prompt carried. No tool call follows (tag « - »).
+    const marked = /sonde-marque-([a-z]+)/.exec(userText.split('Message qui te mentionne').at(1) ?? '')
+    if (marked) console.log(`fake-llm marker ${calls} ${marked[1]}: skills=${(userText.match(/Compétence « /g) ?? []).length} tools=${JSON.stringify(offered)}`)
     // « sonde-lente »: a peer's advice comes only after a long while, so the drive
     // can restart the workbench while a help is open.
     const slow = (userText.includes('te demande ton avis') || userText.includes('Prends position seul')) && userText.includes('sonde-lente')
