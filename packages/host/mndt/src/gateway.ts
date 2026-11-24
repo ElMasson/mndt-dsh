@@ -429,9 +429,11 @@ export class WorkbenchGateway extends TypertRemoteService {
     const readiness = this.readinessFor(ctx)
     const configured = this.requiredConfigured()
     const timeZone = this.timeZoneFor(ctx)
+    // Read at each mission: a facts server mounted later counts from its next briefing.
+    const factsConfigured = (): boolean => configuredInSpace(dirname(this.statePath))('workbench_facts')
     return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
-      ? { readiness, configured, timeZone }
-      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone })
+      ? { readiness, configured, timeZone, factsConfigured }
+      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone, factsConfigured })
   }
 
   /**

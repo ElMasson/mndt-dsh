@@ -27,6 +27,7 @@ mission-no-bash
 mission-run
 no-modal
 old-brief-private
+old-briefing-facts
 page
 probe-turn
 restart-closes

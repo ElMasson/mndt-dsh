@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DshMissionRunner, DshTurnRunner } from '../src/runner.ts'
+import { DshMissionRunner, DshTurnRunner, NO_FACTS_NOTE } from '../src/runner.ts'
 import { REQUIRED_TOOLS, ToolsReadiness } from '../src/tools-ready.ts'
 import { soloWorkstation } from '../src/gateway.ts'
 import {
@@ -406,6 +406,43 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     expect(sent).toContain('Brief')
   })
 
+  /** @returns a team's mission runner over this readiness, the facts server mounted or not. */
+  const teamMissions = (ctx: Context, readiness: ToolsReadiness, facts: boolean) =>
+    new DshMissionRunner(ctx, { tools: TEAM_MISSION_POLICY, readiness, factsConfigured: () => facts })
+
+  it('a briefing on a space that mounts no facts server runs without them, and its prompt says so', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const { ctx, seen } = fakeCtx()
+    const runner = teamMissions(ctx, readinessOver(APPROVALS), false)
+    await runner.run(briefing)
+    expect(seen.root).toBeDefined()
+    const sent = JSON.parse((seen.script ?? '').replace(/^return await agent\(/, '').replace(/\)$/, '')) as string
+    expect(sent).toContain(NO_FACTS_NOTE)
+  })
+
+  it('a briefing on a space that mounts the facts, whose tools are absent: it fails, said; a custom mission never carries the note', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const mounted = fakeCtx()
+    const runner = teamMissions(mounted.ctx, readinessOver(APPROVALS), true)
+    await expect(runner.run(briefing)).rejects.toThrow('outils indisponibles : workbench_facts')
+    expect(mounted.seen.root).toBeUndefined()
+    const custom = fakeCtx()
+    const plain = teamMissions(custom.ctx, readinessOver(APPROVALS), false)
+    await plain.run({ ...briefing, kind: 'custom' } as unknown as Mission)
+    expect(custom.seen.script ?? '').not.toContain('workbench_facts (non monté')
+  })
+
+  it('without the approvals a briefing never runs, facts mounted or not', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    for (const factsConfigured of [true, false]) {
+      const { ctx, seen } = fakeCtx()
+      const readiness = readinessOver(['mcp__workbench_facts__get_facts'])
+      const runner = teamMissions(ctx, readiness, factsConfigured)
+      await expect(runner.run(briefing)).rejects.toThrow('outils indisponibles : approvals')
+      expect(seen.root).toBeUndefined()
+    }
+  })
+
   it('a turn stopped while it waits leaves at once, and does not start', async () => {
     const { ctx, seen } = fakeCtx()
     const controller = new AbortController()
@@ -421,8 +458,10 @@ describe('the runners scope it before the agent exists, and lift it after', () =
   it('a reading step (no server) waits for nothing', async () => {
     const { ctx } = fakeCtx()
     const started = Date.now()
-    await new DshTurnRunner(ctx, readinessOver([])).run({ ...turn(), tools: 'none' })
-    expect(Date.now() - started).toBeLessThan(25)
+    // A readiness that would wait a full minute: any wait at all would show, under any load.
+    const slow = new ToolsReadiness(() => ({ schemas: () => [] }), () => () => undefined, () => undefined, 60_000)
+    await new DshTurnRunner(ctx, slow).run({ ...turn(), tools: 'none' })
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 
   it('a channel turn: the root and the workflow child get its servers and the approvals, nothing else', async () => {

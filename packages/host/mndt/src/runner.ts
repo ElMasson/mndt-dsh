@@ -44,6 +44,12 @@ export interface DshRunnerOptions {
    * required: a solo workstation mounts none. Omitted, every server is.
    */
   readonly configured?: (server: string) => boolean
+  /**
+   * Whether the space mounts the facts server (its descriptor
+   * connectors/workbench_facts.json exists). A briefing requires the facts only
+   * then; otherwise it runs without them, told so. Omitted: mounted.
+   */
+  readonly factsConfigured?: () => boolean
   /** The instance's IANA time zone, for the date line the mission's prompt opens with (default: the process's). */
   readonly timeZone?: string
   /** The clock (tests). */
@@ -66,9 +72,15 @@ export function toolsReadinessOf(ctx: Context): ToolsReadiness {
  * @param mission - a mission.
  * @returns the servers it cannot run without: the approvals, and the facts for a briefing.
  */
-export function missionRequiredServers(mission: Pick<Mission, 'kind'>): string[] {
-  return [...ALWAYS_SERVERS, ...(mission.kind === 'briefing' ? ['workbench_facts'] : [])]
+export function missionRequiredServers(mission: Pick<Mission, 'kind'>, factsConfigured = true): string[] {
+  // The facts are required only where the space mounts them: an instance with
+  // no facts server (none of the guide's jumps mounts one) runs its briefings
+  // without them, told so, instead of failing every one of them.
+  return [...ALWAYS_SERVERS, ...(mission.kind === 'briefing' && factsConfigured ? ['workbench_facts'] : [])]
 }
+
+/** The note a briefing's prompt carries when the space mounts no facts server. */
+export const NO_FACTS_NOTE = 'Outils indisponibles pour cette mission : workbench_facts (non monté sur cet espace). Ne prétends pas les avoir consultés.'
 
 /** Default framing: the product's voice and its evidence discipline. */
 export function defaultFrame(mission: Mission): string {
@@ -226,7 +238,8 @@ export class DshMissionRunner {
     // the servers are still starting. Without its required servers, a mission
     // does not start, and says why.
     const configured = this.#options.configured ?? (() => true)
-    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission).filter(configured))
+    const facts = this.#options.factsConfigured?.() ?? true
+    const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission, facts).filter(configured))
     if (missing.length > 0) {
       throw new Error(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
     }
@@ -269,7 +282,8 @@ export class DshMissionRunner {
     try {
       // As every turn's: a briefing or an automation knows the day it runs.
       const dated = dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)
-      const prompt = `${dated}\n\n${(this.#options.frame ?? defaultFrame)(mission)}`
+      const framed = (this.#options.frame ?? defaultFrame)(mission)
+      const prompt = `${dated}\n\n${mission.kind === 'briefing' && !facts ? `${framed}\n\n${NO_FACTS_NOTE}` : framed}`
       run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },
