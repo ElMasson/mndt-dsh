@@ -1393,8 +1393,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     onChannel: (id) => { setChatId(id) },
                     pending: pendingCards.length,
                     onPending: () => { setView('pending') },
-                    // Owners and admins add an agent to their own lane in one click.
-                    ...(state.canWrite && current.kind === 'solo' ? {
+                    // Whoever may write adds an agent to their lane, or to a channel no agent reads, in one click.
+                    ...(state.canWrite ? {
                       addable: {
                         agents: chatAgents.filter(a => a.retiredAt === undefined && !current.agents.includes(a.id)),
                         onAdd: (agentId: string) => toggleChatAgent(agentId, true),
