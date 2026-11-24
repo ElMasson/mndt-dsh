@@ -127,8 +127,26 @@ describe('the panel\'s section « Ce qu\'il faut savoir ici »', () => {
     expect(contextOf((await chat.channels())[0] ?? channel)?.text).toBe('Changé ailleurs.')
     // Reopened on the new version: saving sends the version now read.
     fireEvent.click(screen.getByRole('button', { name: 'Reprendre sur la nouvelle version' }))
+    // The person's text stays beside, read-only, to copy from.
+    const kept = screen.getByTestId('context-kept').querySelector('textarea')
+    expect(kept?.readOnly).toBe(true)
+    expect(kept?.value).toBe('Ma version.')
     fireEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
     await waitFor(() => { expect(sent).toHaveBeenLastCalledWith(4) })
+  })
+
+  it('a channel read again while editing, without any 409: the version read at opening is kept, the save blocked', async () => {
+    const onSave = vi.fn(async () => undefined)
+    const { rerender } = render(<ContextSection channel={channel} agents={[]} canEdit onSave={onSave} t={chatFrench} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Ce qu\'il faut savoir ici' }), { target: { value: 'Ma version.' } })
+    // Someone else's change arrives with a read of the channel, before any click.
+    rerender(<ContextSection channel={{ ...channel, context: { text: 'Leur version.', version: 4, updatedBy: you, updatedAt: at } }} agents={[]} canEdit onSave={onSave} t={chatFrench} />)
+    expect(screen.getByTestId('context-stale').textContent).toContain('Leur version.')
+    const save = screen.getByRole('button', { name: 'Enregistrer' })
+    expect(save instanceof HTMLButtonElement && save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect(onSave).not.toHaveBeenCalled()
   })
 
   it('the double refuses a context over 4 000 characters with its code', async () => {

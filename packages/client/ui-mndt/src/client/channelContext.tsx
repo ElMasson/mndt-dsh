@@ -131,6 +131,8 @@ export function ContextSection(props: {
   const [draft, setDraft] = useState<string | undefined>(undefined)
   // The version read when the edit opened: always the one sent, never a channel read again since.
   const [editVersion, setEditVersion] = useState(0)
+  // The person's text not saved, kept beside the new version when they take it up again: never lost.
+  const [kept, setKept] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   // The context changed since the edit opened (someone else wrote it): said, with the new text.
   const stale = draft !== undefined && (context?.version ?? 0) !== editVersion
@@ -143,7 +145,10 @@ export function ContextSection(props: {
     setPending(true)
     const refused = await props.onSave(draft, editVersion)
     setError(refused)
-    if (refused === undefined) setDraft(undefined)
+    if (refused === undefined) {
+      setDraft(undefined)
+      setKept(undefined)
+    }
     busy.current = false
     setPending(false)
   }
@@ -169,14 +174,20 @@ export function ContextSection(props: {
             <div className="mw-turn-unchecked" role="note" data-testid="context-stale">
               <p>{context?.updatedBy === undefined ? t('contextChanged') : t('contextChangedBy', { who: shownName(context.updatedBy, props.names) })}</p>
               {context === undefined || context.text === '' ? <p className="mw-ctx-muted">{t('contextEmpty')}</p> : <ContextFrame context={context} names={props.names} t={t} />}
-              <button type="button" className="mw-secondary" onClick={() => { setDraft(context?.text ?? ''); setEditVersion(context?.version ?? 0); setError(undefined) }}>
+              <button type="button" className="mw-secondary" onClick={() => { setKept(draft); setDraft(context?.text ?? ''); setEditVersion(context?.version ?? 0); setError(undefined) }}>
                 {t('contextReopen')}
               </button>
             </div>
           )}
+          {kept === undefined ? undefined : (
+            <label className="mw-field" data-testid="context-kept">
+              {t('keptDraft')}
+              <textarea className="mw-input" rows={4} readOnly value={kept} />
+            </label>
+          )}
           <div className="mw-decide-buttons">
             <button type="button" className="mw-primary" disabled={pending || stale} onClick={() => { void save() }}>{t('agentSave')}</button>
-            <button type="button" className="mw-secondary" disabled={pending} onClick={() => { setDraft(undefined); setError(undefined) }}>{t('cancel')}</button>
+            <button type="button" className="mw-secondary" disabled={pending} onClick={() => { setDraft(undefined); setKept(undefined); setError(undefined) }}>{t('cancel')}</button>
           </div>
         </div>
       )}
