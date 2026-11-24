@@ -471,6 +471,10 @@ export const TEAM_CSS = `
 .mw-help-advices { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 .mw-help-reading p { margin: 4px 0; font-size: 13px; }
 .mw-app .mw-help-chip { margin-left: 6px; }
+.mw-screen-part { display: flex; flex-direction: column; gap: 8px; max-width: 760px; margin-bottom: 16px; }
+.mw-skills { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.mw-skill { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--mw-line); border-radius: 12px; background: var(--mw-card); }
+.mw-skill p { margin: 0; }
 .mw-context { display: flex; flex-direction: column; gap: 8px; }
 .mw-context-edit { display: flex; flex-direction: column; gap: 6px; }
 .mw-app .mw-quoted-more { margin: 0 12px 8px; }

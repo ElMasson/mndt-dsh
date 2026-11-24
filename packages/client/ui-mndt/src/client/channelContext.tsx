@@ -175,7 +175,7 @@ export function ContextSection(props: {
               <p>{context?.updatedBy === undefined ? t('contextChanged') : t('contextChangedBy', { who: shownName(context.updatedBy, props.names) })}</p>
               {context === undefined || context.text === '' ? <p className="mw-ctx-muted">{t('contextEmpty')}</p> : <ContextFrame context={context} names={props.names} t={t} />}
               <button type="button" className="mw-secondary" onClick={() => { setKept(draft); setDraft(context?.text ?? ''); setEditVersion(context?.version ?? 0); setError(undefined) }}>
-                {t('contextReopen')}
+                {t('editNewVersion')}
               </button>
             </div>
           )}

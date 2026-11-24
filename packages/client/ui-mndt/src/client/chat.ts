@@ -22,6 +22,8 @@ export interface ChatAgent {
   readonly eurThisMonth?: number
   readonly createdBy: string
   readonly createdAt: string
+  /** The space's skills it reads, by slug. */
+  readonly skills?: readonly string[]
   readonly retiredAt?: string
 }
 
@@ -228,6 +230,14 @@ export interface ChatFace {
   createAgent?(input: AgentInput): Promise<ChatAgent>
   /** Change an agent; its handle never changes (`POST /agents/:id`). Optional: the team page only. */
   updateAgent?(id: string, patch: Partial<Omit<AgentInput, 'handle'>>): Promise<ChatAgent>
+  /** The space's skills (`GET /skills`). Optional: the team page only. */
+  skills?(): Promise<readonly ChatSkill[]>
+  /** Add a skill from a pasted SKILL.md (owners and admins). */
+  createSkill?(markdown: string): Promise<SkillWritten>
+  /** Change a skill; `version` is the one read (409 `skill-changed` otherwise). */
+  updateSkill?(slug: string, change: { readonly markdown: string; readonly version: number }): Promise<SkillWritten>
+  /** Remove a skill (owners and admins). */
+  deleteSkill?(slug: string): Promise<void>
 }
 
 /** What declares an agent: the API's fields, its handle written once. */
@@ -241,6 +251,25 @@ export interface AgentInput {
   readonly connectors?: readonly string[]
   /** The monthly ceiling, in euros (5 by default on the server). */
   readonly eurPerMonth?: number
+  /** The space's skills the agent reads, by slug: three at most. */
+  readonly skills?: readonly string[]
+}
+
+/** A reusable skill of the space (`GET /skills`): read by every member, written by owners and admins. */
+export interface ChatSkill {
+  readonly slug: string
+  readonly name: string
+  readonly description: string
+  readonly body: string
+  readonly version: number
+  readonly updatedBy?: string
+  readonly updatedAt?: string
+}
+
+/** A skill written: the skill, and the SKILL.md fields that have no effect here. */
+export interface SkillWritten {
+  readonly skill: ChatSkill
+  readonly ignoredFields: readonly string[]
 }
 
 /** An agent's open question after its peers' help, as `GET /escalations` serves it. */
