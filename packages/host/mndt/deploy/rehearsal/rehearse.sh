@@ -47,7 +47,24 @@ touch "$root/.mndt-rehearsal"
 # Whatever the exit, the containers and their network go, unless KEEP=1: the
 # workbench restarts unless stopped and would loop on. The root stays, for the
 # screenshots and the logs.
+# The live probe's witnesses, planted in the running workbench (step 6): taken
+# away right after the probe, and here again whatever stopped the run. A flat
+# transcript left under /state/home/sessions makes every later turn of a kept
+# stack fail (« unsupported flat-file layout »), and the engine keeps its
+# session index in memory: a kept stack also restarts its workbench.
+unplant_live() {
+  [ "${planted_live:-0}" = 1 ] || return 0
+  docker exec -u 0 $project-workbench sh -c 'rm -rf /state/channels/chn_other /state/channels/chn_probe "/state/home/sessions/--state-channels-chn_other-files--" \
+    /tmp/probe-tools /tmp/dsh-subprocess-other /dev/shm/canary /etc/mndt-probe-searched.conf' >/dev/null 2>&1
+  planted_live=0
+  unplanted_live=1
+}
+
 cleanup() {
+  unplant_live
+  if [ "${KEEP:-0}" = 1 ] && [ "${unplanted_live:-0}" = 1 ]; then
+    docker restart $project-workbench >/dev/null 2>&1 && echo "kept stack: the probe's witnesses removed, the workbench restarted (its session index is in memory)"
+  fi
   if [ "${KEEP:-0}" != 1 ]; then
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
@@ -305,6 +322,7 @@ step "6. the sandbox of the running workbench, canaries where its secrets live"
 # folder, mounted from inside /state, and another session's spill in /tmp
 # included), plus one where reading is allowed (the probe must see it, or it
 # proves nothing).
+planted_live=1
 printf '{ "CANARY_SECRET_tokens": { "user": "nobody@datanalysis.re" } }\n' > "$data/tokens.json"
 printf 'CANARY_SECRET_connector_env=1\n' > "$data/connectors/probe-canary.env"
 printf 'CANARY_SECRET_tools_data\n' > "$data/tools/canary-facts.md"
@@ -324,6 +342,9 @@ leaks=$(echo "$probe_out" | grep -cE '^(LEAK|CROSS|OPEN|TIMEOUT|TRUNCATED)')
 if [ "$leaks" = 0 ]; then echo "OK  live-no-leak   on the running workbench: no LEAK, no CROSS, no cut walk (environment, /proc, /state, /opt/mndt-tools, /run, /tmp, /dev/shm, /root)"; else echo "KO  live-no-leak   $leaks LEAK/CROSS/OPEN/TIMEOUT/TRUNCATED line(s)"; live=1; fi
 if echo "$probe_out" | grep -q '^SEEN file .*SEARCHED_etc'; then echo "OK  live-searched  the probe read /etc, where reading is allowed"; else echo "KO  live-searched  the probe did not read the allowed place"; live=1; fi
 if echo "$probe_out" | grep -q '^DONE6' && echo "$probe_out" | grep -q '^WITNESS own-channel-file' && echo "$probe_out" | grep -q '^RUNNER .*landlock'; then echo "OK  live-witness   Landlock, every step done, the agent still writes in its channel"; else echo "KO  live-witness   $(echo "$probe_out" | grep -E '^(RUNNER|SANDBOX-REFUSED)' | head -1)"; live=1; fi
+unplant_live
+left=$(docker exec $project-workbench sh -c 'ls -d /state/channels/chn_other "/state/home/sessions/--state-channels-chn_other-files--" /tmp/dsh-subprocess-other 2>/dev/null | wc -l')
+if [ "$left" = 0 ]; then echo "OK  live-unplanted the probe's witnesses removed from the running workbench (the flat transcript under /state/home/sessions included)"; else echo "KO  live-unplanted $left witness folder(s) left in the workbench"; live=1; fi
 
 step "7. the sandbox proof: the same probe with and without the allow-list, three sessions"
 bash "$here/sandbox-proof.sh" "$image" | grep -E '^(OK|KO|LIMIT|NOTE|sandbox-proof) ' ; proved=${PIPESTATUS[0]}
