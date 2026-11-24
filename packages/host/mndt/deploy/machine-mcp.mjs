@@ -413,6 +413,8 @@ lines.on('line', (line) => {
     return
   }
   const id = message.id
+  // A message without an id is a notification: never answered, whatever its method.
+  if (id === undefined || id === null) return
   if (message.method === 'initialize') {
     send(id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'machine', version: '1.0.0' } })
     return
@@ -435,7 +437,6 @@ lines.on('line', (line) => {
   }
   // Any other request is answered, never left pending: the MCP client first
   // probes the newer protocol (server/discover) and, left unanswered, waits its
-  // whole request timeout (60 s) before the classic handshake. A notification
-  // (no id) gets no answer.
-  if (id !== undefined && id !== null) fail(id, -32601, `machine: method not found: ${String(message.method)}`)
+  // whole request timeout (60 s) before the classic handshake.
+  fail(id, -32601, `machine: method not found: ${String(message.method).slice(0, 64)}`)
 })

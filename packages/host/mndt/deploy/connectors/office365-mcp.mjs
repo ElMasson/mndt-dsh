@@ -233,6 +233,8 @@ lines.on('line', (line) => {
     return
   }
   const reply = (payload) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, ...payload })}\n`)
+  // A message without an id is a notification: never answered, whatever its method.
+  if (message.id === undefined || message.id === null) return
   if (message.method === 'initialize') {
     reply({ result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'office365', version: '1.0.0' } } })
     return
@@ -255,8 +257,6 @@ lines.on('line', (line) => {
   // Any other request is answered, never left pending: the MCP client first
   // probes the newer protocol (server/discover) and, left unanswered, waits its
   // whole request timeout (60 s) before the classic handshake, so the tools
-  // arrived a minute after start. A notification (no id) gets no answer.
-  if (message.id !== undefined && message.id !== null) {
-    reply({ error: { code: -32601, message: `office365: method not found: ${String(message.method)}` } })
-  }
+  // arrived a minute after start.
+  reply({ error: { code: -32601, message: `office365: method not found: ${String(message.method).slice(0, 64)}` } })
 })
