@@ -429,5 +429,13 @@ lines.on('line', (line) => {
       .catch(error => fail(id, -32000, error instanceof Error ? error.message : String(error)))
     return
   }
-  if (message.method === 'ping') send(id, {})
+  if (message.method === 'ping') {
+    send(id, {})
+    return
+  }
+  // Any other request is answered, never left pending: the MCP client first
+  // probes the newer protocol (server/discover) and, left unanswered, waits its
+  // whole request timeout (60 s) before the classic handshake. A notification
+  // (no id) gets no answer.
+  if (id !== undefined && id !== null) fail(id, -32601, `machine: method not found: ${String(message.method)}`)
 })

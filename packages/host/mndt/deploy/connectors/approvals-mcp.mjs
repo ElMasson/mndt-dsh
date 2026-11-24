@@ -259,5 +259,17 @@ lines.on('line', (line) => {
       text => reply({ result: { content: [{ type: 'text', text }] } }),
       error => reply({ result: { isError: true, content: [{ type: 'text', text: `approvals: ${error.message}` }] } }),
     )
+    return
+  }
+  if (message.method === 'ping') {
+    reply({ result: {} })
+    return
+  }
+  // Any other request is answered, never left pending: the MCP client first
+  // probes the newer protocol (server/discover) and, left unanswered, waits its
+  // whole request timeout (60 s) before the classic handshake, so the tools
+  // arrived a minute after start. A notification (no id) gets no answer.
+  if (message.id !== undefined && message.id !== null) {
+    reply({ error: { code: -32601, message: `approvals: method not found: ${String(message.method)}` } })
   }
 })
