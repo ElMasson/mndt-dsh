@@ -124,7 +124,50 @@ export function hideOutsidePolicy(tools: ScopedToolsLike, policy: ToolPolicy, ag
 /** An agent as the policy sees it, structurally. */
 export interface LineageAgentLike {
   readonly session: { readonly header: { readonly id: string; readonly parentSession?: string | undefined } }
-  readonly ctx: { readonly tools: ScopedToolsLike }
+  readonly ctx: {
+    readonly tools: ScopedToolsLike
+    /** The agent-scoped events: its own prompt assemblies only. Absent on a fake agent. */
+    readonly on?: (event: 'system-prompt/assemble', listener: AssembleListener) => () => void
+  }
+}
+
+/** The assembly of one prompt, as far as the team turns change it. */
+export interface PromptAssemblyLike {
+  readonly sections: readonly { readonly name: string }[]
+  readonly contexts: readonly { readonly name: string }[]
+}
+
+/** A waterfall listener on an agent's prompt assembly. */
+export type AssembleListener = (
+  assembly: PromptAssemblyLike, context: unknown, next: () => Promise<PromptAssemblyLike>,
+) => Promise<PromptAssemblyLike>
+
+/**
+ * What the engine writes for a person working on DeepSeek Harness itself, and
+ * a team's agent never uses: the orientation in the DSH checkout and its Web
+ * GUI (harness-dev-context: about a quarter of a « bonjour »'s prompt, measured
+ * on 24/11), the presentation of files as cards (ui-deliverables), and the
+ * runtime lines naming the checkout and the GUI's URL. The working directory,
+ * the file policy and the subagent's limits stay.
+ */
+export const DEV_PROMPT_SECTIONS: readonly string[] = ['harness:source', 'app:web-surface', 'ui:deliverable-file-references']
+export const DEV_PROMPT_CONTEXTS: readonly string[] = ['harness:source', 'app:web-surface']
+
+/**
+ * Leave the DSH development prompt out of one agent's assemblies (a team turn's
+ * or mission's agent and its descendants). Registered on the agent's own scope:
+ * the owner's shell, outside every run's lineage, keeps it.
+ * @param agent - an agent of the run's lineage.
+ */
+export function withoutDevPrompt(agent: LineageAgentLike): void {
+  agent.ctx.on?.('system-prompt/assemble', async (_assembly, _context, next) => {
+    const assembled = await next()
+    return {
+      ...assembled,
+      sections: assembled.sections.filter(section => !DEV_PROMPT_SECTIONS.includes(section.name)),
+      contexts: assembled.contexts.filter(entry => !DEV_PROMPT_CONTEXTS.includes(entry.name)),
+    }
+  })
 }
 
 /** The host context face the policy uses, structurally. */
@@ -175,7 +218,9 @@ export function scopeToolPolicy(host: PolicyHostLike, rootSessionId: string, pol
   // A child is announced before its first step: hide there what it may not call.
   // A throw here fails the child's creation, so the run fails closed.
   const stopCreated = host.on('agent/created', ({ agent }) => {
-    if (inLineage(agent)) hideOutsidePolicy(agent.ctx.tools, policy, agent)
+    if (!inLineage(agent)) return
+    hideOutsidePolicy(agent.ctx.tools, policy, agent)
+    withoutDevPrompt(agent)
   })
   return () => {
     stopCreated()

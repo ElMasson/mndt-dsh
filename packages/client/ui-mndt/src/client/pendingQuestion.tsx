@@ -48,7 +48,8 @@ export function PendingQuestion(props: {
         {t(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
       </p>
       {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
-      {props.onAnswer === undefined ? undefined : (
+      {/* Without the published question's message (an older help), an answer would close nothing: the channel only. */}
+      {props.onAnswer === undefined || e.questionMessageId === '' ? undefined : (
         <div className="mw-help-answer">
           <textarea
             className="mw-input"

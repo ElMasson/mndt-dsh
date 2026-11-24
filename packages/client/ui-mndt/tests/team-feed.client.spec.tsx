@@ -79,11 +79,14 @@ describe('the feed, as mndt-web draws it', () => {
     expect(screen.getByTestId('chat-turn').textContent).toContain('outils indisponibles : approvals')
   })
 
-  it('says a finished turn with its duration, tokens, cost and model', () => {
+  it('says a finished turn with its agent and cost; duration, tokens and model on hover', () => {
     const turned = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'done', tokens: { input: 4421, output: 540 }, eur: 0.0041, startedAt: '2026-11-14T09:00:00.000Z', finishedAt: '2026-11-14T09:00:03.200Z' }] })
     render(<WebMessage message={turned} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
     expect(screen.getByTestId('chat-turn').textContent?.startsWith('Tour d\'agent')).toBe(true)
-    expect(screen.getByTestId('chat-turn-cost').textContent).toMatch(/^@assistant · 3,2 s · 4\s961 jetons · 0,0041\s€ · deepseek-v4\.1-flash$/u)
+    // Who and what it cost on the line; the duration, tokens and model on hover.
+    const cost = screen.getByTestId('chat-turn-cost')
+    expect(cost.textContent).toMatch(/^@assistant · 0,0041\s€$/u)
+    expect(cost.getAttribute('title')).toMatch(/^3,2 s · 4\s961 jetons · deepseek-v4\.1-flash$/u)
   })
 
   it('says a turn under way, and one that did not complete with its cause', () => {
