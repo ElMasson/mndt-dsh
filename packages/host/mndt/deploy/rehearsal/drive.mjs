@@ -485,7 +485,16 @@ for (let attempt = 0; attempt < 90 && councilBack !== 200; attempt += 1) {
 }
 // (#126) a turn posted as soon as the API answers after a restart gets the
 // card tools, all of them: it waits for the servers instead of running bare.
-const restarted = councilBack === 200 && channel !== undefined && qwen !== undefined ? await probeTurn('@qwen sonde-marque-redemarrage') : undefined
+// The browser is closed by now: the probe goes through fetch, as the restarts do.
+let restarted
+if (councilBack === 200 && channel !== undefined && qwen !== undefined) {
+  const asked = (await asOwner('POST', `/channels/${channel.id}/messages`, { text: '@qwen sonde-marque-redemarrage' })).body.message
+  for (let attempt = 0; attempt < 90 && asked !== undefined; attempt += 1) {
+    restarted = ((await asOwner('GET', `/channels/${channel.id}/messages`)).body.messages ?? []).find(m => m.id === asked.id)?.turns?.[0]
+    if (restarted !== undefined && !['queued', 'running'].includes(restarted.status)) break
+    await sleep(2000)
+  }
+}
 const restartedMarker = markerOf('redemarrage')
 check('tools-after-restart', restarted?.status === 'done' && JSON.stringify(restartedMarker?.tools) === JSON.stringify(APPROVALS) && restarted.toolsUnavailable === undefined,
   `API back ${councilBack}, turn ${restarted?.status ?? '-'} « ${restarted?.reason ?? '-'} », tools ${restartedMarker === undefined ? 'no call' : JSON.stringify(restartedMarker.tools) === JSON.stringify(APPROVALS) ? `the ${APPROVALS.length} card tools` : JSON.stringify(restartedMarker.tools)}, unavailable ${JSON.stringify(restarted?.toolsUnavailable ?? [])}`)
