@@ -387,3 +387,15 @@ describe('« conseil »: an escalation\'s summary names no one', () => {
     expect(listed.every(e => !/@|€|agt_|route-/.test(e.summary))).toBe(true)
   })
 })
+
+describe('« conseil »: a deleted request withdraws its question', () => {
+  it('no longer listed in « À traiter »', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.positions = { alpha: 1, beta: 2, gamma: 3 }
+    const { replies } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(((await b.call('GET', '/escalations', 'operator')).body.escalations as unknown[]).length).toBe(1)
+    await b.call('POST', `/channels/${t.channel}/messages/${(replies.at(-1) as Message).replyTo as string}/delete`, 'owner')
+    expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+  })
+})

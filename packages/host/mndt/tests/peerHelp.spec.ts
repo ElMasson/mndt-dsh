@@ -273,6 +273,22 @@ describe('ask_peers: escalation, answered by a member', () => {
     expect((await served())?.help?.advices.every(advice => advice.agentId !== undefined)).toBe(true)
   })
 
+  it('a deleted request withdraws its question: no longer listed, and a reply answers nothing', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "HT ?"}'
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(((await b.call('GET', '/escalations', 'operator')).body.escalations as unknown[]).length).toBe(1)
+    const origin = (replies.at(-1) as Message).replyTo as string
+    expect((await b.call('POST', `/channels/${t.channel}/messages/${origin}/delete`, 'owner')).status).toBe(200)
+    expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+    b.engine.helpBody = {}
+    const reply = await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    expect((reply.body.message as Message).turns ?? []).toEqual([])
+    expect((await b.service.message(origin))?.turns?.find(x => x.id === turn.id)?.help?.escalation?.answeredAt).toBeUndefined()
+  })
+
   it('« card » without a card is an escalation', async () => {
     const b = bench()
     const t = await team(b)
