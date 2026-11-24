@@ -96,17 +96,20 @@ function WebTurn(props: {
     ? undefined
     : (Date.parse(turn.finishedAt) - Date.parse(turn.startedAt)) / 1000
   const tokens = turn.tokens === undefined ? undefined : turn.tokens.input + turn.tokens.output
+  // Who answered and what it cost, on the line; the duration, tokens and model on hover only.
   const parts = [
     `@${agent?.handle ?? turn.agentId}`,
+    turn.eur === undefined ? undefined : euros(turn.eur),
+  ].filter((part): part is string => part !== undefined)
+  const detail = [
     seconds === undefined || Number.isNaN(seconds) ? undefined : t('webSeconds', { n: seconds.toLocaleString(pageLanguage() ?? 'fr', { maximumFractionDigits: 1 }) }),
     tokens === undefined ? undefined : t('webTokens', { n: tokens.toLocaleString(pageLanguage() ?? 'fr') }),
-    turn.eur === undefined ? undefined : euros(turn.eur),
     agent?.model,
-  ].filter((part): part is string => part !== undefined)
+  ].filter((part): part is string => part !== undefined).join(' · ')
   return (
     <p className="mw-turn" data-testid="chat-turn" data-status="done">
       <span className="mw-chip mw-chip-strong">{t('webTurn')}</span>
-      <span data-testid="chat-turn-cost">{parts.join(' · ')}</span>
+      <span data-testid="chat-turn-cost" title={detail === '' ? undefined : detail}>{parts.join(' · ')}</span>
     </p>
   )
 }

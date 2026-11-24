@@ -46,6 +46,7 @@ describe('the council in the panel', () => {
       )
     }
     render(<Panel />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     fireEvent.click(screen.getByRole('button', { name: 'Conseil' }))
     const members = screen.getByTestId('council-members')
     fireEvent.click(within(members).getByRole('button', { name: '@assistant' }))
@@ -60,6 +61,7 @@ describe('the council in the panel', () => {
 
   it('« Synthèse » asks for a synthesiser outside the members', () => {
     render(<CoordinationSection channel={CHANNEL} agents={AGENTS} canManage onChange={vi.fn()} t={chatFrench} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Modifier' }))
     fireEvent.click(screen.getByRole('button', { name: 'Conseil' }))
     const members = screen.getByTestId('council-members')
     fireEvent.click(within(members).getByRole('button', { name: '@assistant' }))

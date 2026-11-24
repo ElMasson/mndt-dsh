@@ -13,6 +13,7 @@ import type { ChatTranslate } from './chatLocales.ts'
 import { Icon } from './Icons.tsx'
 import { shownName } from './TeamFeed.tsx'
 import { TeamDocuments } from './TeamDocuments.tsx'
+import { modelLabel } from './TeamAgentForm.tsx'
 import type { DocumentsFace } from './documents.ts'
 
 /** @param props - its title and content. @returns one section of the card. */
@@ -115,9 +116,6 @@ export function TeamContext(props: TeamContextProps): ReactNode {
       <Section title={t('ctxChannel')}>
         <p>{channel.kind === 'solo' ? t('ctxKindLane') : t('ctxKindTeam')}</p>
       </Section>
-      <Section title={t('ctxMandates')}>
-        <p className="mw-ctx-muted">{t('ctxMandatesSoon')}</p>
-      </Section>
       <Section title={t('agents')}>
         {declared.length === 0 ? <p className="mw-ctx-muted">{t('agentsNoneDeclared')}</p> : (
           <div className="mw-pills" role="group" aria-label={t('agentsOfChannel')} data-testid="agent-pills">
@@ -147,7 +145,7 @@ export function TeamContext(props: TeamContextProps): ReactNode {
             {here.map(a => (
               <li key={a.id} className="mw-ctx-item" data-testid="chat-agent">
                 <p className="mw-ctx-strong">{a.name} <span className="mw-ctx-muted">· @{a.handle}</span></p>
-                <p className="mw-ctx-small">{t('ctxLlm', { provider: a.provider, model: a.model })}</p>
+                <p className="mw-ctx-small" title={`${a.provider} · ${a.model}`}>{modelLabel({ provider: a.provider, model: a.model }, t)}</p>
                 <p className="mw-ctx-small mw-ctx-muted" data-testid="chat-agent-month">
                   {t('agentMonth', { spent: euros(a.eurThisMonth ?? 0), ceiling: euros(a.eurPerMonth) })}
                 </p>

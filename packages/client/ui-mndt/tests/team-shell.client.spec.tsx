@@ -292,8 +292,9 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
-    expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
+    // No section without a function: « Mandats : bientôt » is gone from the panel.
+    expect(card.textContent).not.toContain('les mandats du canal')
     expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
     // Members by the part before @, the address kept as title.
     expect([...card.querySelectorAll('.mw-ctx-member')].map(m => m.textContent)).toEqual(['stephane', 'lecteur'])
@@ -326,7 +327,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
     )
     expect(screen.getByPlaceholderText('Une note, une question, ou @assistant pour lui parler…')).toBeTruthy()
     const agent = within(screen.getByTestId('context-panel')).getByTestId('chat-agent')
-    expect(agent.textContent).toContain('LLM : scaleway-genapi · deepseek-v4.1-flash')
+    expect(agent.textContent).toContain('Rapide')
   })
 
   it('the lane speaks of your agents, with no subtitle', async () => {
