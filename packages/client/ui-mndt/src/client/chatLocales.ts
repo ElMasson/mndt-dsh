@@ -355,6 +355,7 @@ export const chatEn = {
   councilSynthChose: '{option} (synthesis by {who})',
   councilQuestionFor: 'A council asks you: {question}',
   agentsMonthUnattributed: 'This month: {total}, of which {councils} of councils not named.',
+  toolsUnavailable: 'Tools unavailable for this turn: {servers}. The answer did not consult them.',
 } as const
 
 /** One copy key. */
@@ -710,6 +711,7 @@ export const chatFr: Record<ChatKey, string> = {
   councilSynthChose: '{option} (synthèse par {who})',
   councilQuestionFor: 'Un conseil vous demande : {question}',
   agentsMonthUnattributed: 'Ce mois-ci : {total}, dont {councils} de conseils non nommés.',
+  toolsUnavailable: 'Outils indisponibles pour ce tour : {servers}. La réponse ne les a pas consultés.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

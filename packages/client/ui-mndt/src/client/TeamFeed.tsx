@@ -112,6 +112,23 @@ function WebTurn(props: {
 }
 
 /**
+ * The servers a turn ran without (#126): said under its line, in orange, so a reader knows the
+ * answer did not consult them. Read defensively: server names only, nothing shown otherwise.
+ */
+function ToolsUnavailable(props: { readonly turn: ChatTurn; readonly t: ChatTranslate }): ReactNode {
+  const raw: unknown = props.turn.toolsUnavailable
+  const servers = Array.isArray(raw)
+    ? raw.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s))
+    : []
+  if (servers.length === 0) return undefined
+  return (
+    <p className="mw-turn-unchecked" role="note" data-testid="tools-unavailable">
+      {props.t('toolsUnavailable', { servers: servers.join(', ') })}
+    </p>
+  )
+}
+
+/**
  * @param card - a card as served.
  * @returns the handle of the agent whose turn asked for it, only when the API served a non-empty
  * text: `null`, `{}`, an empty or non-text handle all fall back to the person's line.
@@ -357,6 +374,7 @@ export function WebMessage(props: {
         return (
           <Fragment key={turn.id}>
             <WebTurn turn={turn} agent={agents.get(turn.agentId)} agents={agents} t={t} />
+            <ToolsUnavailable turn={turn} t={t} />
             {council === undefined ? undefined : (
               <CouncilThread turn={turn} council={council} agents={agents} onAnswer={props.onAnswer} canAnswer={props.canAnswer} t={t} />
             )}
