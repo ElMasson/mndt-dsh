@@ -177,6 +177,8 @@ export function CoordinationSection(props: {
   const writable = props.canManage && props.onChange !== undefined
   // The mode picked here and not yet sent; otherwise the channel's.
   const [picked, setPicked] = useState<Mode | undefined>(undefined)
+  // The choice open (owners and admins, on « Modifier »); folded again once a change is saved.
+  const [open, setOpen] = useState(false)
   const shown: Mode = picked ?? current?.mode ?? 'solo'
   const [author, setAuthor] = useState<string | undefined>(current?.mode === 'author-verifier' ? current.authorId : undefined)
   const [workers, setWorkers] = useState<readonly string[]>(current?.mode === 'parallel-synthesis' ? current.workerIds : [])
@@ -195,30 +197,37 @@ export function CoordinationSection(props: {
     setPending(true)
     const refused = await props.onChange(change)
     setError(refused)
-    if (refused === undefined) setPicked(undefined)
+    if (refused === undefined) {
+      setPicked(undefined)
+      setOpen(false)
+    }
     busy.current = false
     setPending(false)
   }
   const handle = (id: string): string => `@${byId.get(id)?.handle ?? id}`
-  if (!writable) {
+  // Folded to one line, as everyone reads it; owners and admins open the choice with « Modifier ».
+  if (!writable || !open) {
     return (
-      <p data-testid="coordination-read">
-        {current === undefined ? t('coordSolo')
-          : current.mode === 'author-verifier'
-            ? t('coordPair', { author: handle(current.authorId), verifier: handle(current.verifierId) })
-            : current.mode === 'council'
-              ? t(current.decision === 'vote' ? 'councilReadVote' : 'councilReadSynthesis', {
-                members: current.memberIds.map(handle).join(', '),
-                chair: handle(current.memberIds[0] ?? ''),
-                synthesizer: current.synthesizerId === undefined ? '' : handle(current.synthesizerId),
-                max: euros(current.maxEurPerTurn),
-              })
-              : t('coordParallelRead', {
-                workers: current.workerIds.map(handle).join(', '),
-                synthesizer: handle(current.synthesizerId),
-                max: euros(current.maxEurPerTurn),
-              })}
-      </p>
+      <div className="mw-coord-line">
+        <p data-testid="coordination-read">
+          {current === undefined ? t('coordSolo')
+            : current.mode === 'author-verifier'
+              ? t('coordPair', { author: handle(current.authorId), verifier: handle(current.verifierId) })
+              : current.mode === 'council'
+                ? t(current.decision === 'vote' ? 'councilReadVote' : 'councilReadSynthesis', {
+                  members: current.memberIds.map(handle).join(', '),
+                  chair: handle(current.memberIds[0] ?? ''),
+                  synthesizer: current.synthesizerId === undefined ? '' : handle(current.synthesizerId),
+                  max: euros(current.maxEurPerTurn),
+                })
+                : t('coordParallelRead', {
+                  workers: current.workerIds.map(handle).join(', '),
+                  synthesizer: handle(current.synthesizerId),
+                  max: euros(current.maxEurPerTurn),
+                })}
+        </p>
+        {writable ? <button type="button" className="mw-ctx-link" onClick={() => { setOpen(true) }}>{t('sheetEdit')}</button> : undefined}
+      </div>
     )
   }
   const authorAgent = author === undefined ? undefined : byId.get(author)
@@ -503,6 +512,7 @@ export function CoordinationSection(props: {
         </>
       )}
       {error === undefined ? undefined : <p role="alert" className="mw-ctx-error">{error}</p>}
+      <button type="button" className="mw-ctx-link" onClick={() => { setOpen(false); setPicked(undefined); setError(undefined) }}>{t('sheetClose')}</button>
     </div>
   )
 }

@@ -35,16 +35,11 @@ function props(over: Partial<TeamShellProps> = {}): TeamShellProps {
 }
 
 describe('the team frame, as mndt-web draws it', () => {
-  it('lists the places of mndt-web in its order, the steering ones greyed « bientôt »', () => {
+  it('lists the places of mndt-web in its order; no « Pilotage » while none of its places works', () => {
     render(<TeamShell {...props()} />)
     const nav = screen.getByTestId('side-nav')
-    expect(nav.textContent).toBe('Ma laneÀ traiterMémoireCanaux# testAgentsAssistantPilotageMissionsbientôtMandatsbientôtPreuvesbientôtRéglages')
-    for (const label of ['Missions', 'Mandats', 'Preuves']) {
-      const entry = within(nav).getByText(label).parentElement as HTMLElement
-      expect(entry.getAttribute('aria-disabled')).toBe('true')
-      // Greyed entries are not buttons: nothing to follow until their screen exists.
-      expect(entry.tagName).toBe('SPAN')
-    }
+    expect(nav.textContent).toBe('Ma laneÀ traiterMémoireCanaux# testAgentsAssistantRéglages')
+    expect(within(nav).queryByText('Pilotage')).toBeNull()
     expect(within(nav).getByRole('button', { name: 'Ma lane' }).getAttribute('aria-current')).toBe('page')
   })
 
@@ -292,9 +287,11 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
     await open()
     const card = screen.getByTestId('context-panel')
-    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Mandats', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Documents', 'Membres'])
-    expect(card.textContent).toContain('Bientôt : les mandats du canal arrivent avec leur écran.')
-    expect(card.textContent).toContain('Bientôt : les documents du canal arrivent avec leur route.')
+    expect([...card.querySelectorAll('h3')].map(h => h.textContent)).toEqual(['Ce qu\'il faut savoir ici', 'Canal', 'Agents', 'Coordination', 'Connecteurs', 'Mémoire', 'Membres'])
+    // No section without a function: « Mandats : bientôt » is gone from the panel.
+    expect(card.textContent).not.toContain('les mandats du canal')
+    // No section without a function: no documents route here, no « bientôt » documents section.
+    expect(card.textContent).not.toContain('les documents du canal')
     // Members by the part before @, the address kept as title.
     expect([...card.querySelectorAll('.mw-ctx-member')].map(m => m.textContent)).toEqual(['stephane', 'lecteur'])
   })
@@ -326,7 +323,7 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
     )
     expect(screen.getByPlaceholderText('Une note, une question, ou @assistant pour lui parler…')).toBeTruthy()
     const agent = within(screen.getByTestId('context-panel')).getByTestId('chat-agent')
-    expect(agent.textContent).toContain('LLM : scaleway-genapi · deepseek-v4.1-flash')
+    expect(agent.textContent).toContain('Rapide')
   })
 
   it('the lane speaks of your agents, with no subtitle', async () => {
@@ -654,7 +651,28 @@ describe('Ma lane as a first screen, and a new member\'s arrival', { timeout: 20
     render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
     const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
     expect(within(welcome).getByTestId('welcome-no-channel').textContent).toBe('Vous n\'êtes encore dans aucun canal d\'équipe : un owner ou un admin vous y ajoute.')
+    // Someone who may add one gets the gesture, not a sentence sending them to themselves.
+    expect(within(welcome).getByText('Aucun agent ne lit encore votre lane. Ajoutez-en un :')).toBeTruthy()
+    fireEvent.click(within(within(welcome).getByTestId('lane-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' }))
+    await waitFor(async () => { expect((await chat.channels())[0]?.agents).toEqual(['agt_1']) })
+  })
+
+  it('a reader who may not add one is told who does', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [{ ...lane, agents: [] }] }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
     expect(within(welcome).getByText('Aucun agent ne lit encore votre lane : un owner ou un admin en ajoute un.')).toBeTruthy()
+    expect(within(welcome).queryByTestId('lane-add-agents')).toBeNull()
+  })
+
+  it('a private lane\'s panel shows no coordination nor documents', async () => {
+    const chat = createMockChat({ you, agents: [agent], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    const card = screen.getByTestId('context-panel')
+    const titles = [...card.querySelectorAll('h3')].map(h => h.textContent)
+    expect(titles).not.toContain('Coordination')
+    expect(titles).not.toContain('Documents')
   })
 
   it('no lane but a team channel: the person lands in it', async () => {
@@ -717,6 +735,35 @@ describe('an open question answered where it is read (À traiter)', { timeout: 2
   it('a reader whose answer would not count gets the channel only', async () => {
     const chat = createMockChat({ you, agents: [], channels: [team], escalations }, () => Date.parse(at))
     render(<CollabPage api={face(state({ approvals: [], canWrite: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const item = await screen.findByTestId('pending-question')
+    expect(within(item).queryByRole('textbox')).toBeNull()
+    expect(within(item).getByRole('button', { name: 'Répondre dans # compta' })).toBeTruthy()
+  })
+})
+
+describe('review of #141 and #142', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-25T08:00:00.000Z'
+  const assistant = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+
+  it('adding an agent to the lane that is refused is said', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [lane] }, () => Date.parse(at))
+    const refusing = { ...chat, addAgents: () => Promise.reject(new ChatRefusal('stephane is viewer and does not hold workflows.write', 403)) }
+    render(<CollabPage api={face(state())} chat={refusing} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })
+    fireEvent.click(within(within(welcome).getByTestId('lane-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' }))
+    expect((await within(welcome).findByRole('alert')).textContent).not.toBe('')
+  })
+
+  it('a question without its published message (an older help) offers the channel only, no field', async () => {
+    const team = { id: 'chn_1', name: 'compta', title: 'compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+    const chat = createMockChat({
+      you, agents: [], channels: [team],
+      escalations: [{ channelId: 'chn_1', turnId: 'trn_1', messageId: 'msg_1', questionMessageId: '', question: 'HT ?', at }],
+    }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ approvals: [] }))} chat={chat} tc={chatFrench} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
     const item = await screen.findByTestId('pending-question')
     expect(within(item).queryByRole('textbox')).toBeNull()
