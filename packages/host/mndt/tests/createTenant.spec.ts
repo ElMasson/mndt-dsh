@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
@@ -163,6 +163,42 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     writeFileSync(join(copy, 'connectors', 'mcp-check.mjs'), `${readFileSync(join(deploy, 'connectors', 'mcp-check.mjs'), 'utf8')}\n// changed\n`)
     execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
     expect(readFileSync(composePath, 'utf8')).toBe(fourth)
+  })
+
+  it('replaces each tool atomically: a new file renamed over the old one, mode 0644, no .tmp left', () => {
+    const root = rootWithEntra()
+    const tools = join(root, 'data/mndt/datanalysis/live/tools')
+    const names = ['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs', 'facts-mcp.mjs', 'mcp-check.mjs', 'workbench-entrypoint.sh']
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const first = new Map(names.map(name => [name, statSync(join(tools, name)).ino]))
+    // A file left with another mode (an older copy) gets 0644 back.
+    chmodSync(join(tools, 'mcp-proxy.mjs'), 0o600)
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    for (const name of names) {
+      const info = statSync(join(tools, name))
+      expect(info.mode & 0o777, name).toBe(0o644)
+      // Owner: the user who ran it (root on the server, where it is also set to 0:0 explicitly).
+      expect(info.uid, name).toBe(process.getuid?.())
+      // Renamed over, never rewritten in place: a reader of the old file keeps a whole file.
+      expect(info.ino, name).not.toBe(first.get(name))
+    }
+    expect(readdirSync(tools).filter(name => name.includes('.tmp'))).toEqual([])
+  })
+
+  it('a tool that cannot be installed stops the run, leaves the old file whole and no .tmp', () => {
+    const root = rootWithEntra()
+    const tools = join(root, 'data/mndt/datanalysis/live/tools')
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const before = readFileSync(join(tools, 'approvals-mcp.mjs'), 'utf8')
+    // The folder read-only: the new file cannot be written beside the old one.
+    chmodSync(tools, 0o555)
+    try {
+      expect(() => create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')).toThrow(/could not install/)
+      expect(readFileSync(join(tools, 'approvals-mcp.mjs'), 'utf8')).toBe(before)
+      expect(readdirSync(tools).filter(name => name.includes('.tmp'))).toEqual([])
+    } finally {
+      chmodSync(tools, 0o755)
+    }
   })
 
   it('installs the operator\'s check and the facts server in the tools folder, refreshed on each run', () => {
