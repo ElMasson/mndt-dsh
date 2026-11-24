@@ -135,6 +135,30 @@ if (qwen !== undefined && channel !== undefined) {
     `${cards.length} card(s), in this channel: ${cards.filter(card => card.channelId === channel.id).length}, tool « ${(tour.get('mcp__approvals__request_approval') ?? 'no result').slice(0, 80)} »`)
 }
 
+/** @param tag - a « sonde-marque-<tag> » probe. @returns the last call of that probe: its skill blocks and the tools it was offered. */
+const markerOf = (tag) => {
+  const found = [...logs('fakellm').matchAll(new RegExp(`fake-llm marker \\d+ ${tag}: skills=(\\d+) tools=(\\[[^\\n]*\\])`, 'g'))].at(-1)
+  return found === undefined ? undefined : { skills: Number(found[1]), tools: JSON.parse(found[2]) }
+}
+
+// (#127) a skill attached to @qwen reaches its prompt, opens no tool, and
+// leaves @qwen with the skill when it leaves the library.
+if (qwen !== undefined && channel !== undefined) {
+  const made = await api('POST', '/skills', { markdown: '---\nname: Répétition compétence\ndescription: sonde du saut\nallowed-tools: Bash\n---\nVérifier la facture avant de répondre.' })
+  const slug = made.body.skill?.slug
+  const attached = slug === undefined ? undefined : await api('POST', `/agents/${qwen.id}`, { skills: [slug] })
+  const skillTurn = await probeTurn('@qwen sonde-marque-competence')
+  const marker = markerOf('competence')
+  const removed = slug === undefined ? undefined : await api('POST', `/skills/${slug}/delete`)
+  const after = ((await api('GET', '/agents')).body.agents ?? []).find(a => a.id === qwen.id)
+  check('skill-in-prompt', made.status === 201 && JSON.stringify(made.body.ignoredFields) === '["allowed-tools"]'
+    && attached?.status === 200 && skillTurn?.status === 'done' && marker?.skills === 1 && JSON.stringify(marker.tools) === JSON.stringify(APPROVALS)
+    && removed?.status === 200 && (removed.body.removedFrom ?? []).includes(qwen.id) && (after?.skills ?? []).length === 0,
+  `skill ${made.status} ${slug ?? '-'} ignored ${JSON.stringify(made.body.ignoredFields)}, attached ${attached?.status}, turn ${skillTurn?.status} « ${skillTurn?.reason ?? '-'} », `
+    + `skill blocks ${marker?.skills ?? 'no call'}, tools ${marker === undefined ? '-' : JSON.stringify(marker.tools) === JSON.stringify(APPROVALS) ? 'the card tools exactly' : JSON.stringify(marker.tools)}, `
+    + `removed ${removed?.status} from ${JSON.stringify(removed?.body.removedFrom)}, @qwen skills after ${JSON.stringify(after?.skills ?? [])}`)
+}
+
 // (d) a mission of the owner: MCP tools only; a member cannot start one.
 const mission = await api('POST', '/missions', { kind: 'custom', prompt: 'sonde-outils-mission' }, owner, 180000)
   .catch(error => ({ status: 0, body: { error: String(error).split('\n')[0] } }))
@@ -459,6 +483,28 @@ for (let attempt = 0; attempt < 90 && councilBack !== 200; attempt += 1) {
   await sleep(2000)
   councilBack = (await asOwner('GET', '/me')).status
 }
+// When /me answered again: the start of the delay tools-after-restart measures.
+const apiBackAt = Date.now()
+// (#126) a turn posted as soon as the API answers after a restart gets the
+// card tools, all of them: it waits for the servers instead of running bare.
+// The browser is closed by now: the probe goes through fetch, as the restarts do.
+let restarted
+if (councilBack === 200 && channel !== undefined && qwen !== undefined) {
+  const asked = (await asOwner('POST', `/channels/${channel.id}/messages`, { text: '@qwen sonde-marque-redemarrage' })).body.message
+  for (let attempt = 0; attempt < 90 && asked !== undefined; attempt += 1) {
+    restarted = ((await asOwner('GET', `/channels/${channel.id}/messages`)).body.messages ?? []).find(m => m.id === asked.id)?.turns?.[0]
+    if (restarted !== undefined && !['queued', 'running'].includes(restarted.status)) break
+    await sleep(2000)
+  }
+}
+const restartedMarker = markerOf('redemarrage')
+// The turn starts once its servers are ready (it waits for them before the
+// queue, #126): from /me answering to that start is how long the approvals
+// took to register after the restart. Under 10 s (it was ~60 s before #132).
+const readyMs = restarted?.startedAt === undefined ? undefined : Date.parse(restarted.startedAt) - apiBackAt
+check('tools-after-restart', restarted?.status === 'done' && JSON.stringify(restartedMarker?.tools) === JSON.stringify(APPROVALS) && restarted.toolsUnavailable === undefined
+  && readyMs !== undefined && readyMs < 10_000,
+  `API back ${councilBack}, approvals ready ${readyMs === undefined ? '-' : `${(readyMs / 1000).toFixed(1)} s`} after /me (bound 10 s), turn ${restarted?.status ?? '-'} « ${restarted?.reason ?? '-'} », tools ${restartedMarker === undefined ? 'no call' : JSON.stringify(restartedMarker.tools) === JSON.stringify(APPROVALS) ? `the ${APPROVALS.length} card tools` : JSON.stringify(restartedMarker.tools)}, unavailable ${JSON.stringify(restarted?.toolsUnavailable ?? [])}`)
 const councilAfter = councilBack === 200 ? openCount() : 'no API'
 const closedCouncil = slowCouncil === undefined ? undefined
   : ((await asOwner('GET', `/channels/${conseil.id}/messages`)).body.messages ?? []).find(m => m.id === slowCouncil.id)?.turns?.[0]

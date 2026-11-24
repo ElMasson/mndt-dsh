@@ -36,9 +36,11 @@ scheduler-first-pass
 seed-restart
 seeded
 shell-ws
+skill-in-prompt
 still-serves
 team-no-mux
 team-page
+tools-after-restart
 turn-card
 turn-no-bash
 turn-no-facts
