@@ -271,8 +271,7 @@ docker exec -u 0 $project-workbench chown -R "$(id -u):$(id -g)" /state/home/pro
 # A second MCP server, mounted for the tool probe and never allowed in the
 # rehearsal's channel: the turn must neither see nor run it (seed-team.sh
 # restarts the workbench right after, which starts it).
-mkdir -p "$data/tools"
-cp "$deploy/connectors/facts-mcp.mjs" "$data/tools/facts-mcp.mjs"
+# facts-mcp.mjs itself: create-tenant.sh installed it (tools-current checks it).
 printf 'Faits de repetition.\n' > "$data/tools/facts.md"
 MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
   bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
@@ -290,9 +289,26 @@ checked=0
 for file in "$data/home/cordis.patch.yml" "$data/home/profiles/web/cordis.patch.yml"; do
   python3 "$deploy/patchfile.py" "$file" --check || checked=1
 done
-# mcp-check.mjs, as install-connectors.sh installs it (the rehearsal does not
-# run install-connectors.sh: it downloads, and needs the real secrets).
-cp "$deploy/connectors/mcp-check.mjs" "$data/tools/mcp-check.mjs"
+# The connector code create-tenant.sh installed: in the workbench, each file the
+# same as this version's, and the two the update used to miss carry its marks
+# (mcp-check.mjs knows --discover, facts-mcp.mjs answers « method not found »).
+# Nothing here copies them: the tenant's own scripts must.
+tools_current() {
+  local stale="" tool inside
+  for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs facts-mcp.mjs mcp-check.mjs; do
+    inside=$(docker exec $project-workbench sha256sum /opt/mndt-tools/$tool 2>/dev/null | cut -c1-16)
+    [ "$inside" = "$(sha256sum "$deploy/connectors/$tool" | cut -c1-16)" ] || stale="$stale $tool"
+  done
+  local marks; marks=$(docker exec $project-workbench sh -c "grep -c 'sonde server/discover' /opt/mndt-tools/mcp-check.mjs; grep -c 'method not found' /opt/mndt-tools/facts-mcp.mjs" 2>/dev/null | paste -sd' ')
+  if [ -z "$stale" ] && [ "${marks%% *}" -ge 1 ] 2>/dev/null && [ "${marks##* }" -ge 1 ] 2>/dev/null; then
+    echo "OK  tools-current  the 5 connector files in /opt/mndt-tools are this version's (sha256), marks found (mcp-check --discover, facts -32601: $marks)"
+  else
+    echo "KO  tools-current  stale or missing in /opt/mndt-tools:${stale:- none}; marks « ${marks:-none} »"
+  fi
+}
+tools_current
+# mcp-check.mjs: create-tenant.sh installed it (an update does not run
+# install-connectors.sh, so nothing else would).
 MNDT_ROOT=$root MNDT_CHECK_EXEC="docker exec -i $project-workbench" bash "$deploy/tenant/check-connectors.sh" datanalysis; connectors=$?
 echo "check-connectors.sh exit $connectors"
 

@@ -134,7 +134,14 @@ fingerprint() { sha256sum "$1" | cut -c1-16; }
 gateway_code=$(fingerprint "$here/gateway/server.mjs")
 # Everything this script puts in the tools folder, which the workbench runs from
 # disk: the entrypoint and the connector tools. One aggregated fingerprint.
-tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs)
+# facts-mcp.mjs is among them: it used to reach the folder only through an old
+# tools archive, so an update never refreshed it.
+tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs facts-mcp.mjs)
+# Copied too, but not in the fingerprint: the operator's check
+# (check-connectors.sh runs it inside the workbench), which the workbench never
+# runs itself. A change to it must not recreate the workbench; left stale, it
+# would ignore an option it does not know (« --discover ») and print a success.
+checks=(mcp-check.mjs)
 tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
 render_with_proxy() { render "$1" | sed -e "s|__PROXY_CONF__|$proxy_conf|g"; }
 render() {
@@ -160,7 +167,7 @@ cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
 cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
-for tool in "${tools[@]}"; do
+for tool in "${tools[@]}" "${checks[@]}"; do
   cp "$here/connectors/$tool" "$root$data/tools/$tool"
 done
 # The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,
