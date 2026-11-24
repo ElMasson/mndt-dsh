@@ -361,6 +361,8 @@ export interface Turn {
   readonly eur?: number
   /** Why it failed, was refused or cancelled, in plain words. */
   readonly reason?: string
+  /** The channel's servers whose tools were not ready when the turn ran: it ran without them, and was told so. */
+  readonly toolsUnavailable?: readonly string[]
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
   readonly steps?: readonly TurnStep[]
   /**

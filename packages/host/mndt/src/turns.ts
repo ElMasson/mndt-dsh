@@ -127,11 +127,18 @@ export interface TurnOutput {
   readonly text: string
   readonly sessionId?: string
   readonly tokens?: NonNullable<Mission['tokens']>
+  /** The channel's servers whose tools were not ready: the turn ran without them, and was told. */
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** Runs one agent turn. */
 export interface TurnEngine {
   run(input: TurnInput): Promise<TurnOutput>
+  /**
+   * Optional: wait until the servers a turn will use are ready (bounded),
+   * called before the turn takes its place in the queue.
+   */
+  ready?(servers: readonly string[], signal: AbortSignal): Promise<void>
 }
 
 /** What the scheduler needs. */
@@ -164,6 +171,8 @@ export class TurnScheduler {
   #queue: Promise<unknown> = Promise.resolve()
   readonly #pending = new Set<Promise<unknown>>()
   readonly #running = new Map<string, Running>()
+  /** Turns waiting for their servers, before the queue: a stop reaches them too. */
+  readonly #waiting = new Map<string, Running>()
 
   /** @param options - service, engine, prices and data folder. */
   constructor(options: TurnSchedulerOptions) {
@@ -196,12 +205,22 @@ export class TurnScheduler {
    * @param message - the message just posted.
    */
   launch(message: Message): void {
+    // A message's turns keep their order: each waits for its servers after the previous one.
+    let gate: Promise<unknown> = Promise.resolve()
     for (const turn of message.turns ?? []) {
-      const next = this.#queue.then(
-        () => this.#run(message.id, turn),
-        () => this.#run(message.id, turn),
-      )
-      this.#queue = next.catch(() => undefined)
+      // The turn waits for its servers BEFORE the queue (it stays queued
+      // meanwhile): a slow or broken connector delays its own turn, never
+      // the other channels'. Then it takes its place, ready or at the bound.
+      const ready = gate.then(() => this.#ready(message.id, turn)).catch(() => undefined)
+      gate = ready
+      const next = ready.then(() => {
+        const run = this.#queue.then(
+          () => this.#run(message.id, turn),
+          () => this.#run(message.id, turn),
+        )
+        this.#queue = run.catch(() => undefined)
+        return run
+      })
       const tracked = next
         .catch(() => undefined)
         .finally(() => this.#pending.delete(tracked))
@@ -221,7 +240,7 @@ export class TurnScheduler {
       | { readonly channelId: string; readonly agentId: string }
       | { readonly agentId: string },
   ): void {
-    for (const running of this.#running.values()) {
+    for (const running of [...this.#running.values(), ...this.#waiting.values()]) {
       const matches =
         'messageId' in filter
           ? running.messageId === filter.messageId
@@ -765,6 +784,34 @@ export class TurnScheduler {
    * @param agentId - the agent.
    * @returns the reason, or undefined while it may go on.
    */
+  /**
+   * Wait until the servers this turn will use are ready, if the engine can
+   * tell; a stop (message deleted, agent gone) ends the wait at once, and the
+   * run then cancels the turn as usual.
+   * @param messageId - the message.
+   * @param turn - the turn.
+   */
+  async #ready(messageId: string, turn: Turn): Promise<void> {
+    const { service, engine } = this.#options
+    if (engine.ready === undefined) return
+    const message = await service.message(messageId)
+    const channel = message === undefined ? undefined : await service.channel(message.channelId)
+    const agent = await service.agent(turn.agentId)
+    if (message === undefined || channel === undefined || agent === undefined) return
+    // The agent's own servers; a synthesizer's workers use theirs too.
+    const workers = channel.coordination?.mode === 'parallel-synthesis' && channel.coordination.synthesizerId === agent.id
+      ? await Promise.all(channel.coordination.workerIds.map(id => service.agent(id)))
+      : []
+    const servers = [...new Set([agent, ...workers].flatMap(who => who === undefined ? [] : turnServers(who, channel)))]
+    const controller = new AbortController()
+    this.#waiting.set(turn.id, { messageId, channelId: channel.id, agentId: agent.id, agentHandle: agent.handle, controller })
+    try {
+      await engine.ready(servers, controller.signal)
+    } finally {
+      this.#waiting.delete(turn.id)
+    }
+  }
+
   async #stale(
     messageId: string,
     agentId: string,
@@ -1030,6 +1077,7 @@ export class TurnScheduler {
         ...(tokens === undefined ? {} : { tokens }),
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
+        ...(first.output.toolsUnavailable === undefined ? {} : { toolsUnavailable: first.output.toolsUnavailable }),
       })
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
