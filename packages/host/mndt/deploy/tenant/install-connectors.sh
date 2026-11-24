@@ -65,9 +65,14 @@ compose=(docker compose -f "$app/docker-compose.yml")
 umask 022
 
 # ---- 1. The connector machinery, refreshed from this checkout.
-cp "$deploy/connectors/render-connectors.py" "$deploy/connectors/catalog.json" "$deploy/patchfile.py" "$app/gateway/"
+# Replaced atomically (lib/install-file.sh), as create-tenant.sh does: the
+# workbench may be running these very files.
+. "$deploy/lib/install-file.sh"
+for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
+  install_file "$deploy/$file" "$app/gateway/$(basename "$file")" || exit 1
+done
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs mcp-check.mjs; do
-  cp "$deploy/connectors/$tool" "$tools/$tool"
+  install_file "$deploy/connectors/$tool" "$tools/$tool" || exit 1
 done
 mkdir -p "$connectors" "$auth"
 chmod 700 "$connectors" "$auth"

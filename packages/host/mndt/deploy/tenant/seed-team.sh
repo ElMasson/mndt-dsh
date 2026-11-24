@@ -35,7 +35,11 @@ compose=(docker compose -f "$app/docker-compose.yml")
 # (patchfile.py) would append its block after the `[]` dsh writes, and the
 # workbench would no longer start.
 mkdir -p "$app/gateway"
-cp "$here/../connectors/render-connectors.py" "$here/../connectors/catalog.json" "$here/../patchfile.py" "$app/gateway/"
+# Replaced atomically (lib/install-file.sh), as create-tenant.sh does.
+. "$here/../lib/install-file.sh"
+for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
+  install_file "$here/../$file" "$app/gateway/$(basename "$file")" || exit 1
+done
 
 if [ -z "$ceiling" ]; then
   # The approvals connector, from the versioned catalog, at this tenant's paths:
