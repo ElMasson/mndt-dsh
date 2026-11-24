@@ -34,6 +34,19 @@ describe('missions', () => {
       .rejects.toThrow('unknown mission kind')
   })
 
+  it('a briefing that ran without the facts keeps it on the mission, for the screen; one with them carries nothing', async () => {
+    const workbench = bench()
+    const bare = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })
+    await workbench.startMission(bare.id, 'session-1')
+    const { mission: without } = await workbench.completeMission(bare.id, { title: 'B', markdown: 'M', toolsUnavailable: ['workbench_facts'] })
+    expect(without.toolsUnavailable).toEqual(['workbench_facts'])
+    expect((await workbench.getMission(bare.id))?.toolsUnavailable).toEqual(['workbench_facts'])
+    const full = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })
+    await workbench.startMission(full.id, 'session-2')
+    const { mission: withFacts } = await workbench.completeMission(full.id, { title: 'B', markdown: 'M', toolsUnavailable: [] })
+    expect('toolsUnavailable' in withFacts).toBe(false)
+  })
+
   it('runs a mission through a session and produces a brief', async () => {
     const workbench = bench()
     const mission = await workbench.createMission({ kind: 'briefing', prompt: 'Morning', createdBy: owner })

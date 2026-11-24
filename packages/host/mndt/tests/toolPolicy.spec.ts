@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DshMissionRunner, DshTurnRunner, NO_FACTS_NOTE } from '../src/runner.ts'
 import { REQUIRED_TOOLS, ToolsReadiness } from '../src/tools-ready.ts'
+import { clearOperatorWarning } from '../src/operator-log.ts'
 import { soloWorkstation } from '../src/gateway.ts'
 import {
   ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, channelPolicy, hideOutsidePolicy, isServerName, mcpServerOf,
@@ -430,6 +431,28 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     const plain = teamMissions(custom.ctx, readinessOver(APPROVALS), false)
     await plain.run({ ...briefing, kind: 'custom' } as unknown as Mission)
     expect(custom.seen.script ?? '').not.toContain('workbench_facts (non monté')
+  })
+
+  it('the operator hears of « no facts » once per passage, and the briefing records it for the screen', async () => {
+    clearOperatorWarning('briefing-without-facts')
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const warned: string[] = []
+    const run = async (facts: boolean) => {
+      const { ctx } = fakeCtx()
+      ;(ctx as unknown as { logger: { warn: (m: string) => void } }).logger = { warn: (m: string) => { warned.push(m) } }
+      const readiness = readinessOver(facts ? [...APPROVALS, 'mcp__workbench_facts__get_facts'] : APPROVALS)
+      return teamMissions(ctx, readiness, facts).run(briefing)
+    }
+    const first = await run(false)
+    await run(false)
+    expect(warned.filter(m => m.includes('briefing sans workbench_facts : descripteur absent'))).toHaveLength(1)
+    expect(first.toolsUnavailable).toEqual(['workbench_facts'])
+    // The facts come back: nothing said, nothing recorded; then gone again: said again, once.
+    const back = await run(true)
+    expect(back.toolsUnavailable).toBeUndefined()
+    await run(false)
+    await run(false)
+    expect(warned.filter(m => m.includes('briefing sans workbench_facts : descripteur absent'))).toHaveLength(2)
   })
 
   it('without the approvals a briefing never runs, facts mounted or not', async () => {

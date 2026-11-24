@@ -53,6 +53,8 @@ export interface Mission {
     readonly cacheWrite?: number
   }
   readonly briefId?: string
+  /** Servers the mission ran without, served for the screen (a briefing on a space with no facts server). */
+  readonly toolsUnavailable?: readonly string[]
   /** The mandate this mission runs under, when it runs under one. */
   readonly mandateId?: string
 }

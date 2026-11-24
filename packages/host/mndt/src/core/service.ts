@@ -73,6 +73,8 @@ export interface MissionResult {
   readonly markdown: string
   readonly sources?: readonly BriefSource[]
   readonly tokens?: { readonly input: number; readonly output: number }
+  /** Servers the mission ran without (a briefing on a space with no facts server). */
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** What a caller must say to ask for a decision. */
@@ -523,6 +525,7 @@ export class WorkbenchService {
         finishedAt: at,
         briefId: brief.id,
         ...(result.tokens === undefined ? {} : { tokens: result.tokens }),
+        ...((result.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(result.toolsUnavailable ?? [])] }),
       }
       return {
         state: {
