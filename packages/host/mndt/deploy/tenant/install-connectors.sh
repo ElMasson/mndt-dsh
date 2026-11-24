@@ -65,15 +65,24 @@ compose=(docker compose -f "$app/docker-compose.yml")
 umask 022
 
 # ---- 1. The connector machinery, refreshed from this checkout.
-cp "$deploy/connectors/render-connectors.py" "$deploy/connectors/catalog.json" "$deploy/patchfile.py" "$app/gateway/"
+# Replaced atomically (shared/install-file.sh), as create-tenant.sh does: the
+# workbench may be running these very files.
+f="$deploy/shared/install-file.sh"; [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+. "$f"
+for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
+  install_file "$deploy/$file" "$app/gateway/$(basename "$file")" || exit 1
+done
 for tool in approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs mcp-check.mjs; do
-  cp "$deploy/connectors/$tool" "$tools/$tool"
+  install_file "$deploy/connectors/$tool" "$tools/$tool" || exit 1
 done
 mkdir -p "$connectors" "$auth"
 chmod 700 "$connectors" "$auth"
 
 # ---- 2. Code: copy the *.py files of one package directory, nothing else.
 # $1 source package dir, $2 destination package dir.
+# The swap below (rm the old directory, then mv the new one) leaves a short gap
+# where the package is absent: to be replaced by versioned directories and a
+# link swapped atomically (C's shape), in a change of its own.
 copy_package() {
   rm -rf "$2.new"
   mkdir -p "$2.new"
@@ -97,14 +106,15 @@ elif [ -f "$tools/dolibarr-mcp/src/dolibarr_mcp/dolibarr_mcp_server.py" ]; then
 else
   echo "dolibarr: no source in $dolibarr_src (dolibarr_mcp_server.py not found): copy it first" >&2; exit 1
 fi
-cp "$deploy/connectors/runtime/dolibarr.requirements.txt" "$tools/dolibarr-mcp/requirements.txt"
+install_file "$deploy/connectors/runtime/dolibarr.requirements.txt" "$tools/dolibarr-mcp/requirements.txt" || exit 1
 
 mkdir -p "$tools/swing/src"
 if [ -f "$swing_src/mcp/swing_mcp.py" ]; then
   rm -rf "$tools/swing/src/mcp.new"
   mkdir -p "$tools/swing/src/mcp.new"
-  cp "$swing_src/mcp/swing_mcp.py" "$tools/swing/src/mcp.new/"
-  if [ -f "$swing_src/mcp/__init__.py" ]; then cp "$swing_src/mcp/__init__.py" "$tools/swing/src/mcp.new/"; else : > "$tools/swing/src/mcp.new/__init__.py"; fi
+  install_file "$swing_src/mcp/swing_mcp.py" "$tools/swing/src/mcp.new/swing_mcp.py" || exit 1
+  if [ -f "$swing_src/mcp/__init__.py" ]; then init="$swing_src/mcp/__init__.py"; else init=/dev/null; fi
+  install_file "$init" "$tools/swing/src/mcp.new/__init__.py" || exit 1
   rm -rf "$tools/swing/src/mcp"
   mv "$tools/swing/src/mcp.new" "$tools/swing/src/mcp"
   echo "swing: code copied from $swing_src (sha256 $(digest "$tools/swing/src/mcp/swing_mcp.py"))"
@@ -113,11 +123,11 @@ elif [ -f "$tools/swing/src/mcp/swing_mcp.py" ]; then
 else
   echo "swing: no source in $swing_src (mcp/swing_mcp.py not found): copy it first" >&2; exit 1
 fi
-cp "$deploy/connectors/runtime/swing.requirements.txt" "$tools/swing/requirements.txt"
+install_file "$deploy/connectors/runtime/swing.requirements.txt" "$tools/swing/requirements.txt" || exit 1
 
 mkdir -p "$tools/qonto"
-cp "$deploy/connectors/runtime/qonto.package.json" "$tools/qonto/package.json"
-cp "$deploy/connectors/runtime/qonto.package-lock.json" "$tools/qonto/package-lock.json"
+install_file "$deploy/connectors/runtime/qonto.package.json" "$tools/qonto/package.json" || exit 1
+install_file "$deploy/connectors/runtime/qonto.package-lock.json" "$tools/qonto/package-lock.json" || exit 1
 
 # ---- 3. Dependencies, in throw-away containers; skipped when already in place.
 # $1 directory under tools, $2 what was installed from, $3 the command. A stamp

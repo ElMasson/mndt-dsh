@@ -162,29 +162,27 @@ if [ ! -f "$root$data/grants.json" ]; then
   chmod 600 "$root$data/grants.json"
 fi
 mkdir -p "$root$app/gateway"
-cp "$here/gateway/server.mjs" "$root$app/gateway/server.mjs"
+# Every file a container reads, replaced atomically (shared/install-file.sh): the
+# gateway runs server.mjs, and a partial file at its restart would make it fall
+# in a loop.
+f="$here/shared/install-file.sh"; [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+. "$f"
+install_file "$here/gateway/server.mjs" "$root$app/gateway/server.mjs" || exit 1
 # The connector machinery of the adapters lane, at this tenant's paths: the
 # renderer and the catalog beside the gateway, the tools the workbench runs in
 # its tools folder (code, refreshed on each run; no secret among them).
-cp "$here/connectors/render-connectors.py" "$here/connectors/catalog.json" "$here/patchfile.py" "$root$app/gateway/"
-# Each one replaced atomically: written beside it, then renamed over it, so an
-# MCP server started meanwhile, or a check-connectors.sh running, never reads a
-# half-written file (cp rewrote the file in place). Mode 0644, owned by root on
-# the server: the workbench runs as root and mounts the folder read-only. A
-# failure leaves no .tmp behind and stops the script.
-install_tool() {
-  local src=$1 dst=$2 tmp="$2.tmp.$$"
-  if install -m 0644 "$src" "$tmp" && { [ "$(id -u)" != 0 ] || chown 0:0 "$tmp"; } && mv -f "$tmp" "$dst"; then return 0; fi
-  rm -f "$tmp"
-  echo "could not install $dst: the tools folder was left as it was" >&2
-  exit 1
-}
+for file in connectors/render-connectors.py connectors/catalog.json patchfile.py; do
+  install_file "$here/$file" "$root$app/gateway/$(basename "$file")" || exit 1
+done
+# Each one replaced atomically, as above (shared/install-file.sh): an MCP server
+# started meanwhile, or a check-connectors.sh running, never reads a
+# half-written file. A failure leaves no .tmp behind and stops the script.
 for tool in "${tools[@]}" "${checks[@]}"; do
-  install_tool "$here/connectors/$tool" "$root$data/tools/$tool"
+  install_file "$here/connectors/$tool" "$root$data/tools/$tool" || exit 1
 done
 # The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,
 # and /opt/mndt-tools is this tools folder: without it the workbench never starts.
-install_tool "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh"
+install_file "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh" || exit 1
 mkdir -p "$root$data/home/profiles/web"
 
 # The team tenant's defaults, in the home patch (DSH_HOME=/state/home), between
