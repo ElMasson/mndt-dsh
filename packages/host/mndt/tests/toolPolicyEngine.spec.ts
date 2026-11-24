@@ -55,6 +55,19 @@ async function host(scope: (ctx: Context, parentCtx: Context | undefined) => voi
     textResponse('child done'),
   ])
   ctx.llm.registerAdapter(['mock'], adapter)
+  // What the engine's own plugins register in production: the DSH development
+  // prompt (harness-dev-context, ui-deliverables) beside a section a team turn keeps.
+  const prompt = (ctx as unknown as { systemPrompt: {
+    section(s: { name: string; order: number; text: string; interpolate?: boolean }): () => void
+    context(c: { name: string; order: number; text: string; interpolate?: boolean }): () => void
+  } }).systemPrompt
+  prompt.section({ name: 'harness:source', order: 1000, text: 'DEV-SECTION-SOURCE', interpolate: false })
+  prompt.section({ name: 'app:web-surface', order: 1001, text: 'DEV-SECTION-WEB', interpolate: false })
+  prompt.section({ name: 'ui:deliverable-file-references', order: 1002, text: 'DEV-SECTION-FILES', interpolate: false })
+  prompt.section({ name: 'team:kept', order: 1003, text: 'KEPT-SECTION', interpolate: false })
+  prompt.context({ name: 'harness:source', order: 10, text: 'DEV-CONTEXT-CHECKOUT', interpolate: false })
+  prompt.context({ name: 'app:web-surface', order: 11, text: 'DEV-CONTEXT-URL', interpolate: false })
+  prompt.context({ name: 'team:cwd', order: 12, text: 'KEPT-CONTEXT', interpolate: false })
   if (when === 'before') scope(ctx, undefined)
   const handle = await ctx.agents.create({
     sessionId: SessionId('trn_1'),
@@ -82,6 +95,32 @@ function seenBy(adapter: MockAdapter) {
   const results = JSON.stringify(adapter.requests.at(-1)?.messages ?? [])
   return { offered, results }
 }
+
+describe('a team run\'s agents get no DSH development prompt; anyone else keeps it', () => {
+  const DEV = ['DEV-SECTION-SOURCE', 'DEV-SECTION-WEB', 'DEV-SECTION-FILES', 'DEV-CONTEXT-CHECKOUT', 'DEV-CONTEXT-URL']
+
+  it('the run\'s lineage, child included: the development sections and contexts are left out, the rest kept', async () => {
+    const { adapter, parent } = await host((ctx) => { scopeToolPolicy(ctx as unknown as PolicyHostLike, 'trn_1', channelPolicy(['qonto'])) }, 'before')
+    const run = await child(parent)
+    expect(adapter.requests.length).toBeGreaterThan(0)
+    for (const request of adapter.requests) {
+      const sent = JSON.stringify(request)
+      for (const mark of DEV) expect(sent).not.toContain(mark)
+      expect(sent).toContain('KEPT-SECTION')
+      expect(sent).toContain('KEPT-CONTEXT')
+    }
+    await run.dispose()
+  })
+
+  it('outside every run (the owner\'s shell): the same prompt, whole', async () => {
+    // A policy scoped to another session: this agent is not of its lineage.
+    const { adapter, parent } = await host((ctx) => { scopeToolPolicy(ctx as unknown as PolicyHostLike, 'trn_other', channelPolicy(['qonto'])) }, 'before')
+    const run = await child(parent)
+    const sent = JSON.stringify(adapter.requests[0])
+    for (const mark of [...DEV, 'KEPT-SECTION', 'KEPT-CONTEXT']) expect(sent).toContain(mark)
+    await run.dispose()
+  })
+})
 
 describe('the tool policy reaches the agent that calls the model', () => {
   it('scoped to the run\'s session lineage: the child sees and runs only what the channel allows', async () => {
