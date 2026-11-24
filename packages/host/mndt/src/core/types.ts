@@ -206,6 +206,8 @@ export interface Agent {
   readonly connectors: readonly string[]
   /** Its monthly ceiling in euros; a turn is refused once the month reaches it. */
   readonly eurPerMonth: number
+  /** The skills of the space's library it uses (their slugs), three at most: given in its prompt, never a tool. */
+  readonly skills?: readonly string[]
   readonly createdBy: string
   readonly createdAt: string
   readonly retiredAt?: string
@@ -382,6 +384,23 @@ export interface Turn {
   readonly finishedAt?: string
 }
 
+/**
+ * A reusable skill: the text of a SKILL.md (its name, description and body),
+ * written by an owner or an admin. Given to the agents that use it in their
+ * prompt, after their role, as a method: it grants no right and opens no tool.
+ */
+export interface Skill {
+  /** From its name: lower case, digits and dashes; unique in the library. */
+  readonly slug: string
+  readonly name: string
+  readonly description: string
+  readonly body: string
+  /** Grows by one at every change: a page writes from the version it read. */
+  readonly version: number
+  readonly updatedBy: string
+  readonly updatedAt: string
+}
+
 /** What a blocked agent needs from its peers. */
 export type HelpNeed = 'fact' | 'opinion' | 'check' | 'choice'
 
@@ -527,6 +546,8 @@ export interface WorkbenchState {
   /** Absent in a state written before the channels: read as empty. */
   readonly agents?: readonly Agent[]
   readonly channels?: readonly Channel[]
+  /** The space's library of reusable skills (a SKILL.md each), attached to agents by people. */
+  readonly skills?: readonly Skill[]
   readonly messages?: readonly Message[]
 }
 

@@ -213,6 +213,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       engine: new DshTurnRunner(ctx, this.readinessFor(ctx)),
       prices,
       dataDir: dirname(this.statePath),
+      warn: (message) => { warnOperator(ctx, message) },
     })
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
     // without it, the API never believes the proxy's identity header.

@@ -21,6 +21,7 @@ import type {
   BriefSource,
   Channel,
   ChannelContext,
+  Skill,
   HelpEscalation,
   HelpRequest,
   TurnHelp,
@@ -101,10 +102,12 @@ export interface AgentDraft {
   readonly instructions?: string
   readonly connectors?: readonly string[]
   readonly eurPerMonth?: number
+  /** Slugs of the library's skills. */
+  readonly skills?: readonly string[]
 }
 
 /** What changing an agent may touch. */
-export type AgentPatch = Partial<Pick<Agent, 'name' | 'provider' | 'model' | 'instructions' | 'connectors' | 'eurPerMonth'>>
+export type AgentPatch = Partial<Pick<Agent, 'name' | 'provider' | 'model' | 'instructions' | 'connectors' | 'eurPerMonth' | 'skills'>>
 
 /** What creating a channel needs. */
 export interface ChannelDraft {
@@ -153,6 +156,74 @@ export interface OpenEscalation {
   readonly question: string
   readonly summary: string
   readonly at: string
+}
+
+/** The longest body of a skill, in characters once trimmed: it enters the prompt of every agent that uses it. */
+export const MAX_SKILL_BODY = 6000
+/** The skills one agent may use. */
+export const MAX_SKILLS_PER_AGENT = 3
+/** The longest name of a skill. */
+export const MAX_SKILL_NAME = 60
+
+/** Why a skill is refused, by a code the screen reads. */
+export type SkillRefusalCode = 'missing-fields' | 'skill-too-long' | 'skill-changed' | 'skill-exists' | 'unknown-skill' | 'too-many-skills'
+/** A refused skill: 409 for skill-changed and skill-exists, 404 for unknown-skill on its own route, 400 otherwise. */
+export class SkillRefusal extends Error {
+  readonly code: SkillRefusalCode
+  constructor(code: SkillRefusalCode, message: string) {
+    super(message)
+    this.name = 'SkillRefusal'
+    this.code = code
+  }
+}
+
+/** The fields of a SKILL.md's front matter a skill keeps; any other is ignored, and said. */
+const SKILL_FIELDS = ['name', 'description']
+
+/**
+ * Read a SKILL.md: its front matter (between two « --- » lines, « key: value »
+ * per line) and its body. Format parsing only. Only name and description are
+ * kept: a skill grants nothing, so allowed-tools, model and the like are
+ * ignored, and returned for the person to see.
+ * @param markdown - the file's text.
+ * @returns the skill's fields and the front-matter keys ignored.
+ * @throws SkillRefusal missing-fields (no front matter, no name), skill-too-long.
+ */
+export function parseSkill(markdown: string): { name: string; description: string; body: string; ignoredFields: string[] } {
+  const text = markdown.replace(/\r\n/g, '\n').trim()
+  if (!text.startsWith('---\n')) throw new SkillRefusal('missing-fields', 'a SKILL.md starts with its front matter: « --- », « name: … », « --- »')
+  const end = text.indexOf('\n---', 4)
+  if (end < 0) throw new SkillRefusal('missing-fields', 'the front matter of a SKILL.md ends with a « --- » line')
+  const fields = new Map<string, string>()
+  const ignored: string[] = []
+  for (const line of text.slice(4, end).split('\n')) {
+    const found = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line)
+    if (found === null) continue
+    const key = (found[1] ?? '').toLowerCase()
+    if (SKILL_FIELDS.includes(key)) fields.set(key, (found[2] ?? '').trim().replace(/^["']|["']$/g, ''))
+    else if (!ignored.includes(key)) ignored.push(key)
+  }
+  const name = fields.get('name') ?? ''
+  const body = text.slice(end + 4).trim()
+  if (name === '') throw new SkillRefusal('missing-fields', 'a SKILL.md names its skill (« name: … » in its front matter)')
+  if (name.length > MAX_SKILL_NAME) throw new SkillRefusal('missing-fields', `a skill's name is ${MAX_SKILL_NAME} characters at most`)
+  if (body === '') throw new SkillRefusal('missing-fields', 'a SKILL.md has a body after its front matter')
+  if (body.length > MAX_SKILL_BODY) throw new SkillRefusal('skill-too-long', `a skill's body is ${MAX_SKILL_BODY} characters at most (${body.length} given)`)
+  return { name, description: fields.get('description') ?? '', body, ignoredFields: ignored }
+}
+
+/**
+ * @param skills - the library.
+ * @param slugs - the skills asked for an agent.
+ * @returns them, deduplicated, each one in the library, three at most.
+ * @throws SkillRefusal unknown-skill, too-many-skills.
+ */
+function checkedSkills(skills: readonly Skill[], slugs: readonly string[]): string[] {
+  const asked = [...new Set(slugs)]
+  if (asked.length > MAX_SKILLS_PER_AGENT) throw new SkillRefusal('too-many-skills', `an agent uses ${MAX_SKILLS_PER_AGENT} skills at most`)
+  const unknown = asked.filter(slug => !skills.some(skill => skill.slug === slug))
+  if (unknown.length > 0) throw new SkillRefusal('unknown-skill', `not in the library: ${unknown.join(', ')}`)
+  return asked
 }
 
 /** The peers of one help request, at most. */
@@ -1081,7 +1152,9 @@ export class WorkbenchService {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
         throw new Error(`the handle @${draft.handle} is taken`)
       }
-      const agent = this.#newAgent(draft, actor, this.#at())
+      const skills = draft.skills === undefined ? [] : checkedSkills(state.skills ?? [], draft.skills)
+      const made = this.#newAgent(draft, actor, this.#at())
+      const agent: Agent = skills.length === 0 ? made : { ...made, skills }
       return {
         state: { ...state, agents: [...(state.agents ?? []), agent] },
         event: { at: agent.createdAt, actor, action: 'agent.created', subject: agent.id, detail: `@${agent.handle} ${agent.provider}/${agent.model}` },
@@ -1102,10 +1175,15 @@ export class WorkbenchService {
     return this.#write((state) => {
       const agent = (state.agents ?? []).find(candidate => candidate.id === id)
       if (agent === undefined || agent.retiredAt !== undefined) throw new Error(`no agent ${id}`)
+      const { skills: asked, ...rest } = patch
+      const skills = asked === undefined ? undefined : checkedSkills(state.skills ?? [], asked)
+      const { skills: _previous, ...kept } = agent
+      const base: Agent = skills === undefined ? agent : kept
       const next: Agent = {
-        ...agent,
-        ...patch,
+        ...base,
+        ...rest,
         ...(patch.connectors === undefined ? {} : { connectors: [...new Set(patch.connectors)].sort() }),
+        ...(skills === undefined || skills.length === 0 ? {} : { skills }),
       }
       const refusal = agentRefusal(next)
       if (refusal !== undefined) throw new Error(refusal)
@@ -1555,6 +1633,102 @@ export class WorkbenchService {
           question: escalation.question, summary: escalation.summary, at: escalation.at,
         }]
       }))
+  }
+
+  /** @returns the space's library of skills, by name. */
+  async listSkills(): Promise<readonly Skill[]> {
+    return [...((await this.#ready()).skills ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /**
+   * Add a skill to the library, from a SKILL.md.
+   * @param markdown - the file's text.
+   * @param actor - an owner or an admin.
+   * @returns the skill, and the front-matter fields it ignored (for the person to see).
+   */
+  createSkill(markdown: string, actor: string): Promise<{ skill: Skill; ignoredFields: string[] }> {
+    let parsed: ReturnType<typeof parseSkill>
+    try {
+      parsed = parseSkill(markdown)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    return this.#write((state) => {
+      const slug = slugOf(parsed.name)
+      if (slug === '') throw new SkillRefusal('missing-fields', 'a skill\'s name needs letters or digits')
+      if ((state.skills ?? []).some(skill => skill.slug === slug)) throw new SkillRefusal('skill-exists', `a skill « ${slug} » is already in the library`)
+      const at = this.#at()
+      const skill: Skill = {
+        slug, name: parsed.name, description: parsed.description, body: parsed.body, version: 1, updatedBy: actor, updatedAt: at,
+      }
+      return {
+        state: { ...state, skills: [...(state.skills ?? []), skill] },
+        event: { at, actor, action: 'skill.created', subject: slug, detail: 'version 1' },
+        value: { skill, ignoredFields: parsed.ignoredFields },
+      }
+    })
+  }
+
+  /**
+   * Change a skill, from the version the writer read; its agents use the new
+   * text at their next turn.
+   * @param slug - the skill.
+   * @param markdown - the new SKILL.md (its name may change; its slug does not).
+   * @param version - the version read.
+   * @param actor - an owner or an admin.
+   * @returns the skill and the fields ignored.
+   */
+  updateSkill(slug: string, markdown: string, version: number, actor: string): Promise<{ skill: Skill; ignoredFields: string[] }> {
+    let parsed: ReturnType<typeof parseSkill>
+    try {
+      parsed = parseSkill(markdown)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    return this.#write((state) => {
+      const current = (state.skills ?? []).find(skill => skill.slug === slug)
+      if (current === undefined) throw new SkillRefusal('unknown-skill', `no skill ${slug}`)
+      if (current.version !== version) {
+        throw new SkillRefusal('skill-changed', `the skill « ${slug} » changed since version ${version} (now ${current.version}): read it again`)
+      }
+      const at = this.#at()
+      const skill: Skill = {
+        ...current, name: parsed.name, description: parsed.description, body: parsed.body,
+        version: current.version + 1, updatedBy: actor, updatedAt: at,
+      }
+      return {
+        state: { ...state, skills: (state.skills ?? []).map(candidate => (candidate.slug === slug ? skill : candidate)) },
+        event: { at, actor, action: 'skill.updated', subject: slug, detail: `version ${skill.version}` },
+        value: { skill, ignoredFields: parsed.ignoredFields },
+      }
+    })
+  }
+
+  /**
+   * Remove a skill from the library and from every agent that used it, in ONE
+   * write: no slug is left pointing nowhere.
+   * @param slug - the skill.
+   * @param actor - an owner or an admin.
+   * @returns the agents it was removed from.
+   */
+  deleteSkill(slug: string, actor: string): Promise<{ removedFrom: string[] }> {
+    return this.#write((state) => {
+      if (!(state.skills ?? []).some(skill => skill.slug === slug)) throw new SkillRefusal('unknown-skill', `no skill ${slug}`)
+      const removedFrom: string[] = []
+      const agents = (state.agents ?? []).map((agent) => {
+        if (!(agent.skills ?? []).includes(slug)) return agent
+        removedFrom.push(agent.id)
+        const left = (agent.skills ?? []).filter(other => other !== slug)
+        const { skills: _all, ...rest } = agent
+        return left.length === 0 ? rest : { ...rest, skills: left }
+      })
+      const at = this.#at()
+      return {
+        state: { ...state, agents, skills: (state.skills ?? []).filter(skill => skill.slug !== slug) },
+        event: { at, actor, action: 'skill.deleted', subject: slug, detail: `removed from ${removedFrom.length} agent(s)` },
+        value: { removedFrom },
+      }
+    })
   }
 
   /**

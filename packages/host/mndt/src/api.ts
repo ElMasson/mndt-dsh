@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, StateFileError } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -383,6 +383,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const missing = await unmounted(connectors ?? [])
         if (missing !== undefined) return missing
         const eurPerMonth = typeof input.eurPerMonth === 'number' ? input.eurPerMonth : undefined
+        const skills = input.skills === undefined ? undefined : strings(input.skills)
         const text = (key: string): string | undefined => (typeof input[key] === 'string' ? input[key] : undefined)
         if (parts.length === 1 || text('provider') !== undefined || text('model') !== undefined) {
           const current = parts.length === 2 ? await service.agent(parts[1] ?? '') : undefined
@@ -400,6 +401,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
             ...(connectors === undefined ? {} : { connectors }),
             ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
+            ...(skills === undefined ? {} : { skills }),
           }, identity, creatorRole)
           return respond(201, { agent })
         }
@@ -412,6 +414,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(text('instructions') === undefined ? {} : { instructions: text('instructions') as string }),
           ...(connectors === undefined ? {} : { connectors }),
           ...(eurPerMonth === undefined ? {} : { eurPerMonth }),
+          ...(skills === undefined ? {} : { skills }),
         }
         const agent = await service.updateAgent(parts[1] ?? '', patch, identity, role)
         return respond(200, { agent })
@@ -960,6 +963,40 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(201, { help: { state: help.state, peers: help.peerIds.length, capEur: help.capEur } })
         } catch (error) {
           if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: error.message, code: error.code })
+          throw error
+        }
+      }
+
+      // The space's library of skills: read by every member, written by owners and admins.
+      if (path === '/skills' || path.startsWith('/skills/')) {
+        const skillStatus = (error: unknown): MndtApiResponse | undefined => {
+          if (!(error instanceof SkillRefusal)) return undefined
+          const status = error.code === 'skill-changed' || error.code === 'skill-exists' ? 409 : error.code === 'unknown-skill' ? 404 : 400
+          return respond(status, { error: error.message, code: error.code })
+        }
+        if (request.method === 'GET' && path === '/skills') return respond(200, { skills: await service.listSkills() })
+        if (request.method !== 'POST') return respond(404, { error: `no route ${request.method} ${path}` })
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const input = parseBody(request.body)
+        const parts = path.split('/')
+        try {
+          if (path === '/skills') {
+            if (typeof input.markdown !== 'string') return respond(400, { error: 'a skill is the text of a SKILL.md (markdown)', code: 'missing-fields' })
+            return respond(201, await service.createSkill(input.markdown, identity))
+          }
+          if (parts.length === 4 && parts[3] === 'delete') return respond(200, await service.deleteSkill(parts[2] ?? '', identity))
+          if (parts.length === 3) {
+            const version = input.version
+            if (typeof input.markdown !== 'string' || typeof version !== 'number' || !Number.isInteger(version)) {
+              return respond(400, { error: 'a change needs markdown and version (the version read)', code: 'missing-fields' })
+            }
+            return respond(200, await service.updateSkill(parts[2] ?? '', input.markdown, version, identity))
+          }
+          return respond(404, { error: `no route ${request.method} ${path}` })
+        } catch (error) {
+          const refused = skillStatus(error)
+          if (refused !== undefined) return refused
           throw error
         }
       }
