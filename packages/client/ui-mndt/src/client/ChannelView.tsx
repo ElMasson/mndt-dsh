@@ -7,10 +7,12 @@
  * whether a turn runs or is refused, what it cost. A message never decides anything; a card is
  * decided only through its button. A refusal is shown with the Host's reason, never as emptiness.
  */
+import { helpOf } from './help.tsx'
+import { councilOf } from './council.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { ChatRefusal } from './chat.ts'
-import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel } from './chat.ts'
+import type { ChatAgent, ChatChannel, ChatFace, ChatMessage, ChatTurn, MountedConnector, OfferedModel, OpenEscalation } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { DecideOptions } from './face.ts'
 import type { ApprovalRow } from './face.ts'
@@ -438,6 +440,25 @@ export function ChannelThread(props: {
   // The most recent of the welcome's seed and the panel's.
   const latestSeed = props.seed !== undefined && (seed === undefined || props.seed.at > seed.at) ? props.seed : seed
 
+  // The questions an agent publishes after a help or a council, by the message that publishes them:
+  // shown once, under that message, where the person reads it (not also under the turn).
+  const asked = new Map<string, OpenEscalation>()
+  // Only a question whose message is really drawn in this thread moves under it: otherwise it stays
+  // under its turn. No question may become invisible.
+  const drawn = new Set((thread ?? []).filter(m => m.deletedAt === undefined).map(m => m.id))
+  for (const m of thread ?? []) {
+    for (const turn of m.turns ?? []) {
+      const help = helpOf(turn)
+      const council = councilOf(turn)
+      const e = help?.escalation ?? council?.escalation
+      if (e?.messageId === undefined || e.answeredAt !== undefined || !drawn.has(e.messageId)) continue
+      asked.set(e.messageId, {
+        channelId: channel.id, turnId: turn.id, messageId: m.id, questionMessageId: e.messageId, question: e.question,
+        ...(e.summary === undefined ? {} : { summary: e.summary }), kind: council?.escalation === undefined ? 'help' : 'council',
+      })
+    }
+  }
+
   const cardsOf = (messageId: string): ThreadCard[] =>
     props.cards.filter(card => card.channelId === channel.id && card.messageId === messageId)
 
@@ -479,6 +500,8 @@ export function ChannelThread(props: {
                 offered={props.offered}
                 channel={channel}
                 onAnswer={answer}
+                asks={asked.get(m.id)}
+                askedIds={asked}
                 canAnswer={props.canAnswer}
                 t={t}
               />
@@ -528,6 +551,8 @@ function LaneWelcome(props: {
   readonly t: ChatTranslate
 }): ReactNode {
   const { arrival, t } = props
+  // A refused addition is said to the person, never dropped.
+  const [addError, setAddError] = useState<string | undefined>(undefined)
   return (
     <div className="mw-welcome" data-testid="lane-welcome">
       <p className="mw-welcome-title">{t('laneWelcomeTitle')}</p>
@@ -543,12 +568,13 @@ function LaneWelcome(props: {
                 type="button"
                 className="mw-pill"
                 aria-label={t('pillAddAgent', { handle: a.handle })}
-                onClick={() => { void arrival.addable?.onAdd(a.id) }}
+                onClick={() => { void arrival.addable?.onAdd(a.id).then(setAddError) }}
               >
                 @{a.handle}
               </button>
             ))}
           </div>
+          {addError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{addError}</p>}
         </>
       ) : props.agents.length === 0 ? <p className="mw-welcome-text">{t('laneWelcomeNoAgent')}</p> : (
         <div className="mw-pills" role="group" aria-label={t('laneWelcomeAsk')}>

@@ -230,6 +230,8 @@ export function HelpThread(props: {
   readonly originMessageId?: string | undefined
   /** Whether the reader's answer counts (workflows.write): a viewer is offered no field. */
   readonly canAnswer?: boolean | undefined
+  /** The question is shown under the message that publishes it, just below: not here too. */
+  readonly questionBelow?: boolean | undefined
   /** The team's names by lower-case address, where they are served. */
   readonly names?: Readonly<Record<string, string>> | undefined
   readonly t: ChatTranslate
@@ -245,7 +247,11 @@ export function HelpThread(props: {
   const total = help.eur ?? help.advices.reduce((sum, a) => sum + (a.eur ?? 0), 0)
   const name = (id: string): string => `@${props.agents.get(id)?.handle ?? id}`
   const send = async (): Promise<void> => {
-    if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
+    if (props.onAnswer === undefined || target === undefined || busy) return
+    if (answer.trim() === '') {
+      setError(t('answerEmpty'))
+      return
+    }
     setBusy(true)
     const refused = await props.onAnswer(answer.trim(), target)
     setError(refused)
@@ -266,7 +272,7 @@ export function HelpThread(props: {
         value={answer}
         onChange={(event) => { setAnswer(event.target.value) }}
       />
-      <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>
+      <button type="button" className="mw-primary" disabled={busy} onClick={() => { void send() }}>
         {t('helpAnswer')}
       </button>
       {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
@@ -280,7 +286,7 @@ export function HelpThread(props: {
         <b data-testid="help-state">{stateWord(help, t, props.names)}</b>
         {total > 0 ? ` · ${help.capEur === undefined ? euros(total) : t('helpCost', { eur: euros(total), cap: euros(help.capEur) })}` : ''}
       </p>
-      {waiting ? (
+      {waiting && props.questionBelow !== true ? (
         <div className="mw-turn-unchecked mw-help-question" role="note" data-testid="help-question">
           <p className="mw-help-question-text">{t('helpQuestionFor', { question: escalation.question })}</p>
           {escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(escalation.summary, { plainHeadings: true })}</div>}

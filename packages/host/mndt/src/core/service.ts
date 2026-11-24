@@ -1708,6 +1708,41 @@ export class WorkbenchService {
   }
 
   /**
+   * Attach one skill to an agent, or detach one, inside the write chain: it is
+   * applied to the agent as it stands at that moment, so two changes made at
+   * the same time both count (a whole list sent without a version, by
+   * contrast, could erase a skill attached in between). Attaching a skill
+   * already attached, or detaching one that is not, changes nothing.
+   * @param id - the agent.
+   * @param change - exactly one of add or remove: a skill's slug.
+   * @param actor - an owner or an admin.
+   * @returns the agent, as written.
+   * @throws SkillRefusal missing-fields (neither or both), unknown-skill, too-many-skills; an Error for an unknown or retired agent.
+   */
+  changeAgentSkill(id: string, change: { readonly add?: string; readonly remove?: string }, actor: string): Promise<Agent> {
+    return this.#write((state) => {
+      if ((change.add === undefined) === (change.remove === undefined)) {
+        throw new SkillRefusal('missing-fields', 'one skill to add or to remove: { add: slug } or { remove: slug }')
+      }
+      const agent = (state.agents ?? []).find(candidate => candidate.id === id)
+      if (agent === undefined || agent.retiredAt !== undefined) throw new Error(`no agent ${id}`)
+      const current = agent.skills ?? []
+      const slug = (change.add ?? change.remove) as string
+      const wanted = change.add !== undefined
+        ? (current.includes(slug) ? current : checkedSkills(state.skills ?? [], [...current, slug]))
+        : current.filter(other => other !== slug)
+      const { skills: _previous, ...rest } = agent
+      const next: Agent = wanted.length === 0 ? rest : { ...rest, skills: wanted }
+      const at = this.#at()
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor, action: 'agent.updated', subject: id, detail: `skills ${change.add !== undefined ? '+' : '-'}${slug}` },
+        value: next,
+      }
+    })
+  }
+
+  /**
    * Remove a skill from the library and from every agent that used it, in ONE
    * write: no slug is left pointing nowhere.
    * @param slug - the skill.

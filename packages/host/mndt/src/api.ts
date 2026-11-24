@@ -373,6 +373,24 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         options.turns?.stop({ agentId: agent.id })
         return respond(200, { agent })
       }
+      if (request.method === 'POST' && parts.length === 3 && parts[2] === 'skills') {
+        // One skill attached or detached, applied to the agent as it stands
+        // (two at the same time both count): owners and admins, as the agent itself.
+        const denied = await authorise(identity, 'rights.write')
+        if (denied !== undefined) return denied
+        const add = typeof input.add === 'string' ? input.add : undefined
+        const remove = typeof input.remove === 'string' ? input.remove : undefined
+        try {
+          const agent = await service.changeAgentSkill(parts[1] ?? '', { ...(add === undefined ? {} : { add }), ...(remove === undefined ? {} : { remove }) }, identity)
+          return respond(200, { agent })
+        } catch (error) {
+          if (error instanceof SkillRefusal) {
+            return respond(error.code === 'unknown-skill' ? 404 : error.code === 'too-many-skills' ? 409 : 400, { error: error.message, code: error.code })
+          }
+          if (error instanceof Error && error.message.startsWith('no agent ')) return respond(404, { error: error.message, code: 'unknown-agent' })
+          throw error
+        }
+      }
       if (request.method === 'POST' && parts.length <= 2) {
         // Creating and changing an agent (its instructions, model, connectors,
         // ceiling): owners and admins only (rights.write), decided by Stephane on

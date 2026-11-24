@@ -396,6 +396,16 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     expect(output.text).toBe('Réponse.')
   })
 
+  it('a mission\'s prompt opens with the date line, in the zone given, as every turn\'s', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const { ctx, seen } = fakeCtx()
+    const now = new Date('2026-11-24T21:30:00Z')
+    await new DshMissionRunner(ctx, { tools: TEAM_MISSION_POLICY, readiness: readinessOver(APPROVALS.concat('mcp__workbench_facts__get_facts')), timeZone: 'Indian/Reunion', now: () => now }).run(briefing)
+    const sent = JSON.parse((seen.script ?? '').replace(/^return await agent\(/, '').replace(/\)$/, '')) as string
+    expect(sent.startsWith('Nous sommes le mercredi 25 novembre 2026, 01:30 (heure de La Réunion).\n\n')).toBe(true)
+    expect(sent).toContain('Brief')
+  })
+
   it('a turn stopped while it waits leaves at once, and does not start', async () => {
     const { ctx, seen } = fakeCtx()
     const controller = new AbortController()

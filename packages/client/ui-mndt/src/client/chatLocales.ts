@@ -388,6 +388,7 @@ export const chatEn = {
   skillAttach: 'Attach to @{handle}',
   skillDetach: 'Detach from @{handle}',
   skillAgentFull: '@{handle} already reads three skills',
+  answerEmpty: 'Write your answer before sending it.',
   laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
   skillAttachChanged: 'This agent\'s skills were changed meanwhile: read them again.',
 } as const
@@ -778,6 +779,7 @@ export const chatFr: Record<ChatKey, string> = {
   skillAttach: 'Attacher à @{handle}',
   skillDetach: 'Détacher de @{handle}',
   skillAgentFull: '@{handle} lit déjà trois compétences',
+  answerEmpty: 'Écrivez votre réponse avant de l\'envoyer.',
   laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
   skillAttachChanged: 'Les compétences de cet agent ont été modifiées entre-temps : relisez.',
 }

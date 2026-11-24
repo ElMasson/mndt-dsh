@@ -195,6 +195,8 @@ export function CouncilThread(props: {
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly onAnswer?: ((text: string, replyTo: string) => Promise<string | undefined>) | undefined
   readonly canAnswer?: boolean | undefined
+  /** The question is shown under the message that publishes it, just below: not here too. */
+  readonly questionBelow?: boolean | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { council: c, t } = props
@@ -227,7 +229,11 @@ export function CouncilThread(props: {
           : ended ? endedWords : t('councilRunning')
   const target = props.canAnswer === true && waiting ? c.escalation.messageId : undefined
   const send = async (): Promise<void> => {
-    if (props.onAnswer === undefined || target === undefined || answer.trim() === '' || busy) return
+    if (props.onAnswer === undefined || target === undefined || busy) return
+    if (answer.trim() === '') {
+      setError(t('answerEmpty'))
+      return
+    }
     setBusy(true)
     const refused = await props.onAnswer(answer.trim(), target)
     setError(refused)
@@ -249,14 +255,14 @@ export function CouncilThread(props: {
           {t('councilDissent', { slot: d.slot })}{d.why === undefined ? '' : ` : ${d.why}`}
         </p>
       ))}
-      {waiting ? (
+      {waiting && props.questionBelow !== true ? (
         <div className="mw-turn-unchecked mw-help-question" role="note" data-testid="council-question">
           <p className="mw-help-question-text">{t('helpQuestionFor', { question: c.escalation.question })}</p>
           {c.escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(c.escalation.summary, { plainHeadings: true })}</div>}
           {props.onAnswer === undefined || target === undefined ? undefined : (
             <div className="mw-help-answer">
               <textarea className="mw-input" rows={2} aria-label={t('helpAnswerLabel')} value={answer} onChange={(event) => { setAnswer(event.target.value) }} />
-              <button type="button" className="mw-primary" disabled={busy || answer.trim() === ''} onClick={() => { void send() }}>{t('helpAnswer')}</button>
+              <button type="button" className="mw-primary" disabled={busy} onClick={() => { void send() }}>{t('helpAnswer')}</button>
               {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
             </div>
           )}
