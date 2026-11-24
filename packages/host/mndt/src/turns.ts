@@ -19,6 +19,7 @@ import type {
   CouncilCost,
   CouncilSlot,
   ParallelSynthesis,
+  Skill,
   Turn,
   TurnCouncil,
   TurnHelp,
@@ -41,6 +42,7 @@ import {
   parseHelpReading,
   parseVerdict,
   reasonKind,
+  skillsOf,
   priceOf,
   revisionPrompt,
   spentThisMonth,
@@ -141,6 +143,8 @@ export interface TurnSchedulerOptions {
   readonly prices: PriceGrid
   /** Where each channel's folder lives: `<dataDir>/channels/<id>/files`. */
   readonly dataDir: string
+  /** The operator's log line (a skill left out of a prompt, its budget passed). */
+  readonly warn?: (message: string) => void
 }
 
 /** @param dataDir - the data root. @param channelId - the channel. @returns its folder. */
@@ -275,7 +279,7 @@ export class TurnScheduler {
       const worker = agents.find(candidate =>
         candidate.id === workerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
       const name = worker === undefined ? workerId : `@${worker.handle}`
-      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents)}\n\n${WORKER_FRAME}`
+      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, undefined, await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
         : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
@@ -429,7 +433,7 @@ export class TurnScheduler {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal' }] }
           continue
         }
-        const text = helpPeerPrompt(peer, channel, help.request, disputed)
+        const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, undefined, await this.#skillsFor(peer))
         const why = await askerCeiling() ?? overCap(peer, text)
         if (why !== undefined) {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why }] }
@@ -646,7 +650,8 @@ export class TurnScheduler {
     const valid = (choice: unknown): number | undefined =>
       typeof choice === 'number' && Number.isInteger(choice) && choice >= 1 && choice <= council.options.length ? choice : undefined
     for (const { slot, member } of slots) {
-      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options))
+      const skills = await this.#skillsFor(member)
+      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options, undefined, undefined, skills))
       if ('refused' in positioned) {
         skip(member, positioned, slot)
       } else {
@@ -671,7 +676,9 @@ export class TurnScheduler {
       const member = slots.find(entry => entry.slot === own.slot)?.member
       if (member === undefined) continue
       const others = counted.filter(other => other.slot !== own.slot).map(other => ({ slot: other.slot, text: other.text }))
-      const critiqued = await run(member, `cc${own.slot.toLowerCase()}`, councilCritiquePrompt(member, channel, council.question, council.options, own, others))
+      const critiqueSkills = await this.#skillsFor(member)
+      const critiqued = await run(member, `cc${own.slot.toLowerCase()}`,
+        councilCritiquePrompt(member, channel, council.question, council.options, own, others, undefined, critiqueSkills))
       if ('refused' in critiqued) {
         skip(member, critiqued, own.slot)
       } else {
@@ -748,6 +755,20 @@ export class TurnScheduler {
     council = { ...council, dissent, state: 'done', eur: spent() }
     await save()
     return { text: body, eur: spent() }
+  }
+
+  /**
+   * @param agent - an agent.
+   * @returns the skills its prompt carries, from the library, within the
+   * per-turn budget; one left out is said in the operator's log.
+   */
+  async #skillsFor(agent: Agent): Promise<Skill[]> {
+    if ((agent.skills ?? []).length === 0) return []
+    const { kept, dropped } = skillsOf(agent, (await this.#options.service.snapshot()).skills ?? [])
+    if (dropped.length > 0) {
+      this.#options.warn?.(`mndt: @${agent.handle}'s skills ${dropped.join(', ')} left out of its prompt (no longer in the library, or past the per-turn budget)`)
+    }
+    return kept
   }
 
   /** @returns once every queued turn has settled (for tests and shutdown). */
@@ -846,7 +867,7 @@ export class TurnScheduler {
     try {
       const history = await service.messages(channel.id)
       const agents = await service.listAgents(true)
-      const prompt = turnPrompt(agent, channel, history, message, agents)
+      const prompt = turnPrompt(agent, channel, history, message, agents, undefined, await this.#skillsFor(agent))
       const actor = message.author.kind === 'human' ? message.author.email : ''
       /**
        * One call of the engine for one agent, priced with that agent's model. A
