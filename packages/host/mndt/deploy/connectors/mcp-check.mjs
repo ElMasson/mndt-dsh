@@ -46,6 +46,14 @@ if (command.length === 0) {
   process.stderr.write('usage: mcp-check.mjs [--discover] [--refuse <tool>] [--call <tool>] [--actor <email> --actor-file <f>] -- <command...>\n')
   process.exit(2)
 }
+// --discover is a read-only probe on its own: it refuses, itself, to be
+// combined with a real tools/call (--refuse, --call) or with writing a file
+// (--actor, --actor-file), so the guarantee never rests on the caller.
+const mixed = ['--refuse', '--call', '--actor', '--actor-file'].filter(name => options.includes(name))
+if (discover && mixed.length > 0) {
+  process.stderr.write(`mcp-check: --discover runs alone, without ${mixed.join(', ')}: nothing was sent\n`)
+  process.exit(2)
+}
 if (actor !== '' && actorFile !== '') writeFileSync(actorFile, JSON.stringify({ actor }), { mode: 0o600 })
 
 const child = spawn(command[0], command.slice(1), { stdio: ['pipe', 'pipe', 'pipe'], env: process.env })
