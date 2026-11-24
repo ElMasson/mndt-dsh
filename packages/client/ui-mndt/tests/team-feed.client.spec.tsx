@@ -61,6 +61,24 @@ describe('the feed, as mndt-web draws it', () => {
     expect(screen.getByTestId('chat-markdown').querySelector('strong')?.textContent).toBe('prêt')
   })
 
+  it('a turn that ran without some tools says which, in orange; other shapes show nothing', () => {
+    const turned = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'done', toolsUnavailable: ['dolibarr', 'qonto', 3, '../x'] }] })
+    const { unmount } = render(
+      <WebMessage message={turned} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />,
+    )
+    expect(screen.getByTestId('tools-unavailable').textContent).toBe('Outils indisponibles pour ce tour : dolibarr, qonto. La réponse ne les a pas consultés.')
+    unmount()
+    const odd = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'done', toolsUnavailable: 'dolibarr' }] })
+    render(<WebMessage message={odd} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.queryByTestId('tools-unavailable')).toBeNull()
+  })
+
+  it('a turn not started for want of its tools says why on its line', () => {
+    const failed = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reason: 'outils indisponibles : approvals (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé' }] })
+    render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('chat-turn').textContent).toContain('outils indisponibles : approvals')
+  })
+
   it('says a finished turn with its duration, tokens, cost and model', () => {
     const turned = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'done', tokens: { input: 4421, output: 540 }, eur: 0.0041, startedAt: '2026-11-14T09:00:00.000Z', finishedAt: '2026-11-14T09:00:03.200Z' }] })
     render(<WebMessage message={turned} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
