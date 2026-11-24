@@ -27,6 +27,8 @@ class HelpEngine implements TurnEngine {
   helpAnswer?: { status: number; body: Record<string, unknown> }
   reading = 'Je retiens l’avis A : le montant est HT.\n{"retained": "A", "why": "il cite la facture", "verdict": "unblocked"}'
   tokens = { input: 1000, output: 100 }
+  /** The channel's servers the engine reports not ready, on an ordinary turn. */
+  unavailable?: string[]
   before?: (input: TurnInput) => Promise<void> | void
   async run(input: TurnInput): Promise<TurnOutput> {
     this.seen.push(input)
@@ -37,7 +39,7 @@ class HelpEngine implements TurnEngine {
     }
     if (/-hr\d$/.test(input.turnId)) return { text: this.reading, tokens: this.tokens }
     if (/-h\d[ab]$/.test(input.turnId)) return { text: `avis de ${input.agent.handle}`, tokens: this.tokens }
-    return { text: `réponse de ${input.agent.handle}`, tokens: this.tokens }
+    return { text: `réponse de ${input.agent.handle}`, tokens: this.tokens, ...(this.unavailable === undefined ? {} : { toolsUnavailable: this.unavailable }) }
   }
 }
 
@@ -189,6 +191,17 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
     // After the reading, the reason in full and the peer named.
     expect(turn.help?.skipped[0]?.reason).toMatch(/^@(beta|gamma) : le moteur a refusé$/)
     expect(turn.help?.skipped[0]?.agentId).toBeDefined()
+  })
+})
+
+describe('a turn whose connector was not ready', () => {
+  it('records the servers it ran without, for the screen', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.unavailable = ['dolibarr']
+    const { turn } = await ask(b, t.channel, '@beta un mot ?')
+    expect(turn.status).toBe('done')
+    expect(turn.toolsUnavailable).toEqual(['dolibarr'])
   })
 })
 

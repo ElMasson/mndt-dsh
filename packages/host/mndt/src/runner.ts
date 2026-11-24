@@ -19,7 +19,9 @@ import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
 import { eurOf } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
-import { channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
+import { ALWAYS_SERVERS, channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
+import { ToolsReadiness } from './tools-ready.ts'
+import type { ToolsRegistryLike } from './tools-ready.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 import { warnOperator } from './operator-log.ts'
 
@@ -256,10 +258,17 @@ export class DshMissionRunner {
  */
 export class DshTurnRunner implements TurnEngine {
   readonly #ctx: Context
+  /** Whether a turn's servers have registered their tools: kept across turns (a server's unavailability is remembered). */
+  readonly #readiness: ToolsReadiness
 
-  /** @param ctx - the host context. */
-  constructor(ctx: Context) {
+  /** @param ctx - the host context. @param readiness - for tests: how the servers' readiness is read. */
+  constructor(ctx: Context, readiness?: ToolsReadiness) {
     this.#ctx = ctx
+    this.#readiness = readiness ?? new ToolsReadiness(
+      () => ctx.get('tools') as ToolsRegistryLike | undefined,
+      listener => ctx.on('tools/change' as never, listener as never),
+      (message) => { warnOperator(ctx, message) },
+    )
   }
 
   /**
@@ -275,6 +284,20 @@ export class DshTurnRunner implements TurnEngine {
     const engine = this.#ctx.get('workflowEngine') as WorkflowEngineLike | undefined
     if (engine === undefined) throw new Error('mndt: this host does not mount the workflow engine, so an agent cannot answer')
     await mkdir(input.cwd, { recursive: true })
+    // The servers' tools first: the policy below copies the visible names once,
+    // when the agent is created, so a server not yet registered would stay
+    // hidden for the whole turn. The approvals are required: without them the
+    // turn does not start. A channel's connector may be missing: the turn runs
+    // without it, and is told so.
+    const needed = input.tools === 'none' ? [] : input.tools === 'no-cards' ? [...input.servers] : [...new Set([...input.servers, ...ALWAYS_SERVERS])]
+    const { missing } = await this.#readiness.waitFor(needed)
+    const required = missing.filter(server => input.tools !== 'no-cards' && ALWAYS_SERVERS.includes(server))
+    if (required.length > 0) {
+      throw new Error(`outils indisponibles : ${required.join(', ')} (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé`)
+    }
+    const toolsUnavailable = missing.filter(server => !required.includes(server))
+    const prompt = toolsUnavailable.length === 0 ? input.prompt
+      : `${input.prompt}\n\nOutils indisponibles pour ce tour : ${toolsUnavailable.join(', ')} (démarrage en cours ou connecteur en panne). Ne prétends pas les avoir consultés.`
     // Deny by default: the channel's servers and the approvals, nothing else.
     // A reading step (an « auteur puis vérificateur » verifier) has no server, no tool.
     // A worker of « en parallèle puis synthèse » keeps its connectors, not the approvals.
@@ -337,7 +360,7 @@ export class DshTurnRunner implements TurnEngine {
     let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
       run = engine.start({
-        script: `return await agent(${JSON.stringify(input.prompt)})`,
+        script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-turn', description: `@${input.agent.handle} in #${input.channel.name}` },
         parent: created.agent,
       })
@@ -351,7 +374,9 @@ export class DshTurnRunner implements TurnEngine {
       const text = textOf(settled)
       if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
-      return { text, sessionId, ...(tokens === undefined ? {} : { tokens }) }
+      return {
+        text, sessionId, ...(tokens === undefined ? {} : { tokens }), ...(toolsUnavailable.length === 0 ? {} : { toolsUnavailable }),
+      }
     } finally {
       // The policy is lifted last, and only once the workflow's children and
       // the agent are gone (endRun).

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DshMissionRunner, DshTurnRunner } from '../src/runner.ts'
+import { ToolsReadiness } from '../src/tools-ready.ts'
 import { soloWorkstation } from '../src/gateway.ts'
 import {
   ALLOWED_TOOLS, ALWAYS_SERVERS, TEAM_MISSION_POLICY, channelPolicy, hideOutsidePolicy, isServerName, mcpServerOf,
@@ -233,6 +234,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       runDisposedBeforeAgent?: boolean
       /** How many messages had been reported when the agent was disposed. */
       messagesAtAgentDispose?: number
+      /** The script the run was started with. */
+      script?: string
     }
     const seen: Seen = {}
     let runDisposed = false
@@ -243,7 +246,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     const provider = options.provider ?? {}
     const engine = {
       ...(provider === 'unreadable' ? {} : { config: { provider: provider.name ?? 'spawn' } }),
-      start: () => {
+      start: (spec?: { script?: string }) => {
+        seen.script = spec?.script
         // The workflow child: the agent that actually calls the model.
         const child = agentOf('child_1', seen.root!.session.header.id)
         announce(child)
@@ -310,6 +314,32 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     agent: { handle: 'assistant', provider: 'p', model: 'm' },
     channel: { id: 'ch_1', name: 'compta' },
   } as unknown as TurnInput)
+
+  /** @param names - the tools registered now. @returns a readiness over them, with a short bound. */
+  const readinessOver = (names: string[], warned: string[] = []) =>
+    new ToolsReadiness(() => ({ schemas: () => names.map(name => ({ name })) }), () => () => undefined, (m) => { warned.push(m) }, 30)
+
+  it('the approvals not registered at the bound: the turn does not start, and says why', async () => {
+    const { ctx, seen } = fakeCtx()
+    await expect(new DshTurnRunner(ctx, readinessOver(['mcp__qonto__list'])).run(turn()))
+      .rejects.toThrow('outils indisponibles : approvals (démarrage en cours ou connecteur en panne)')
+    expect(seen.root).toBeUndefined()
+  })
+
+  it('a channel connector not registered: the turn runs with the tools ready, told so, and records it', async () => {
+    const { ctx, seen } = fakeCtx()
+    const output = await new DshTurnRunner(ctx, readinessOver(['mcp__approvals__request_approval'])).run(turn())
+    expect(output.text).toBe('Réponse.')
+    expect(output.toolsUnavailable).toEqual(['qonto'])
+    expect(seen.script).toContain('Outils indisponibles pour ce tour : qonto (démarrage en cours ou connecteur en panne). Ne prétends pas les avoir consultés.')
+  })
+
+  it('a reading step (no server) waits for nothing', async () => {
+    const { ctx } = fakeCtx()
+    const started = Date.now()
+    await new DshTurnRunner(ctx, readinessOver([])).run({ ...turn(), tools: 'none' })
+    expect(Date.now() - started).toBeLessThan(25)
+  })
 
   it('a channel turn: the root and the workflow child get its servers and the approvals, nothing else', async () => {
     const { ctx, seen, guards } = fakeCtx()

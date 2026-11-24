@@ -127,6 +127,8 @@ export interface TurnOutput {
   readonly text: string
   readonly sessionId?: string
   readonly tokens?: NonNullable<Mission['tokens']>
+  /** The channel's servers whose tools were not ready: the turn ran without them, and was told. */
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** Runs one agent turn. */
@@ -1026,6 +1028,7 @@ export class TurnScheduler {
         ...(tokens === undefined ? {} : { tokens }),
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
+        ...(first.output.toolsUnavailable === undefined ? {} : { toolsUnavailable: first.output.toolsUnavailable }),
       })
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
