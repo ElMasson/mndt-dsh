@@ -27,6 +27,8 @@ class HelpEngine implements TurnEngine {
   helpAnswer?: { status: number; body: Record<string, unknown> }
   reading = 'Je retiens l’avis A : le montant est HT.\n{"retained": "A", "why": "il cite la facture", "verdict": "unblocked"}'
   tokens = { input: 1000, output: 100 }
+  /** The channel's servers the engine reports not ready, on an ordinary turn. */
+  unavailable?: string[]
   before?: (input: TurnInput) => Promise<void> | void
   async run(input: TurnInput): Promise<TurnOutput> {
     this.seen.push(input)
@@ -37,7 +39,7 @@ class HelpEngine implements TurnEngine {
     }
     if (/-hr\d$/.test(input.turnId)) return { text: this.reading, tokens: this.tokens }
     if (/-h\d[ab]$/.test(input.turnId)) return { text: `avis de ${input.agent.handle}`, tokens: this.tokens }
-    return { text: `réponse de ${input.agent.handle}`, tokens: this.tokens }
+    return { text: `réponse de ${input.agent.handle}`, tokens: this.tokens, ...(this.unavailable === undefined ? {} : { toolsUnavailable: this.unavailable }) }
   }
 }
 
@@ -192,6 +194,17 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
   })
 })
 
+describe('a turn whose connector was not ready', () => {
+  it('records the servers it ran without, for the screen', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.unavailable = ['dolibarr']
+    const { turn } = await ask(b, t.channel, '@beta un mot ?')
+    expect(turn.status).toBe('done')
+    expect(turn.toolsUnavailable).toEqual(['dolibarr'])
+  })
+})
+
 describe('ask_peers: what the core refuses', () => {
   it('a missing field, the asker itself, a non-member, three peers, a second request in the same turn', async () => {
     const b = bench()
@@ -235,7 +248,9 @@ describe('ask_peers: escalation, answered by a member', () => {
     b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "La facture 42 est-elle HT ?"}'
     const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
     expect(turn.help?.escalation).toMatchObject({ question: 'La facture 42 est-elle HT ?' })
-    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ?.')
+    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ? Avis reçus : 2.')
+    // Each sentence ended once: never « ?. » nor « .. ».
+    expect(turn.help?.escalation?.summary).not.toMatch(/\?\.|\.\./)
     const question = replies.at(-1) as Message
     expect(question.text).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
     const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { turnId: string; question: string }[]
@@ -271,6 +286,22 @@ describe('ask_peers: escalation, answered by a member', () => {
     await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'Oui, HT.', replyTo: (replies.at(-1) as Message).id })
     await b.turns.settled()
     expect((await served())?.help?.advices.every(advice => advice.agentId !== undefined)).toBe(true)
+  })
+
+  it('a deleted request withdraws its question: no longer listed, and a reply answers nothing', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "HT ?"}'
+    const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
+    expect(((await b.call('GET', '/escalations', 'operator')).body.escalations as unknown[]).length).toBe(1)
+    const origin = (replies.at(-1) as Message).replyTo as string
+    expect((await b.call('POST', `/channels/${t.channel}/messages/${origin}/delete`, 'owner')).status).toBe(200)
+    expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+    b.engine.helpBody = {}
+    const reply = await b.call('POST', `/channels/${t.channel}/messages`, 'operator', { text: 'HT.', replyTo: (replies.at(-1) as Message).id })
+    await b.turns.settled()
+    expect((reply.body.message as Message).turns ?? []).toEqual([])
+    expect((await b.service.message(origin))?.turns?.find(x => x.id === turn.id)?.help?.escalation?.answeredAt).toBeUndefined()
   })
 
   it('« card » without a card is an escalation', async () => {

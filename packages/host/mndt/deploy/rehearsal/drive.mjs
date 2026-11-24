@@ -377,11 +377,13 @@ if (assistant !== undefined && analyste !== undefined && qwen !== undefined) {
   const councilDeleted = councilDeleteMessage === undefined ? undefined
     : (await api('POST', `/channels/${councilRoom.id}/messages/${councilDeleteMessage.id}/delete`)).body.message
   const slotSkips = councilDeleted?.turns?.[0]?.council?.skipped.filter(s => s.slot !== undefined) ?? []
-  check('deleted-anonymous', helpToDelete?.help?.escalation !== undefined && helpDeleted?.deletedAt !== undefined && !names(helpDeleted.turns?.[0])
+  // A deleted request withdraws its question from « À traiter ».
+  const stillListed = (await escalations()).filter(e => [helpToDelete?.id, unreadable?.id].includes(e.turnId)).length
+  check('deleted-anonymous', stillListed === 0 && helpToDelete?.help?.escalation !== undefined && helpDeleted?.deletedAt !== undefined && !names(helpDeleted.turns?.[0])
     && helpDeleted.turns?.[0]?.help?.peerIds.length === 0
     && unreadable?.council?.escalation !== undefined && councilDeleted?.deletedAt !== undefined && !names(councilDeleted.turns?.[0])
     && slotSkips.length === 1 && slotSkips.every(s => s.reason === 'avis non obtenu'),
-  `help deleted ${helpDeleted?.deletedAt !== undefined}, named ${names(helpDeleted?.turns?.[0])}; council deleted ${councilDeleted?.deletedAt !== undefined}, named ${names(councilDeleted?.turns?.[0])}, slot skips ${slotSkips.map(s => `« ${s.reason} »`).join(' ') || 'none'}`)
+  `still listed ${stillListed}; help deleted ${helpDeleted?.deletedAt !== undefined}, named ${names(helpDeleted?.turns?.[0])}; council deleted ${councilDeleted?.deletedAt !== undefined}, named ${names(councilDeleted?.turns?.[0])}, slot skips ${slotSkips.map(s => `« ${s.reason} »`).join(' ') || 'none'}`)
 } else {
   check('coord-author-verifier', false, 'the seeded agents @assistant, @analyste and @qwen are not all there')
 }

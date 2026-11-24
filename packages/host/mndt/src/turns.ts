@@ -19,6 +19,7 @@ import type {
   CouncilCost,
   CouncilSlot,
   ParallelSynthesis,
+  Skill,
   Turn,
   TurnCouncil,
   TurnHelp,
@@ -41,6 +42,7 @@ import {
   parseHelpReading,
   parseVerdict,
   reasonKind,
+  skillsOf,
   priceOf,
   revisionPrompt,
   spentThisMonth,
@@ -127,11 +129,18 @@ export interface TurnOutput {
   readonly text: string
   readonly sessionId?: string
   readonly tokens?: NonNullable<Mission['tokens']>
+  /** The channel's servers whose tools were not ready: the turn ran without them, and was told. */
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** Runs one agent turn. */
 export interface TurnEngine {
   run(input: TurnInput): Promise<TurnOutput>
+  /**
+   * Optional: wait until the servers a turn will use are ready (bounded),
+   * called before the turn takes its place in the queue.
+   */
+  ready?(servers: readonly string[], signal: AbortSignal): Promise<void>
 }
 
 /** What the scheduler needs. */
@@ -141,6 +150,8 @@ export interface TurnSchedulerOptions {
   readonly prices: PriceGrid
   /** Where each channel's folder lives: `<dataDir>/channels/<id>/files`. */
   readonly dataDir: string
+  /** The operator's log line (a skill left out of a prompt, its budget passed). */
+  readonly warn?: (message: string) => void
 }
 
 /** @param dataDir - the data root. @param channelId - the channel. @returns its folder. */
@@ -164,6 +175,8 @@ export class TurnScheduler {
   #queue: Promise<unknown> = Promise.resolve()
   readonly #pending = new Set<Promise<unknown>>()
   readonly #running = new Map<string, Running>()
+  /** Turns waiting for their servers, before the queue: a stop reaches them too. */
+  readonly #waiting = new Map<string, Running>()
 
   /** @param options - service, engine, prices and data folder. */
   constructor(options: TurnSchedulerOptions) {
@@ -196,12 +209,22 @@ export class TurnScheduler {
    * @param message - the message just posted.
    */
   launch(message: Message): void {
+    // A message's turns keep their order: each waits for its servers after the previous one.
+    let gate: Promise<unknown> = Promise.resolve()
     for (const turn of message.turns ?? []) {
-      const next = this.#queue.then(
-        () => this.#run(message.id, turn),
-        () => this.#run(message.id, turn),
-      )
-      this.#queue = next.catch(() => undefined)
+      // The turn waits for its servers BEFORE the queue (it stays queued
+      // meanwhile): a slow or broken connector delays its own turn, never
+      // the other channels'. Then it takes its place, ready or at the bound.
+      const ready = gate.then(() => this.#ready(message.id, turn)).catch(() => undefined)
+      gate = ready
+      const next = ready.then(() => {
+        const run = this.#queue.then(
+          () => this.#run(message.id, turn),
+          () => this.#run(message.id, turn),
+        )
+        this.#queue = run.catch(() => undefined)
+        return run
+      })
       const tracked = next
         .catch(() => undefined)
         .finally(() => this.#pending.delete(tracked))
@@ -221,7 +244,7 @@ export class TurnScheduler {
       | { readonly channelId: string; readonly agentId: string }
       | { readonly agentId: string },
   ): void {
-    for (const running of this.#running.values()) {
+    for (const running of [...this.#running.values(), ...this.#waiting.values()]) {
       const matches =
         'messageId' in filter
           ? running.messageId === filter.messageId
@@ -275,7 +298,7 @@ export class TurnScheduler {
       const worker = agents.find(candidate =>
         candidate.id === workerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
       const name = worker === undefined ? workerId : `@${worker.handle}`
-      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents)}\n\n${WORKER_FRAME}`
+      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, undefined, await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
         : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
@@ -429,7 +452,7 @@ export class TurnScheduler {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal' }] }
           continue
         }
-        const text = helpPeerPrompt(peer, channel, help.request, disputed)
+        const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, undefined, await this.#skillsFor(peer))
         const why = await askerCeiling() ?? overCap(peer, text)
         if (why !== undefined) {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why }] }
@@ -472,10 +495,10 @@ export class TurnScheduler {
       // By kind: a raw reason (« Plafond mensuel atteint pour @x : … € ») would name a peer while the question waits.
       const reasons = help.skipped.map(skip => reasonKind(skip.reason))
       const summary = [
-        `Blocage : ${help.request.blocker}.`,
+        sentence(`Blocage : ${help.request.blocker}`),
         `Avis reçus : ${help.advices.length}.`,
-        ...(reasons.length === 0 ? [] : [`Sans avis : ${reasons.join(' ; ')}.`]),
-        ...(disputed === undefined ? [] : [`Désaccord restant : ${disputed}.`]),
+        ...(reasons.length === 0 ? [] : [sentence(`Sans avis : ${reasons.join(' ; ')}`)]),
+        ...(disputed === undefined ? [] : [sentence(`Désaccord restant : ${disputed}`)]),
       ].join(' ')
       help = { ...help, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
       await save()
@@ -612,11 +635,11 @@ export class TurnScheduler {
     }
     const escalate = async (question: string, why: string, body: string): Promise<{ text: string; eur: number }> => {
       const summary = [
-        `Question : ${council.question === '' ? question : council.question}.`,
-        `Pourquoi : ${why}.`,
+        sentence(`Question : ${council.question === '' ? question : council.question}`),
+        sentence(`Pourquoi : ${why}`),
         `Positions comptées : ${council.positions.filter(p => p.choice !== undefined).length}.`,
         ...(council.decision?.kind === 'vote' ? [`Décompte : ${Object.entries(council.decision.tally).map(([k, n]) => `option ${k} : ${n}`).join(', ')}.`] : []),
-        ...(council.critiques.length === 0 ? [] : [`Critiques : ${council.critiques.map(c => `${c.slot} : ${c.text.replace(/\s+/g, ' ').slice(0, 200)}`).join(' / ')}.`]),
+        ...(council.critiques.length === 0 ? [] : [sentence(`Critiques : ${council.critiques.map(c => `${c.slot} : ${unended(c.text.replace(/\s+/g, ' ').slice(0, 200))}`).join(' / ')}`)]),
       ].join(' ')
       council = { ...council, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
       await save()
@@ -630,7 +653,11 @@ export class TurnScheduler {
       return escalate(withoutMentions(message.text), `cadrage impossible (${reasonKind(framed.refused)})`, 'Le conseil n’a pas pu être cadré.')
     }
     const frame = parseFraming(framed.text)
-    council = { ...council, framing: { text: framed.text, ...framed.cost } }
+    // What the chair framed, as people read it: the question and its options, never its JSON line.
+    const framedText = frame === undefined ? framed.text
+      : [lastJsonLine(framed.text)?.body ?? '', `Question : ${frame.question}`, ...frame.options.map((option, index) => `${index + 1}. ${option}`)]
+        .filter(line => line !== '').join('\n')
+    council = { ...council, framing: { text: framedText, ...framed.cost } }
     if (frame === undefined) return escalate(withoutMentions(message.text), 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
     council = { ...council, question: frame.question, options: [...frame.options, NONE_OF_THESE] }
     await save()
@@ -646,7 +673,8 @@ export class TurnScheduler {
     const valid = (choice: unknown): number | undefined =>
       typeof choice === 'number' && Number.isInteger(choice) && choice >= 1 && choice <= council.options.length ? choice : undefined
     for (const { slot, member } of slots) {
-      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options))
+      const skills = await this.#skillsFor(member)
+      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options, undefined, undefined, skills))
       if ('refused' in positioned) {
         skip(member, positioned, slot)
       } else {
@@ -671,7 +699,9 @@ export class TurnScheduler {
       const member = slots.find(entry => entry.slot === own.slot)?.member
       if (member === undefined) continue
       const others = counted.filter(other => other.slot !== own.slot).map(other => ({ slot: other.slot, text: other.text }))
-      const critiqued = await run(member, `cc${own.slot.toLowerCase()}`, councilCritiquePrompt(member, channel, council.question, council.options, own, others))
+      const critiqueSkills = await this.#skillsFor(member)
+      const critiqued = await run(member, `cc${own.slot.toLowerCase()}`,
+        councilCritiquePrompt(member, channel, council.question, council.options, own, others, undefined, critiqueSkills))
       if ('refused' in critiqued) {
         skip(member, critiqued, own.slot)
       } else {
@@ -750,6 +780,20 @@ export class TurnScheduler {
     return { text: body, eur: spent() }
   }
 
+  /**
+   * @param agent - an agent.
+   * @returns the skills its prompt carries, from the library, within the
+   * per-turn budget; one left out is said in the operator's log.
+   */
+  async #skillsFor(agent: Agent): Promise<Skill[]> {
+    if ((agent.skills ?? []).length === 0) return []
+    const { kept, dropped } = skillsOf(agent, (await this.#options.service.snapshot()).skills ?? [])
+    if (dropped.length > 0) {
+      this.#options.warn?.(`mndt: @${agent.handle}'s skills ${dropped.join(', ')} left out of its prompt (no longer in the library, or past the per-turn budget)`)
+    }
+    return kept
+  }
+
   /** @returns once every queued turn has settled (for tests and shutdown). */
   async settled(): Promise<void> {
     while (this.#pending.size > 0) await Promise.all([...this.#pending])
@@ -761,6 +805,34 @@ export class TurnScheduler {
    * @param agentId - the agent.
    * @returns the reason, or undefined while it may go on.
    */
+  /**
+   * Wait until the servers this turn will use are ready, if the engine can
+   * tell; a stop (message deleted, agent gone) ends the wait at once, and the
+   * run then cancels the turn as usual.
+   * @param messageId - the message.
+   * @param turn - the turn.
+   */
+  async #ready(messageId: string, turn: Turn): Promise<void> {
+    const { service, engine } = this.#options
+    if (engine.ready === undefined) return
+    const message = await service.message(messageId)
+    const channel = message === undefined ? undefined : await service.channel(message.channelId)
+    const agent = await service.agent(turn.agentId)
+    if (message === undefined || channel === undefined || agent === undefined) return
+    // The agent's own servers; a synthesizer's workers use theirs too.
+    const workers = channel.coordination?.mode === 'parallel-synthesis' && channel.coordination.synthesizerId === agent.id
+      ? await Promise.all(channel.coordination.workerIds.map(id => service.agent(id)))
+      : []
+    const servers = [...new Set([agent, ...workers].flatMap(who => who === undefined ? [] : turnServers(who, channel)))]
+    const controller = new AbortController()
+    this.#waiting.set(turn.id, { messageId, channelId: channel.id, agentId: agent.id, agentHandle: agent.handle, controller })
+    try {
+      await engine.ready(servers, controller.signal)
+    } finally {
+      this.#waiting.delete(turn.id)
+    }
+  }
+
   async #stale(
     messageId: string,
     agentId: string,
@@ -846,7 +918,7 @@ export class TurnScheduler {
     try {
       const history = await service.messages(channel.id)
       const agents = await service.listAgents(true)
-      const prompt = turnPrompt(agent, channel, history, message, agents)
+      const prompt = turnPrompt(agent, channel, history, message, agents, undefined, await this.#skillsFor(agent))
       const actor = message.author.kind === 'human' ? message.author.email : ''
       /**
        * One call of the engine for one agent, priced with that agent's model. A
@@ -1026,6 +1098,7 @@ export class TurnScheduler {
         ...(tokens === undefined ? {} : { tokens }),
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
+        ...(first.output.toolsUnavailable === undefined ? {} : { toolsUnavailable: first.output.toolsUnavailable }),
       })
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
@@ -1043,6 +1116,17 @@ export class TurnScheduler {
       this.#running.delete(turn.id)
     }
   }
+}
+
+/** @param text - a sentence. @returns it without its final punctuation, for a list that ends it once. */
+function unended(text: string): string {
+  return text.trim().replace(/[.;,]+$/, '')
+}
+
+/** @param text - a sentence. @returns it ended by one mark: a point only when it has none (« ?. » and « .. » never). */
+function sentence(text: string): string {
+  const trimmed = text.trim()
+  return /[.?!…]$/.test(trimmed) ? trimmed : `${trimmed}.`
 }
 
 /**
