@@ -31,7 +31,7 @@ import type { ToolsReadiness } from './tools-ready.ts'
 import { TEAM_MISSION_POLICY } from './tool-policy.ts'
 import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
@@ -70,6 +70,15 @@ function readGatewaySecret(path: string | undefined): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * @param dataDir - the space's data root (beside state.json).
+ * @returns whether a server is configured for this space: its descriptor,
+ * written by mount-connector.sh, is in <dataDir>/connectors. Read at each call.
+ */
+export function configuredInSpace(dataDir: string): (server: string) => boolean {
+  return server => existsSync(join(dataDir, 'connectors', `${server}.json`))
 }
 
 /**
@@ -210,7 +219,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
     const turns = new TurnScheduler({
       service: this.service,
-      engine: new DshTurnRunner(ctx, this.readinessFor(ctx)),
+      engine: new DshTurnRunner(ctx, this.readinessFor(ctx), configuredInSpace(dirname(this.statePath))),
       prices,
       dataDir: dirname(this.statePath),
       warn: (message) => { warnOperator(ctx, message) },
@@ -402,7 +411,10 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   private missionRunner(ctx: Context): DshMissionRunner {
     const readiness = this.readinessFor(ctx)
-    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader) ? { readiness } : { tools: TEAM_MISSION_POLICY, readiness })
+    const configured = configuredInSpace(dirname(this.statePath))
+    return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
+      ? { readiness, configured }
+      : { tools: TEAM_MISSION_POLICY, readiness, configured })
   }
 
   /** One readiness for turns and missions: a server's unavailability is remembered once. */

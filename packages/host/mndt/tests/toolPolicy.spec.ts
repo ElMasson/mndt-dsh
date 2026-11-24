@@ -359,6 +359,22 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     expect(other.seen.root).toBeDefined()
   })
 
+  it('a space that does not configure the approvals (a solo workstation) neither waits for nor requires them', async () => {
+    const briefing = { id: 'msn_1', kind: 'briefing', prompt: 'Brief', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const slow = () => new ToolsReadiness(() => ({ schemas: () => [] }), () => () => undefined, () => undefined, 60_000)
+    const started = Date.now()
+    const solo = fakeCtx()
+    await new DshMissionRunner(solo.ctx, { readiness: slow(), configured: () => false }).run(briefing)
+    expect(solo.seen.root).toBeDefined()
+    const turnCtx = fakeCtx()
+    const output = await new DshTurnRunner(turnCtx.ctx, slow(), server => server === 'qonto').run({ ...turn(), servers: [] })
+    expect(output.toolsUnavailable).toBeUndefined()
+    expect(Date.now() - started).toBeLessThan(2000)
+    // Configured: required again.
+    const team = fakeCtx()
+    await expect(new DshMissionRunner(team.ctx, { readiness: readinessOver([]), configured: () => true }).run(briefing)).rejects.toThrow('outils indisponibles : approvals')
+  })
+
   it('a turn stopped while it waits leaves at once, and does not start', async () => {
     const { ctx, seen } = fakeCtx()
     const controller = new AbortController()

@@ -11,6 +11,7 @@ const PRICES: PriceGrid = { 'route-a/*': { input: 1, output: 2 } }
 /** An engine whose first turn's servers are slow to be ready, until released (or stopped). */
 class Engine implements TurnEngine {
   readonly ran: string[] = []
+  readonly runs: string[] = []
   readonly asked: (readonly string[])[] = []
   #release = (): void => undefined
   readonly #first = new Promise<void>((resolve) => { this.#release = resolve })
@@ -26,6 +27,7 @@ class Engine implements TurnEngine {
   }
   async run(input: TurnInput): Promise<TurnOutput> {
     this.ran.push(input.channel.name)
+    this.runs.push(input.turnId)
     return { text: `réponse dans ${input.channel.name}`, tokens: { input: 10, output: 1 } }
   }
 }
@@ -70,6 +72,34 @@ describe('a turn waits for its servers before the queue, not in it', () => {
     await b.turns.settled()
     expect(b.engine.ran).toEqual(['ventes', 'compta'])
     expect((await b.service.message(slow.id))?.turns?.[0]?.status).toBe('done')
+  })
+
+  it('two messages of one channel keep their order when the first waits; the other channels go on', async () => {
+    const b = bench()
+    const compta = await channelWithAgent(b, 'compta')
+    const ventes = await channelWithAgent(b, 'ventes')
+    const first = (await b.call('POST', `/channels/${compta}/messages`, { text: '@a-compta un' })).body.message as Message
+    const second = (await b.call('POST', `/channels/${compta}/messages`, { text: '@a-compta deux' })).body.message as Message
+    await b.call('POST', `/channels/${ventes}/messages`, { text: '@a-ventes trois' })
+    await until(async () => b.engine.ran.includes('ventes'))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(b.engine.ran).toEqual(['ventes'])
+    expect((await b.service.message(second.id))?.turns?.[0]?.status).toBe('queued')
+    b.engine.release()
+    await b.turns.settled()
+    expect(b.engine.runs.slice(1)).toEqual([first.turns![0]!.id, second.turns![0]!.id])
+  })
+
+  it('a turn stop() was called for never starts, even if the state shows no cause', async () => {
+    const b = bench()
+    const compta = await channelWithAgent(b, 'compta')
+    const posted = (await b.call('POST', `/channels/${compta}/messages`, { text: '@a-compta bonjour' })).body.message as Message
+    await until(async () => b.engine.asked.length > 0)
+    b.turns.stop({ messageId: posted.id })
+    await b.turns.settled()
+    expect(b.engine.ran).toEqual([])
+    const turn = (await b.service.message(posted.id))?.turns?.[0]
+    expect([turn?.status, turn?.reason]).toEqual(['cancelled', 'Tour arrêté avant son départ.'])
   })
 
   it('a message deleted while its turn waits: the wait ends at once, and the turn never starts', async () => {
