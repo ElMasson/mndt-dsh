@@ -235,7 +235,9 @@ describe('ask_peers: escalation, answered by a member', () => {
     b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "La facture 42 est-elle HT ?"}'
     const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
     expect(turn.help?.escalation).toMatchObject({ question: 'La facture 42 est-elle HT ?' })
-    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ?.')
+    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ? Avis reçus : 2.')
+    // Each sentence ended once: never « ?. » nor « .. ».
+    expect(turn.help?.escalation?.summary).not.toMatch(/\?\.|\.\./)
     const question = replies.at(-1) as Message
     expect(question.text).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
     const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { turnId: string; question: string }[]

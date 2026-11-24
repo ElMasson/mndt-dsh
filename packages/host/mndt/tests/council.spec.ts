@@ -166,6 +166,9 @@ describe('« conseil »: a vote on the options\' indexes', () => {
     expect(turn.council?.decision).toMatchObject({ kind: 'vote', chosen: 3 })
     expect(turn.council?.escalation?.summary).toContain('aucune de ces options')
     expect(turn.council?.escalation?.summary).toContain('Critiques : ')
+    expect(turn.council?.escalation?.summary).not.toMatch(/\?\.|\.\./)
+    // The framing is served as people read it: the question and its options, not the chair's JSON line.
+    expect(turn.council?.framing?.text).toBe('Question : HT ou TTC ?\n1. HT\n2. TTC')
   })
 
   it('a choice outside the options is not counted (skipped « choix illisible »); fewer than two counted escalates', async () => {
