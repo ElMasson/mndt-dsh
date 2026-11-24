@@ -1500,7 +1500,8 @@ export class WorkbenchService {
       const question = messages.find(candidate => candidate.id === reply.replyTo)
       if (question === undefined || question.author.kind !== 'agent') return { state, event: [], value: undefined }
       const askerId = question.author.agentId
-      const origin = messages.find(candidate => candidate.id === question.replyTo)
+      // A question whose request was deleted is answered by nobody: its person withdrew it.
+      const origin = messages.find(candidate => candidate.id === question.replyTo && candidate.deletedAt === undefined)
       // The escalation this reply answers: the one its question message names
       // (or, for a help recorded before messageId existed, the asker's open one).
       const turn = origin?.turns?.find((t) => {
@@ -1541,7 +1542,9 @@ export class WorkbenchService {
   async openEscalations(identity: string): Promise<OpenEscalation[]> {
     const state = await this.snapshot()
     const mine = new Set((state.channels ?? []).filter(channel => channel.members.includes(identity)).map(channel => channel.id))
-    return (state.messages ?? []).filter(message => mine.has(message.channelId)).flatMap(message => (message.turns ?? [])
+    // A deleted request withdraws its question: it leaves « À traiter » with it.
+    const open = (state.messages ?? []).filter(message => mine.has(message.channelId) && message.deletedAt === undefined)
+    return open.flatMap(message => (message.turns ?? [])
       .flatMap((turn) => {
         const open = openEscalationOf(turn)
         if (open === undefined) return []

@@ -472,10 +472,10 @@ export class TurnScheduler {
       // By kind: a raw reason (« Plafond mensuel atteint pour @x : … € ») would name a peer while the question waits.
       const reasons = help.skipped.map(skip => reasonKind(skip.reason))
       const summary = [
-        `Blocage : ${help.request.blocker}.`,
+        sentence(`Blocage : ${help.request.blocker}`),
         `Avis reçus : ${help.advices.length}.`,
-        ...(reasons.length === 0 ? [] : [`Sans avis : ${reasons.join(' ; ')}.`]),
-        ...(disputed === undefined ? [] : [`Désaccord restant : ${disputed}.`]),
+        ...(reasons.length === 0 ? [] : [sentence(`Sans avis : ${reasons.join(' ; ')}`)]),
+        ...(disputed === undefined ? [] : [sentence(`Désaccord restant : ${disputed}`)]),
       ].join(' ')
       help = { ...help, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
       await save()
@@ -612,11 +612,11 @@ export class TurnScheduler {
     }
     const escalate = async (question: string, why: string, body: string): Promise<{ text: string; eur: number }> => {
       const summary = [
-        `Question : ${council.question === '' ? question : council.question}.`,
-        `Pourquoi : ${why}.`,
+        sentence(`Question : ${council.question === '' ? question : council.question}`),
+        sentence(`Pourquoi : ${why}`),
         `Positions comptées : ${council.positions.filter(p => p.choice !== undefined).length}.`,
         ...(council.decision?.kind === 'vote' ? [`Décompte : ${Object.entries(council.decision.tally).map(([k, n]) => `option ${k} : ${n}`).join(', ')}.`] : []),
-        ...(council.critiques.length === 0 ? [] : [`Critiques : ${council.critiques.map(c => `${c.slot} : ${c.text.replace(/\s+/g, ' ').slice(0, 200)}`).join(' / ')}.`]),
+        ...(council.critiques.length === 0 ? [] : [sentence(`Critiques : ${council.critiques.map(c => `${c.slot} : ${unended(c.text.replace(/\s+/g, ' ').slice(0, 200))}`).join(' / ')}`)]),
       ].join(' ')
       council = { ...council, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
       await save()
@@ -630,7 +630,11 @@ export class TurnScheduler {
       return escalate(withoutMentions(message.text), `cadrage impossible (${reasonKind(framed.refused)})`, 'Le conseil n’a pas pu être cadré.')
     }
     const frame = parseFraming(framed.text)
-    council = { ...council, framing: { text: framed.text, ...framed.cost } }
+    // What the chair framed, as people read it: the question and its options, never its JSON line.
+    const framedText = frame === undefined ? framed.text
+      : [lastJsonLine(framed.text)?.body ?? '', `Question : ${frame.question}`, ...frame.options.map((option, index) => `${index + 1}. ${option}`)]
+        .filter(line => line !== '').join('\n')
+    council = { ...council, framing: { text: framedText, ...framed.cost } }
     if (frame === undefined) return escalate(withoutMentions(message.text), 'cadrage illisible', 'Le conseil n’a pas pu être cadré.')
     council = { ...council, question: frame.question, options: [...frame.options, NONE_OF_THESE] }
     await save()
@@ -1043,6 +1047,17 @@ export class TurnScheduler {
       this.#running.delete(turn.id)
     }
   }
+}
+
+/** @param text - a sentence. @returns it without its final punctuation, for a list that ends it once. */
+function unended(text: string): string {
+  return text.trim().replace(/[.;,]+$/, '')
+}
+
+/** @param text - a sentence. @returns it ended by one mark: a point only when it has none (« ?. » and « .. » never). */
+function sentence(text: string): string {
+  const trimmed = text.trim()
+  return /[.?!…]$/.test(trimmed) ? trimmed : `${trimmed}.`
 }
 
 /**

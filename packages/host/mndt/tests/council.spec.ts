@@ -166,6 +166,9 @@ describe('« conseil »: a vote on the options\' indexes', () => {
     expect(turn.council?.decision).toMatchObject({ kind: 'vote', chosen: 3 })
     expect(turn.council?.escalation?.summary).toContain('aucune de ces options')
     expect(turn.council?.escalation?.summary).toContain('Critiques : ')
+    expect(turn.council?.escalation?.summary).not.toMatch(/\?\.|\.\./)
+    // The framing is served as people read it: the question and its options, not the chair's JSON line.
+    expect(turn.council?.framing?.text).toBe('Question : HT ou TTC ?\n1. HT\n2. TTC')
   })
 
   it('a choice outside the options is not counted (skipped « choix illisible »); fewer than two counted escalates', async () => {
@@ -385,5 +388,17 @@ describe('« conseil »: an escalation\'s summary names no one', () => {
     const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { question: string; summary: string }[]
     expect(listed.length).toBe(1)
     expect(listed.every(e => !/@|€|agt_|route-/.test(e.summary))).toBe(true)
+  })
+})
+
+describe('« conseil »: a deleted request withdraws its question', () => {
+  it('no longer listed in « À traiter »', async () => {
+    const b = bench()
+    const t = await team(b)
+    b.engine.positions = { alpha: 1, beta: 2, gamma: 3 }
+    const { replies } = await ask(b, t.channel, '@alpha HT ou TTC ?')
+    expect(((await b.call('GET', '/escalations', 'operator')).body.escalations as unknown[]).length).toBe(1)
+    await b.call('POST', `/channels/${t.channel}/messages/${(replies.at(-1) as Message).replyTo as string}/delete`, 'owner')
+    expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
   })
 })
