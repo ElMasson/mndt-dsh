@@ -391,6 +391,8 @@ export const chatEn = {
   answerEmpty: 'Write your answer before sending it.',
   laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
   skillAttachChanged: 'This agent\'s skills were changed meanwhile: read them again.',
+  channelWelcomeAddAgent: 'No agent reads this channel yet. Add one:',
+  channelWelcomeNoAgent: 'No agent reads this channel yet: someone who may write in the space adds one.',
 } as const
 
 /** One copy key. */
@@ -782,6 +784,8 @@ export const chatFr: Record<ChatKey, string> = {
   answerEmpty: 'Écrivez votre réponse avant de l\'envoyer.',
   laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
   skillAttachChanged: 'Les compétences de cet agent ont été modifiées entre-temps : relisez.',
+  channelWelcomeAddAgent: 'Aucun agent ne lit encore ce canal. Ajoutez-en un :',
+  channelWelcomeNoAgent: 'Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
