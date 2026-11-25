@@ -4,6 +4,7 @@
 admin-no-mission
 admin-no-owner-brief
 agent-turn
+briefing-in-lane
 briefing-private
 channel
 context-injected
@@ -20,12 +21,14 @@ gateway-alive
 help-escalated-anonymous
 help-revealed
 landing-text
+lane-card-rises
 llm-called
 member-no-mission
 mission-facts
 mission-no-bash
 mission-run
 no-modal
+no-raw-failure
 old-brief-private
 old-briefing-facts
 page

@@ -231,7 +231,7 @@ for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
 done
 # An admin who is not the owner too: the drive checks that missions stay closed to them.
-printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" }, { "subject": "%s", "role": "operator" } ] }\n' $owner $viewer $admin operateur@datanalysis.re > "$data/grants.json"
 compose_for "$old_image"
 # An installed instance has the tenant topology since #56: the gateway listens
 # on the ingress network only, behind the signing proxy.

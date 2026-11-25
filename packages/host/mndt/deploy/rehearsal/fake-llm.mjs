@@ -154,6 +154,16 @@ createServer((req, res) => {
     let request = {}
     try { request = JSON.parse(body) } catch { /* not JSON */ }
     const messages = request.messages ?? []
+    // « sonde-panne » in the message that mentions the agent: the provider fails,
+    // with words the host must never serve (drive.mjs no-raw-failure). 400, so
+    // no retry repeats it.
+    const mention = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n').split('Message qui te mentionne').at(1) ?? ''
+    if (mention.includes('sonde-panne')) {
+      console.log(`fake-llm call ${calls + 1}: provider failure (sonde-panne)`)
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'upstream db at 10.9.9.9 refused, trace PANNE-SONDE-7731', type: 'invalid_request_error' } }))
+      return
+    }
     const tag = tagOf(messages)
     console.log(`fake-llm call ${calls}: ${req.method} ${req.url} model=${request.model} stream=${request.stream}`)
     // The tools this call offered the model, sorted: the rehearsal compares them
