@@ -133,9 +133,10 @@ describe('automation run', () => {
         throw new Error('modele injoignable')
       },
     }, automation({ id: 'auto_break', createdBy: 'automation:test' }))
-    expect(outcome.outcome).toBe('failed: modele injoignable')
+    // Served on the automation and the mission: the host's sentence, not the runtime's words.
+    expect(outcome.outcome).toBe('failed: Erreur pendant l’exécution.')
     const mission = await service.getMission(outcome.missionId)
     expect(mission?.status).toBe('failed')
-    expect(mission?.error).toContain('modele injoignable')
+    expect(mission?.error).toBe('Erreur pendant l’exécution.')
   })
 })

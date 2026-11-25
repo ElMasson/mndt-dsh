@@ -353,7 +353,7 @@ export function missionFailureKind(reason: string): MissionFailureKind {
   return 'failed'
 }
 
-/** The host's sentence for each kind: all that the lane says of a failure. */
+/** The host's sentence for each kind: all that is served of a failure (the mission, its journal line, the lane). */
 const FAILURE_SENTENCE: Readonly<Record<MissionFailureKind, string>> = {
   'no-answer': 'le modèle n’a pas répondu.',
   cut: 'réponse coupée (limite de longueur atteinte).',
@@ -366,12 +366,22 @@ const FAILURE_SENTENCE: Readonly<Record<MissionFailureKind, string>> = {
  * @param kind - the failure's kind.
  * @param by - who cancelled it, for a cancellation.
  * @param restarted - whether a restart of the workbench interrupted it.
- * @returns the host's line published in the lane: never the runtime's words.
+ * @returns the host's sentence for it, lower case: never the runtime's words.
  */
-function failedLine(kind: MissionFailureKind, by?: string, restarted = false): string {
-  if (kind === 'cancelled' && by !== undefined) return `Le briefing n’a pas abouti : annulé par ${by}.`
-  if (restarted) return 'Le briefing n’a pas abouti : interrompu par un redémarrage.'
-  return `Le briefing n’a pas abouti : ${FAILURE_SENTENCE[kind]}`
+function failureSentence(kind: MissionFailureKind, by?: string, restarted = false): string {
+  if (kind === 'cancelled' && by !== undefined) return `annulé par ${by}.`
+  if (restarted) return 'interrompu par un redémarrage.'
+  return FAILURE_SENTENCE[kind]
+}
+
+/** @param sentence - a failure sentence. @returns it as Mission.error: capitalized. */
+function asError(sentence: string): string {
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`
+}
+
+/** @param sentence - a failure sentence. @returns the line published in the lane. */
+function failedLine(sentence: string): string {
+  return `Le briefing n’a pas abouti : ${sentence}`
 }
 
 /** What building one service needs. */
@@ -669,13 +679,16 @@ export class WorkbenchService {
       if (mission === undefined) throw new Error(`no mission ${id}`)
       if (mission.status === 'done' || mission.status === 'failed') throw new Error(`mission ${id} already ${mission.status}`)
       const at = this.#at()
-      const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: detail }
-      const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
       const kind = missionFailureKind(detail)
-      const published = this.#inLane({ ...state, missions }, next, failedLine(kind, undefined, detail.startsWith('interrupted by a workbench restart')), at, kind)
+      const sentence = failureSentence(kind, undefined, detail.startsWith('interrupted by a workbench restart'))
+      // The runtime's own words, for the operator only (web.log): never served.
+      this.#options.warn?.(`mndt: mission ${id} (${mission.kind}) failed: ${detail}`)
+      const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: asError(sentence), reasonKind: kind }
+      const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
+      const published = this.#inLane({ ...state, missions }, next, failedLine(sentence), at, kind)
       return {
         state: published.state,
-        event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail }, ...published.events],
+        event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail: asError(sentence) }, ...published.events],
         value: next,
       }
     })
@@ -704,7 +717,7 @@ export class WorkbenchService {
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: `cancelled by ${actor}` }
       const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
-      const published = this.#inLane({ ...state, missions }, next, failedLine('cancelled', actor), at, 'cancelled')
+      const published = this.#inLane({ ...state, missions }, next, failedLine(failureSentence('cancelled', actor)), at, 'cancelled')
       return {
         state: published.state,
         event: [{ at, actor, action: 'mission.cancelled', subject: id }, ...published.events],

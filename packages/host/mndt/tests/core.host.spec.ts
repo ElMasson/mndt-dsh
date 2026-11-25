@@ -73,18 +73,25 @@ describe('missions', () => {
 
     const stored = await workbench.getMission(mission.id)
     expect(stored?.status).toBe('failed')
-    expect(stored?.error).toContain('no usable content')
+    expect(stored).toMatchObject({ error: 'Le modèle n’a pas répondu.', reasonKind: 'no-answer' })
     expect(await workbench.listBriefs()).toHaveLength(0)
   })
 
-  it('records the runtime reason when a run fails', async () => {
-    const workbench = bench()
+  it('serves the host\'s sentence for a failure, and gives the runtime\'s words to the operator\'s log only', async () => {
+    const warned: string[] = []
+    const workbench = new WorkbenchService({ store: new MemoryStore(), warn: (line) => { warned.push(line) } })
     const mission = await workbench.createMission({ kind: 'account-review', prompt: 'Review', createdBy: owner })
     await workbench.startMission(mission.id, 'session-1')
-    const failed = await workbench.failMission(mission.id, 'the agent turn failed: model refused')
+    const raw = 'the agent turn failed: 502 from upstream req_9a1 shard eu-3'
+    const failed = await workbench.failMission(mission.id, raw)
 
-    expect(failed.status).toBe('failed')
-    expect(failed.error).toBe('the agent turn failed: model refused')
+    expect(failed).toMatchObject({ status: 'failed', error: 'Erreur pendant l’exécution.', reasonKind: 'failed' })
+    // The journal line served to members says the same sentence.
+    const line = (await workbench.snapshot()).events.find(event => event.action === 'mission.failed')
+    expect(line?.detail).toBe('Erreur pendant l’exécution.')
+    expect(JSON.stringify(await workbench.snapshot())).not.toContain('req_9a1')
+    // The runtime's words reach the operator's log, and only it.
+    expect(warned).toEqual([`mndt: mission ${mission.id} (account-review) failed: ${raw}`])
   })
 
   it('refuses to finish a mission that never started', async () => {

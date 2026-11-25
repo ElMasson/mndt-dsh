@@ -72,11 +72,10 @@ describe('a finished briefing in its owner\'s lane', () => {
       text: 'Le briefing n’a pas abouti : réponse coupée (limite de longueur atteinte).',
       mission: { id: started.id, status: 'failed', title: 'Briefing', reasonKind: 'cut' },
     })
-    expect(JSON.stringify(published)).not.toContain('req_8f2c')
     expect(published?.mission?.eur).toBeUndefined()
     expect(published?.channelId).toBe((await b.service.laneOf(owner)).id)
-    // The runtime's words stay in the journal, for the operator.
-    expect((await b.service.snapshot()).events.find(event => event.action === 'mission.failed')?.detail).toBe(raw)
+    // Nowhere in what is served: the message, the mission, the journal line.
+    expect(JSON.stringify(await b.service.snapshot())).not.toContain('req_8f2c')
   })
 
   it('each kind of failure gets its sentence: no answer, tools, a restart, anything else', async () => {

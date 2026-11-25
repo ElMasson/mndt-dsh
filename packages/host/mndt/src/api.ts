@@ -284,9 +284,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const result = await runner.run(started)
       return respond(201, await service.completeMission(started.id, result))
     } catch (error) {
-      const reason = messageOf(error)
-      await service.failMission(started.id, reason)
-      return respond(502, { error: reason, mission: await service.getMission(started.id) })
+      // The runtime's words go to the operator's log (failMission); the caller
+      // reads the host's sentence for the failure, as on the mission.
+      await service.failMission(started.id, messageOf(error))
+      const failed = await service.getMission(started.id)
+      return respond(502, { error: failed?.error ?? 'Erreur pendant l’exécution.', mission: failed })
     }
   }
   /** @param channelId - a channel. @param identity - the caller. @returns it, when they are a member. */

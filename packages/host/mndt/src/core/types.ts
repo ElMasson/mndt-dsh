@@ -42,8 +42,14 @@ export interface Mission {
   readonly sessionId?: string
   readonly startedAt?: string
   readonly finishedAt?: string
-  /** Why it failed, in the runtime's own words. Never a generic excuse. */
+  /**
+   * Why it failed, in the host's words for its kind (« Réponse coupée (limite
+   * de longueur atteinte). »): what is served. The runtime's or the provider's
+   * own words may carry an internal detail: they go to the operator's log only.
+   */
   readonly error?: string
+  /** The kind of its failure, with `error`. */
+  readonly reasonKind?: MissionFailureKind
   readonly tokens?: {
     readonly input: number
     readonly output: number

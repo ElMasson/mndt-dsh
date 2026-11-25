@@ -540,7 +540,8 @@ export class WorkbenchGateway extends TypertRemoteService {
       const reason = error instanceof Error ? error.message : String(error)
       await this.service.failMission(mission.id, reason).catch(() => undefined)
       const stored = await this.service.getMission(mission.id)
-      return JSON.stringify({ ok: false, error: reason, ...(stored === undefined ? {} : { value: { mission: stored } }) })
+      // The host's sentence, as on the mission: the runtime's words are in the operator's log.
+      return JSON.stringify({ ok: false, error: stored?.error ?? 'Erreur pendant l’exécution.', ...(stored === undefined ? {} : { value: { mission: stored } }) })
     }
   }
 
@@ -607,7 +608,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       await this.service.failMission(mission.id, reason).catch(() => undefined)
-      return JSON.stringify({ ok: false, error: reason })
+      return JSON.stringify({ ok: false, error: (await this.service.getMission(mission.id))?.error ?? 'Erreur pendant l’exécution.' })
     }
   }
 
