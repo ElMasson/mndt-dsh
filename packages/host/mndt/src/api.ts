@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, StateFileError, UnreadableApproval } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -17,7 +17,7 @@ import type {
   MissionStatus,
   Visibility,
 } from './core/index.ts'
-import type { WorkbenchService, MissionResult } from './core/index.ts'
+import type { WorkbenchService, MissionResult, WorkbenchState, Approval } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
@@ -28,7 +28,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMandate, canReadMission } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission, servedCard, servedEvent } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -257,9 +257,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    * @param identity - the reader.
    * @returns their channels and whether they may decide.
    */
-  const readerOf = async (identity: string): Promise<Reader> => {
-    const table = await grants.grants()
-    const all = (await service.snapshot()).channels ?? []
+  const readerOf = async (identity: string): Promise<Reader> => readerIn(await service.snapshot(), await grants.grants(), identity)
+
+  /**
+   * The same reader, resolved from a given state: a decision checks it inside
+   * its own write, on the state it changes (never on an earlier snapshot).
+   * @param state - the state read.
+   * @param table - the role table.
+   * @param identity - the reader.
+   * @returns their channels and whether they may decide.
+   */
+  const readerIn = (state: WorkbenchState, table: Awaited<ReturnType<typeof grants.grants>>, identity: string): Reader => {
+    const all = state.channels ?? []
     const decides = (person: string): boolean => table.ok && can(table.grants, person, 'rights.write').allowed
     const decider = decides(identity)
     return {
@@ -709,7 +718,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const activeMandates = mandatesSeen.filter(mandate => mandateState(mandate, todayDate) === 'active').length
         const lastEvent = reader === undefined
           ? snapshot.events.at(-1)
-          : snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
+          : servedLast(reader, snapshot)
         return respond(200, {
           up: 1,
           uptimeSeconds: Math.round(process.uptime()),
@@ -741,9 +750,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           canShare,
           missions: snapshot.missions.filter(mission => canReadMission(reader, mission)).slice(0, 30),
           briefs: snapshot.briefs.filter(brief => canReadMission(reader, brief)).slice(0, 30),
-          approvals: snapshot.approvals.filter(approval => approval.state === 'pending' && canReadApproval(reader, approval)),
+          approvals: snapshot.approvals.filter(approval => approval.state === 'pending' && canReadApproval(reader, approval))
+            .map(approval => servedCard(reader, approval, snapshot)),
           memories: snapshot.memories.filter(note => note.scope === 'team' || note.createdBy === identity).slice(0, 20),
-          events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40),
+          events: snapshot.events.filter(event => canReadEvent(reader, event, snapshot)).slice(-40)
+            .map(event => servedEvent(reader, event, snapshot)),
           mandates: snapshot.mandates
             .filter(mandate => canReadMandate(identity, canAdmin, mandate))
             .map(mandate => ({ ...mandate, state: mandateState(mandate, new Date().toISOString().slice(0, 10)) })),
@@ -830,7 +841,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // On a team instance the journal shows only lines whose subject the reader may read.
         const reader = teamInstance ? await readerOf(identity) : undefined
         const snapshot = reader === undefined ? undefined : await service.snapshot()
-        const events = reader === undefined || snapshot === undefined ? all : all.filter(event => canReadEvent(reader, event, snapshot))
+        const events = reader === undefined || snapshot === undefined
+          ? all
+          : all.filter(event => canReadEvent(reader, event, snapshot)).map(event => servedEvent(reader, event, snapshot))
         if (request.query?.format === 'csv') return respond(200, { format: 'csv', filename: 'journal.csv', text: journalCsv(events) })
         return respond(200, { format: 'json', entries: events })
       }
@@ -958,9 +971,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // the reader, whether the card is theirs to decide; `mine=1` keeps exactly
         // those, pending: the « À traiter » queue.
         const reader = await readerOf(identity)
+        const snapshot = await service.snapshot()
         const visible = (await service.listApprovals(state))
           .filter(approval => canReadApproval(reader, approval))
-          .map(approval => ({ ...approval, canDecide: reader.decider && approval.state === 'pending' }))
+          .map(approval => servedCard(reader, { ...approval, canDecide: reader.decider && approval.state === 'pending' }, snapshot))
         const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
         return respond(200, { approvals })
       }
@@ -1080,6 +1094,21 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (kind === 'propose_context' && thread === undefined) {
           return respond(400, { error: 'a propose_context card is asked from a channel turn' })
         }
+        // A channel's context is decided by one of its members only: a decider
+        // from outside must not write the content of a channel they do not read
+        // (decision of 25/11). In a channel with no decider among its members,
+        // such a card would never be decided: it is refused before it is born.
+        if (kind === 'propose_context' && thread !== undefined) {
+          const table = await grants.grants()
+          const channel = ((await service.snapshot()).channels ?? []).find(candidate => candidate.id === thread.channelId)
+          const decided = channel !== undefined && table.ok && channel.members.some(member => can(table.grants, member, 'rights.write').allowed)
+          if (!decided) {
+            return respond(409, {
+              error: 'le contexte de ce canal se décide par un owner ou un admin membre du canal ; ajoutez-en un au canal',
+              code: 'no-context-decider',
+            })
+          }
+        }
         const asked = service.requestApproval({
           kind,
           title: typeof input.title === 'string' && input.title.trim() !== ''
@@ -1132,9 +1161,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           if (offered !== undefined) return offered
           const table = await grants.grants()
           const role = table.ok ? roleOf(table.grants, identity) : undefined
+          const readable = (state: WorkbenchState, card: Approval): boolean => canReadApproval(readerIn(state, table, identity), card)
           try {
-            return respond(200, await service.approveAgentProposal(id, identity, role))
+            return respond(200, await service.approveAgentProposal(id, identity, role, readable))
           } catch (error) {
+            if (error instanceof UnreadableApproval) return respond(404, { error: `no approval ${id}` })
             return respond(400, { error: messageOf(error) })
           }
         }
@@ -1151,8 +1182,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             return respond(400, { error: messageOf(error) })
           }
         }
-        const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined)
-        return respond(200, { approval })
+        // Read again inside the write that decides: a card whose channel gained a
+        // decider meanwhile, or that the reader lost, is not decided from outside.
+        const table = await grants.grants()
+        const readable = (state: WorkbenchState, approval: Approval): boolean => canReadApproval(readerIn(state, table, identity), approval)
+        try {
+          const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined, readable)
+          return respond(200, { approval })
+        } catch (error) {
+          if (error instanceof UnreadableApproval) return respond(404, { error: `no approval ${id}` })
+          throw error
+        }
       }
 
       if (request.method === 'POST' && /^\/missions\/[^/]+\/visibility$/.test(path)) {
@@ -1629,6 +1669,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const snapshot = await service.snapshot()
         const limit = Number(request.query?.limit ?? 100)
         const events = snapshot.events.filter(event => canReadEvent(reader, event, snapshot))
+          .map(event => servedEvent(reader, event, snapshot))
         return respond(200, { events: events.slice(-(Number.isFinite(limit) && limit > 0 ? limit : 100)) })
       }
 
@@ -1641,6 +1682,16 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       return respond(client ? 409 : 500, { error: reason })
     }
   }
+}
+
+/**
+ * @param reader - who reads.
+ * @param snapshot - the state.
+ * @returns the last event this reader may read, as served to them.
+ */
+function servedLast(reader: Reader, snapshot: WorkbenchState): WorkbenchEvent | undefined {
+  const found = snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
+  return found === undefined ? undefined : servedEvent(reader, found, snapshot)
 }
 
 /**

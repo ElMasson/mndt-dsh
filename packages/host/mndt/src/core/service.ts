@@ -334,6 +334,15 @@ export interface MemoryFilter {
   readonly limit?: number
 }
 
+/** A decision on a card its decider can no longer read, checked inside the write: answered as absent. */
+export class UnreadableApproval extends Error {
+  /** @param id - the card. */
+  constructor(id: string) {
+    super(`no approval ${id}`)
+    this.name = 'UnreadableApproval'
+  }
+}
+
 /** What building one service needs. */
 export interface ServiceOptions {
   readonly store: WorkbenchStore
@@ -802,10 +811,16 @@ export class WorkbenchService {
    * @param role - their role.
    * @returns the approved card and the agent.
    */
-  approveAgentProposal(id: string, actor: string, role: Role | undefined): Promise<{ approval: Approval; agent: Agent }> {
+  approveAgentProposal(
+    id: string,
+    actor: string,
+    role: Role | undefined,
+    readable?: (state: WorkbenchState, approval: Approval) => boolean,
+  ): Promise<{ approval: Approval; agent: Agent }> {
     return this.#write((state) => {
       const approval = state.approvals.find(candidate => candidate.id === id)
       if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (readable !== undefined && !readable(state, approval)) throw new UnreadableApproval(id)
       if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Error(`approval ${id} proposes no agent`)
       if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
       const proposal = approval.proposal
@@ -838,7 +853,13 @@ export class WorkbenchService {
    * @param reason - why, when rejected.
    * @returns the decided approval.
    */
-  decideApproval(id: string, actor: string, decision: ApprovalState, reason?: string): Promise<Approval> {
+  decideApproval(
+    id: string,
+    actor: string,
+    decision: ApprovalState,
+    reason?: string,
+    readable?: (state: WorkbenchState, approval: Approval) => boolean,
+  ): Promise<Approval> {
     if (actor.trim() === '') return Promise.reject(new Error('a decision needs an actor'))
     if (decision !== 'approved' && decision !== 'rejected') return Promise.reject(new Error('cannot decide that'))
     const rejection = reason?.trim()
@@ -846,6 +867,7 @@ export class WorkbenchService {
     return this.#write((state) => {
       const approval = state.approvals.find(candidate => candidate.id === id)
       if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (readable !== undefined && !readable(state, approval)) throw new UnreadableApproval(id)
       if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
       const at = this.#at()
       const next: Approval = {

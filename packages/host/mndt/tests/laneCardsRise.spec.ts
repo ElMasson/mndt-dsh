@@ -5,7 +5,8 @@
  * channel that already has a decider among its members keeps its cards.
  */
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
+import { MemoryStore, UnreadableApproval, WorkbenchService } from '../src/core/index.ts'
+import { RISEN_CARD_DETAIL } from '../src/visibility.ts'
 import { createMndtApi } from '../src/api.ts'
 
 const owner = 'duke@datanalysis.re'
@@ -67,6 +68,61 @@ describe('a card no member of its channel may decide rises to the deciders', () 
     const others = await subjects('other')
     expect(others).not.toContain(card.id)
     expect(others).not.toContain(note.id)
+  })
+
+  it('a risen card\'s journal lines carry nothing of its channel for a decider outside it; its members read them whole', async () => {
+    const b = bench()
+    const lane = await b.service.laneOf(operator)
+    const card = await b.service.requestApproval({ kind: 'spend', title: 'Achat', payload: {}, requestedBy: operator, channelId: lane.id })
+    expect((await b.call('POST', `/approvals/${card.id}/decide`, 'owner', { decision: 'rejected', reason: 'trop cher' })).status).toBe(200)
+    const lines = async (who: string) => ((await b.call('GET', '/events', who)).body.events as { action: string; subject?: string; detail?: string }[])
+      .filter(event => event.subject === card.id)
+    const outside = await lines('owner')
+    expect(outside.map(event => event.action)).toEqual(['approval.requested', 'approval.rejected'])
+    expect(outside.every(event => event.detail === RISEN_CARD_DETAIL)).toBe(true)
+    expect((await lines('operator')).map(event => event.detail)).toEqual(['spend', 'trop cher'])
+  })
+
+  it('the decision reads the card again inside its own write: a card its decider can no longer read is not decided', async () => {
+    const b = bench()
+    const lane = await b.service.laneOf(operator)
+    const card = await b.service.requestApproval({ kind: 'spend', title: 'Achat', payload: {}, requestedBy: operator, channelId: lane.id })
+    await expect(b.service.decideApproval(card.id, owner, 'approved', undefined, () => false)).rejects.toBeInstanceOf(UnreadableApproval)
+    expect((await b.service.listApprovals('all')).find(c => c.id === card.id)?.state).toBe('pending')
+    // The guard is given the state of the write, the card included.
+    let seen: string | undefined
+    await b.service.decideApproval(card.id, owner, 'approved', undefined, (state, approval) => {
+      seen = `${state.approvals.length} ${approval.id}`
+      return true
+    })
+    expect(seen).toBe(`1 ${card.id}`)
+  })
+
+  it('a context card never rises, even one born before the refusal: a decider from outside does not write a channel they do not read', async () => {
+    const b = bench()
+    const lane = await b.service.laneOf(operator)
+    await b.service.requestApproval({
+      kind: 'propose_context', title: 'Contexte du canal', payload: {}, requestedBy: operator, channelId: lane.id,
+      contextProposal: { text: 'Client : Orange.', baseVersion: 0 },
+    })
+    expect(await b.pending('owner')).toEqual([])
+    expect(await b.pending('admin')).toEqual([])
+  })
+
+  it('a risen card says where it comes from, a lane or a channel, and nothing else of it; a member reads it without origin', async () => {
+    const b = bench()
+    const lane = await b.service.laneOf(operator)
+    await b.service.requestApproval({ kind: 'spend', title: 'Depuis la lane', payload: {}, requestedBy: operator, channelId: lane.id })
+    const field = await b.service.createChannel({ title: 'Terrain', members: [operator, other] }, operator)
+    await b.service.requestApproval({ kind: 'publish', title: 'Depuis le canal', payload: {}, requestedBy: other, channelId: field.id })
+    const cards = (await b.call('GET', '/approvals', 'owner')).body.approvals as { title: string; origin?: unknown }[]
+    expect(Object.fromEntries(cards.map(card => [card.title, card.origin]))).toEqual({
+      'Depuis la lane': { kind: 'lane' },
+      'Depuis le canal': { kind: 'channel' },
+    })
+    expect(JSON.stringify(cards)).not.toContain('Terrain')
+    const theirs = (await b.call('GET', '/approvals', 'operator')).body.approvals as { origin?: unknown }[]
+    expect(theirs.map(card => card.origin)).toEqual([undefined, undefined])
   })
 
   it('another operator never sees it, nor can decide it', async () => {
