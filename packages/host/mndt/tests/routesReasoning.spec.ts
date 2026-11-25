@@ -92,11 +92,36 @@ describe('the reasoning of the Scaleway routes', () => {
 })
 
 describe('the host never asks a reasoning effort', () => {
-  it('no call of a turn, a verifier, a council, a help, a synthesis or a mission names one: each gets its route\'s « off », sent as « none »', () => {
-    const src = join(import.meta.dirname, '..', 'src')
-    const named = readdirSync(src, { recursive: true, encoding: 'utf8' })
-      .filter(file => file.endsWith('.ts'))
-      .filter(file => /reasoningEffort|reasoning_effort/.test(readFileSync(join(src, file), 'utf8')))
-    expect(named).toEqual([])
+  /**
+   * The only files that may speak of reasoning or effort outside a comment,
+   * each for a reason: anything else that names one would bypass the routes'
+   * « off » (a kind of call asking « high » by itself, a provider flag such as
+   * `enable_thinking` set in a connector).
+   */
+  const EXCEPTIONS: Readonly<Record<string, string>> = {
+    'deploy/llm/routes.patch.yml.template': 'declares each Scaleway model\'s levels, « off » sent as « none »',
+    'deploy/rehearsal/fake-llm.mjs': 'logs the effort each call sent (rehearse.sh scaleway-reasoning-none)',
+    'deploy/rehearsal/rehearse.sh': 'checks those logs (scaleway-reasoning-none)',
+  }
+  const SCANNED = /\.(ts|js|mjs|cjs|ya?ml|template|json|py|sh)$/
+  const COMMENT = /^\s*(\/\/|\/\*|\*|#)/
+  const SPOKEN = /effort|thinking|reasoning/i
+
+  it('no file of src/ nor deploy/ names an effort, a thinking or a reasoning outside a comment, but the named exceptions', () => {
+    const root = join(import.meta.dirname, '..')
+    const named = ['src', 'deploy'].flatMap(dir => readdirSync(join(root, dir), { recursive: true, encoding: 'utf8' })
+      .map(file => `${dir}/${file.split('\\').join('/')}`))
+      .filter(file => SCANNED.test(file) && !file.includes('__pycache__') && !file.includes('node_modules'))
+      .filter(file => readFileSync(join(root, file), 'utf8').split('\n').some(line => !COMMENT.test(line) && SPOKEN.test(line)))
+      .sort()
+    expect(named).toEqual(Object.keys(EXCEPTIONS).sort())
+  })
+
+  it('the guard bites: a line naming an effort outside a comment is seen, a comment is not', () => {
+    const seen = (line: string): boolean => !COMMENT.test(line) && SPOKEN.test(line)
+    expect(seen("    reasoningEffort: 'high',")).toBe(true)
+    expect(seen('  chat_template_kwargs: {enable_thinking: true}')).toBe(true)
+    expect(seen('  // the effort is the route\'s')).toBe(false)
+    expect(seen('  # Its reasoning models REASON BY DEFAULT')).toBe(false)
   })
 })
