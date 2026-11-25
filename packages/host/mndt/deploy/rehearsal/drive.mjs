@@ -304,9 +304,18 @@ for (const surface of surfaces) for (const [who, context, expected] of [['owner'
 }
 const leaked = reads.filter(read => read.raw)
 const misread = reads.filter(read => read.status !== read.expected)
-const loggedRaw = docker('logs', `${project}-workbench`).includes('PANNE-SONDE') || (() => { try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat /state/web.log 2>/dev/null || true').includes('PANNE-SONDE') } catch { return false } })()
+// The provider's words reach the operator's log, and only it: the workbench's
+// web.log (DSH_MNDT_WEB_LOG, /run/mndt-launch/web.log by default; a restart
+// starts it anew, and this check runs before the drive's restarts).
+const operatorLog = (() => {
+  try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat "${DSH_MNDT_WEB_LOG:-/run/mndt-launch/web.log}" 2>/dev/null || true') } catch { return '' }
+})()
+// Tied to this very turn: a line left by an earlier run, in a volume that
+// persists, must not pass for this failure.
+const loggedRaw = failedTurn?.id !== undefined
+  && new RegExp(`turn ${failedTurn.id.replace(/[^A-Za-z0-9_]/g, '\\$&')} of @qwen failed: .*PANNE-SONDE`).test(operatorLog)
 check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string'
-  && surfaces.length > 0 && misread.length === 0 && leaked.length === 0,
+  && surfaces.length > 0 && misread.length === 0 && leaked.length === 0 && loggedRaw,
   `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads, ${misread.length === 0 ? 'every status as declared' : `unexpected: ${misread.map(read => `${read.who} ${read.path} ${read.status} (declared ${read.expected})`).join(', ')}`}; the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
 
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
