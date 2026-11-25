@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MemoryStore, Refusal, SkillRefusal, WorkbenchService } from '../src/core/index.ts'
 import type { WorkbenchState } from '../src/core/index.ts'
-import { createMndtApi } from '../src/api.ts'
+import { createMndtApi, MACHINE_FIELDS, machinePayload } from '../src/api.ts'
 import { publicFailure } from '../src/public-failure.ts'
 
 /** A line that serves something: an HTTP answer, a machine tool's answer, a reason (a role table's, a turn's, a step's). */
@@ -37,6 +37,15 @@ describe('a served failure', () => {
         .map(file => `deploy/${file}`),
     ].flatMap(file => rawServed(readFileSync(join(root, file), 'utf8')).map(line => `${file}: ${line}`))
     expect(found).toEqual([])
+  })
+
+  it('every machine answer goes through a route\'s list of fields, and machinePayload keeps nothing else', () => {
+    const api = readFileSync(join(import.meta.dirname, '..', 'src', 'api.ts'), 'utf8')
+    const calls = api.split('\n').filter(line => /machineAnswer\(answer/.test(line))
+    expect(calls.length).toBe(8)
+    expect(calls.every(line => /MACHINE_FIELDS\.[A-Z]+\)/.test(line))).toBe(true)
+    expect(machinePayload({ ok: true, png: 'p', host: 'h', token: 't', error: 'e', text: 3 }, MACHINE_FIELDS.ACTED)).toEqual({ ok: true, png: 'p' })
+    expect(machinePayload({ sessions: [{ name: 'n', status: 's', token: 't' }, 'x'] }, MACHINE_FIELDS.SESSIONS)).toEqual({ sessions: [{ name: 'n', status: 's' }] })
   })
 
   it('the guard bites, through its own predicate', () => {

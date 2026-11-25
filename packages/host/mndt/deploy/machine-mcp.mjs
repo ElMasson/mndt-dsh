@@ -142,7 +142,10 @@ async function requestApproval(kind, title, detail) {
     }),
   })
   const body = await answer.json().catch(() => ({}))
-  if (!answer.ok || body.approval === undefined) throw new ToolRefusal(body.error ?? `the product refused the approval (${answer.status})`)
+  // The product's own refusal is a text (the host's words); anything else is not served.
+  if (!answer.ok || body.approval === undefined) {
+    throw new ToolRefusal(typeof body.error === 'string' ? body.error : `the product refused the approval (${answer.status})`)
+  }
   return body.approval
 }
 

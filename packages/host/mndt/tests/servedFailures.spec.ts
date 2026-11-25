@@ -193,6 +193,40 @@ describe('another service\'s answer is never relayed as it came', () => {
   })
 })
 
+describe('a success of the machine service serves its route\'s fields only', () => {
+  const machinesApi = () => createMndtApi({
+    service: new WorkbenchService({ store: new MemoryStore() }),
+    runner: noMissions,
+    identity: { tokens: { owner: { user: owner } } },
+    grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }] }) },
+    machines: { baseUrl: 'http://machines.test', token: 'machine-token' },
+  })
+
+  it('a 200 that carries an error is a refusal: « db at » is served nowhere', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: 'db at 10.0.3.7 down', sessions: [] }), { status: 200 }))
+    const answer = await machinesApi()({ method: 'GET', path: '/machines', authorization: 'Bearer owner' })
+    expect(answer.body).toEqual({ error: 'the machine service refused the request', code: 'machine-refused' })
+    expect(JSON.stringify(answer.body)).not.toContain('db at')
+  })
+
+  it('GET /machines serves the sessions\' names and states, never a host or a token', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      sessions: [{ name: 'mndt-browser-1', status: 'Up 3 minutes', host: '10.0.3.9', token: 'agent-token-x' }],
+      token: 'service-token', debug: 'node gpu-7',
+    }), { status: 200 }))
+    const answer = await machinesApi()({ method: 'GET', path: '/machines', authorization: 'Bearer owner' })
+    expect(answer.body).toEqual({ sessions: [{ name: 'mndt-browser-1', status: 'Up 3 minutes' }] })
+  })
+
+  it('an action serves what the page reads (ok, png, text, url, title), nothing of the agent', async () => {
+    vi.stubGlobal('fetch', async (url: string) => (String(url).endsWith('/desktops/start')
+      ? new Response(JSON.stringify({ ok: true, host: 'desk-1.internal', token: 'agent-token-y' }), { status: 200 })
+      : new Response(JSON.stringify({ ok: true, png: 'iVBOR', title: 'Bureau', token: 'agent-token-y', cwd: '/root' }), { status: 200 })))
+    const answer = await machinesApi()({ method: 'POST', path: '/machines/desktop/act', authorization: 'Bearer owner', body: JSON.stringify({ op: 'screenshot' }) })
+    expect(answer.body).toEqual({ ok: true, png: 'iVBOR', title: 'Bureau' })
+  })
+})
+
 describe('the host\'s own refusals that named another', () => {
   it('/state serves nothing of a role table that cannot be read: no write, and its detail in the operator\'s log', async () => {
     const warned: string[] = []
