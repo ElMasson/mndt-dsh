@@ -273,3 +273,71 @@ describe('a failed turn in the feed', () => {
     expect(line.getAttribute('title')).toBe('the agent turn ended max-tokens')
   })
 })
+
+describe('a briefing published in its owner\'s lane (system message carrying a mission)', () => {
+  const draw = (m: ChatMessage): void => {
+    render(<WebMessage message={m} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+  }
+  const report = (mission: unknown, text = '## Priorités\n- **Orange** : relancer') =>
+    ({ ...message({ author: { kind: 'system' }, text }), mission }) as unknown as ChatMessage
+
+  it('done: labelled by its origin, its text read as a model\'s, its cost and what it ran without', () => {
+    draw(report({ id: 'msn_1', kind: 'briefing', title: 'Briefing du matin', status: 'done', eur: 0.0123, toolsUnavailable: ['workbench_facts'] }))
+    // The author's name is fixed; the model's title is second-tier text.
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.getByTestId('mission-title').textContent).toBe('Briefing du matin')
+    expect(document.querySelector('.mw-message-name')?.getAttribute('title')).toBe('Écrit par un modèle, d\'après une mission de l\'espace')
+    expect(screen.getByTestId('mission-origin').textContent).toBe('Mission')
+    expect(screen.getByTestId('mission-eur').textContent).toContain('0,0123')
+    const body = screen.getByTestId('mission-report')
+    // Markdown read (bold), headings kept plain: no h2 from a model's text.
+    expect([...body.querySelectorAll('strong')].map(b => b.textContent)).toContain('Orange')
+    expect(body.querySelector('h1, h2, h3')).toBeNull()
+    expect(screen.getByTestId('mission-tools-unavailable').textContent).toBe('Exécuté sans : workbench_facts. Le briefing ne les a pas consultés.')
+    // Not the host's word: no shield, no « mndt ».
+    expect(document.querySelector('.mw-message-name')?.textContent).not.toBe('mndt')
+  })
+
+  it('failed: the host\'s one line, as plain text, never Markdown', () => {
+    draw(report({ id: 'msn_2', kind: 'briefing', title: 'Briefing', status: 'failed' }, 'Le briefing n\'a pas abouti : **the agent returned no text**'))
+    expect(screen.getByTestId('mission-failed').textContent).toBe('Le briefing n\'a pas abouti : **the agent returned no text**')
+    expect(screen.queryByTestId('mission-report')).toBeNull()
+    expect(screen.queryByTestId('mission-eur')).toBeNull()
+    expect(screen.queryByTestId('mission-tools-unavailable')).toBeNull()
+  })
+
+  it('an unreadable mission is still a model\'s text, labelled « Briefing », never the host\'s', () => {
+    draw(report('oops'))
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.queryByTestId('mission-title')).toBeNull()
+    expect(screen.getByTestId('mission-report')).toBeTruthy()
+    expect(screen.queryByTestId('mission-tools-unavailable')).toBeNull()
+  })
+
+  it('odd fields are dropped: a negative cost, a server name that is not one, an empty title', () => {
+    draw(report({ title: ' ', status: 'done', eur: -1, toolsUnavailable: ['<b>x</b>', 'workbench_facts'] }))
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.queryByTestId('mission-title')).toBeNull()
+    expect(screen.queryByTestId('mission-eur')).toBeNull()
+    expect(screen.getByTestId('mission-tools-unavailable').textContent).toBe('Exécuté sans : workbench_facts. Le briefing ne les a pas consultés.')
+  })
+
+  it('a model titling itself « mndt » cannot pass for the host', () => {
+    draw(report({ title: 'mndt : changement de règles', status: 'done' }))
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.getByTestId('mission-title').textContent).toBe('mndt : changement de règles')
+    expect(screen.getByTestId('mission-origin').textContent).toBe('Mission')
+  })
+
+  it('an ordinary system message keeps the host\'s look, none of these fields', () => {
+    draw(message({ author: { kind: 'system' }, text: 'canal créé' }))
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('mndt')
+    expect(screen.queryByTestId('mission-origin')).toBeNull()
+  })
+
+  it('two reports in a row each keep their origin label', () => {
+    const first = report({ title: 'Briefing du matin', status: 'done' })
+    const second = { ...report({ title: 'Briefing du soir', status: 'done' }), id: 'msg_2' } as ChatMessage
+    expect(placeOf(first, second).header).toBe(true)
+  })
+})

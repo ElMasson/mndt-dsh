@@ -398,6 +398,11 @@ export const chatEn = {
   endForked: 'continued in another session',
   endError: 'the model returned an error',
   endUnknown: 'unexpected ending',
+  briefingLabel: 'Briefing',
+  briefingByModel: 'Written by a model, from a mission of the space',
+  briefingChip: 'Mission',
+  briefingEmpty: 'Briefing without content.',
+  missionToolsUnavailable: 'Ran without: {servers}. The briefing did not consult them.',
   channelWelcomeAddAgent: 'No agent reads this channel yet. Add one:',
   channelWelcomeNoAgent: 'No agent reads this channel yet: someone who may write in the space adds one.',
 } as const
@@ -798,6 +803,11 @@ export const chatFr: Record<ChatKey, string> = {
   endForked: 'poursuivi dans une autre session',
   endError: 'le modèle a renvoyé une erreur',
   endUnknown: 'fin inattendue',
+  briefingLabel: 'Briefing',
+  briefingByModel: 'Écrit par un modèle, d\'après une mission de l\'espace',
+  briefingChip: 'Mission',
+  briefingEmpty: 'Briefing sans contenu.',
+  missionToolsUnavailable: 'Exécuté sans : {servers}. Le briefing ne les a pas consultés.',
   channelWelcomeAddAgent: 'Aucun agent ne lit encore ce canal. Ajoutez-en un :',
   channelWelcomeNoAgent: 'Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.',
 }
