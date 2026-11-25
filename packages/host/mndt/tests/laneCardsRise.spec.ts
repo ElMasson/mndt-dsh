@@ -125,6 +125,22 @@ describe('a card no member of its channel may decide rises to the deciders', () 
     expect(theirs.map(card => card.origin)).toEqual([undefined, undefined])
   })
 
+  it('the search serves a risen card with its origin and nothing of its channel; a member finds it without origin', async () => {
+    const b = bench()
+    const field = await b.service.createChannel({ title: 'Terrain secret', members: [operator, other] }, operator)
+    await b.service.requestApproval({ kind: 'publish', title: 'Publier le compte rendu', payload: {}, requestedBy: other, channelId: field.id })
+    const lane = await b.service.laneOf(operator)
+    await b.service.requestApproval({ kind: 'spend', title: 'Publier la facture', payload: {}, requestedBy: operator, channelId: lane.id })
+    const hits = async (who: string) => ((await b.call('GET', '/search', who, undefined, { q: 'publier' })).body.hits as { label: string; origin?: unknown }[])
+    const owners = await hits('owner')
+    expect(Object.fromEntries(owners.map(hit => [hit.label, hit.origin]))).toEqual({
+      'Publier le compte rendu': { kind: 'channel' },
+      'Publier la facture': { kind: 'lane' },
+    })
+    expect(JSON.stringify(owners)).not.toContain('Terrain secret')
+    expect((await hits('operator')).map(hit => hit.origin)).toEqual([undefined, undefined])
+  })
+
   it('another operator never sees it, nor can decide it', async () => {
     const b = bench()
     const lane = await b.service.laneOf(operator)

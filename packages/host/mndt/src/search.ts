@@ -8,6 +8,8 @@ export interface SearchHitRow {
   readonly label: string
   readonly detail: string
   readonly at: string
+  /** A card risen from a channel the reader does not read: where it comes from, a lane or a channel, nothing else (visibility.ts). */
+  readonly origin?: { readonly kind: 'lane' | 'channel' }
 }
 
 /** @param value - text to test. @param needle - lower-case query. @returns whether the text matches. */
@@ -23,6 +25,7 @@ function matches(value: string, needle: string): boolean {
  * @param query - the raw search text.
  * @param canReadApproval - whether the caller may read one card (visibility.ts).
  * @param canReadMission - whether the caller may read one mission or brief (visibility.ts).
+ * @param originOf - a card's origin for the caller, when it rose from a channel they do not read (visibility.ts cardOrigin).
  * @returns the newest matching rows, forty at most.
  */
 export function searchState(
@@ -32,6 +35,7 @@ export function searchState(
   query: string,
   canReadApproval: (approval: Approval) => boolean,
   canReadMission: (item: { readonly visibility?: 'team' | 'private'; readonly createdBy: string }) => boolean,
+  originOf: (approval: Approval) => { readonly kind: 'lane' | 'channel' } | undefined = () => undefined,
 ): readonly SearchHitRow[] {
   const needle = query.trim().toLowerCase()
   if (needle === '') return []
@@ -53,9 +57,11 @@ export function searchState(
   for (const approval of snapshot.approvals) {
     if (approval.state !== 'pending' || !canReadApproval(approval)) continue
     if (!matches(approval.title, needle) && !matches(approval.id, needle)) continue
+    const origin = originOf(approval)
     hits.push({
       id: approval.id, kind: 'approval', label: approval.title, at: approval.requestedAt,
       detail: `${approval.kind}, demandee par ${approval.requestedBy}`,
+      ...(origin === undefined ? {} : { origin }),
     })
   }
   for (const mandate of snapshot.mandates) {

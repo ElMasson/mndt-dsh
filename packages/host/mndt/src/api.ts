@@ -28,7 +28,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMandate, canReadMission, servedCard, servedEvent } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission, cardOrigin, servedCard, servedEvent } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -684,7 +684,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const canAdmin = table.ok && can(table.grants, identity, 'rights.write').allowed
         const reader = await readerOf(identity)
-        return respond(200, { hits: searchState(snapshot, identity, canAdmin, request.query?.q ?? '', approval => canReadApproval(reader, approval), item => canReadMission(reader, item)) })
+        const hits = searchState(snapshot, identity, canAdmin, request.query?.q ?? '',
+          approval => canReadApproval(reader, approval), item => canReadMission(reader, item),
+          approval => cardOrigin(reader, approval, snapshot))
+        return respond(200, { hits })
       }
 
       if (request.method === 'GET' && path === '/metrics') {
@@ -1161,7 +1164,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           if (offered !== undefined) return offered
           const table = await grants.grants()
           const role = table.ok ? roleOf(table.grants, identity) : undefined
-          const readable = (state: WorkbenchState, card: Approval): boolean => canReadApproval(readerIn(state, table, identity), card)
+          const readable = async (state: WorkbenchState, card: Approval): Promise<boolean> =>
+            canReadApproval(readerIn(state, await grants.grants(), identity), card)
           try {
             return respond(200, await service.approveAgentProposal(id, identity, role, readable))
           } catch (error) {
@@ -1184,8 +1188,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }
         // Read again inside the write that decides: a card whose channel gained a
         // decider meanwhile, or that the reader lost, is not decided from outside.
-        const table = await grants.grants()
-        const readable = (state: WorkbenchState, approval: Approval): boolean => canReadApproval(readerIn(state, table, identity), approval)
+        // The role table is read inside the write too, with the state it decides on.
+        const readable = async (state: WorkbenchState, approval: Approval): Promise<boolean> =>
+          canReadApproval(readerIn(state, await grants.grants(), identity), approval)
         try {
           const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined, readable)
           return respond(200, { approval })
