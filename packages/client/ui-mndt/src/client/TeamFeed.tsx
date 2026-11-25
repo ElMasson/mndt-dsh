@@ -23,6 +23,7 @@ import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
 import { turnEndWords } from './turnReason.ts'
+import { ScheduleSheet, scheduleProposalOf } from './schedule.tsx'
 
 /** How long the same author's next message joins the previous one without its own header. */
 const GROUP_MS = 5 * 60 * 1000
@@ -182,6 +183,8 @@ export function WebCard(props: {
   readonly channel?: ChatChannel | undefined
   /** The card was asked for after the agent read its peers' help. */
   readonly fromHelp?: boolean | undefined
+  /** The space's agents, to name the one a proposed task would run on. */
+  readonly agents?: ReadonlyMap<string, ChatAgent> | undefined
   readonly t: ChatTranslate
 }): ReactNode {
   const { card, t } = props
@@ -205,7 +208,10 @@ export function WebCard(props: {
   const contextNow = props.channel === undefined ? undefined : contextOf(props.channel)
   const contextStale = contextProposal !== undefined && props.channel !== undefined
     && contextProposal.baseVersion !== (contextNow?.version ?? 0)
-  const refuseOnly = unreadable || modelGone || unmountedNow.length > 0 || contextUnreadable || contextStale
+  // A proposed task (on A1's names): the whole proposal, read field by field; unreadable, « Refuser » only.
+  const schedule = scheduleProposalOf(card)
+  const scheduleUnreadable = card.kind === 'propose_schedule' && schedule === undefined
+  const refuseOnly = unreadable || modelGone || unmountedNow.length > 0 || contextUnreadable || contextStale || scheduleUnreadable
   // The turn's agent asked, on behalf of the person who mentioned it and holds the rights; a field
   // the screen cannot read falls back to the person's line.
   const handle = agentHandleOf(card)
@@ -225,7 +231,7 @@ export function WebCard(props: {
     setBusy(true)
     // The sheet above is the whole proposal: only then does the page say it shows it.
     const why = decision === 'rejected' ? reason.trim() : undefined
-    setError(await (proposal === undefined && contextProposal === undefined
+    setError(await (proposal === undefined && contextProposal === undefined && schedule === undefined
       ? props.onDecide(card.id, decision, why)
       : props.onDecide(card.id, decision, why, { showsProposal: true })))
     setBusy(false)
@@ -234,7 +240,9 @@ export function WebCard(props: {
     <article className="mw-card-box" data-testid="chat-card" data-state={state}>
       <div className="mw-card-head">
         <p className="mw-card-title">
-          {proposal !== undefined ? t('proposeAgentTitle', { name: proposal.name }) : card.title}
+          {proposal !== undefined ? t('proposeAgentTitle', { name: proposal.name })
+            // The task's title is the model's: a fixed heading here, its title inside the sheet.
+            : card.kind === 'propose_schedule' ? t('proposeScheduleTitle') : card.title}
         </p>
         <StatusBadge state={card.state} t={t} />
       </div>
@@ -244,6 +252,18 @@ export function WebCard(props: {
       </p>
       {/* An agent proposes an agent: the whole sheet, read-only, so one click validates what was read. */}
       {proposal === undefined ? undefined : <AgentSheetView proposal={proposal} mounted={props.mounted ?? []} t={t} />}
+      {schedule === undefined ? undefined : (
+        <ScheduleSheet
+          proposal={schedule}
+          agentHandle={props.agents?.get(schedule.agentId)?.handle}
+          where={schedule.destination.kind === 'lane'
+            ? t('scheduleLaneOf', { name: shownName(schedule.destination.member, props.names) })
+            : props.channel !== undefined && props.channel.id === schedule.destination.channelId
+              ? `# ${props.channel.title || props.channel.name}` : t('scheduleUnreadChannel')}
+          t={t}
+        />
+      )}
+      {scheduleUnreadable ? <p className="mw-decide-error" data-testid="schedule-unreadable">{t('proposeScheduleUnreadable')}</p> : undefined}
       {contextProposal === undefined ? undefined : (
         <div className="mw-context" data-testid="context-proposal">
           {contextProposal.text === '' ? <p className="mw-ctx-muted" data-testid="context-proposed">{t('proposeContextErase')}</p> : (
@@ -522,6 +542,7 @@ export function WebMessage(props: {
           offered={props.offered}
           channel={props.channel}
           fromHelp={fromHelp}
+          agents={agents}
           t={t}
         />
       ))}

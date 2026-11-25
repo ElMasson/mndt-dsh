@@ -1,0 +1,176 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WebCard } from '../src/client/TeamFeed.tsx'
+import type { ThreadCard } from '../src/client/ChannelView.tsx'
+import type { ChatAgent, ChatChannel } from '../src/client/chat.ts'
+import { chatFrench } from '../src/client/chatLocales.ts'
+import { ScheduleList, cadenceOf, cadenceWords, runTime, scheduleProposalOf, scheduleRowOf } from '../src/client/schedule.tsx'
+import { createMockChat } from '../src/client/mockChat.ts'
+import { ChatRefusal } from '../src/client/chat.ts'
+
+afterEach(cleanup)
+
+const you = 'stephane@datanalysis.re'
+const at = '2026-11-25T08:00:00.000Z'
+const assistant: ChatAgent = {
+  id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at,
+}
+const compta: ChatChannel = {
+  id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team', members: [you], agents: ['agt_1'], connectors: [], createdBy: you, createdAt: at,
+}
+const schedule = {
+  title: 'Relance des impayés', instructions: '## Étapes\n- Lister les **impayés**',
+  cadence: { every: 'week', days: [1], at: '08:00' }, agentId: 'agt_1',
+  destination: { kind: 'channel', channelId: 'chn_1' }, eurPerRun: 0.5,
+}
+const card = (over: Record<string, unknown> = {}): ThreadCard => ({
+  id: 'apr_s', kind: 'propose_schedule', title: 'Relance des impayés', requestedBy: you, requestedAt: at, state: 'pending',
+  channelId: 'chn_1', schedule, timeZone: 'Indian/Reunion',
+  nextRuns: ['2026-11-30T04:00:00.000Z', '2026-12-07T04:00:00.000Z', '2026-12-14T04:00:00.000Z'], ...over,
+}) as unknown as ThreadCard
+
+describe('a cadence in words', () => {
+  const say = (raw: unknown): string => { const c = cadenceOf(raw); return c === undefined ? 'illisible' : cadenceWords(c, chatFrench) }
+  it('the four forms', () => {
+    expect(say({ every: 'day', at: '07:30' })).toBe('chaque jour à 07:30')
+    expect(say({ every: 'week', days: [1], at: '08:00' })).toBe('chaque lundi à 08:00')
+    expect(say({ every: 'week', days: [4, 1], at: '08:00' })).toBe('chaque lundi et jeudi à 08:00')
+    expect(say({ every: 'week', days: [1, 2, 3, 4, 5], at: '07:30' })).toBe('du lundi au vendredi à 07:30')
+    expect(say({ every: 'month', monthDay: 1, at: '09:00' })).toBe('le 1er de chaque mois à 09:00')
+    expect(say({ every: 'month', monthDay: 15, at: '09:00' })).toBe('le 15 de chaque mois à 09:00')
+    expect(say({ cron: '0 8 * * 1' })).toBe('planification personnalisée')
+  })
+  it('an odd cadence is unreadable, never guessed', () => {
+    for (const raw of [{ every: 'day', at: '8h' }, { every: 'week', days: [0], at: '08:00' }, { every: 'week', days: [], at: '08:00' },
+      { every: 'month', monthDay: 31, at: '09:00' }, { every: 'hour', at: '08:00' }, 'weekly', null]) expect(say(raw)).toBe('illisible')
+  })
+})
+
+describe('next runs are shown in the instance\'s time zone', () => {
+  it('04:00 UTC reads 08:00 in Réunion, whatever the reader\'s zone', () => {
+    expect(runTime('2026-11-30T04:00:00.000Z', 'Indian/Reunion')).toContain('08:00')
+  })
+})
+
+describe('the proposal a card carries', () => {
+  it('is read whole, or not at all', () => {
+    expect(scheduleProposalOf(card())?.title).toBe('Relance des impayés')
+    for (const broken of [{ ...schedule, eurPerRun: -1 }, { ...schedule, cadence: { every: 'hour' } }, { ...schedule, agentId: '' },
+      { ...schedule, destination: { kind: 'elsewhere' } }, { ...schedule, title: ' ' }]) {
+      expect(scheduleProposalOf(card({ schedule: broken }))).toBeUndefined()
+    }
+    expect(scheduleProposalOf(card({ schedule: 'x' }))).toBeUndefined()
+  })
+  it('an unknown time zone is dropped, the runs still shown', () => {
+    expect(scheduleProposalOf(card({ timeZone: 'Mars/Olympus' }))?.timeZone).toBeUndefined()
+  })
+})
+
+describe('the propose_schedule card', () => {
+  const draw = (c: ThreadCard, onDecide = vi.fn(async () => undefined), channel: ChatChannel | undefined = compta): void => {
+    render(<WebCard card={c} canDecide onDecide={onDecide} channel={channel} agents={new Map([[assistant.id, assistant]])} names={{ [you]: 'Stéphane' }} t={chatFrench} />)
+  }
+
+  it('shows the whole proposal under a fixed heading; validating says it showed it', async () => {
+    const onDecide = vi.fn(async () => undefined)
+    draw(card(), onDecide)
+    expect(document.querySelector('.mw-card-title')?.textContent).toBe('Une tâche planifiée est proposée')
+    expect(screen.getByTestId('schedule-title').textContent).toBe('Relance des impayés')
+    expect(screen.getByTestId('schedule-cadence').textContent).toBe('chaque lundi à 08:00')
+    expect(screen.getByTestId('schedule-runs').textContent?.split(' · ')).toHaveLength(3)
+    expect(screen.getByTestId('schedule-runs').textContent).toContain('08:00')
+    expect(screen.getByTestId('schedule-agent').textContent).toBe('@assistant')
+    expect(screen.getByTestId('schedule-where').textContent).toBe('# Compta')
+    expect(screen.getByTestId('schedule-cost').textContent).toContain('au plus par passage')
+    // The instructions are a model's text: Markdown read, headings kept plain.
+    expect(screen.getByTestId('schedule-instructions').querySelector('h1, h2, h3')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Valider' }))
+    await vi.waitFor(() => { expect(onDecide).toHaveBeenCalledWith('apr_s', 'approved', undefined, { showsProposal: true }) })
+  })
+
+  it('a lane destination names whose; a channel the reader does not read is said, no title', () => {
+    draw(card({ schedule: { ...schedule, destination: { kind: 'lane', member: you } } }))
+    expect(screen.getByTestId('schedule-where').textContent).toBe('la lane de Stéphane')
+    cleanup()
+    draw(card({ schedule: { ...schedule, destination: { kind: 'channel', channelId: 'chn_other' } } }))
+    expect(screen.getByTestId('schedule-where').textContent).toBe('un canal que vous ne lisez pas')
+  })
+
+  it('an unreadable proposal can only be refused, and says why', () => {
+    draw(card({ schedule: { ...schedule, cadence: { every: 'hour' } } }))
+    expect(screen.getByTestId('schedule-unreadable')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Refuser' })).toBeTruthy()
+  })
+})
+
+const task = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: 'sch_1', title: 'Relance des impayés', instructions: '…', cadence: { every: 'week', days: [1], at: '08:00' }, agentId: 'agt_1',
+  destination: { kind: 'channel', channelId: 'chn_1' }, eurPerRun: 0.5, state: 'active', requestedBy: you, approvedBy: you, approvedAt: at,
+  nextRuns: ['2026-11-30T04:00:00.000Z'], timeZone: 'Indian/Reunion', eurThisMonth: 0, eurPerMonthMax: 2, missed: 0,
+  can: { pause: true, resume: true, delete: true }, ...over,
+})
+
+describe('the list of a channel\'s tasks', { timeout: 20_000 }, () => {
+  const open = (rows: readonly Record<string, unknown>[]) => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: rows }, () => Date.parse(at))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    return chat
+  }
+
+  it('says nothing, not even a title, when there is no task', async () => {
+    open([])
+    await new Promise(r => setTimeout(r, 50))
+    expect(screen.queryByTestId('schedule-list')).toBeNull()
+  })
+
+  it('one line: title, cadence, agent, state, next run in the instance\'s zone, the month\'s cost', async () => {
+    open([task()])
+    const row = await screen.findByTestId('schedule-row')
+    expect(row.textContent).toContain('Relance des impayés · chaque lundi à 08:00 · @assistant')
+    expect(within(row).getByTestId('schedule-state').textContent).toBe('active')
+    expect(row.textContent).toContain('prochain :')
+    expect(row.textContent).toContain('08:00')
+    expect(row.textContent).toContain('ce mois :')
+  })
+
+  it('pause, then resume, in one click each; delete in two', async () => {
+    const chat = open([task()])
+    fireEvent.click(await screen.findByRole('button', { name: 'Mettre en pause' }))
+    await waitFor(() => { expect(screen.getByTestId('schedule-state').textContent).toBe('en pause') })
+    fireEvent.click(screen.getByRole('button', { name: 'Reprendre' }))
+    await waitFor(() => { expect(screen.getByTestId('schedule-state').textContent).toBe('active') })
+    fireEvent.click(screen.getByRole('button', { name: 'Supprimer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmer la suppression' }))
+    await waitFor(() => { expect(screen.queryByTestId('schedule-list')).toBeNull() })
+    expect(await chat.schedules?.({ channelId: 'chn_1' })).toEqual([])
+  })
+
+  it('a gesture the host does not allow is not offered; resume is a decider\'s', async () => {
+    open([task({ state: 'paused', pausedBecause: 'failures', can: { pause: true, resume: false, delete: true } })])
+    await screen.findByTestId('schedule-row')
+    expect(screen.queryByRole('button', { name: 'Reprendre' })).toBeNull()
+    expect(screen.getByTestId('schedule-paused-because').textContent).toBe('En pause après 3 échecs de suite.')
+  })
+
+  it('a can of another shape offers nothing', async () => {
+    open([task({ can: { pause: 'yes', resume: 1, delete: null } })])
+    await screen.findByTestId('schedule-row')
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('missed runs are said; a refused gesture is said by its code', async () => {
+    const chat = open([task({ missed: 2 })])
+    expect((await screen.findByTestId('schedule-missed')).textContent).toBe('2 passages manqués')
+    vi.spyOn(chat, 'pauseSchedule').mockRejectedValue(new ChatRefusal('x is viewer', 403, 'not-allowed'))
+    fireEvent.click(screen.getByRole('button', { name: 'Mettre en pause' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Vous ne pouvez pas faire cela sur cette tâche.')
+  })
+
+  it('rows the page cannot read are dropped', () => {
+    expect(scheduleRowOf({ id: '', title: 'x', state: 'active' })).toBeUndefined()
+    expect(scheduleRowOf({ id: 'a', title: 'x', state: 'running' })).toBeUndefined()
+    expect(scheduleRowOf({ id: 'a', title: 'x', state: 'active', lastEur: -1 })?.lastEur).toBeUndefined()
+  })
+})

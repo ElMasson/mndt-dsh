@@ -57,6 +57,8 @@ export interface MockSeed {
   readonly unattributedEur?: number
   /** The space's skills; absent, `skills()` answers 404 as an older core does. */
   readonly skills?: readonly ChatSkill[]
+  /** Scheduled tasks as the core serves them (A1's names); the double keeps their `can` as given. */
+  readonly schedules?: readonly Record<string, unknown>[]
   readonly mounted?: readonly MountedConnector[]
 }
 
@@ -66,6 +68,11 @@ export interface MockChat extends ChatFace {
   tick(): void
   /** The double always serves the single-skill route (#145). */
   changeSkill: NonNullable<ChatFace['changeSkill']>
+  /** The double always serves the scheduled tasks' routes (A1's names). */
+  schedules: NonNullable<ChatFace['schedules']>
+  pauseSchedule: NonNullable<ChatFace['pauseSchedule']>
+  resumeSchedule: NonNullable<ChatFace['resumeSchedule']>
+  deleteSchedule: NonNullable<ChatFace['deleteSchedule']>
 }
 
 /**
@@ -85,6 +92,12 @@ export function createMockChat(
   )
   const channels = new Map(seed.channels.map(c => [c.id, c]))
   const skills = new Map((seed.skills ?? []).map(k => [k.slug, k]))
+  const schedules = new Map((seed.schedules ?? []).map(s => [String(s.id), s]))
+  const scheduleOfId = (id: string): Record<string, unknown> => {
+    const row = schedules.get(id)
+    if (row === undefined) throw new ChatRefusal(`no schedule ${id}`, 404)
+    return row
+  }
   const messages = new Map((seed.messages ?? []).map(m => [m.id, m]))
   const nextId = (prefix: string): string =>
     `${prefix}_${(seq += 1).toString(36)}`
@@ -357,6 +370,36 @@ export function createMockChat(
         }
         agents.set(agent.id, agent)
         return agent
+      })
+    },
+    schedules(query) {
+      return settle(() => [...schedules.values()].filter((s) => {
+        const d = s.destination as { kind?: string; channelId?: string; member?: string } | undefined
+        if ('agentId' in query) return s.agentId === query.agentId
+        const lane = channels.get(query.channelId)
+        return d?.kind === 'channel' ? d.channelId === query.channelId : lane?.kind === 'solo' && lane.members[0] === d?.member
+      }))
+    },
+    pauseSchedule(id) {
+      return settle(() => {
+        const row = scheduleOfId(id)
+        if ((row.can as { pause?: boolean } | undefined)?.pause !== true) throw new ChatRefusal('not allowed', 403, 'not-allowed')
+        schedules.set(id, { ...row, state: 'paused', pausedBecause: 'owner' })
+      })
+    },
+    resumeSchedule(id) {
+      return settle(() => {
+        const row = scheduleOfId(id)
+        if ((row.can as { resume?: boolean } | undefined)?.resume !== true) throw new ChatRefusal('not allowed', 403, 'not-allowed')
+        const { pausedBecause: _was, ...rest } = row
+        schedules.set(id, { ...rest, state: 'active' })
+      })
+    },
+    deleteSchedule(id) {
+      return settle(() => {
+        const row = scheduleOfId(id)
+        if ((row.can as { delete?: boolean } | undefined)?.delete !== true) throw new ChatRefusal('not allowed', 403, 'not-allowed')
+        schedules.delete(id)
       })
     },
     changeSkill(agentId, change) {

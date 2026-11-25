@@ -5,6 +5,8 @@
  * (no raw HTML, no link), folded beyond ten lines. What an agent does not decide is the product's
  * rule, the same for every agent, written once.
  */
+import { ScheduleList } from './schedule.tsx'
+import type { ScheduleFace } from './schedule.tsx'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatChannel, ChatSkill, MountedConnector } from './chat.ts'
@@ -21,6 +23,8 @@ const FOLD_LINES = 10
 /** What the sheet reads. */
 export interface TeamAgentSheetProps {
   readonly agent: ChatAgent
+  /** The tasks this agent runs (scheduled tasks); absent where the core serves none. */
+  readonly schedules?: ScheduleFace | undefined
   /** Every agent, to say when the instructions were written by one (a proposed agent). */
   readonly agents?: readonly ChatAgent[] | undefined
   /** The channels the reader sees: the agent's are those that list it. */
@@ -112,6 +116,9 @@ export function TeamAgentSheet(props: TeamAgentSheetProps): ReactNode {
           </>
         )}
       </section>
+      {props.schedules?.schedules === undefined ? undefined : (
+        <ScheduleList face={props.schedules} query={{ agentId: a.id }} agents={props.agents ?? [a]} t={t} />
+      )}
     </article>
   )
 }

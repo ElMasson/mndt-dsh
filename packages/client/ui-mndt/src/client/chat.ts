@@ -238,6 +238,15 @@ export interface ChatFace {
    * Optional: the team page only.
    */
   changeSkill?(agentId: string, change: { readonly add: string } | { readonly remove: string }): Promise<ChatAgent>
+  /**
+   * The scheduled tasks a channel receives, or an agent runs (`GET /schedules?channelId=` or
+   * `?agentId=`), as served: read row by row by the page. Optional: the team page only.
+   */
+  schedules?(query: { readonly channelId: string } | { readonly agentId: string }): Promise<readonly unknown[]>
+  /** Pause, resume or delete a task (`POST /schedules/:id/pause|resume`, `DELETE /schedules/:id`). */
+  pauseSchedule?(id: string): Promise<void>
+  resumeSchedule?(id: string): Promise<void>
+  deleteSchedule?(id: string): Promise<void>
   /** The space's skills (`GET /skills`). Optional: the team page only. */
   skills?(): Promise<readonly ChatSkill[]>
   /** Add a skill from a pasted SKILL.md (owners and admins). */

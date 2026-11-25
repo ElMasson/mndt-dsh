@@ -3,6 +3,8 @@
  * of sections, CANAL, MANDATS, AGENTS, MÉMOIRE, DOCUMENTS, MEMBRES. Only what the workspace serves
  * is said; a section whose route does not exist yet says so (« Bientôt »), it shows nothing made up.
  */
+import { ScheduleList } from './schedule.tsx'
+import type { ScheduleFace } from './schedule.tsx'
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatChannel, CoordinationChange, MountedConnector } from './chat.ts'
@@ -36,6 +38,8 @@ export function nameOf(email: string): string {
 export interface TeamContextProps {
   readonly channel: ChatChannel
   readonly agents: readonly ChatAgent[]
+  /** The tasks this channel receives (scheduled tasks); absent where the core serves none. */
+  readonly schedules?: ScheduleFace | undefined
   readonly t: ChatTranslate
   /** Open the memory place (« Toutes les mémoires »). */
   readonly onMemory: () => void
@@ -202,6 +206,9 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         {canManage || servers.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
         {connectorError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{connectorError}</p>}
       </Section>
+      {props.schedules?.schedules === undefined ? undefined : (
+        <ScheduleList face={props.schedules} query={{ channelId: channel.id }} agents={props.agents} t={t} />
+      )}
       <Section title={t('ctxMemory')}>
         <p className="mw-ctx-small mw-ctx-muted">
           {t('ctxMemoryNote')}{' '}
