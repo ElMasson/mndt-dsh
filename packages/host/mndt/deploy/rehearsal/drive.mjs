@@ -283,19 +283,31 @@ if (channel !== undefined && qwen !== undefined) {
 const providerFailed = (docker('logs', `${project}-fakellm`).match(/provider failure \(sonde-panne\)/g) ?? []).length
 // Every surface a member or the owner reads, each read with its status: a refused
 // read proves nothing.
+// Each surface with the status each reader must get: the owner reads them all;
+// the viewer is not a member of the channel (404) and does not hold
+// rights.write (the journal, 403); the rest it reads, filtered (200). A status
+// other than the one declared fails the check: a refused read proves nothing.
 const surfaces = channel === undefined ? [] : [
-  `/channels/${channel.id}/messages`, '/state', '/events', '/journal', '/approvals?state=all', '/search?q=panne', '/missions', '/briefs',
+  { path: `/channels/${channel.id}/messages`, owner: 200, viewer: 404 },
+  { path: '/state', owner: 200, viewer: 200 },
+  { path: '/events', owner: 200, viewer: 200 },
+  { path: '/journal', owner: 200, viewer: 403 },
+  { path: '/approvals?state=all', owner: 200, viewer: 200 },
+  { path: '/search?q=panne', owner: 200, viewer: 200 },
+  { path: '/missions', owner: 200, viewer: 200 },
+  { path: '/briefs', owner: 200, viewer: 200 },
 ]
 const reads = []
-for (const path of surfaces) for (const [who, context] of [['owner', owner], [SECOND, viewer]]) {
-  const read = await api('GET', path, undefined, context)
-  reads.push({ path, who, status: read.status, raw: /PANNE-SONDE|10\.9\.9\.9/.test(JSON.stringify(read.body)) })
+for (const surface of surfaces) for (const [who, context, expected] of [['owner', owner, surface.owner], ['viewer', viewer, surface.viewer]]) {
+  const read = await api('GET', surface.path, undefined, context)
+  reads.push({ path: surface.path, who, status: read.status, expected, raw: /PANNE-SONDE|10\.9\.9\.9/.test(JSON.stringify(read.body)) })
 }
 const leaked = reads.filter(read => read.raw)
-const ownerReads200 = reads.filter(read => read.who === 'owner').every(read => read.status === 200)
+const unexpected = reads.filter(read => read.status !== read.expected)
 const loggedRaw = docker('logs', `${project}-workbench`).includes('PANNE-SONDE') || (() => { try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat /state/web.log 2>/dev/null || true').includes('PANNE-SONDE') } catch { return false } })()
-check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string' && ownerReads200 && leaked.length === 0,
-  `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads (${reads.map(read => `${read.who === 'owner' ? 'o' : 'v'}${read.status}`).join(' ')}): the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
+check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string'
+  && surfaces.length > 0 && unexpected.length === 0 && leaked.length === 0,
+  `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads, ${unexpected.length === 0 ? 'every status as declared' : `unexpected: ${unexpected.map(read => `${read.who} ${read.path} ${read.status} (declared ${read.expected})`).join(', ')}`}; the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
 
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
