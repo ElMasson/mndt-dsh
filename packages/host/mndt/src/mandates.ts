@@ -118,7 +118,7 @@ export function missionRefusal(
 ): string | undefined {
   const state = mandateState(mandate, today)
   if (state !== 'active') return `the mandate is ${state}`
-  if (mandate.delegataire !== request.identity) return `this mandate belongs to ${mandate.delegataire}`
+  if (mandate.delegataire !== request.identity) return 'this mandate is not yours'
   if (!mandate.missionKinds.includes(request.kind)) return `this mandate does not allow a ${request.kind} mission`
   for (const connector of kindConnectors[request.kind]) {
     if (!mandate.connectors.includes(connector)) {

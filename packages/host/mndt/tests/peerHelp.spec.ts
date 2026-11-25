@@ -188,8 +188,9 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
     const { turn } = await ask(b, t.channel, '@alpha le point ?')
     expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/), reason: 'avis non obtenu : erreur' }])
     expect(JSON.stringify(served)).not.toMatch(/@beta|@gamma/)
-    // After the reading, the reason in full and the peer named.
-    expect(turn.help?.skipped[0]?.reason).toMatch(/^@(beta|gamma) : le moteur a refusé$/)
+    // After the reading, the peer named and the host's sentence: the engine's words go to the operator's log.
+    expect(turn.help?.skipped[0]?.reason).toBe('Erreur pendant l’exécution.')
+    expect(JSON.stringify(turn)).not.toContain('le moteur a refusé')
     expect(turn.help?.skipped[0]?.agentId).toBeDefined()
   })
 })

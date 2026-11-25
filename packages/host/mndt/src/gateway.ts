@@ -19,7 +19,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
-import { startMndtApi } from './api.ts'
+import { GRANTS_UNREADABLE, startMndtApi } from './api.ts'
 import type { ModelChoice } from './api.ts'
 import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
@@ -37,6 +37,7 @@ import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { publicFailure } from './public-failure.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -412,7 +413,7 @@ export class WorkbenchGateway extends TypertRemoteService {
   /** @param capability - what an action needs. @returns whether this workstation may do it. */
   private async allowed(capability: 'workflows.write' | 'rights.write' | 'agents.write'): Promise<{ allowed: boolean; reason: string }> {
     const table = await this.grants.grants()
-    if (!table.ok) return { allowed: false, reason: `cannot read the grant table: ${table.reason}` }
+    if (!table.ok) return { allowed: false, reason: this.unreadableGrants(table.reason) }
     return can(table.grants, this.identity, capability)
   }
 
@@ -431,6 +432,24 @@ export class WorkbenchGateway extends TypertRemoteService {
    * is declared a solo workstation (DSH_MNDT_SOLO_WORKSTATION=1, refused on a
    * team instance): a missing or mistyped setting never opens the whole engine.
    */
+  /**
+   * @param reason - why the role table cannot be read (its file, row or code).
+   * @returns what a machine tool's answer says of it: one sentence.
+   */
+  private unreadableGrants(reason: string): string {
+    // Its file, row or code go to the operator's log, once per change of the reason.
+    warnOperatorOnce(this.ctx, 'grants-unreadable', `mndt: the grant table cannot be read: ${reason}`)
+    return GRANTS_UNREADABLE
+  }
+
+  /**
+   * @param error - what failed under a machine tool.
+   * @returns what its answer may say (public-failure.ts).
+   */
+  private publicError(error: unknown): string {
+    return publicFailure(error, 'échec de l’opération', (line) => { warnOperator(this.ctx, line) }, 'a machine tool failed')
+  }
+
   private missionRunner(ctx: Context): DshMissionRunner {
     const readiness = this.readinessFor(ctx)
     const configured = this.requiredConfigured()
@@ -491,7 +510,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
-      const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: table.reason }
+      const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: this.unreadableGrants(table.reason) }
       const role = table.ok ? roleOf(table.grants, this.identity) : undefined
       const page: PageState = {
         you: this.identity,
@@ -509,7 +528,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       }
       return JSON.stringify({ ok: true, page })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -530,17 +549,19 @@ export class WorkbenchGateway extends TypertRemoteService {
       mission = await this.service.createMission({ kind, prompt, createdBy: this.identity })
       await this.service.startMission(mission.id, 'page')
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
     try {
       const result = await this.missionRunner(this.ctx).run(mission)
       const finished = await this.service.completeMission(mission.id, result)
       return JSON.stringify({ ok: true, value: finished })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      await this.service.failMission(mission.id, reason).catch(() => undefined)
+      // The runtime's words, for failMission: it serves the host's sentence and logs these.
+      const raw = error instanceof Error ? error.message : String(error)
+      await this.service.failMission(mission.id, raw).catch(() => undefined)
       const stored = await this.service.getMission(mission.id)
-      return JSON.stringify({ ok: false, error: reason, ...(stored === undefined ? {} : { value: { mission: stored } }) })
+      // The host's sentence, as on the mission: the runtime's words are in the operator's log.
+      return JSON.stringify({ ok: false, error: stored?.error ?? 'Erreur pendant l’exécution.', ...(stored === undefined ? {} : { value: { mission: stored } }) })
     }
   }
 
@@ -560,7 +581,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true,
         item => canReadMission({ identity: this.identity, channels: new Set(), decider: canAdmin }, item)) } })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -579,7 +600,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.cancelMission(id, this.identity, rights.allowed) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -599,15 +620,16 @@ export class WorkbenchGateway extends TypertRemoteService {
       mission = await this.service.retryMission(id, this.identity)
       await this.service.startMission(mission.id, 'page')
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
     try {
       const result = await this.missionRunner(this.ctx).run(mission)
       return JSON.stringify({ ok: true, value: await this.service.completeMission(mission.id, result) })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      await this.service.failMission(mission.id, reason).catch(() => undefined)
-      return JSON.stringify({ ok: false, error: reason })
+      // The runtime's words, for failMission: it serves the host's sentence and logs these.
+      const raw = error instanceof Error ? error.message : String(error)
+      await this.service.failMission(mission.id, raw).catch(() => undefined)
+      return JSON.stringify({ ok: false, error: (await this.service.getMission(mission.id))?.error ?? 'Erreur pendant l’exécution.' })
     }
   }
 
@@ -625,7 +647,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.approveBrief(briefId, this.identity) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -645,7 +667,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.decideApproval(approvalId, this.identity, decision, reason) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -665,7 +687,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.remember({ scope, kind, text, createdBy: this.identity }) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 

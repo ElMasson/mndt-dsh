@@ -5,6 +5,8 @@
  * import it without a cycle: a plugin module that imports the module that mounts
  * the plugin is a boot hazard, not a style question.
  */
+import { publicFailure, rawDetail } from './public-failure.ts'
+import { errorShape } from './operator-log.ts'
 import { asRole } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import type { Grant } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
 import { readFile } from 'node:fs/promises'
@@ -44,7 +46,8 @@ export function authorityGrants(
         if (skipped.length > 0) logSkipped('the team authority', skipped, warn)
         return skipped.length > 0 ? { ok: true, grants, skipped } : { ok: true, grants }
       } catch (error) {
-        return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+        // The call's own words (an address, a system error) go to the operator's log only.
+        return { ok: false, reason: publicFailure(error, 'the team authority did not answer', warn, 'reading the team authority failed') }
       }
     },
   }
@@ -78,19 +81,22 @@ const REREAD_MS = 50
 type RowsRead = { readonly ok: true; readonly rows: readonly unknown[] } | { readonly ok: false; readonly reason: string }
 
 /** @param path - the role file. @returns its rows, or why the file cannot be read. */
-async function readRows(path: string): Promise<RowsRead> {
+async function readRows(path: string, warn: (message: string) => void = () => {}): Promise<RowsRead> {
   let text: string
   try {
     text = await readFile(path, 'utf8')
   } catch (error) {
     const code = (error as { code?: unknown }).code
-    return { ok: false, reason: code === 'ENOENT' ? `the role file ${path} is missing` : `cannot read the role file ${path}: ${String(error)}` }
+    // The system's own words go to the operator's log; what is served names the file and the code only.
+    if (code !== 'ENOENT') warn(`mndt: reading the role file ${path} failed: ${rawDetail(error)}`)
+    return { ok: false, reason: code === 'ENOENT' ? `the role file ${path} is missing` : `cannot read the role file ${path} (${typeof code === 'string' ? code : 'error'})` }
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (error) {
-    return { ok: false, reason: `the role file ${path} is not JSON: ${error instanceof Error ? error.message : String(error)}` }
+    // Node's message quotes the text it read: its shape (name, position) only.
+    return { ok: false, reason: `the role file ${path} is not JSON: ${errorShape(error)}` }
   }
   // JSON, but not an object (null, a list, a number): said as such, never « not JSON ».
   const rows = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as { grants?: unknown }).grants : undefined
@@ -164,10 +170,12 @@ export function fileGrants(path: string, warn: (message: string) => void = () =>
       }
     },
     async grants() {
-      let rows = await readRows(path)
+      let rows = await readRows(path, warn)
       // A rewrite in progress (a truncated or half-written file) reads as broken
       // once: read again before concluding the file is.
-      if (!rows.ok) rows = await new Promise<RowsRead>((resolve) => { setTimeout(() => { void readRows(path).then(resolve) }, REREAD_MS) })
+      if (!rows.ok) {
+        rows = await new Promise<RowsRead>((resolve) => { setTimeout(() => { void readRows(path, warn).then(resolve) }, REREAD_MS) })
+      }
       if (!rows.ok) return rows
       const grants: Grant[] = []
       const skipped: SkippedGrant[] = []

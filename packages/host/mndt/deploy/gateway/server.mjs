@@ -176,7 +176,9 @@ function forward(req, res, target, path, shellCookie, extraHeaders = {}) {
       return
     }
     res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end(`gateway: upstream failed: ${error.message}`)
+    // The upstream's own words (an address, a system error) go to stderr only.
+    process.stderr.write(`gateway: upstream failed: ${error.message}\n`)
+    res.end('gateway: upstream failed')
   })
   // A browser that leaves mid-request (closed tab, lost network) resets its
   // socket: drop the upstream call, and never let the reset reach the process.

@@ -31,18 +31,22 @@ const get = async (api: ReturnType<typeof bench>, token: string, path: string) =
 }
 
 describe('who the person is, for the team screen', () => {
-  it('/me tells the gateway\'s owner why the role file cannot be read, and nobody else', async () => {
+  it('/me tells the gateway\'s owner that the role file cannot be read, and nobody else; its file and error go to the operator\'s log', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'grants-'))
     const file = join(dir, 'grants.json')
     writeFileSync(file, '{ broken')
+    const warned: string[] = []
     const api = createMndtApi({
       service: new WorkbenchService({ store: new MemoryStore() }),
       runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
       identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'secret' },
       grants: fileGrants(file),
+      warn: (line) => { warned.push(line) },
     })
     const me = async (headers: Record<string, string>) => (await api({ method: 'GET', path: '/me', headers: { 'x-forwarded-email': owner, 'x-mndt-gateway': 'secret', ...headers } })).body as Record<string, unknown>
-    expect(String((await me({ 'x-mndt-shell': '1' })).grantsError)).toContain('is not JSON')
+    expect((await me({ 'x-mndt-shell': '1' })).grantsError).toBe('la table des rôles est illisible')
+    expect(warned.join('\n')).toContain('is not JSON')
+    expect(warned.join('\n')).toContain(file)
     expect((await me({})).grantsError).toBeUndefined()
     expect((await api({ method: 'GET', path: '/channels', headers: { 'x-forwarded-email': owner, 'x-mndt-gateway': 'secret' } })).status).toBe(503)
   })

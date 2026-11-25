@@ -7,6 +7,7 @@
  * and an action that leaves the building never happens without a recorded human
  * decision.
  */
+import { Refusal } from './refusal.ts'
 import { randomUUID } from 'node:crypto'
 import { coordinationAgents, emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
@@ -40,7 +41,7 @@ import type {
   WorkbenchState,
 } from './types.ts'
 import type { WorkbenchStore } from './store.ts'
-import type { Mandate } from './types.ts'
+import type { Mandate, MissionFailureKind, TurnFailureKind } from './types.ts'
 import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
@@ -54,7 +55,7 @@ import { isPlainAscii } from './address.ts'
  */
 function plainMembers(members: readonly string[]): readonly string[] {
   const refused = members.filter(email => !isPlainAscii(email))
-  if (refused.length > 0) throw new Error(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
+  if (refused.length > 0) throw new Refusal(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
   return members
 }
 
@@ -174,7 +175,7 @@ export const MAX_SKILL_NAME = 60
 /** Why a skill is refused, by a code the screen reads. */
 export type SkillRefusalCode = 'missing-fields' | 'skill-too-long' | 'skill-changed' | 'skill-exists' | 'unknown-skill' | 'too-many-skills'
 /** A refused skill: 409 for skill-changed and skill-exists, 404 for unknown-skill on its own route, 400 otherwise. */
-export class SkillRefusal extends Error {
+export class SkillRefusal extends Refusal {
   readonly code: SkillRefusalCode
   constructor(code: SkillRefusalCode, message: string) {
     super(message)
@@ -247,7 +248,7 @@ export type HelpRefusalCode =
   | 'missing-fields' | 'not-running' | 'already-asked' | 'coordinated-channel'
   | 'no-peer' | 'too-many-peers' | 'self' | 'thread-limit' | 'pair-already-asked'
 /** A refused help request. */
-export class HelpRefusal extends Error {
+export class HelpRefusal extends Refusal {
   readonly code: HelpRefusalCode
   constructor(code: HelpRefusalCode, message: string) {
     super(message)
@@ -262,7 +263,7 @@ export const MAX_CONTEXT_CHARS = 4000
 /** Why a channel's context is refused, by a code the screen reads. */
 export type ContextRefusalCode = 'context-too-long' | 'context-changed'
 /** A refused change of a channel's context: 409 for context-changed, 400 otherwise. */
-export class ContextRefusal extends Error {
+export class ContextRefusal extends Refusal {
   readonly code: ContextRefusalCode
   constructor(code: ContextRefusalCode, message: string) {
     super(message)
@@ -300,7 +301,7 @@ export type CoordinationRefusalCode =
   | 'too-few-members' | 'too-many-members' | 'synthesizer-is-member' | 'unknown-decision'
 
 /** A refused coordination: its message for people, its code for the screen. */
-export class CoordinationRefusal extends Error {
+export class CoordinationRefusal extends Refusal {
   readonly code: CoordinationRefusalCode
   constructor(code: CoordinationRefusalCode, message: string) {
     super(message)
@@ -339,7 +340,7 @@ export interface MemoryFilter {
 }
 
 /** A decision on a card its decider can no longer read, checked inside the write: answered as absent. */
-export class UnreadableApproval extends Error {
+export class UnreadableApproval extends Refusal {
   /** @param id - the card. */
   constructor(id: string) {
     super(`no approval ${id}`)
@@ -349,12 +350,79 @@ export class UnreadableApproval extends Error {
 
 /**
 /**
- * @param reason - why a briefing did not finish, in the runtime's words.
- * @returns the host's short line published in the lane, on one line.
+ * The kind of a mission's failure, read from the host's own wording of it (the
+ * runner's and the service's messages, a technical format, not a judgment):
+ * what is served instead of those words, which may carry a provider's detail.
+ * @param reason - the failure's reason, as recorded on the mission.
+ * @returns its kind.
  */
-function failedLine(reason: string): string {
-  const said = reason.replace(/\s+/g, ' ').trim()
-  return `Le briefing n’a pas abouti : ${said.length > 300 ? `${said.slice(0, 299)}…` : said}`
+export function missionFailureKind(reason: string): MissionFailureKind {
+  if (reason.startsWith('cancelled by ')) return 'cancelled'
+  if (reason.startsWith('outils indisponibles')) return 'tools'
+  if (/ended max-tokens|ended length/.test(reason)) return 'cut'
+  if (/returned no text|no usable content/.test(reason)) return 'no-answer'
+  return 'failed'
+}
+
+/**
+ * The kind of a turn's failure, read as missionFailureKind does, plus the
+ * engine's known ends.
+ * @param reason - the failure's text, as the engine or the host gave it.
+ * @returns its kind.
+ */
+export function turnFailureKind(reason: string): TurnFailureKind {
+  if (reason.startsWith('le coût du tour a atteint sa borne')) return 'budget'
+  if (/ended blocked/.test(reason)) return 'blocked'
+  if (/ended aborted/.test(reason)) return 'aborted'
+  if (/ended interrupted/.test(reason)) return 'interrupted'
+  return missionFailureKind(reason)
+}
+
+/** The host's sentence for each kind of a turn's failure: all that is served of it. */
+export const TURN_FAILURE_SENTENCE: Readonly<Record<TurnFailureKind, string>> = {
+  'no-answer': 'Le modèle n’a pas répondu.',
+  cut: 'Réponse coupée (limite de longueur atteinte).',
+  cancelled: 'Tour annulé.',
+  tools: 'Des outils n’étaient pas disponibles ; le tour n’a pas été lancé.',
+  failed: 'Erreur pendant l’exécution.',
+  budget: 'Le coût du tour a atteint sa borne.',
+  blocked: 'Le tour a été bloqué.',
+  aborted: 'Le tour a été abandonné.',
+  interrupted: 'Le tour a été interrompu.',
+  refused: 'Tour refusé.',
+  stale: 'Tour sans objet.',
+  restart: 'Interrompu par un redémarrage.',
+}
+
+/** The host's sentence for each kind: all that is served of a failure (the mission, its journal line, the lane). */
+const FAILURE_SENTENCE: Readonly<Record<MissionFailureKind, string>> = {
+  'no-answer': 'le modèle n’a pas répondu.',
+  cut: 'réponse coupée (limite de longueur atteinte).',
+  cancelled: 'annulé.',
+  tools: 'des outils n’étaient pas disponibles ; il n’a pas été lancé.',
+  failed: 'erreur pendant l’exécution.',
+}
+
+/**
+ * @param kind - the failure's kind.
+ * @param by - who cancelled it, for a cancellation.
+ * @param restarted - whether a restart of the workbench interrupted it.
+ * @returns the host's sentence for it, lower case: never the runtime's words.
+ */
+function failureSentence(kind: MissionFailureKind, by?: string, restarted = false): string {
+  if (kind === 'cancelled' && by !== undefined) return `annulé par ${by}.`
+  if (restarted) return 'interrompu par un redémarrage.'
+  return FAILURE_SENTENCE[kind]
+}
+
+/** @param sentence - a failure sentence. @returns it as Mission.error: capitalized. */
+function asError(sentence: string): string {
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`
+}
+
+/** @param sentence - a failure sentence. @returns the line published in the lane. */
+function failedLine(sentence: string): string {
+  return `Le briefing n’a pas abouti : ${sentence}`
 }
 
 /** What building one service needs. */
@@ -406,7 +474,13 @@ export class WorkbenchService {
    * @param at - when.
    * @returns the state with the message (and the lane, created when absent), and their journal lines.
    */
-  #inLane(state: WorkbenchState, mission: Mission, text: string, at: string): { state: WorkbenchState; events: WorkbenchEvent[] } {
+  #inLane(
+    state: WorkbenchState,
+    mission: Mission,
+    text: string,
+    at: string,
+    reasonKind?: MissionFailureKind,
+  ): { state: WorkbenchState; events: WorkbenchEvent[] } {
     const owner = mission.createdBy
     if (this.#options.briefingsInLane !== true || mission.kind !== 'briefing' || !owner.includes('@')) return { state, events: [] }
     const events: WorkbenchEvent[] = []
@@ -440,6 +514,7 @@ export class WorkbenchService {
         status: mission.status === 'done' ? 'done' : 'failed',
         ...(mission.eur === undefined ? {} : { eur: mission.eur }),
         ...((mission.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(mission.toolsUnavailable ?? [])] }),
+        ...(reasonKind === undefined ? {} : { reasonKind }),
       },
       createdAt: at,
       updatedAt: at,
@@ -525,10 +600,10 @@ export class WorkbenchService {
    * @returns the queued mission.
    */
   createMission(request: MissionRequest): Promise<Mission> {
-    if (!isMissionKind(request.kind)) return Promise.reject(new Error(`unknown mission kind: ${String(request.kind)}`))
+    if (!isMissionKind(request.kind)) return Promise.reject(new Refusal(`unknown mission kind: ${String(request.kind)}`))
     const prompt = request.prompt.trim()
-    if (prompt === '') return Promise.reject(new Error('a mission needs an instruction'))
-    if (request.createdBy.trim() === '') return Promise.reject(new Error('a mission needs a requester'))
+    if (prompt === '') return Promise.reject(new Refusal('a mission needs an instruction'))
+    if (request.createdBy.trim() === '') return Promise.reject(new Refusal('a mission needs a requester'))
     const mission: Mission = {
       id: this.#id('mis'),
       kind: request.kind,
@@ -554,12 +629,12 @@ export class WorkbenchService {
    * @returns the running mission.
    */
   startMission(id: string, sessionId: string): Promise<Mission> {
-    if (sessionId.trim() === '') return Promise.reject(new Error('a run needs a session'))
+    if (sessionId.trim() === '') return Promise.reject(new Refusal('a run needs a session'))
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
-      if (mission === undefined) throw new Error(`no mission ${id}`)
+      if (mission === undefined) throw new Refusal(`no mission ${id}`)
       if (mission.status !== 'queued' && mission.status !== 'needs-review') {
-        throw new Error(`mission ${id} is ${mission.status}; only a queued mission can start`)
+        throw new Refusal(`mission ${id} is ${mission.status}; only a queued mission can start`)
       }
       const at = this.#at()
       const next: Mission = { ...mission, status: 'running', sessionId, startedAt: at }
@@ -584,12 +659,12 @@ export class WorkbenchService {
     const markdown = result.markdown.trim()
     if (title === '' || markdown === '') {
       await this.failMission(id, 'the agent returned no usable content')
-      throw new Error(`mission ${id} produced no usable content`)
+      throw new Refusal(`mission ${id} produced no usable content`)
     }
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
-      if (mission === undefined) throw new Error(`no mission ${id}`)
-      if (mission.status !== 'running') throw new Error(`mission ${id} is ${mission.status}; only a running mission can finish`)
+      if (mission === undefined) throw new Refusal(`no mission ${id}`)
+      if (mission.status !== 'running') throw new Refusal(`mission ${id} is ${mission.status}; only a running mission can finish`)
       const at = this.#at()
       const brief: Brief = {
         id: this.#id('brf'),
@@ -638,19 +713,24 @@ export class WorkbenchService {
    * @returns the failed mission.
    */
   failMission(id: string, reason: string): Promise<Mission> {
-    const detail = reason.trim()
-    if (detail === '') return Promise.reject(new Error('a failure needs a reason'))
+    // An empty reason (an error thrown without a message) must not leave the
+    // mission running: it fails with a reason of its own, said as « failed ».
+    const detail = reason.trim() === '' ? 'the run failed without a reason' : reason.trim()
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
-      if (mission === undefined) throw new Error(`no mission ${id}`)
-      if (mission.status === 'done' || mission.status === 'failed') throw new Error(`mission ${id} already ${mission.status}`)
+      if (mission === undefined) throw new Refusal(`no mission ${id}`)
+      if (mission.status === 'done' || mission.status === 'failed') throw new Refusal(`mission ${id} already ${mission.status}`)
       const at = this.#at()
-      const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: detail }
+      const kind = missionFailureKind(detail)
+      const sentence = failureSentence(kind, undefined, detail.startsWith('interrupted by a workbench restart'))
+      // The runtime's own words, for the operator only (web.log): never served.
+      this.#options.warn?.(`mndt: mission ${id} (${mission.kind}) failed: ${detail}`)
+      const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: asError(sentence), reasonKind: kind }
       const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
-      const published = this.#inLane({ ...state, missions }, next, failedLine(detail), at)
+      const published = this.#inLane({ ...state, missions }, next, failedLine(sentence), at, kind)
       return {
         state: published.state,
-        event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail }, ...published.events],
+        event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail: asError(sentence) }, ...published.events],
         value: next,
       }
     })
@@ -671,15 +751,15 @@ export class WorkbenchService {
   cancelMission(id: string, actor: string, privileged: boolean): Promise<Mission> {
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
-      if (mission === undefined) throw new Error(`no mission ${id}`)
-      if (!privileged && mission.createdBy !== actor) throw new Error(`mission ${id} belongs to ${mission.createdBy}`)
+      if (mission === undefined) throw new Refusal(`no mission ${id}`)
+      if (!privileged && mission.createdBy !== actor) throw new Refusal(`mission ${id} belongs to someone else`)
       if (mission.status !== 'queued' && mission.status !== 'running') {
-        throw new Error(`mission ${id} is ${mission.status}; only a waiting mission can be cancelled`)
+        throw new Refusal(`mission ${id} is ${mission.status}; only a waiting mission can be cancelled`)
       }
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: `cancelled by ${actor}` }
       const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
-      const published = this.#inLane({ ...state, missions }, next, failedLine(`annulé par ${actor}`), at)
+      const published = this.#inLane({ ...state, missions }, next, failedLine(failureSentence('cancelled', actor)), at, 'cancelled')
       return {
         state: published.state,
         event: [{ at, actor, action: 'mission.cancelled', subject: id }, ...published.events],
@@ -696,8 +776,8 @@ export class WorkbenchService {
    */
   async retryMission(id: string, actor: string): Promise<Mission> {
     const mission = await this.getMission(id)
-    if (mission === undefined) throw new Error(`no mission ${id}`)
-    if (mission.status !== 'failed') throw new Error(`mission ${id} is ${mission.status}; only a failed mission can be retried`)
+    if (mission === undefined) throw new Refusal(`no mission ${id}`)
+    if (mission.status !== 'failed') throw new Refusal(`mission ${id} is ${mission.status}; only a failed mission can be retried`)
     return this.createMission({
       kind: mission.kind,
       prompt: mission.prompt,
@@ -736,11 +816,11 @@ export class WorkbenchService {
    * @returns the updated brief.
    */
   approveBrief(id: string, actor: string): Promise<Brief> {
-    if (actor.trim() === '') return Promise.reject(new Error('an approval needs an actor'))
+    if (actor.trim() === '') return Promise.reject(new Refusal('an approval needs an actor'))
     return this.#write((state) => {
       const brief = state.briefs.find(candidate => candidate.id === id)
-      if (brief === undefined) throw new Error(`no brief ${id}`)
-      if (brief.status !== 'draft') throw new Error(`brief ${id} is already ${brief.status}`)
+      if (brief === undefined) throw new Refusal(`no brief ${id}`)
+      if (brief.status !== 'draft') throw new Refusal(`brief ${id} is already ${brief.status}`)
       const at = this.#at()
       const next: Brief = { ...brief, status: 'approved', approvedBy: actor.trim(), approvedAt: at }
       return {
@@ -757,13 +837,13 @@ export class WorkbenchService {
    * @returns the pending approval.
    */
   requestApproval(request: ApprovalRequest): Promise<Approval> {
-    if (!needsApproval(request.kind)) return Promise.reject(new Error(`action ${String(request.kind)} does not need approval`))
-    if (request.title.trim() === '') return Promise.reject(new Error('an approval needs a title'))
-    if (request.requestedBy.trim() === '') return Promise.reject(new Error('an approval needs a requester'))
+    if (!needsApproval(request.kind)) return Promise.reject(new Refusal(`action ${String(request.kind)} does not need approval`))
+    if (request.title.trim() === '') return Promise.reject(new Refusal('an approval needs a title'))
+    if (request.requestedBy.trim() === '') return Promise.reject(new Refusal('an approval needs a requester'))
     if (request.kind === 'propose_context') {
       // A context belongs to a channel: the card is asked from one of its turns.
-      if (request.channelId === undefined) return Promise.reject(new Error('a propose_context card is asked from a channel turn'))
-      if (request.contextProposal === undefined) return Promise.reject(new Error('a propose_context card needs a text and a baseVersion'))
+      if (request.channelId === undefined) return Promise.reject(new Refusal('a propose_context card is asked from a channel turn'))
+      if (request.contextProposal === undefined) return Promise.reject(new Refusal('a propose_context card needs a text and a baseVersion'))
       const length = request.contextProposal.text.trim().length
       if (length > MAX_CONTEXT_CHARS) {
         return Promise.reject(new ContextRefusal('context-too-long', `a channel's context is ${MAX_CONTEXT_CHARS} characters at most (${length} given)`))
@@ -772,7 +852,7 @@ export class WorkbenchService {
     if (request.kind === 'propose_agent') {
       // The proposal is checked when the card is made, with the rules of POST /agents.
       const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
-      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+      if (refusal !== undefined) return Promise.reject(new Refusal(refusal))
     }
     // A propose_agent card's title is the server's, built from the proposal: what an
     // agent writes never names what a person grants.
@@ -801,10 +881,10 @@ export class WorkbenchService {
         // The title is the server's, from the channel and the change: an agent's
         // words never name what a person approves.
         const channel = (state.channels ?? []).find(candidate => candidate.id === approval.channelId)
-        if (channel === undefined) throw new Error(`no channel ${String(approval.channelId)}`)
+        if (channel === undefined) throw new Refusal(`no channel ${String(approval.channelId)}`)
         const waiting = state.approvals.filter(card => card.kind === 'propose_context' && card.state === 'pending' && card.channelId === channel.id)
         if (waiting.length >= MAX_PENDING_PROPOSALS) {
-          throw new Error(`${MAX_PENDING_PROPOSALS} context proposals already wait for a decision in #${channel.name}: decide them first`)
+          throw new Refusal(`${MAX_PENDING_PROPOSALS} context proposals already wait for a decision in #${channel.name}: decide them first`)
         }
         const text = approval.contextProposal?.text ?? ''
         const titled: Approval = { ...approval, title: text === '' ? `Effacer le contexte de #${channel.name}` : `Changer le contexte de #${channel.name} (${text.length} caractères)` }
@@ -819,11 +899,11 @@ export class WorkbenchService {
         // Both limits hold together: per person who asked, and per agent when the
         // card was asked during a turn (requestedByAgent, set by the server).
         if (waiting.filter(card => card.requestedBy === approval.requestedBy).length >= MAX_PENDING_PROPOSALS) {
-          throw new Error(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
+          throw new Refusal(`${MAX_PENDING_PROPOSALS} agent proposals already wait for a decision: decide them first`)
         }
         const agent = approval.requestedByAgent
         if (agent !== undefined && waiting.filter(card => card.requestedByAgent?.id === agent.id).length >= MAX_PENDING_PROPOSALS) {
-          throw new Error(`@${agent.handle} already has ${MAX_PENDING_PROPOSALS} agent proposals waiting for a decision: decide them first`)
+          throw new Refusal(`@${agent.handle} already has ${MAX_PENDING_PROPOSALS} agent proposals waiting for a decision: decide them first`)
         }
       }
       return {
@@ -846,11 +926,11 @@ export class WorkbenchService {
   approveContextProposal(id: string, actor: string): Promise<{ approval: Approval; channel: Channel }> {
     return this.#write((state) => {
       const approval = state.approvals.find(candidate => candidate.id === id)
-      if (approval === undefined) throw new Error(`no approval ${id}`)
-      if (approval.kind !== 'propose_context' || approval.contextProposal === undefined) throw new Error(`approval ${id} proposes no context`)
-      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      if (approval === undefined) throw new Refusal(`no approval ${id}`)
+      if (approval.kind !== 'propose_context' || approval.contextProposal === undefined) throw new Refusal(`approval ${id} proposes no context`)
+      if (approval.state !== 'pending') throw new Refusal(`approval ${id} is already ${approval.state}`)
       const channel = (state.channels ?? []).find(candidate => candidate.id === approval.channelId)
-      if (channel === undefined || !channel.members.includes(actor.trim())) throw new Error(`no channel ${String(approval.channelId)}`)
+      if (channel === undefined || !channel.members.includes(actor.trim())) throw new Refusal(`no channel ${String(approval.channelId)}`)
       const at = this.#at()
       const next = withContext(channel, approval.contextProposal.text, approval.contextProposal.baseVersion, actor.trim(), at)
       const decided: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at }
@@ -900,17 +980,17 @@ export class WorkbenchService {
   ): Promise<{ approval: Approval; agent: Agent }> {
     return this.#write((state) => {
       const approval = state.approvals.find(candidate => candidate.id === id)
-      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval === undefined) throw new Refusal(`no approval ${id}`)
       if (readable !== undefined && !readable(state, approval)) throw new UnreadableApproval(id)
-      if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Error(`approval ${id} proposes no agent`)
-      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      if (approval.kind !== 'propose_agent' || approval.proposal === undefined) throw new Refusal(`approval ${id} proposes no agent`)
+      if (approval.state !== 'pending') throw new Refusal(`approval ${id} is already ${approval.state}`)
       const proposal = approval.proposal
       const refusal = agentRefusal(proposal)
-      if (refusal !== undefined) throw new Error(refusal)
+      if (refusal !== undefined) throw new Refusal(refusal)
       if ((proposal.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
-        throw new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`)
+        throw new Refusal(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`)
       }
-      if ((state.agents ?? []).some(agent => agent.handle === proposal.handle)) throw new Error(`the handle @${proposal.handle} is taken`)
+      if ((state.agents ?? []).some(agent => agent.handle === proposal.handle)) throw new Refusal(`the handle @${proposal.handle} is taken`)
       const at = this.#at()
       const agent = this.#newAgent(proposal, actor.trim(), at)
       const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, agentId: agent.id }
@@ -941,15 +1021,15 @@ export class WorkbenchService {
     reason?: string,
     readable?: (state: WorkbenchState, approval: Approval) => boolean,
   ): Promise<Approval> {
-    if (actor.trim() === '') return Promise.reject(new Error('a decision needs an actor'))
-    if (decision !== 'approved' && decision !== 'rejected') return Promise.reject(new Error('cannot decide that'))
+    if (actor.trim() === '') return Promise.reject(new Refusal('a decision needs an actor'))
+    if (decision !== 'approved' && decision !== 'rejected') return Promise.reject(new Refusal('cannot decide that'))
     const rejection = reason?.trim()
-    if (decision === 'rejected' && (rejection === undefined || rejection === '')) return Promise.reject(new Error('a rejection needs a reason'))
+    if (decision === 'rejected' && (rejection === undefined || rejection === '')) return Promise.reject(new Refusal('a rejection needs a reason'))
     return this.#write((state) => {
       const approval = state.approvals.find(candidate => candidate.id === id)
-      if (approval === undefined) throw new Error(`no approval ${id}`)
+      if (approval === undefined) throw new Refusal(`no approval ${id}`)
       if (readable !== undefined && !readable(state, approval)) throw new UnreadableApproval(id)
-      if (approval.state !== 'pending') throw new Error(`approval ${id} is already ${approval.state}`)
+      if (approval.state !== 'pending') throw new Refusal(`approval ${id} is already ${approval.state}`)
       const at = this.#at()
       const next: Approval = {
         ...approval,
@@ -982,8 +1062,8 @@ export class WorkbenchService {
    */
   remember(note: Omit<MemoryNote, 'id' | 'createdAt'>): Promise<MemoryNote> {
     const text = note.text.trim()
-    if (text === '') return Promise.reject(new Error('a memory note needs text'))
-    if (note.createdBy.trim() === '') return Promise.reject(new Error('a memory note needs an author'))
+    if (text === '') return Promise.reject(new Refusal('a memory note needs text'))
+    if (note.createdBy.trim() === '') return Promise.reject(new Refusal('a memory note needs an author'))
     const stored: MemoryNote = { ...note, text, id: this.#id('mem'), createdAt: this.#at() }
     return this.#write(state => ({
       state: { ...state, memories: [stored, ...state.memories] },
@@ -1014,7 +1094,7 @@ export class WorkbenchService {
   setMissionVisibility(id: string, visibility: Visibility): Promise<Mission> {
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
-      if (mission === undefined) throw new Error(`no mission ${id}`)
+      if (mission === undefined) throw new Refusal(`no mission ${id}`)
       const next: Mission = { ...mission, visibility }
       return {
         state: {
@@ -1039,7 +1119,7 @@ export class WorkbenchService {
   setMemoryScope(id: string, scope: 'user' | 'team'): Promise<MemoryNote> {
     return this.#write((state) => {
       const note = state.memories.find(candidate => candidate.id === id)
-      if (note === undefined) throw new Error(`no memory ${id}`)
+      if (note === undefined) throw new Refusal(`no memory ${id}`)
       const next: MemoryNote = { ...note, scope }
       return {
         state: { ...state, memories: state.memories.map(candidate => (candidate.id === id ? next : candidate)) },
@@ -1083,7 +1163,7 @@ export class WorkbenchService {
   createMandate(draft: MandateDraft): Promise<Mandate> {
     const today = this.#at().slice(0, 10)
     const refusal = draftRefusal(draft, today)
-    if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    if (refusal !== undefined) return Promise.reject(new Refusal(refusal))
     const mandate: Mandate = {
       id: this.#id('mnd'),
       delegant: draft.delegant.trim().toLowerCase(),
@@ -1113,10 +1193,10 @@ export class WorkbenchService {
   signMandate(id: string, actor: string, role: Role | undefined): Promise<Mandate> {
     return this.#write((state) => {
       const mandate = state.mandates.find(candidate => candidate.id === id)
-      if (mandate === undefined) throw new Error(`no mandate ${id}`)
+      if (mandate === undefined) throw new Refusal(`no mandate ${id}`)
       const today = this.#at().slice(0, 10)
       const refusal = signRefusal(mandate, actor, role, today)
-      if (refusal !== undefined) throw new Error(refusal)
+      if (refusal !== undefined) throw new Refusal(refusal)
       const at = this.#at()
       const next: Mandate = { ...mandate, state: 'active', signedBy: actor, signedAt: at }
       return {
@@ -1137,10 +1217,10 @@ export class WorkbenchService {
   retireMandate(id: string, actor: string, role: Role | undefined): Promise<Mandate> {
     return this.#write((state) => {
       const mandate = state.mandates.find(candidate => candidate.id === id)
-      if (mandate === undefined) throw new Error(`no mandate ${id}`)
-      if (mandate.state === 'retired') throw new Error('this mandate is already retired')
+      if (mandate === undefined) throw new Refusal(`no mandate ${id}`)
+      if (mandate.state === 'retired') throw new Refusal('this mandate is already retired')
       if (actor !== mandate.delegant && role !== 'owner' && role !== 'admin') {
-        throw new Error(`${actor} can neither retract this mandate nor administer mandates`)
+        throw new Refusal(`${actor} can neither retract this mandate nor administer mandates`)
       }
       const at = this.#at()
       const next: Mandate = { ...mandate, state: 'retired', retiredBy: actor, retiredAt: at }
@@ -1218,8 +1298,8 @@ export class WorkbenchService {
   retireAgent(id: string, actor: string): Promise<Agent> {
     return this.#write((state) => {
       const agent = (state.agents ?? []).find(candidate => candidate.id === id)
-      if (agent === undefined) throw new Error(`no agent ${id}`)
-      if (agent.retiredAt !== undefined) throw new Error(`the agent @${agent.handle} is already retired`)
+      if (agent === undefined) throw new Refusal(`no agent ${id}`)
+      if (agent.retiredAt !== undefined) throw new Refusal(`the agent @${agent.handle} is already retired`)
       const at = this.#at()
       const next: Agent = { ...agent, retiredAt: at, retiredBy: actor }
       return {
@@ -1250,16 +1330,16 @@ export class WorkbenchService {
    */
   createAgent(draft: AgentDraft, actor: string, role?: Role): Promise<Agent> {
     const refusal = agentRefusal(draft)
-    if (refusal !== undefined) return Promise.reject(new Error(refusal))
+    if (refusal !== undefined) return Promise.reject(new Refusal(refusal))
     // A ceiling above the default is the owner's to give, at creation as at a
     // change: an admin cannot create an agent at 50 € a month, nor recreate under
     // another handle one the owner bounded.
     if ((draft.eurPerMonth ?? DEFAULT_EUR_PER_MONTH) > DEFAULT_EUR_PER_MONTH && role !== 'owner') {
-      return Promise.reject(new Error(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`))
+      return Promise.reject(new Refusal(`only the owner gives an agent a ceiling above ${DEFAULT_EUR_PER_MONTH} € a month`))
     }
     return this.#write((state) => {
       if ((state.agents ?? []).some(agent => agent.handle === draft.handle)) {
-        throw new Error(`the handle @${draft.handle} is taken`)
+        throw new Refusal(`the handle @${draft.handle} is taken`)
       }
       const skills = draft.skills === undefined ? [] : checkedSkills(state.skills ?? [], draft.skills)
       const made = this.#newAgent(draft, actor, this.#at())
@@ -1283,7 +1363,7 @@ export class WorkbenchService {
   updateAgent(id: string, patch: AgentPatch, actor: string, role: Role | undefined): Promise<Agent> {
     return this.#write((state) => {
       const agent = (state.agents ?? []).find(candidate => candidate.id === id)
-      if (agent === undefined || agent.retiredAt !== undefined) throw new Error(`no agent ${id}`)
+      if (agent === undefined || agent.retiredAt !== undefined) throw new Refusal(`no agent ${id}`)
       const { skills: asked, ...rest } = patch
       const skills = asked === undefined ? undefined : checkedSkills(state.skills ?? [], asked)
       const { skills: _previous, ...kept } = agent
@@ -1295,9 +1375,9 @@ export class WorkbenchService {
         ...(skills === undefined || skills.length === 0 ? {} : { skills }),
       }
       const refusal = agentRefusal(next)
-      if (refusal !== undefined) throw new Error(refusal)
+      if (refusal !== undefined) throw new Refusal(refusal)
       if (next.eurPerMonth > agent.eurPerMonth && role !== 'owner') {
-        throw new Error(`only the owner raises the ceiling of @${agent.handle}`)
+        throw new Refusal(`only the owner raises the ceiling of @${agent.handle}`)
       }
       return {
         state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
@@ -1360,24 +1440,24 @@ export class WorkbenchService {
    */
   createChannel(draft: ChannelDraft, actor: string): Promise<Channel> {
     const title = draft.title?.trim() ?? ''
-    if (draft.name === undefined && title === '') return Promise.reject(new Error('a channel needs a name or a title'))
+    if (draft.name === undefined && title === '') return Promise.reject(new Refusal('a channel needs a name or a title'))
     if (draft.name !== undefined && !SLUG.test(draft.name)) {
-      return Promise.reject(new Error(`a channel name is a slug: ${draft.name}`))
+      return Promise.reject(new Refusal(`a channel name is a slug: ${draft.name}`))
     }
     const connectorRefusal = serversRefusal(draft.connectors ?? [])
-    if (connectorRefusal !== undefined) return Promise.reject(new Error(connectorRefusal))
+    if (connectorRefusal !== undefined) return Promise.reject(new Refusal(connectorRefusal))
     return this.#write((state) => {
       const taken = new Set((state.channels ?? []).map(channel => channel.name))
       if (draft.name !== undefined && taken.has(draft.name)) {
         // Neutral: the name may be a private channel's the caller is not in.
-        throw new Error(`the name #${draft.name} is not available`)
+        throw new Refusal(`the name #${draft.name} is not available`)
       }
       // A name the person chose is theirs; one derived from a title takes the
       // first free suffix instead of failing.
       const name = draft.name ?? freeSlug(slugOf(title), taken)
       const agents = draft.agents ?? []
       const unknown = agents.filter(id => !(state.agents ?? []).some(agent => agent.id === id && agent.retiredAt === undefined))
-      if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
+      if (unknown.length > 0) throw new Refusal(`no agent ${unknown.join(', ')}`)
       const channel: Channel = {
         id: this.#id('chn'),
         name,
@@ -1422,22 +1502,22 @@ export class WorkbenchService {
     for (const servers of [change.connectors, change.addConnectors, change.removeConnectors]) {
       if (servers === undefined) continue
       const refusal = serversRefusal(servers)
-      if (refusal !== undefined) return Promise.reject(new Error(refusal))
+      if (refusal !== undefined) return Promise.reject(new Refusal(refusal))
     }
     return this.#write((state) => {
       const channel = (state.channels ?? []).find(candidate => candidate.id === id)
-      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Refusal(`no channel ${id}`)
       if (channel.kind === 'solo' && ((change.addMembers ?? []).length > 0 || (change.removeMembers ?? []).length > 0)) {
-        throw new Error('a solo lane has one person')
+        throw new Refusal('a solo lane has one person')
       }
       const added = change.addAgents ?? []
       const unknown = added.filter(agentId => !(state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined))
-      if (unknown.length > 0) throw new Error(`no agent ${unknown.join(', ')}`)
+      if (unknown.length > 0) throw new Refusal(`no agent ${unknown.join(', ')}`)
       // One spelling of a person: an e-mail written Prenom.Nom@ is the same member as prenom.nom@.
       const removed = (change.removeMembers ?? []).map(email => email.trim().toLowerCase())
       const members = [...new Set([...channel.members, ...plainMembers(change.addMembers ?? [])].map(email => email.trim().toLowerCase()))]
         .filter(email => !removed.includes(email))
-      if (members.length === 0) throw new Error('a channel keeps at least one person')
+      if (members.length === 0) throw new Refusal('a channel keeps at least one person')
       // The connectors, applied on the list as it is NOW (inside the write chain):
       // two people toggling one connector each never undo each other.
       const before = [...(channel.connectors ?? [])].sort()
@@ -1513,7 +1593,7 @@ export class WorkbenchService {
       }
       if (turn.help !== undefined) throw new HelpRefusal('already-asked', 'one help request per turn')
       const channel = (state.channels ?? []).find(candidate => candidate.id === message.channelId)
-      if (channel === undefined) throw new Error(`no channel ${message.channelId}`)
+      if (channel === undefined) throw new Refusal(`no channel ${message.channelId}`)
       if (channel.coordination !== undefined) throw new HelpRefusal('coordinated-channel', 'this channel\'s turns are coordinated: no help request inside them')
       const active = (agentId: string): boolean =>
         (state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
@@ -1585,6 +1665,7 @@ export class WorkbenchService {
               ...turn,
               status: 'cancelled',
               reason: turn.status === 'running' ? 'interrompu par un redémarrage' : 'non lancé : redémarrage',
+              reasonKind: 'restart' as const,
               finishedAt: at,
               ...(spent > 0 ? { eur: Math.round(spent * 1_000_000) / 1_000_000 } : {}),
             }
@@ -1831,7 +1912,7 @@ export class WorkbenchService {
         throw new SkillRefusal('missing-fields', 'one skill to add or to remove: { add: slug } or { remove: slug }')
       }
       const agent = (state.agents ?? []).find(candidate => candidate.id === id)
-      if (agent === undefined || agent.retiredAt !== undefined) throw new Error(`no agent ${id}`)
+      if (agent === undefined || agent.retiredAt !== undefined) throw new Refusal(`no agent ${id}`)
       const current = agent.skills ?? []
       const slug = (change.add ?? change.remove) as string
       const wanted = change.add !== undefined
@@ -1889,7 +1970,7 @@ export class WorkbenchService {
   setChannelContext(id: string, text: string, baseVersion: number, actor: string): Promise<Channel> {
     return this.#write((state) => {
       const channel = (state.channels ?? []).find(candidate => candidate.id === id)
-      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Refusal(`no channel ${id}`)
       const next = withContext(channel, text, baseVersion, actor, this.#at())
       return {
         state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
@@ -1911,7 +1992,7 @@ export class WorkbenchService {
   setCoordination(id: string, coordination: Coordination | undefined, actor: string): Promise<Channel> {
     return this.#write((state) => {
       const channel = (state.channels ?? []).find(candidate => candidate.id === id)
-      if (channel === undefined || !channel.members.includes(actor)) throw new Error(`no channel ${id}`)
+      if (channel === undefined || !channel.members.includes(actor)) throw new Refusal(`no channel ${id}`)
       const active = (agentId: string): Agent | undefined =>
         (state.agents ?? []).find(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
       let recorded: Coordination | undefined
@@ -2038,10 +2119,10 @@ export class WorkbenchService {
    */
   postMessage(channelId: string, author: string, text: string, replyTo?: string): Promise<Message> {
     const body = text.trim()
-    if (body === '') return Promise.reject(new Error('a message needs text'))
+    if (body === '') return Promise.reject(new Refusal('a message needs text'))
     return this.#write((state) => {
       const channel = (state.channels ?? []).find(candidate => candidate.id === channelId)
-      if (channel === undefined || !channel.members.includes(author)) throw new Error(`no channel ${channelId}`)
+      if (channel === undefined || !channel.members.includes(author)) throw new Refusal(`no channel ${channelId}`)
       const agents = (state.agents ?? []).filter(agent => channel.agents.includes(agent.id) && agent.retiredAt === undefined)
       const mentions = mentionsOf(body, agents)
       const turns: Turn[] = mentions.map(agentId => ({ id: this.#id('trn'), agentId, status: 'queued' }))
@@ -2076,8 +2157,8 @@ export class WorkbenchService {
   deleteMessage(channelId: string, id: string, actor: string): Promise<Message> {
     return this.#write((state) => {
       const message = (state.messages ?? []).find(candidate => candidate.id === id && candidate.channelId === channelId)
-      if (message === undefined) throw new Error(`no message ${id}`)
-      if (message.author.kind !== 'human' || message.author.email !== actor) throw new Error('only its author deletes a message')
+      if (message === undefined) throw new Refusal(`no message ${id}`)
+      if (message.author.kind !== 'human' || message.author.email !== actor) throw new Refusal('only its author deletes a message')
       const at = this.#at()
       const next: Message = {
         ...message,
@@ -2088,7 +2169,7 @@ export class WorkbenchService {
           ? {}
           : {
             turns: message.turns.map(turn => (turn.status === 'queued' || turn.status === 'running'
-              ? { ...turn, status: 'cancelled' as const, reason: 'Message supprimé par son auteur.', finishedAt: at }
+              ? { ...turn, status: 'cancelled' as const, reason: 'Message supprimé par son auteur.', reasonKind: 'stale' as const, finishedAt: at }
               : turn)),
           }),
       }
@@ -2111,7 +2192,7 @@ export class WorkbenchService {
     return this.#write((state) => {
       const message = (state.messages ?? []).find(candidate => candidate.id === messageId)
       const turn = message?.turns?.find(candidate => candidate.id === turnId)
-      if (message === undefined || turn === undefined) throw new Error(`no turn ${turnId}`)
+      if (message === undefined || turn === undefined) throw new Refusal(`no turn ${turnId}`)
       const settled = turn.status !== 'queued' && turn.status !== 'running'
       const next: Turn = settled ? turn : { ...turn, ...patch }
       const updated: Message = {

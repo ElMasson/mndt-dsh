@@ -18,7 +18,7 @@ import { dateLine, instanceTimeZone } from './core/index.ts'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
-import { eurOf, priceOf } from './core/index.ts'
+import { eurOf, priceOf, Refusal } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
 import { ALWAYS_SERVERS, channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
@@ -146,8 +146,9 @@ async function endRun(ctx: Context, releases: readonly (() => unknown)[], unscop
     unscope()
     return
   }
-  const reason = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
-  warnOperator(ctx, `mndt: a run did not end cleanly, its tool policy stays in force: ${reason}`)
+  // For the operator's log only: never served.
+  const raw = failures.map(error => (error instanceof Error ? error.message : String(error))).join('; ')
+  warnOperator(ctx, `mndt: a run did not end cleanly, its tool policy stays in force: ${raw}`)
   throw failures[0]
 }
 
@@ -257,7 +258,7 @@ export class DshMissionRunner {
     }
     const { missing } = await this.#readiness.waitFor(missionRequiredServers(mission, facts).filter(configured))
     if (missing.length > 0) {
-      throw new Error(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
+      throw new Refusal(`outils indisponibles : ${missing.join(', ')} (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée`)
     }
     const { created, unscope } = await createUnderPolicy(this.#ctx, this.#options.tools, mission.id, () => this.#ctx.agents.create({
       // A fresh session per mission keeps runs readable and disposable.
@@ -394,7 +395,7 @@ export class DshTurnRunner implements TurnEngine {
     if (input.signal.aborted) throw new Error('turn stopped')
     const required = missing.filter(server => input.tools !== 'no-cards' && ALWAYS_SERVERS.includes(server))
     if (required.length > 0) {
-      throw new Error(`outils indisponibles : ${required.join(', ')} (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé`)
+      throw new Refusal(`outils indisponibles : ${required.join(', ')} (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé`)
     }
     const toolsUnavailable = missing.filter(server => !required.includes(server))
     const prompt = toolsUnavailable.length === 0 ? input.prompt
