@@ -25,6 +25,12 @@ describe('a failed turn\'s reason, in words', () => {
     expect(say('the agent turn ended paused')).toEqual({ words: 'fin inattendue', raw: 'the agent turn ended paused' })
   })
 
+  it('an ending named like an inherited member is unknown, not a function', () => {
+    for (const kind of ['constructor', 'tostring', 'valueof', 'hasownproperty']) {
+      expect(say(`the agent turn ended ${kind}`).words).toBe('fin inattendue')
+    }
+  })
+
   it('several endings joined by the core are each said, once', () => {
     expect(say('the agent turn ended max-tokens; the agent turn ended max-tokens; the agent turn failed: x').words)
       .toBe('réponse coupée : limite de longueur atteinte ; le modèle a renvoyé une erreur')

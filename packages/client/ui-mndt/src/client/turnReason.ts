@@ -20,8 +20,9 @@ export function turnReasonWords(reason: string, t: ChatTranslate): { readonly wo
   const parts = reason.split('; ').map((part) => {
     const ended = /^the agent turn ended ([a-z-]+)$/u.exec(part)
     if (ended !== null) {
-      const key = ENDINGS[ended[1] ?? '']
-      return key === undefined ? t('endUnknown') : t(key)
+      // Own keys only: « ended constructor » must not read an object's inherited member.
+      const kind = ended[1] ?? ''
+      return Object.hasOwn(ENDINGS, kind) ? t(ENDINGS[kind] ?? 'endUnknown') : t('endUnknown')
     }
     // A model or provider error: said as one, its own message kept on hover.
     if (part.startsWith('the agent turn failed: ')) return t('endError')

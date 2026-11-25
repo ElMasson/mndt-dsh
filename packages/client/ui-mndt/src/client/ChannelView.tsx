@@ -480,6 +480,10 @@ export function ChannelThread(props: {
               onAgent={(handle) => { setSeed({ text: `@${handle} `, at: Date.now() }) }}
               t={t}
             />
+          ) : web && channel.kind !== 'solo' && !props.agents.some(a => channel.agents.includes(a.id) && a.retiredAt === undefined) ? (
+            // A new channel no agent reads says so, with the gesture when the person may add one:
+            // never a silent channel where a question waits for an answer that cannot come.
+            <ChannelWelcome addable={props.arrival?.addable} t={t} />
           ) : <p className={web ? 'mw-feed-empty' : 'mndt-hint'} data-testid="chat-empty">{web ? t('emptyChannel') : t('empty')}</p>
         ) : web ? thread.map((m, index) => {
           const place = placeOf(thread[index - 1], m)
@@ -569,7 +573,7 @@ function LaneWelcome(props: {
                 type="button"
                 className="mw-pill"
                 aria-label={t('pillAddAgent', { handle: a.handle })}
-                onClick={() => { void arrival.addable?.onAdd(a.id).then(setAddError) }}
+                onClick={() => { setAddError(undefined); void arrival.addable?.onAdd(a.id).then(setAddError) }}
               >
                 @{a.handle}
               </button>
@@ -601,6 +605,35 @@ function LaneWelcome(props: {
           {t(arrival.pending === 1 ? 'laneWelcomePendingOne' : 'laneWelcomePendingMany', { n: arrival.pending })}
         </button>
       )}
+    </div>
+  )
+}
+
+/** A team channel that no agent reads yet: said, and one pill per agent for whoever may add one. */
+function ChannelWelcome(props: { readonly addable?: LaneArrival['addable']; readonly t: ChatTranslate }): ReactNode {
+  const { addable, t } = props
+  const [addError, setAddError] = useState<string | undefined>(undefined)
+  return (
+    <div className="mw-welcome" data-testid="channel-welcome">
+      {addable !== undefined && addable.agents.length > 0 ? (
+        <>
+          <p className="mw-welcome-text">{t('channelWelcomeAddAgent')}</p>
+          <div className="mw-pills" role="group" aria-label={t('channelWelcomeAddAgent')} data-testid="channel-add-agents">
+            {addable.agents.map(a => (
+              <button
+                key={a.id}
+                type="button"
+                className="mw-pill"
+                aria-label={t('pillAddAgent', { handle: a.handle })}
+                onClick={() => { setAddError(undefined); void addable.onAdd(a.id).then(setAddError) }}
+              >
+                @{a.handle}
+              </button>
+            ))}
+          </div>
+          {addError === undefined ? undefined : <p role="alert" className="mw-ctx-error">{addError}</p>}
+        </>
+      ) : <p className="mw-welcome-text">{t('channelWelcomeNoAgent')}</p>}
     </div>
   )
 }

@@ -398,6 +398,8 @@ export const chatEn = {
   endForked: 'continued in another session',
   endError: 'the model returned an error',
   endUnknown: 'unexpected ending',
+  channelWelcomeAddAgent: 'No agent reads this channel yet. Add one:',
+  channelWelcomeNoAgent: 'No agent reads this channel yet: someone who may write in the space adds one.',
 } as const
 
 /** One copy key. */
@@ -796,6 +798,8 @@ export const chatFr: Record<ChatKey, string> = {
   endForked: 'poursuivi dans une autre session',
   endError: 'le modèle a renvoyé une erreur',
   endUnknown: 'fin inattendue',
+  channelWelcomeAddAgent: 'Aucun agent ne lit encore ce canal. Ajoutez-en un :',
+  channelWelcomeNoAgent: 'Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

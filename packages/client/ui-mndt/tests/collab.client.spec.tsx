@@ -591,3 +591,27 @@ describe('who gives which role, and the confirmation (#86)', { timeout: 20_000 }
     expect(screen.queryByRole('group', { name: /^rôle de /u })).toBeNull()
   })
 })
+
+describe('a briefing that ran without its facts', () => {
+  it('says so on its mission card, server names only', async () => {
+    const briefing = {
+      id: 'mis_9', kind: 'briefing', prompt: 'briefing du matin', status: 'succeeded', createdBy: 'scheduler',
+      createdAt: '2026-11-24T06:30:00.000Z', visibility: 'team', toolsUnavailable: ['workbench_facts', '<b>x</b>'],
+    }
+    const api = fakeFace({ state: async () => ({ ...state({ missions: [...state().missions, briefing] }), events: [] }) as never })
+    render(<CollabPage api={api} />)
+    const card = await waitFor(() => {
+      const found = document.querySelector('[data-mission="mission:mis_9"]')
+      expect(found).toBeTruthy()
+      return found as HTMLElement
+    })
+    expect(within(card).getByTestId('mission-tools-unavailable').textContent)
+      .toBe('Exécutée sans : workbench_facts. Ce qu\'elle a écrit ne les a pas consultés.')
+  })
+
+  it('a mission that ran with all its tools says nothing more', async () => {
+    render(<CollabPage api={fakeFace()} />)
+    await screen.findByText('# equipe')
+    expect(document.querySelector('[data-testid="mission-tools-unavailable"]')).toBeNull()
+  })
+})
