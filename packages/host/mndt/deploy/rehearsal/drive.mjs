@@ -303,11 +303,11 @@ for (const surface of surfaces) for (const [who, context, expected] of [['owner'
   reads.push({ path: surface.path, who, status: read.status, expected, raw: /PANNE-SONDE|10\.9\.9\.9/.test(JSON.stringify(read.body)) })
 }
 const leaked = reads.filter(read => read.raw)
-const unexpected = reads.filter(read => read.status !== read.expected)
+const misread = reads.filter(read => read.status !== read.expected)
 const loggedRaw = docker('logs', `${project}-workbench`).includes('PANNE-SONDE') || (() => { try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat /state/web.log 2>/dev/null || true').includes('PANNE-SONDE') } catch { return false } })()
 check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string'
-  && surfaces.length > 0 && unexpected.length === 0 && leaked.length === 0,
-  `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads, ${unexpected.length === 0 ? 'every status as declared' : `unexpected: ${unexpected.map(read => `${read.who} ${read.path} ${read.status} (declared ${read.expected})`).join(', ')}`}; the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
+  && surfaces.length > 0 && misread.length === 0 && leaked.length === 0,
+  `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads, ${misread.length === 0 ? 'every status as declared' : `unexpected: ${misread.map(read => `${read.who} ${read.path} ${read.status} (declared ${read.expected})`).join(', ')}`}; the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
 
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
