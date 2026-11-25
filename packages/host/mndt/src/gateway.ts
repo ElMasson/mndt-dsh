@@ -37,6 +37,7 @@ import type { PriceGrid } from './core/index.ts'
 import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { publicFailure } from './public-failure.ts'
 
 /** How the deployment configures the product. */
 export interface MndtConfig {
@@ -431,6 +432,15 @@ export class WorkbenchGateway extends TypertRemoteService {
    * is declared a solo workstation (DSH_MNDT_SOLO_WORKSTATION=1, refused on a
    * team instance): a missing or mistyped setting never opens the whole engine.
    */
+  /**
+   * @param error - what failed under a machine tool.
+   * @returns what its answer may say (public-failure.ts): the host's refusal,
+   * or a fixed sentence; the error itself goes to the operator's log.
+   */
+  private publicError(error: unknown): string {
+    return publicFailure(error, 'échec de l’opération', (line) => { warnOperator(this.ctx, line) }, 'a machine tool failed')
+  }
+
   private missionRunner(ctx: Context): DshMissionRunner {
     const readiness = this.readinessFor(ctx)
     const configured = this.requiredConfigured()
@@ -509,7 +519,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       }
       return JSON.stringify({ ok: true, page })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -530,7 +540,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       mission = await this.service.createMission({ kind, prompt, createdBy: this.identity })
       await this.service.startMission(mission.id, 'page')
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
     try {
       const result = await this.missionRunner(this.ctx).run(mission)
@@ -561,7 +571,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       return JSON.stringify({ ok: true, value: { hits: searchState(snapshot, this.identity, canAdmin, query, () => true,
         item => canReadMission({ identity: this.identity, channels: new Set(), decider: canAdmin }, item)) } })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -580,7 +590,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.cancelMission(id, this.identity, rights.allowed) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -600,7 +610,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       mission = await this.service.retryMission(id, this.identity)
       await this.service.startMission(mission.id, 'page')
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
     try {
       const result = await this.missionRunner(this.ctx).run(mission)
@@ -626,7 +636,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.approveBrief(briefId, this.identity) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -646,7 +656,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.decideApproval(approvalId, this.identity, decision, reason) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 
@@ -666,7 +676,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       return JSON.stringify({ ok: true, value: await this.service.remember({ scope, kind, text, createdBy: this.identity }) })
     } catch (error) {
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ ok: false, error: this.publicError(error) })
     }
   }
 

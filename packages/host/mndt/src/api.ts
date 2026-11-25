@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, StateFileError } from './core/index.ts'
+import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -21,7 +21,8 @@ import type { WorkbenchService, MissionResult } from './core/index.ts'
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
-import { errorShape, operatorLine } from './operator-log.ts'
+import { operatorLine } from './operator-log.ts'
+import { isRefusal, publicFailure } from './public-failure.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -334,21 +335,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       // « …Refusal ») is served with its words. Anything else (a TypeError, a
       // JSON error, a system error carrying a path) is an internal fault: the
       // caller gets « internal error », the detail goes to the operator's log.
-      if (!isMeantRefusal(error)) {
-        warnInternal(`mndt: internal error on ${request.method} ${path}: ${internalDetail(error)}`)
-        return respond(500, { error: 'internal error' })
-      }
-      const reason = messageOf(error)
+      if (!isRefusal(error)) return respond(500, { error: failure(error, 'internal error', `internal error on ${request.method} ${path}`) })
+      const reason = failure(error, 'internal error', `internal error on ${request.method} ${path}`)
       if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
       if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
-      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
+      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as unknown as { code: string }).code } : {}) })
     }
   }
 
   /** The operator's log for an internal fault: the gateway's, or stderr on one clean line. */
   const warnInternal = options.warn ?? ((message: string): void => { process.stderr.write(`${operatorLine(message)}\n`) })
+  /** What may be served of a failure (public-failure.ts): the host's refusal, or the caller's fixed sentence. */
+  const failure = (error: unknown, fallback: string, where: string): string => publicFailure(error, fallback, warnInternal, where)
 
   const conversation = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
     const parts = path.split('/').slice(1)
@@ -387,9 +387,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(200, { agent })
         } catch (error) {
           if (error instanceof SkillRefusal) {
-            return respond(error.code === 'unknown-skill' ? 404 : error.code === 'too-many-skills' ? 409 : 400, { error: error.message, code: error.code })
+            return respond(error.code === 'unknown-skill' ? 404 : error.code === 'too-many-skills' ? 409 : 400, { error: failure(error, 'refused', 'a skill change failed'), code: error.code })
           }
-          if (error instanceof Error && error.message.startsWith('no agent ')) return respond(404, { error: error.message, code: 'unknown-agent' })
+          const said = isRefusal(error) ? failure(error, 'no agent', 'a skill change failed') : undefined
+          if (said?.startsWith('no agent ') === true) return respond(404, { error: said, code: 'unknown-agent' })
           throw error
         }
       }
@@ -787,7 +788,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           })
           return respond(201, mandate)
         } catch (error) {
-          return respond(400, { error: messageOf(error) })
+          return respond(400, { error: failure(error, 'the mandate could not be created', 'a mandate failed') })
         }
       }
 
@@ -801,7 +802,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           const mandate = await service.signMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
         } catch (error) {
-          return respond(403, { error: messageOf(error) })
+          return respond(403, { error: failure(error, 'the mandate could not be signed', 'a mandate signature failed') })
         }
       }
 
@@ -815,7 +816,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           const mandate = await service.retireMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
         } catch (error) {
-          return respond(403, { error: messageOf(error) })
+          return respond(403, { error: failure(error, 'the mandate could not be retired', 'a mandate retirement failed') })
         }
       }
 
@@ -879,7 +880,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           const mission = await service.cancelMission(id, identity, can(table.grants, identity, 'rights.write').allowed)
           return respond(200, mission)
         } catch (error) {
-          return respond(409, { error: messageOf(error) })
+          return respond(409, { error: failure(error, 'the mission could not be cancelled', 'a mission cancellation failed') })
         }
       }
 
@@ -982,7 +983,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           }, list('peers'))
           return respond(201, { help: { state: help.state, peers: help.peerIds.length, capEur: help.capEur } })
         } catch (error) {
-          if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: error.message, code: error.code })
+          if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: failure(error, 'refused', 'a help failed'), code: error.code })
           throw error
         }
       }
@@ -992,7 +993,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const skillStatus = (error: unknown): MndtApiResponse | undefined => {
           if (!(error instanceof SkillRefusal)) return undefined
           const status = error.code === 'skill-changed' || error.code === 'skill-exists' ? 409 : error.code === 'unknown-skill' ? 404 : 400
-          return respond(status, { error: error.message, code: error.code })
+          return respond(status, { error: failure(error, 'refused', 'a skill failed'), code: error.code })
         }
         if (request.method === 'GET' && path === '/skills') return respond(200, { skills: await service.listSkills() })
         if (request.method !== 'POST') return respond(404, { error: `no route ${request.method} ${path}` })
@@ -1093,7 +1094,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         try {
           return respond(201, { approval: await asked })
         } catch (error) {
-          return respond(400, { error: messageOf(error), ...(error instanceof ContextRefusal ? { code: error.code } : {}) })
+          return respond(400, { error: failure(error, 'the card could not be asked', 'a card failed'), ...(error instanceof ContextRefusal ? { code: error.code } : {}) })
         }
       }
 
@@ -1130,7 +1131,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           try {
             return respond(200, await service.approveAgentProposal(id, identity, role))
           } catch (error) {
-            return respond(400, { error: messageOf(error) })
+            return respond(400, { error: failure(error, 'the agent could not be created', 'an agent proposal failed') })
           }
         }
         if (card.kind === 'propose_context' && decision === 'approved') {
@@ -1142,8 +1143,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           try {
             return respond(200, await service.approveContextProposal(id, identity))
           } catch (error) {
-            if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: messageOf(error), code: error.code })
-            return respond(400, { error: messageOf(error) })
+            const said = failure(error, 'the context could not be changed', 'a context proposal failed')
+            if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: said, code: error.code })
+            return respond(400, { error: said })
           }
         }
         const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined)
@@ -1267,7 +1269,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify(input),
           })
         } catch (error) {
-          return respond(502, { error: `the desktop agent is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
         return respond(answer.status, body)
@@ -1331,7 +1333,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify(input),
           })
         } catch (error) {
-          return respond(502, { error: `the browser agent is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the browser agent is unreachable', 'the browser agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
         return respond(answer.status, body)
@@ -1368,7 +1370,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify({ identity, url }),
           })
         } catch (error) {
-          return respond(502, { error: `the machine service is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the machine service is unreachable', 'the machine service is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
         if (!answer.ok) return respond(answer.status, body)
@@ -1592,7 +1594,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             })
             return timedOut
               ? respond(504, { error: `the authority did not answer within ${(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS) / 1000} s: the role is unchanged` })
-              : respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+              : respond(502, { error: failure(error, 'authority unreachable: the role is unchanged', 'the role authority is unreachable') })
           }
           await service.recordRoleChange(identity, subject, {
             before,
@@ -1629,11 +1631,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       return respond(404, { error: `no route ${request.method} ${path}` })
     } catch (error) {
-      const reason = messageOf(error)
-      // A state error is the caller's fault, anything else is ours; both are
-      // reported, neither is swallowed.
+      // A refusal of the host is the caller's: said, with its words. Anything
+      // else is ours: « internal error », its detail in the operator's log.
+      if (!isRefusal(error)) return respond(500, { error: failure(error, 'internal error', `internal error on ${request.method} ${request.path}`) })
+      const reason = failure(error, 'internal error', `internal error on ${request.method} ${request.path}`)
       const client = /needs|unknown|already|only|cannot|does not/.test(reason)
-      return respond(client ? 409 : 500, { error: reason })
+      return respond(client ? 409 : 400, { error: reason })
     }
   }
 }
@@ -1707,30 +1710,4 @@ export function eventLine(event: WorkbenchEvent): string {
 /** @param brief - a produced brief. @returns its title. */
 export function briefTitle(brief: Brief): string {
   return brief.title
-}
-
-/**
- * @param error - what a conversation route threw.
- * @returns whether it is a refusal the product means: a plain Error (the
- * service's « no channel … », « a channel keeps at least one person »…) or a
- * typed refusal (a class named « …Refusal », with its code). A system error
- * (syscall, errno: its message carries a path) and any other class are not.
- */
-function isMeantRefusal(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  if ('syscall' in error || 'errno' in error) return false
-  return error.constructor === Error || error.name.endsWith('Refusal')
-}
-
-/**
- * @param error - an internal fault of a route.
- * @returns what the operator's log says of it: a SyntaxError by its name and
- * position only (Node's message quotes the text it read, a team's messages for
- * the state); a state file error with its path, which callers never see; any
- * other by its name and message.
- */
-function internalDetail(error: unknown): string {
-  if (error instanceof SyntaxError) return errorShape(error)
-  if (error instanceof StateFileError) return `${error.name}: ${error.message} (${error.path})`
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

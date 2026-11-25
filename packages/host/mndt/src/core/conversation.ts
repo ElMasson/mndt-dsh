@@ -7,6 +7,7 @@
  * price is refused rather than counted as free. A turn sees its own channel
  * only: the prompt is built from that channel's messages and nothing else.
  */
+import { Refusal } from './refusal.ts'
 import type {
   Agent, Channel, CouncilSlot, HelpAdvice, HelpNeed, HelpReading, HelpRequest, Message, Mission, Skill, Turn, TurnCouncil, TurnHelp,
 } from './types.ts'
@@ -96,7 +97,7 @@ export function parsePrices(text: string | undefined): PriceGrid {
   const parsed = JSON.parse(text) as { models?: unknown }
   const models = parsed.models
   if (typeof models !== 'object' || models === null || Array.isArray(models)) {
-    throw new Error('the price grid needs { "models": { "<route>/<model>": { input, output } | null } } in euros per million tokens')
+    throw new Refusal('the price grid needs { "models": { "<route>/<model>": { input, output } | null } } in euros per million tokens')
   }
   const grid: Record<string, ModelPrice | null> = {}
   for (const [key, value] of Object.entries(models as Record<string, unknown>)) {
@@ -107,7 +108,7 @@ export function parsePrices(text: string | undefined): PriceGrid {
     const price = value as Partial<Record<keyof ModelPrice, unknown>>
     const numbers = [price.input, price.output, price.cacheRead ?? 0, price.cacheWrite ?? 0]
     if (numbers.some(n => typeof n !== 'number' || !Number.isFinite(n) || n < 0)) {
-      throw new Error(`the price of ${key} needs non-negative numbers for input and output, or null`)
+      throw new Refusal(`the price of ${key} needs non-negative numbers for input and output, or null`)
     }
     grid[key] = price as ModelPrice
   }
@@ -635,7 +636,7 @@ export function parseHelpReading(text: string): ParsedReading {
   try {
     const value = JSON.parse(last) as Record<string, unknown>
     const verdict = value.verdict
-    if (verdict !== 'unblocked' && verdict !== 'card' && verdict !== 'escalate') throw new Error('verdict')
+    if (verdict !== 'unblocked' && verdict !== 'card' && verdict !== 'escalate') throw new Refusal('verdict')
     const said = (key: string): string | undefined => (typeof value[key] === 'string' && (value[key] as string).trim() !== '' ? (value[key] as string).trim() : undefined)
     return {
       reading: { retained: said('retained') ?? 'aucun', why: said('why') ?? '', verdict },
