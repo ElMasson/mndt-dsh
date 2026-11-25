@@ -225,12 +225,9 @@ signed_override
 # credentials file readable beyond its owner (credentials-local, mode 600).
 find "$root" -path "$data/home" -prune -o -exec chmod a+rX {} + 2>/dev/null
 
-# A mission runs on the workstation's default model (deepseek on Scaleway in
-# production): here it is the fake model too, or a mission could not reach it.
-for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
-  sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
-  echo "default model of the rehearsal: vllm-qwen/fake-qwen ($routes)"
-done
+# A mission runs on the workstation's default model, deepseek on Scaleway as in
+# production: the Scaleway route already reaches the fake model (fake_scaleway),
+# so the mission's call is the production one, reasoning effort included.
 step "1 bis. nothing of an operator's machine in the image"
 # One scan, run where the files are: .git (its config may carry a credential),
 # environment files but the examples, npm credentials, key-shaped strings, and
@@ -347,6 +344,28 @@ MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$play
 # A drive that dies prints no KO for the checks it never reached: say it, or
 # the TOTAL reads ko=0 over a run cut short.
 [ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
+# Every call on a Scaleway model sent reasoning_effort « none » (#83): those
+# models reason by default, billed, and spent a whole turn's output budget on
+# the instance (« the agent turn ended max-tokens »). Each kind of call a
+# Scaleway agent makes in this drive is seen at least once: a kind no call
+# reached proves nothing about it. The council's framing and synthesis and the
+# help's reading are @qwen's here (it chairs and asks), on vLLM, as on the
+# instance: they are listed, not required.
+all_efforts=$(docker logs $project-fakellm 2>&1 | grep -a '^fake-llm effort ')
+efforts=$(printf '%s\n' "$all_efforts" | awk '$4 ~ /^(deepseek-v4\.1-flash|glm-5\.3)$/')
+vllm=$(printf '%s\n' "$all_efforts" | awk 'NF && $4 !~ /^(deepseek-v4\.1-flash|glm-5\.3)$/ { print $5 "/" $6 }' | sort | uniq -c | awk '{ printf "%s=%s ", $2, $1 }')
+scw=$(printf '%s\n' "$efforts" | grep -c . || true)
+other=$(printf '%s\n' "$efforts" | awk 'NF && $6 != "none"' | head -3 | tr '\n' ';')
+kinds=$(printf '%s\n' "$efforts" | awk 'NF { print $5 }' | sort | uniq -c | awk '{ printf "%s=%s ", $2, $1 }')
+absent=""
+for kind in turn verifier council-position council-critique help-peer synthesis mission; do
+  printf '%s\n' "$efforts" | awk -v k="$kind" '$5 == k { found = 1 } END { exit !found }' || absent="$absent $kind"
+done
+if [ "$scw" -gt 0 ] && [ -z "$other" ] && [ -z "$absent" ]; then
+  echo "OK  scaleway-reasoning-none  $scw call(s) on a Scaleway model, every one with reasoning_effort « none »: ${kinds% }; on vLLM (kind/effort): ${vllm% }"
+else
+  echo "KO  scaleway-reasoning-none  $scw Scaleway call(s); not « none »: ${other:-none}; kinds never seen:${absent:- none}; seen: ${kinds% }"
+fi
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"
 # The model.env canary is in the workbench's environment (env_file): the probe

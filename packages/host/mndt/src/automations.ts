@@ -215,6 +215,8 @@ export async function runAutomation(
     createdBy: owner ?? item.createdBy,
     visibility: owner === undefined ? 'team' : 'private',
     ...(item.mandateId === undefined ? {} : { mandateId: item.mandateId }),
+    // The name the owner reads above the report published in their lane.
+    title: item.name,
   })
   const started = await service.startMission(mission.id, 'scheduled')
   try {

@@ -221,6 +221,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     readonly messages?: readonly { readonly input: number; readonly output: number; readonly toolCalls?: number }[]
     /** The output cap the host's llm reports for the model (defaultMaxTokens). */
     readonly outputCap?: number
+    /** The workstation's default model, the one a mission runs on. */
+    readonly defaultModel?: { readonly provider: string; readonly model: string }
   }
 
   function fakeCtx(options: FakeOptions = {}) {
@@ -285,6 +287,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       get: (name: string) => ({
         tools: host.tools, workflowEngine: engine, subagents,
         ...(options.outputCap === undefined ? {} : { llm: { resolveModelInfo: async () => ({ defaultMaxTokens: options.outputCap }) } }),
+        ...(options.defaultModel === undefined ? {} : { agentDefaultModel: { currentSelection: () => options.defaultModel } }),
       } as Record<string, unknown>)[name],
       agents: {
         get: host.agents.get,
@@ -342,6 +345,18 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     await expect(new DshTurnRunner(ctx, readinessOver([...APPROVALS.slice(1), 'mcp__qonto__list'])).run(turn()))
       .rejects.toThrow('outils indisponibles : approvals')
     expect(seen.root).toBeUndefined()
+  })
+
+  it('a mission reports its cost when its model\'s price is known, and none when it is not', async () => {
+    const custom = { id: 'msn_c', kind: 'custom', prompt: 'Fais le point', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const defaultModel = { provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' }
+    const priced = fakeCtx({ defaultModel, messages: [{ input: 1_000_000, output: 500_000 }] })
+    const prices = { 'scaleway-genapi/deepseek-v4.1-flash': { input: 0.2, output: 0.8 } }
+    const options = { tools: TEAM_MISSION_POLICY, readiness: readinessOver(APPROVALS) }
+    const result = await new DshMissionRunner(priced.ctx, { ...options, prices }).run(custom)
+    expect(result.eur).toBeCloseTo(0.6, 6)
+    const unpriced = fakeCtx({ defaultModel, messages: [{ input: 1_000_000, output: 500_000 }] })
+    expect((await new DshMissionRunner(unpriced.ctx, { ...options, prices: {} }).run(custom)).eur).toBeUndefined()
   })
 
   it('a mission waits too: without the approvals it does not start; a briefing needs the facts as well', async () => {

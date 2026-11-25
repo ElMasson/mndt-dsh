@@ -22,6 +22,7 @@ import { CouncilThread, councilOf } from './council.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
+import { turnReasonWords } from './turnReason.ts'
 
 /** How long the same author's next message joins the previous one without its own header. */
 const GROUP_MS = 5 * 60 * 1000
@@ -37,6 +38,8 @@ export function shownName(email: string, names: Readonly<Record<string, string>>
 
 /** @param m - a message. @returns who wrote it, as a stable key (to group messages). */
 function authorKey(m: ChatMessage): string {
+  // A mission's report never joins the row above: its origin label must show on each one.
+  if (m.author.kind === 'system' && 'mission' in m) return `m:${m.id}`
   return m.author.kind === 'human' ? `h:${m.author.email}` : m.author.kind === 'agent' ? `a:${m.author.agentId}` : 's'
 }
 
@@ -83,7 +86,9 @@ function WebTurn(props: {
     const line = (
       <p className="mw-turn-failed" data-testid="chat-turn" data-status={turn.status}>
         <Icon name="AlertTriangle" size={14} />
-        <span>{t(word)}{turn.reason === undefined ? '' : ` : ${turn.reason}`}{turn.eur === undefined ? '' : ` · ${euros(turn.eur)}`}</span>
+        <span title={turn.reason === undefined ? undefined : turnReasonWords(turn.reason, t).raw}>
+          {t(word)}{turn.reason === undefined ? '' : ` : ${turnReasonWords(turn.reason, t).words}`}{turn.eur === undefined ? '' : ` · ${euros(turn.eur)}`}
+        </span>
       </p>
     )
     // A stopped coordinated turn keeps its steps, its cost and its parts (#85).
@@ -296,13 +301,67 @@ export function WebCard(props: {
           {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
         </div>
       ) : (
-        <p className="mw-cannot">{t('webCannotDecide')}</p>
+        // In a lane nobody but its member reads, the card goes up to the owners and admins (À traiter).
+        <p className="mw-cannot" data-testid="card-raised">
+          {/* The member who waits reads « en attente »; a decider never does (an origin is served to deciders only). */}
+          {originOf(card) !== undefined ? t('webToDecide') : props.channel?.kind === 'solo' ? t('webAwaitsDecider') : t('webCannotDecide')}
+        </p>
       )}
     </article>
   )
 }
 
 /** One message of the feed, its turns and the cards they asked for. */
+/**
+ * Where a card raised to the deciders comes from, as the core serves it: a lane or a channel no decider
+ * is in. Never a title: a reader outside the channel gets none of its metadata.
+ * @param card - a card. @returns its origin, or undefined.
+ */
+export function originOf(card: ThreadCard): 'lane' | 'channel' | undefined {
+  const raw: unknown = (card as { readonly origin?: unknown }).origin
+  const kind = typeof raw === 'object' && raw !== null ? (raw as { readonly kind?: unknown }).kind : undefined
+  return kind === 'lane' || kind === 'channel' ? kind : undefined
+}
+
+/** The host's categories of a failed mission, said in words; any other value leaves the host's sentence. */
+const REASON_KINDS: readonly string[] = ['no-answer', 'cut', 'cancelled', 'tools', 'failed']
+const REASON_WORDS = {
+  'no-answer': 'missionReasonNoAnswer', cut: 'missionReasonCut', cancelled: 'missionReasonCancelled',
+  tools: 'missionReasonTools', failed: 'missionReasonFailed',
+} as const
+
+/** A mission's report published in a lane, as the page reads it. */
+interface PublishedMission {
+  readonly title: string
+  readonly failed: boolean
+  /** Why it failed, as the host's category (never the provider's text). */
+  readonly reasonKind?: 'no-answer' | 'cut' | 'cancelled' | 'tools' | 'failed'
+  readonly eur?: number
+  readonly servers: readonly string[]
+}
+
+/**
+ * The mission a system message publishes (a briefing's report in its owner's lane), read defensively.
+ * Absent: an ordinary system message. Present but unreadable: still a model's text, never the host's.
+ * @param m - a message. @returns what it publishes, or undefined.
+ */
+export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined {
+  if (m.author.kind !== 'system' || !('mission' in m)) return undefined
+  const raw: unknown = (m as { readonly mission?: unknown }).mission
+  const at = (key: string): unknown => (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)[key] : undefined)
+  const title = at('title')
+  const eur = at('eur')
+  const tools = at('toolsUnavailable')
+  return {
+    title: typeof title === 'string' && title.trim() !== '' && title.length <= 120 ? title.trim() : '',
+    failed: at('status') === 'failed',
+    ...(REASON_KINDS.includes(at('reasonKind') as never) ? { reasonKind: at('reasonKind') as NonNullable<PublishedMission['reasonKind']> } : {}),
+    ...(typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? { eur } : {}),
+    // Server names only (a technical format), as on a turn.
+    servers: Array.isArray(tools) ? tools.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s)) : [],
+  }
+}
+
 export function WebMessage(props: {
   readonly message: ChatMessage
   readonly header: boolean
@@ -333,9 +392,12 @@ export function WebMessage(props: {
   // The cards a turn of this message asked for after reading its peers' help.
   const fromHelp = (m.turns ?? []).some(turn => helpOf(turn)?.reading?.verdict === 'card')
   const agent = m.author.kind === 'agent' ? agents.get(m.author.agentId) : undefined
+  // A mission's report is a model's text: labelled by its origin, never shown as the host's word.
+  const published = publishedMissionOf(m)
   const name = m.author.kind === 'human'
     ? shownName(m.author.email, props.names)
-    : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}` : 'mndt'
+    : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}`
+      : published !== undefined ? t('briefingLabel') : 'mndt'
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const waiting = props.cards.filter(card => (card.state ?? 'pending') === 'pending').length
@@ -359,9 +421,15 @@ export function WebMessage(props: {
       )}
       {!props.header ? undefined : (
         <div className="mw-message-head">
-          <Icon name={m.author.kind === 'agent' ? 'Bot' : m.author.kind === 'human' ? 'User' : 'ShieldCheck'} className="mw-slate" />
-          <span className="mw-message-name">{name}</span>
+          <Icon name={m.author.kind === 'agent' || published !== undefined ? 'Bot' : m.author.kind === 'human' ? 'User' : 'ShieldCheck'} className="mw-slate" />
+          <span className="mw-message-name" title={published === undefined ? undefined : t('briefingByModel')}>{name}</span>
           {m.author.kind === 'agent' ? <span className="mw-chip mw-chip-strong">{t('webAgent')}</span> : undefined}
+          {published === undefined ? undefined : <span className="mw-chip" data-testid="mission-origin">{t('briefingChip')}</span>}
+          {/* The title is the model's (its first heading): second-tier text, never the author's name. */}
+          {published === undefined || published.title === '' ? undefined : (
+            <span className="mw-message-time" data-testid="mission-title">{published.title}</span>
+          )}
+          {published?.eur === undefined ? undefined : <span className="mw-message-time" data-testid="mission-eur">{euros(published.eur)}</span>}
           <span className="mw-message-time">{clock(m.createdAt)}</span>
         </div>
       )}
@@ -371,8 +439,24 @@ export function WebMessage(props: {
       ) : m.author.kind === 'agent' ? (
         // An agent writes Markdown (tables, lists, bold): read, never shown as raw markers.
         <div className="mw-message-body mw-agent-text" data-testid="chat-markdown">{renderBrief(m.text)}</div>
+      ) : published !== undefined && published.failed ? (
+        // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
+        <p className="mw-message-body mw-decide-error" data-testid="mission-failed">
+          {/* Never m.text: before the core's category is installed it may carry the provider's raw reason. */}
+          {t('missionFailedBecause', { reason: t(REASON_WORDS[published.reasonKind ?? 'failed']) })}
+        </p>
+      ) : published !== undefined ? (
+        // A model wrote it: read as an agent's text, its headings kept plain.
+        m.text.trim() === ''
+          ? <p className="mw-message-body mw-ctx-muted">{t('briefingEmpty')}</p>
+          : <div className="mw-message-body mw-agent-text" data-testid="mission-report">{renderBrief(m.text, { plainHeadings: true })}</div>
       ) : (
         <p className="mw-message-body">{m.text}</p>
+      )}
+      {published === undefined || published.servers.length === 0 ? undefined : (
+        <p className="mw-turn-unchecked" role="note" data-testid="mission-tools-unavailable">
+          {t('missionToolsUnavailable', { servers: published.servers.join(', ') })}
+        </p>
       )}
       {props.asks === undefined ? undefined : (
         <PendingQuestion

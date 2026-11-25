@@ -354,6 +354,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const reason = messageOf(error)
       if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
       if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: reason, code: error.code })
+      // One status per skill refusal, whichever route meets it (POST /agents, /agents/:id, /agents/:id/skills).
+      if (error instanceof SkillRefusal) return respond(skillRefusalStatus(error.code), { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
       return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
@@ -400,7 +402,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(200, { agent })
         } catch (error) {
           if (error instanceof SkillRefusal) {
-            return respond(error.code === 'unknown-skill' ? 404 : error.code === 'too-many-skills' ? 409 : 400, { error: error.message, code: error.code })
+            return respond(skillRefusalStatus(error.code), { error: error.message, code: error.code })
           }
           if (error instanceof Error && error.message.startsWith('no agent ')) return respond(404, { error: error.message, code: 'unknown-agent' })
           throw error
@@ -1012,8 +1014,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (path === '/skills' || path.startsWith('/skills/')) {
         const skillStatus = (error: unknown): MndtApiResponse | undefined => {
           if (!(error instanceof SkillRefusal)) return undefined
-          const status = error.code === 'skill-changed' || error.code === 'skill-exists' ? 409 : error.code === 'unknown-skill' ? 404 : 400
-          return respond(status, { error: error.message, code: error.code })
+          return respond(skillRefusalStatus(error.code), { error: error.message, code: error.code })
         }
         if (request.method === 'GET' && path === '/skills') return respond(200, { skills: await service.listSkills() })
         if (request.method !== 'POST') return respond(404, { error: `no route ${request.method} ${path}` })
@@ -1699,6 +1700,18 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 function servedLast(reader: Reader, snapshot: WorkbenchState): WorkbenchEvent | undefined {
   const found = snapshot.events.findLast(event => canReadEvent(reader, event, snapshot))
   return found === undefined ? undefined : servedEvent(reader, found, snapshot)
+}
+
+/**
+ * @param code - a skill refusal's code.
+ * @returns its one HTTP status, on every route: 404 for a skill not in the
+ * library, 409 for a conflict with what is written (the ceiling of three, a
+ * moved version, a name taken), 400 for a malformed request.
+ */
+function skillRefusalStatus(code: string): number {
+  if (code === 'unknown-skill') return 404
+  if (code === 'too-many-skills' || code === 'skill-changed' || code === 'skill-exists') return 409
+  return 400
 }
 
 /**

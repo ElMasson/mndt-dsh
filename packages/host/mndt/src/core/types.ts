@@ -57,6 +57,10 @@ export interface Mission {
   readonly toolsUnavailable?: readonly string[]
   /** The mandate this mission runs under, when it runs under one. */
   readonly mandateId?: string
+  /** The automation's name it ran under (« Briefing du matin »), when it ran under one. */
+  readonly title?: string
+  /** What it cost, in euros, when the model's price is known. */
+  readonly eur?: number
 }
 
 /** What a mission produced, meant to be read by a person. */
@@ -534,6 +538,23 @@ export interface Message {
   readonly updatedAt?: string
   /** A deleted message keeps its place, without its text. */
   readonly deletedAt?: string
+  /**
+   * On a system message: the mission it reports (a briefing published in its
+   * owner's lane). Its `text` is then the model's report when `status` is
+   * `done`, never the host's word; the host's own short line when `failed`.
+   */
+  readonly mission?: MessageMission
+}
+
+/** The mission a lane's system message reports (see Message.mission). */
+export interface MessageMission {
+  readonly id: string
+  readonly kind: MissionKind
+  /** Where the text comes from: the automation's name, or « Briefing ». Never empty. */
+  readonly title: string
+  readonly status: 'done' | 'failed'
+  readonly eur?: number
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** Everything the product persists. */

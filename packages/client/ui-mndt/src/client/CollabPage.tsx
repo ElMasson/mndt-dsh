@@ -19,7 +19,7 @@ import { TeamContext } from './TeamContext.tsx'
 import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { TeamAgentSheet } from './TeamAgentSheet.tsx'
 import { SkillsSection } from './skills.tsx'
-import { WebCard, shownName } from './TeamFeed.tsx'
+import { WebCard, originOf, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
@@ -1393,8 +1393,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                     onChannel: (id) => { setChatId(id) },
                     pending: pendingCards.length,
                     onPending: () => { setView('pending') },
-                    // Owners and admins add an agent to their own lane in one click.
-                    ...(state.canWrite && current.kind === 'solo' ? {
+                    // Whoever may write adds an agent to their lane, or to a channel no agent reads, in one click.
+                    ...(state.canWrite ? {
                       addable: {
                         agents: chatAgents.filter(a => a.retiredAt === undefined && !current.agents.includes(a.id)),
                         onAdd: (agentId: string) => toggleChatAgent(agentId, true),
@@ -1858,6 +1858,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
                               {where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
                             </button>
+                          ) : originOf(card) === 'lane' ? (
+                            // Raised from a lane the decider does not read: who, never a link.
+                            <span className="mw-queue-from" data-testid="queue-from-lane">{tc('webFromLane', { name: shownName(card.requestedBy, team.names) })}</span>
+                          ) : originOf(card) === 'channel' ? (
+                            <span className="mw-queue-from" data-testid="queue-from-channel">{tc('webFromUndecidedChannel')}</span>
                           ) : card.missionId === undefined ? undefined : (
                             // A mission's card belongs to no channel: said, not a link (missions have no screen yet).
                             <span className="mw-queue-from" data-testid="queue-from-mission">{tc('webFromMission')}</span>
@@ -2255,6 +2260,12 @@ function PostView(props: {
         <span className="mndt-tag">{body.visibility === 'team' ? t('ui.equipe-2') : t('ui.privee')}</span>
         {body.mandate === undefined ? undefined : <span className="mndt-tag">{body.mandate.slice(0, 32)}</span>}
         {body.error === undefined ? undefined : <span className="mndt-error mndt-error-banner">{body.error}</span>}
+        {body.toolsUnavailable.length === 0 ? undefined : (
+          // A briefing written without its facts says so on the mission, before anyone reads the brief as complete.
+          <span className="mndt-hint" role="note" data-testid="mission-tools-unavailable">
+            {t('ui.mission-sans-outils', { servers: body.toolsUnavailable.join(', ') })}
+          </span>
+        )}
         {body.brief === undefined ? undefined : (
           <button type="button" className="mndt-button" onClick={toggle}>{open ? t('ui.masquer-le-brief') : t('ui.ouvrir-le-brief')}</button>
         )}

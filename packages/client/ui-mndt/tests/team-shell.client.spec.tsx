@@ -277,11 +277,12 @@ describe('a channel in the team frame, as mndt-web draws it', () => {
     await screen.findByTestId('context-panel')
   }
 
-  it('titles the channel with its kind below, and says an empty feed in the centre', async () => {
+  it('titles the channel with its kind below, and says in the centre that no agent reads it yet', async () => {
     await open()
     expect(screen.getByRole('heading', { level: 1, name: '# test' })).toBeTruthy()
     expect(document.querySelector('.mw-subtitle')?.textContent).toBe('Équipe')
-    expect((await screen.findByTestId('chat-empty')).textContent).toBe('Aucun message dans ce canal pour l\'instant.')
+    // An empty channel with an agent says « Aucun message… » (see « a new team channel no agent reads »).
+    expect((await screen.findByTestId('channel-welcome')).textContent).toContain('Aucun agent ne lit encore ce canal.')
   })
 
   it('shows the context card in the sections of mndt-web, « bientôt » where nothing is served', async () => {
@@ -768,5 +769,100 @@ describe('review of #141 and #142', { timeout: 20_000 }, () => {
     const item = await screen.findByTestId('pending-question')
     expect(within(item).queryByRole('textbox')).toBeNull()
     expect(within(item).getByRole('button', { name: 'Répondre dans # compta' })).toBeTruthy()
+  })
+})
+
+describe('a new team channel no agent reads', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-25T08:00:00.000Z'
+  const assistant = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }
+  const fresh = { id: 'chn_1', name: 'rapprochement', title: 'Rapprochement', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+
+  it('says so, and one click adds an agent', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('channel-welcome', {}, { timeout: 5000 })
+    expect(within(welcome).getByText('Aucun agent ne lit encore ce canal. Ajoutez-en un :')).toBeTruthy()
+    fireEvent.click(within(within(welcome).getByTestId('channel-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' }))
+    await waitFor(async () => { expect((await chat.channels()).find(c => c.id === 'chn_1')?.agents).toEqual(['agt_1']) })
+    await waitFor(() => { expect(screen.queryByTestId('channel-welcome')).toBeNull() })
+    expect(screen.getByTestId('chat-empty').textContent).toBe('Aucun message dans ce canal pour l\'instant.')
+  })
+
+  it('a reader who may not add one is told who does, without pills', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite: false }))} chat={chat} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('channel-welcome', {}, { timeout: 5000 })
+    expect(welcome.textContent).toBe('Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.')
+    expect(within(welcome).queryByTestId('channel-add-agents')).toBeNull()
+  })
+
+  it('a refusal is cleared when the person tries again', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
+    let first = true
+    const once = {
+      ...chat,
+      addAgents: (id: string, agents: readonly string[]) => {
+        if (first) { first = false; return Promise.reject(new ChatRefusal('try later', 503)) }
+        return chat.addAgents(id, agents)
+      },
+    }
+    render(<CollabPage api={face(state())} chat={once} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('channel-welcome', {}, { timeout: 5000 })
+    const pill = within(within(welcome).getByTestId('channel-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' })
+    fireEvent.click(pill)
+    expect(await within(welcome).findByRole('alert')).toBeTruthy()
+    fireEvent.click(pill)
+    await waitFor(() => { expect(screen.queryByTestId('channel-welcome')).toBeNull() })
+  })
+
+  it('an agent added that refuses is said', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
+    const refusing = { ...chat, addAgents: () => Promise.reject(new ChatRefusal('no agent agt_1', 404)) }
+    render(<CollabPage api={face(state())} chat={refusing} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('channel-welcome', {}, { timeout: 5000 })
+    fireEvent.click(within(within(welcome).getByTestId('channel-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' }))
+    expect((await within(welcome).findByRole('alert')).textContent).not.toBe('')
+  })
+})
+
+describe('cards raised to the deciders (À traiter)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-25T08:00:00.000Z'
+  const raised = (over: Record<string, unknown>) => ({
+    id: 'apr_9', kind: 'send-email', title: 'Relancer Orange', requestedBy: 'smarion@datanalysis.re', requestedAt: at,
+    state: 'pending', canDecide: true, channelId: 'chn_lane_smarion', ...over,
+  })
+  const openPending = async (cards: readonly unknown[]) => {
+    const chat = createMockChat({ you, agents: [], channels: [], cards: cards as never }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{ names: { 'smarion@datanalysis.re': 'Sophie Marion' } }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    return screen.findByTestId('team-pending', {}, { timeout: 5000 })
+  }
+
+  it('from a lane: whose, and no link to it', async () => {
+    const pending = await openPending([raised({ origin: { kind: 'lane' } })])
+    expect((await within(pending).findByTestId('queue-from-lane')).textContent).toBe('depuis la lane de Sophie Marion')
+    expect(within(pending).queryByRole('button', { name: /lane/u })).toBeNull()
+  })
+
+  it('from a channel with no decider: said, no title, no link', async () => {
+    const pending = await openPending([raised({ origin: { kind: 'channel' }, channelId: 'chn_x' })])
+    expect((await within(pending).findByTestId('queue-from-channel')).textContent).toBe('depuis un canal sans décideur')
+  })
+})
+
+describe('a card of a channel absent from the list, without origin', { timeout: 20_000 }, () => {
+  it('says nothing about where it comes from (no « canal sans décideur » it cannot prove)', async () => {
+    const you = 'stephane@datanalysis.re'
+    const at = '2026-11-25T08:00:00.000Z'
+    const card = { id: 'apr_8', kind: 'send-email', title: 'x', requestedBy: you, requestedAt: at, state: 'pending', canDecide: true, channelId: 'chn_gone' }
+    const chat = createMockChat({ you, agents: [], channels: [], cards: [card] as never }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const pending = await screen.findByTestId('team-pending', {}, { timeout: 5000 })
+    await waitFor(() => { expect(within(pending).getAllByRole('article').length).toBeGreaterThan(0) })
+    expect(within(pending).queryByTestId('queue-from-channel')).toBeNull()
+    expect(within(pending).queryByTestId('queue-from-lane')).toBeNull()
   })
 })

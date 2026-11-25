@@ -141,6 +141,10 @@ export function missionPost(
     mandate: mandate?.purpose,
     brief,
     error: mission.error,
+    // Server names only (a technical format): anything else is not shown.
+    toolsUnavailable: Array.isArray(mission.toolsUnavailable)
+      ? mission.toolsUnavailable.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s))
+      : [],
   }
 }
 
