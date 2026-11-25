@@ -310,7 +310,10 @@ const misread = reads.filter(read => read.status !== read.expected)
 const operatorLog = (() => {
   try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat "${DSH_MNDT_WEB_LOG:-/run/mndt-launch/web.log}" 2>/dev/null || true') } catch { return '' }
 })()
-const loggedRaw = /of @qwen failed: .*PANNE-SONDE/.test(operatorLog)
+// Tied to this very turn: a line left by an earlier run, in a volume that
+// persists, must not pass for this failure.
+const loggedRaw = failedTurn?.id !== undefined
+  && new RegExp(`turn ${failedTurn.id.replace(/[^A-Za-z0-9_]/g, '\\$&')} of @qwen failed: .*PANNE-SONDE`).test(operatorLog)
 check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string'
   && surfaces.length > 0 && misread.length === 0 && leaked.length === 0 && loggedRaw,
   `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads, ${misread.length === 0 ? 'every status as declared' : `unexpected: ${misread.map(read => `${read.who} ${read.path} ${read.status} (declared ${read.expected})`).join(', ')}`}; the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
