@@ -141,6 +141,36 @@ describe('a card no member of its channel may decide rises to the deciders', () 
     expect((await hits('operator')).map(hit => hit.origin)).toEqual([undefined, undefined])
   })
 
+  it('the role table is read before the write: while it is slow to answer, the space keeps writing', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const table = { ok: true as const, grants: [{ subject: owner, role: 'owner' as const }, { subject: operator, role: 'operator' as const }] }
+    // The route reads the table three times: its reader, its right, then the
+    // table its decision is checked with. That third read is the one held: read
+    // inside the write, it would hold every other write of the space.
+    let calls = 0
+    let holding = false
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const api = createMndtApi({
+      service,
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { tokens: { owner: { user: owner }, operator: { user: operator } } },
+      grants: { grants: async () => { if (holding && ++calls === 3) await held; return table } },
+    })
+    const lane = await service.laneOf(operator)
+    const card = await service.requestApproval({ kind: 'spend', title: 'Achat', payload: {}, requestedBy: operator, channelId: lane.id })
+    holding = true
+    const deciding = api({ method: 'POST', path: `/approvals/${card.id}/decide`, authorization: 'Bearer owner', body: JSON.stringify({ decision: 'approved' }) })
+    while (calls < 3) await new Promise(resolve => setTimeout(resolve, 2))
+    const posted = await Promise.race([
+      service.postMessage(lane.id, operator, 'pendant la lecture des rôles').then(() => 'written'),
+      new Promise(resolve => setTimeout(() => resolve('blocked'), 300)),
+    ])
+    release()
+    expect(posted).toBe('written')
+    expect((await deciding).status).toBe(200)
+  })
+
   it('another operator never sees it, nor can decide it', async () => {
     const b = bench()
     const lane = await b.service.laneOf(operator)

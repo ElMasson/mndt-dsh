@@ -1164,8 +1164,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           if (offered !== undefined) return offered
           const table = await grants.grants()
           const role = table.ok ? roleOf(table.grants, identity) : undefined
-          const readable = async (state: WorkbenchState, card: Approval): Promise<boolean> =>
-            canReadApproval(readerIn(state, await grants.grants(), identity), card)
+          // As above: the table read before the write, the state read again in it.
+          const readable = (state: WorkbenchState, card: Approval): boolean => canReadApproval(readerIn(state, table, identity), card)
           try {
             return respond(200, await service.approveAgentProposal(id, identity, role, readable))
           } catch (error) {
@@ -1188,9 +1188,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }
         // Read again inside the write that decides: a card whose channel gained a
         // decider meanwhile, or that the reader lost, is not decided from outside.
-        // The role table is read inside the write too, with the state it decides on.
-        const readable = async (state: WorkbenchState, approval: Approval): Promise<boolean> =>
-          canReadApproval(readerIn(state, await grants.grants(), identity), approval)
+        // The role table is read just before the write (an HTTP call: read inside,
+        // it would hold every write of the space); the write reads the state it
+        // decides on again with it (the channel's members, the card's status).
+        const table = await grants.grants()
+        const readable = (state: WorkbenchState, approval: Approval): boolean => canReadApproval(readerIn(state, table, identity), approval)
         try {
           const approval = await service.decideApproval(id, identity, decision, typeof input.reason === 'string' ? input.reason : undefined, readable)
           return respond(200, { approval })
