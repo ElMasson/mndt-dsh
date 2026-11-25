@@ -229,12 +229,13 @@ const ownerLane = await laneOf(owner)
 const laneBriefs = ownerLane === undefined ? [] : ((await api('GET', `/channels/${ownerLane.id}/messages`)).body.messages ?? [])
   .filter(m => m.author?.kind === 'system' && m.mission?.kind === 'briefing')
 const viewerLane = await laneOf(viewer)
-const viewerSees = viewerLane === undefined ? [] : ((await api('GET', `/channels/${viewerLane.id}/messages`, undefined, viewer)).body.messages ?? [])
-  .filter(m => m.mission !== undefined)
+// The viewer's own lane is read (200): an empty list from a refused read proves nothing.
+const viewerRead = viewerLane === undefined ? { status: 0, body: {} } : await api('GET', `/channels/${viewerLane.id}/messages`, undefined, viewer)
+const viewerSees = (viewerRead.body.messages ?? []).filter(m => m.mission !== undefined)
 const ownerLaneByViewer = ownerLane === undefined ? 0 : (await api('GET', `/channels/${ownerLane.id}/messages`, undefined, viewer)).status
 check('briefing-in-lane', laneBriefs.length > 0 && typeof laneBriefs.at(-1)?.text === 'string' && laneBriefs.at(-1).text !== ''
-  && ['done', 'failed'].includes(laneBriefs.at(-1)?.mission?.status) && viewerSees.length === 0 && ownerLaneByViewer === 404,
-  `owner's lane: ${laneBriefs.length} briefing message(s), last ${laneBriefs.at(-1)?.mission?.status ?? '-'} « ${laneBriefs.at(-1)?.mission?.title ?? '-'} »; ${SECOND}'s lane: ${viewerSees.length}; the owner's lane read by ${SECOND}: ${ownerLaneByViewer}`)
+  && ['done', 'failed'].includes(laneBriefs.at(-1)?.mission?.status) && viewerRead.status === 200 && viewerSees.length === 0 && ownerLaneByViewer === 404,
+  `owner's lane: ${laneBriefs.length} briefing message(s), last ${laneBriefs.at(-1)?.mission?.status ?? '-'} « ${laneBriefs.at(-1)?.mission?.title ?? '-'} »; ${SECOND}'s lane read ${viewerRead.status}: ${viewerSees.length}; the owner's lane read by ${SECOND}: ${ownerLaneByViewer}`)
 
 // (#153) A card asked in an operator's lane (no decider among its members)
 // rises to the owner, who decides it without reading the lane.
@@ -250,6 +251,7 @@ const settle = async (context, channelId, messageId) => {
 }
 const operatorLane = await laneOf(operatorContext)
 let rose
+let ownerQueue = { status: 0, body: {} }
 let decided = 0
 let laneRead = 0
 let roseTurn
@@ -257,27 +259,43 @@ if (operatorLane !== undefined && qwen !== undefined) {
   await api('POST', `/channels/${operatorLane.id}/agents`, { add: [qwen.id] }, operatorContext)
   const asked = (await api('POST', `/channels/${operatorLane.id}/messages`, { text: '@qwen sonde-outils-lane' }, operatorContext)).body.message
   roseTurn = asked === undefined ? undefined : await settle(operatorContext, operatorLane.id, asked.id)
-  rose = ((await api('GET', '/approvals?state=pending&mine=1')).body.approvals ?? []).find(card => card.channelId === operatorLane.id)
+  ownerQueue = await api('GET', '/approvals?state=pending&mine=1')
+  rose = (ownerQueue.body.approvals ?? []).find(card => card.channelId === operatorLane.id)
   laneRead = (await api('GET', `/channels/${operatorLane.id}/messages`)).status
   decided = rose === undefined ? 0 : (await api('POST', `/approvals/${rose.id}/decide`, { decision: 'rejected', reason: 'répétition' })).status
 }
-const viewerCards = ((await api('GET', '/approvals?state=all', undefined, viewer)).body.approvals ?? []).filter(card => card.channelId === operatorLane?.id)
-check('lane-card-rises', rose !== undefined && rose.canDecide === true && rose.origin?.kind === 'lane' && laneRead === 404 && decided === 200 && viewerCards.length === 0,
-  `turn in ${OPERATOR}'s lane ${roseTurn?.status ?? '-'}; the owner's « À traiter »: ${rose === undefined ? 'no card' : `« ${rose.title} », canDecide ${rose.canDecide}, origin ${JSON.stringify(rose.origin)}`}; the lane read by the owner: ${laneRead}; decided ${decided}; seen by ${SECOND}: ${viewerCards.length}`)
+// Both reads answer 200: an empty list from a refused read proves nothing.
+const ownerAll = await api('GET', '/approvals?state=all')
+const viewerAll = await api('GET', '/approvals?state=all', undefined, viewer)
+const viewerCards = (viewerAll.body.approvals ?? []).filter(card => card.channelId === operatorLane?.id)
+check('lane-card-rises', ownerQueue.status === 200 && ownerAll.status === 200 && viewerAll.status === 200
+  && rose !== undefined && rose.canDecide === true && rose.origin?.kind === 'lane' && laneRead === 404 && decided === 200 && viewerCards.length === 0,
+  `turn in ${OPERATOR}'s lane ${roseTurn?.status ?? '-'}; the owner's « À traiter » (${ownerQueue.status}): ${rose === undefined ? 'no card' : `« ${rose.title} », canDecide ${rose.canDecide}, origin ${JSON.stringify(rose.origin)}`}; the lane read by the owner: ${laneRead}; decided ${decided}; /approvals?state=all owner ${ownerAll.status}, ${SECOND} ${viewerAll.status}: ${viewerCards.length} seen by ${SECOND}`)
 
 // (#157) A turn whose provider fails serves the host's sentence and its kind,
 // never the provider's words; those reach the operator's log.
 let failedTurn
-let failedMessages = ''
 if (channel !== undefined && qwen !== undefined) {
   const asked = (await api('POST', `/channels/${channel.id}/messages`, { text: '@qwen sonde-panne' })).body.message
   failedTurn = asked === undefined ? undefined : await settle(owner, channel.id, asked.id)
-  failedMessages = JSON.stringify((await api('GET', `/channels/${channel.id}/messages`)).body)
 }
-const servedRaw = failedMessages.includes('PANNE-SONDE') || failedMessages.includes('10.9.9.9')
+// The failure did happen: the fake provider says it answered the probe with its 400.
+const providerFailed = (docker('logs', `${project}-fakellm`).match(/provider failure \(sonde-panne\)/g) ?? []).length
+// Every surface a member or the owner reads, each read with its status: a refused
+// read proves nothing.
+const surfaces = channel === undefined ? [] : [
+  `/channels/${channel.id}/messages`, '/state', '/events', '/journal', '/approvals?state=all', '/search?q=panne', '/missions', '/briefs',
+]
+const reads = []
+for (const path of surfaces) for (const [who, context] of [['owner', owner], [SECOND, viewer]]) {
+  const read = await api('GET', path, undefined, context)
+  reads.push({ path, who, status: read.status, raw: /PANNE-SONDE|10\.9\.9\.9/.test(JSON.stringify(read.body)) })
+}
+const leaked = reads.filter(read => read.raw)
+const ownerReads200 = reads.filter(read => read.who === 'owner').every(read => read.status === 200)
 const loggedRaw = docker('logs', `${project}-workbench`).includes('PANNE-SONDE') || (() => { try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat /state/web.log 2>/dev/null || true').includes('PANNE-SONDE') } catch { return false } })()
-check('no-raw-failure', failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string' && !servedRaw,
-  `turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; the provider's words served: ${servedRaw ? 'YES' : 'no'}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
+check('no-raw-failure', providerFailed > 0 && failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string' && ownerReads200 && leaked.length === 0,
+  `provider failure answered ${providerFailed} time(s); turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; ${reads.length} reads (${reads.map(read => `${read.who === 'owner' ? 'o' : 'v'}${read.status}`).join(' ')}): the provider's words served ${leaked.length === 0 ? 'nowhere' : `in ${leaked.map(read => `${read.who} ${read.path}`).join(', ')}`}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
 
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
