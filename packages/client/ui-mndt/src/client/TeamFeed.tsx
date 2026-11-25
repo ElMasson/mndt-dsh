@@ -22,7 +22,7 @@ import { CouncilThread, councilOf } from './council.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
-import { turnReasonWords } from './turnReason.ts'
+import { turnEndWords } from './turnReason.ts'
 
 /** How long the same author's next message joins the previous one without its own header. */
 const GROUP_MS = 5 * 60 * 1000
@@ -86,8 +86,8 @@ function WebTurn(props: {
     const line = (
       <p className="mw-turn-failed" data-testid="chat-turn" data-status={turn.status}>
         <Icon name="AlertTriangle" size={14} />
-        <span title={turn.reason === undefined ? undefined : turnReasonWords(turn.reason, t).raw}>
-          {t(word)}{turn.reason === undefined ? '' : ` : ${turnReasonWords(turn.reason, t).words}`}{turn.eur === undefined ? '' : ` · ${euros(turn.eur)}`}
+        <span>
+          {t(word)}{turnEndWords(turn, t) === undefined ? '' : ` : ${turnEndWords(turn, t) ?? ''}`}{turn.eur === undefined ? '' : ` · ${euros(turn.eur)}`}
         </span>
       </p>
     )

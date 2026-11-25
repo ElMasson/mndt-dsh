@@ -1,34 +1,31 @@
 /**
- * A failed turn's reason in words. The core writes the runtime's ending as a fixed technical
- * string (runner.ts: « the agent turn ended <kind> », « the agent turn failed: <message> », joined by
- * « ; »); this reads that format, it judges nothing. An ending it does not know is not hidden: it
- * shows as « fin inattendue », its raw text on hover.
+ * Why a failed turn ended, in words. The core serves its own category (`turn.reasonKind`) and a
+ * sentence of the host; the runtime's raw text is never served, and never shown, not even on hover
+ * (a provider's message may carry an internal detail). A turn without a known category — an older
+ * one, or a category this screen does not know — reads « fin inattendue ».
  */
 import type { ChatTranslate } from './chatLocales.ts'
 
-/** The runtime's endings (session TurnEndReason) the screen says in words. */
-const ENDINGS: Readonly<Record<string, 'endMaxTokens' | 'endAborted' | 'endInterrupted' | 'endBlocked' | 'endForked'>> = {
-  'max-tokens': 'endMaxTokens',
-  aborted: 'endAborted',
-  interrupted: 'endInterrupted',
-  blocked: 'endBlocked',
-  forked: 'endForked',
-}
+/** The core's categories of a failed turn (#157), said in words. */
+const KINDS: ReadonlyMap<string, 'endNoAnswer' | 'endMaxTokens' | 'endCancelled' | 'endTools' | 'endError'> = new Map([
+  ['no-answer', 'endNoAnswer'],
+  ['cut', 'endMaxTokens'],
+  ['cancelled', 'endCancelled'],
+  ['tools', 'endTools'],
+  ['failed', 'endError'],
+])
 
-/** @param reason - a turn's reason as served. @param t - the copy. @returns its words, and the raw text for hover. */
-export function turnReasonWords(reason: string, t: ChatTranslate): { readonly words: string; readonly raw: string } {
-  const parts = reason.split('; ').map((part) => {
-    const ended = /^the agent turn ended ([a-z-]+)$/u.exec(part)
-    if (ended !== null) {
-      // Own keys only: « ended constructor » must not read an object's inherited member.
-      const kind = ended[1] ?? ''
-      return Object.hasOwn(ENDINGS, kind) ? t(ENDINGS[kind] ?? 'endUnknown') : t('endUnknown')
-    }
-    // A model or provider error: said as one, its own message kept on hover.
-    if (part.startsWith('the agent turn failed: ')) return t('endError')
-    return undefined
-  })
-  // Anything that is not the runtime's format is the core's own sentence: shown as written.
-  if (parts.every(part => part === undefined)) return { words: reason, raw: reason }
-  return { words: [...new Set(parts.map(part => part ?? t('endUnknown')))].join(' ; '), raw: reason }
+/**
+ * @param turn - a turn as served (its status, its category).
+ * @param t - the copy.
+ * @returns the words after « n'a pas abouti : » for a failed turn; for a refused or cancelled one,
+ * the host's own sentence; undefined when there is nothing to say.
+ */
+export function turnEndWords(
+  turn: { readonly status: string; readonly reason?: string | undefined; readonly reasonKind?: unknown },
+  t: ChatTranslate,
+): string | undefined {
+  if (turn.status !== 'failed') return turn.reason
+  const key = typeof turn.reasonKind === 'string' ? KINDS.get(turn.reasonKind) : undefined
+  return t(key ?? 'endUnknown')
 }
