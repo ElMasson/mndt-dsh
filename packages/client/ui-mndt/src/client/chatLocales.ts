@@ -414,6 +414,13 @@ export const chatEn = {
   endNoAnswer: 'the model gave no answer',
   endCancelled: 'cancelled',
   endTools: 'a tool it needed was unavailable',
+  endBudget: 'the turn\'s cost reached its bound',
+  endBlocked: 'the turn was blocked',
+  endAborted: 'the turn was abandoned',
+  endInterrupted: 'the turn was interrupted',
+  endRefused: 'refused by the space',
+  endStale: 'no longer relevant',
+  endRestart: 'interrupted by a restart',
 } as const
 
 /** One copy key. */
@@ -828,6 +835,13 @@ export const chatFr: Record<ChatKey, string> = {
   endNoAnswer: 'le modèle n\'a rien répondu',
   endCancelled: 'annulé',
   endTools: 'un outil nécessaire était indisponible',
+  endBudget: 'le coût du tour a atteint sa borne',
+  endBlocked: 'le tour a été bloqué',
+  endAborted: 'le tour a été abandonné',
+  endInterrupted: 'le tour a été interrompu',
+  endRefused: 'refusé par l\'espace',
+  endStale: 'plus d\'actualité',
+  endRestart: 'interrompu par un redémarrage',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

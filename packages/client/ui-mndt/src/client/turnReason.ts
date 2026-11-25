@@ -7,13 +7,22 @@
  */
 import type { ChatTranslate } from './chatLocales.ts'
 
-/** The core's categories of a failed turn (#157), said in words. */
-const KINDS: ReadonlyMap<string, 'endNoAnswer' | 'endMaxTokens' | 'endCancelled' | 'endTools' | 'endError'> = new Map([
+/** The core's categories of a turn's ending (#157): their word, used only when the host's sentence is empty. */
+type EndWord = 'endNoAnswer' | 'endMaxTokens' | 'endCancelled' | 'endTools' | 'endError' | 'endBudget' | 'endBlocked'
+  | 'endAborted' | 'endInterrupted' | 'endRefused' | 'endStale' | 'endRestart'
+const KINDS: ReadonlyMap<string, EndWord> = new Map<string, EndWord>([
   ['no-answer', 'endNoAnswer'],
   ['cut', 'endMaxTokens'],
   ['cancelled', 'endCancelled'],
   ['tools', 'endTools'],
   ['failed', 'endError'],
+  ['budget', 'endBudget'],
+  ['blocked', 'endBlocked'],
+  ['aborted', 'endAborted'],
+  ['interrupted', 'endInterrupted'],
+  ['refused', 'endRefused'],
+  ['stale', 'endStale'],
+  ['restart', 'endRestart'],
 ])
 
 /**
@@ -26,10 +35,12 @@ export function turnEndWords(
   turn: { readonly status: string; readonly reason?: string | undefined; readonly reasonKind?: unknown },
   t: ChatTranslate,
 ): string | undefined {
-  if (turn.status !== 'failed') return turn.reason
-  // An older turn, its reason possibly raw: never shown.
-  if (typeof turn.reasonKind !== 'string' || turn.reasonKind === '') return t('endUnknown')
+  const kind = typeof turn.reasonKind === 'string' && turn.reasonKind !== '' ? turn.reasonKind : undefined
   const sentence = turn.reason?.trim() ?? ''
-  if (sentence !== '') return sentence
-  return t(KINDS.get(turn.reasonKind) ?? 'endUnknown')
+  // With a category, the reason is the host's sentence (any category, an unknown one included).
+  if (kind !== undefined) return sentence !== '' ? sentence : t(KINDS.get(kind) ?? 'endUnknown')
+  // Without one, a refused or cancelled turn keeps the host's sentence it always carried;
+  // a failed one is older, its reason possibly raw: never shown.
+  if (turn.status !== 'failed') return turn.reason
+  return t('endUnknown')
 }

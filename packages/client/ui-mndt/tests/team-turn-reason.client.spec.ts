@@ -19,6 +19,21 @@ describe('why a failed turn ended', () => {
     expect(failed('failed')).toBe('le modèle a renvoyé une erreur')
   })
 
+  it('A1\'s other categories: the sentence as written, their word when it is empty', () => {
+    expect(failed('budget', 'le coût du tour a atteint sa borne pendant l’appel')).toBe('le coût du tour a atteint sa borne pendant l’appel')
+    expect(failed('budget', '')).toBe('le coût du tour a atteint sa borne')
+    expect(failed('blocked', '')).toBe('le tour a été bloqué')
+    expect(failed('aborted', '')).toBe('le tour a été abandonné')
+    expect(failed('interrupted', '')).toBe('le tour a été interrompu')
+    expect(turnEndWords({ status: 'cancelled', reasonKind: 'stale', reason: 'L’agent a quitté le canal.' }, chatFrench)).toBe('L’agent a quitté le canal.')
+    expect(turnEndWords({ status: 'cancelled', reasonKind: 'restart', reason: '' }, chatFrench)).toBe('interrompu par un redémarrage')
+    expect(turnEndWords({ status: 'refused', reasonKind: 'refused', reason: 'Plafond mensuel atteint pour @x' }, chatFrench)).toBe('Plafond mensuel atteint pour @x')
+  })
+
+  it('an unknown category keeps the host\'s sentence (it is always one)', () => {
+    expect(failed('new-kind', 'Une phrase de l’hôte.')).toBe('Une phrase de l’hôte.')
+  })
+
   it('an unknown category with an empty sentence, or one named like an inherited member, reads « fin inattendue »', () => {
     for (const kind of ['paused', 'constructor', 'toString']) expect(failed(kind, '')).toBe('fin inattendue')
   })
