@@ -13,14 +13,17 @@ import type { WorkbenchState } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { publicFailure } from '../src/public-failure.ts'
 
-/** A line that serves something: an HTTP answer, a machine tool's answer, a role table's reason. */
-const SERVES = /respond\(|JSON\.stringify\(\{ ok: false|ok: false, reason:/
+/** A line that serves something: an HTTP answer, a machine tool's answer, a reason (a role table's, a turn's, a step's). */
+const SERVES = /respond\(|JSON\.stringify\(\{ ok: false|\breason:|\breason =/
 /** An error's own text: its message, or the error made a string. */
 const RAW = /messageOf\(|\b(error|err|e|cause)\.message\b|String\((error|err|e)\)|rawDetail\(/
 
-/** @param text - a source file. @returns the lines that serve an error's own text. */
+/** Another service's answer relayed as it came: `respond(<status>, <answer>.body)`. */
+const RELAYED = /respond\([^,]+,\s*[\w.]+\.body\s*\)/
+
+/** @param text - a source file. @returns the lines that serve an error's own text, or relay another service's answer. */
 function rawServed(text: string): string[] {
-  return text.split('\n').map(line => line.trim()).filter(line => SERVES.test(line) && RAW.test(line))
+  return text.split('\n').map(line => line.trim()).filter(line => (SERVES.test(line) && RAW.test(line)) || RELAYED.test(line))
 }
 
 describe('a served failure', () => {
@@ -36,6 +39,10 @@ describe('a served failure', () => {
     expect(rawServed('      return respond(502, { error: `unreachable: ${messageOf(error)}` })')).toHaveLength(1)
     expect(rawServed('      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })')).toHaveLength(1)
     expect(rawServed('        return { ok: false, reason: error instanceof Error ? error.message : String(error) }')).toHaveLength(1)
+    expect(rawServed('        reason: error instanceof Error ? error.message : String(error),')).toHaveLength(1)
+    expect(rawServed('          const reason = error instanceof Error ? error.message : String(error)')).toHaveLength(1)
+    expect(rawServed('        if (!started.ok) return respond(502, started.body)')).toHaveLength(1)
+    expect(rawServed('          return respond(answer.status, answer.body)')).toHaveLength(1)
     expect(rawServed("      return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent') })")).toEqual([])
     expect(rawServed('      await service.failMission(started.id, messageOf(error))')).toEqual([])
   })

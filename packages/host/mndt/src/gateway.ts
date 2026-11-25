@@ -19,7 +19,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-workflow'
-import { startMndtApi } from './api.ts'
+import { GRANTS_UNREADABLE, startMndtApi } from './api.ts'
 import type { ModelChoice } from './api.ts'
 import { loadTokens } from './identity.ts'
 import type { GrantSource } from './policy.ts'
@@ -413,7 +413,7 @@ export class WorkbenchGateway extends TypertRemoteService {
   /** @param capability - what an action needs. @returns whether this workstation may do it. */
   private async allowed(capability: 'workflows.write' | 'rights.write' | 'agents.write'): Promise<{ allowed: boolean; reason: string }> {
     const table = await this.grants.grants()
-    if (!table.ok) return { allowed: false, reason: `cannot read the grant table: ${table.reason}` }
+    if (!table.ok) return { allowed: false, reason: this.unreadableGrants(table.reason) }
     return can(table.grants, this.identity, capability)
   }
 
@@ -433,9 +433,18 @@ export class WorkbenchGateway extends TypertRemoteService {
    * team instance): a missing or mistyped setting never opens the whole engine.
    */
   /**
+   * @param reason - why the role table cannot be read (its file, row or code).
+   * @returns what a machine tool's answer says of it: one sentence.
+   */
+  private unreadableGrants(reason: string): string {
+    // Its file, row or code go to the operator's log, once per change of the reason.
+    warnOperatorOnce(this.ctx, 'grants-unreadable', `mndt: the grant table cannot be read: ${reason}`)
+    return GRANTS_UNREADABLE
+  }
+
+  /**
    * @param error - what failed under a machine tool.
-   * @returns what its answer may say (public-failure.ts): the host's refusal,
-   * or a fixed sentence; the error itself goes to the operator's log.
+   * @returns what its answer may say (public-failure.ts).
    */
   private publicError(error: unknown): string {
     return publicFailure(error, 'échec de l’opération', (line) => { warnOperator(this.ctx, line) }, 'a machine tool failed')
@@ -501,7 +510,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     try {
       const snapshot = await this.service.snapshot()
       const table = await this.grants.grants()
-      const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: table.reason }
+      const decision = table.ok ? can(table.grants, this.identity, 'workflows.write') : { allowed: false, reason: this.unreadableGrants(table.reason) }
       const role = table.ok ? roleOf(table.grants, this.identity) : undefined
       const page: PageState = {
         you: this.identity,
@@ -547,8 +556,9 @@ export class WorkbenchGateway extends TypertRemoteService {
       const finished = await this.service.completeMission(mission.id, result)
       return JSON.stringify({ ok: true, value: finished })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      await this.service.failMission(mission.id, reason).catch(() => undefined)
+      // The runtime's words, for failMission: it serves the host's sentence and logs these.
+      const raw = error instanceof Error ? error.message : String(error)
+      await this.service.failMission(mission.id, raw).catch(() => undefined)
       const stored = await this.service.getMission(mission.id)
       // The host's sentence, as on the mission: the runtime's words are in the operator's log.
       return JSON.stringify({ ok: false, error: stored?.error ?? 'Erreur pendant l’exécution.', ...(stored === undefined ? {} : { value: { mission: stored } }) })
@@ -616,8 +626,9 @@ export class WorkbenchGateway extends TypertRemoteService {
       const result = await this.missionRunner(this.ctx).run(mission)
       return JSON.stringify({ ok: true, value: await this.service.completeMission(mission.id, result) })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      await this.service.failMission(mission.id, reason).catch(() => undefined)
+      // The runtime's words, for failMission: it serves the host's sentence and logs these.
+      const raw = error instanceof Error ? error.message : String(error)
+      await this.service.failMission(mission.id, raw).catch(() => undefined)
       return JSON.stringify({ ok: false, error: (await this.service.getMission(mission.id))?.error ?? 'Erreur pendant l’exécution.' })
     }
   }

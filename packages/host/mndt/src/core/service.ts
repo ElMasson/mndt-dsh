@@ -41,7 +41,7 @@ import type {
   WorkbenchState,
 } from './types.ts'
 import type { WorkbenchStore } from './store.ts'
-import type { Mandate, MissionFailureKind } from './types.ts'
+import type { Mandate, MissionFailureKind, TurnFailureKind } from './types.ts'
 import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
@@ -352,6 +352,36 @@ export function missionFailureKind(reason: string): MissionFailureKind {
   if (/ended max-tokens|ended length/.test(reason)) return 'cut'
   if (/returned no text|no usable content/.test(reason)) return 'no-answer'
   return 'failed'
+}
+
+/**
+ * The kind of a turn's failure, read as missionFailureKind does, plus the
+ * engine's known ends.
+ * @param reason - the failure's text, as the engine or the host gave it.
+ * @returns its kind.
+ */
+export function turnFailureKind(reason: string): TurnFailureKind {
+  if (reason.startsWith('le coût du tour a atteint sa borne')) return 'budget'
+  if (/ended blocked/.test(reason)) return 'blocked'
+  if (/ended aborted/.test(reason)) return 'aborted'
+  if (/ended interrupted/.test(reason)) return 'interrupted'
+  return missionFailureKind(reason)
+}
+
+/** The host's sentence for each kind of a turn's failure: all that is served of it. */
+export const TURN_FAILURE_SENTENCE: Readonly<Record<TurnFailureKind, string>> = {
+  'no-answer': 'Le modèle n’a pas répondu.',
+  cut: 'Réponse coupée (limite de longueur atteinte).',
+  cancelled: 'Tour annulé.',
+  tools: 'Des outils n’étaient pas disponibles ; le tour n’a pas été lancé.',
+  failed: 'Erreur pendant l’exécution.',
+  budget: 'Le coût du tour a atteint sa borne.',
+  blocked: 'Le tour a été bloqué.',
+  aborted: 'Le tour a été abandonné.',
+  interrupted: 'Le tour a été interrompu.',
+  refused: 'Tour refusé.',
+  stale: 'Tour sans objet.',
+  restart: 'Interrompu par un redémarrage.',
 }
 
 /** The host's sentence for each kind: all that is served of a failure (the mission, its journal line, the lane). */
@@ -711,7 +741,7 @@ export class WorkbenchService {
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
       if (mission === undefined) throw new Refusal(`no mission ${id}`)
-      if (!privileged && mission.createdBy !== actor) throw new Refusal(`mission ${id} belongs to ${mission.createdBy}`)
+      if (!privileged && mission.createdBy !== actor) throw new Refusal(`mission ${id} belongs to someone else`)
       if (mission.status !== 'queued' && mission.status !== 'running') {
         throw new Refusal(`mission ${id} is ${mission.status}; only a waiting mission can be cancelled`)
       }
@@ -1611,6 +1641,7 @@ export class WorkbenchService {
               ...turn,
               status: 'cancelled',
               reason: turn.status === 'running' ? 'interrompu par un redémarrage' : 'non lancé : redémarrage',
+              reasonKind: 'restart' as const,
               finishedAt: at,
               ...(spent > 0 ? { eur: Math.round(spent * 1_000_000) / 1_000_000 } : {}),
             }

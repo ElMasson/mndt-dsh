@@ -113,6 +113,7 @@ describe('the tenant role file', () => {
     writeFileSync(path, '{ broken')
     const down = await create(owner, 'Fichier cassé')
     expect(down.status).toBe(503)
-    expect((down.body as { error: string }).error).toContain('cannot read the grant table: the role file')
+    // One sentence for the client; the file and its error are the operator's log's.
+    expect(down.body).toEqual({ code: 'grants-unreadable', error: 'la table des rôles est illisible' })
   })
 })

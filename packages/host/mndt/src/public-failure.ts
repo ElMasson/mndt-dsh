@@ -11,7 +11,8 @@
  * (publicFailure.spec.ts) refuses `messageOf(error)`, `error.message` or a raw
  * error in an answer anywhere else.
  */
-import { Refusal } from './core/index.ts'
+import { Refusal, TURN_FAILURE_SENTENCE, turnFailureKind } from './core/index.ts'
+import type { TurnFailureKind } from './core/index.ts'
 import { StateFileError } from './core/index.ts'
 import { errorShape } from './operator-log.ts'
 
@@ -43,4 +44,23 @@ export function rawDetail(error: unknown): string {
   if (error instanceof SyntaxError) return errorShape(error)
   if (error instanceof StateFileError) return `${error.name}: ${error.message} (${error.path})`
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+}
+
+/**
+ * A turn's or a step's failure as it may be served: a Refusal's own sentence
+ * (the cost bound, a ceiling), or the host's sentence for its kind; the
+ * engine's or the provider's words go to the operator's log.
+ * @param error - what failed.
+ * @param log - the operator's log.
+ * @param where - what was being done, the log line's head.
+ * @returns the sentence to serve and the failure's kind.
+ */
+export function turnFailure(
+  error: unknown,
+  log: (line: string) => void,
+  where: string,
+): { readonly reason: string; readonly kind: TurnFailureKind } {
+  // Read from the error's own text (the host's wording, the engine's end), never served.
+  const kind = turnFailureKind(error instanceof Error ? error.message : String(error))
+  return { reason: publicFailure(error, TURN_FAILURE_SENTENCE[kind], log, where), kind }
 }

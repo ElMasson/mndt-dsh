@@ -222,7 +222,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     capability: 'workflows.write' | 'rights.write' | 'rights.read' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
-    if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
+    if (!table.ok) return unreadableGrants(table.reason)
     const decision = can(table.grants, identity, capability)
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
@@ -347,6 +347,24 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
   /** The operator's log for an internal fault: the gateway's, or stderr on one clean line. */
   const warnInternal = options.warn ?? ((message: string): void => { process.stderr.write(`${operatorLine(message)}\n`) })
+  /**
+   * A role table that cannot be read: served as one sentence (« la table des
+   * rôles est illisible », code grants-unreadable); its file, row or code go to
+   * the operator's log, once per change of the reason.
+   */
+  let lastUnreadable: string | undefined
+  const unreadableGrantsSentence = (reason: string): string => {
+    if (reason !== lastUnreadable) {
+      lastUnreadable = reason
+      warnInternal(`mndt: the grant table cannot be read: ${reason}`)
+    }
+    return GRANTS_UNREADABLE
+  }
+  const unreadableGrants = (reason: string): MndtApiResponse =>
+    respond(503, { code: 'grants-unreadable', error: unreadableGrantsSentence(reason) })
+  /** @param what - the machine asked for. @returns its refusal, said by the host. */
+  const machineRefused = (what: string): MndtApiResponse =>
+    respond(502, { error: `the machine service could not start ${what}`, code: 'machine-start-failed' })
   /** What may be served of a failure (public-failure.ts): the host's refusal, or the caller's fixed sentence. */
   const failure = (error: unknown, fallback: string, where: string): string => publicFailure(error, fallback, warnInternal, where)
 
@@ -613,7 +631,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     // part of the team. A role taken off grants.json applies on the next request.
     if (teamInstance && path !== '/me' && path !== '/org') {
       const table = await grants.grants()
-      if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+      if (!table.ok) return unreadableGrants(table.reason)
       if (roleOf(table.grants, identity) === undefined) return respond(403, { error: 'no role on this team: ask its owner' })
     }
 
@@ -633,7 +651,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
         // A role file that cannot be read refuses everyone (503): its reason is told
         // to the tenant's owner as the gateway knows it, who can fix it (#75 review).
-        const grantsError = !table.ok && teamInstance && shell ? table.reason : undefined
+        const grantsError = !table.ok && teamInstance && shell ? unreadableGrantsSentence(table.reason) : undefined
         const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
           && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
           ? table.skipped
@@ -654,7 +672,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/people') {
         // The team as the role file lists it, for the screen to show names: only to someone of the team.
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         if (roleOf(table.grants, identity) === undefined) return respond(403, { error: `${identity} holds no role in this team` })
         const names = (await grants.names?.()) ?? {}
         const subjects = [...new Set(table.grants.map(grant => grant.subject))]
@@ -724,7 +742,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const decision = table.ok
           ? can(table.grants, identity, 'workflows.write')
-          : { allowed: false, reason: table.reason }
+          : { allowed: false, reason: unreadableGrantsSentence(table.reason) }
         const role = table.ok ? roleOf(table.grants, identity) : undefined
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const canShare = table.ok ? can(table.grants, identity, 'sharing.write').allowed : false
@@ -762,7 +780,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         const input = parseBody(request.body)
         const canAdmin = can(table.grants, identity, 'rights.write').allowed
         const delegant = typeof input.delegant === 'string' && canAdmin ? input.delegant.trim().toLowerCase() : identity
@@ -797,7 +815,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mandate = await service.signMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
@@ -811,7 +829,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mandate = await service.retireMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
@@ -875,7 +893,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const target = await service.getMission(id)
         if (target === undefined || !canReadMission(await readerOf(identity), target)) return respond(404, { error: `no mission ${id}` })
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mission = await service.cancelMission(id, identity, can(table.grants, identity, 'rights.write').allowed)
           return respond(200, mission)
@@ -1255,7 +1273,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).then(async answer => ({ ok: answer.ok, body: await answer.json().catch(() => ({})) as Record<string, unknown> }))
           .catch(() => undefined)
         if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
-        if (!started.ok) return respond(502, started.body)
+        // The machine service's own answer is not relayed: a fixed sentence and a code.
+        if (!started.ok) return machineRefused('the desktop')
         const host = typeof started.body.host === 'string' ? started.body.host : ''
         const token = typeof started.body.token === 'string' ? started.body.token : ''
         if (host === '') return respond(502, { error: 'the desktop agent did not provide a host' })
@@ -1319,7 +1338,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).then(async answer => ({ ok: answer.ok, body: await answer.json().catch(() => ({})) as Record<string, unknown> }))
           .catch(() => undefined)
         if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
-        if (!started.ok) return respond(502, started.body)
+        // The machine service's own answer is not relayed: a fixed sentence and a code.
+        if (!started.ok) return machineRefused('the browser')
         const host = typeof started.body.host === 'string' ? started.body.host : ''
         const token = typeof started.body.token === 'string' ? started.body.token : ''
         if (host === '') return respond(502, { error: 'the browser agent did not provide a host' })
@@ -1529,7 +1549,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'rights.read')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         const canAdmin = can(table.grants, identity, 'rights.write').allowed
         return respond(200, { members: table.grants, canAdmin })
       }
@@ -1565,7 +1585,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           // The authority is called with this deployment's token, not the caller's:
           // who may change whose role is decided here, on the current table.
           const table = await grants.grants()
-          if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
+          if (!table.ok) return unreadableGrants(table.reason)
           const before = roleOf(table.grants, subject)
           const refusal = roleChangeRefusal(table.grants, identity, subject, next)
           if (refusal !== undefined) {
@@ -1601,7 +1621,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             after: next,
             outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
           })
-          return respond(answer.status, answer.body)
+          // The authority's own answer is not relayed: its status, with the host's words.
+          if (answer.status === 200) return respond(200, { applied: true, subject, role: next })
+          warnInternal(`mndt: the role authority answered ${answer.status}: ${JSON.stringify(answer.body).slice(0, 300)}`)
+          return respond(answer.status, { error: 'the authority refused the change: the role is unchanged', code: 'authority-refused' })
         })
       }
 
@@ -1640,6 +1663,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     }
   }
 }
+
+/** What a member reads of a role table that cannot be read: its file and its error stay in the operator's log. */
+export const GRANTS_UNREADABLE = 'la table des rôles est illisible'
 
 /**
  * Parse a JSON body.
