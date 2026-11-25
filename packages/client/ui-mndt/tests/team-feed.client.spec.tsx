@@ -260,3 +260,16 @@ describe('the feed, after review', () => {
     expect(shownName('constructor', {})).toBe('constructor')
   })
 })
+
+describe('a failed turn in the feed', () => {
+  it('says « réponse coupée » rather than the engine\'s words, the raw text on hover', () => {
+    const reason = 'the agent turn ended max-tokens'
+    const turn = { id: 'trn_9', agentId: assistant.id, status: 'failed' as const, reason, eur: 0.019 }
+    const failed = message({ turns: [turn] })
+    render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    const line = screen.getByText(/réponse coupée/u)
+    expect(line.textContent).toContain('n\'a pas abouti : réponse coupée : limite de longueur atteinte')
+    expect(line.textContent).not.toContain('max-tokens')
+    expect(line.getAttribute('title')).toBe('the agent turn ended max-tokens')
+  })
+})

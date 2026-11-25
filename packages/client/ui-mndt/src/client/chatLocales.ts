@@ -391,6 +391,13 @@ export const chatEn = {
   answerEmpty: 'Write your answer before sending it.',
   laneWelcomeAddAgent: 'No agent reads your lane yet. Add one:',
   skillAttachChanged: 'This agent\'s skills were changed meanwhile: read them again.',
+  endMaxTokens: 'answer cut off: length limit reached',
+  endAborted: 'stopped before the end',
+  endInterrupted: 'the engine stopped during the turn',
+  endBlocked: 'blocked by a rule of the space',
+  endForked: 'continued in another session',
+  endError: 'the model returned an error',
+  endUnknown: 'unexpected ending',
 } as const
 
 /** One copy key. */
@@ -782,6 +789,13 @@ export const chatFr: Record<ChatKey, string> = {
   answerEmpty: 'Écrivez votre réponse avant de l\'envoyer.',
   laneWelcomeAddAgent: 'Aucun agent ne lit encore votre lane. Ajoutez-en un :',
   skillAttachChanged: 'Les compétences de cet agent ont été modifiées entre-temps : relisez.',
+  endMaxTokens: 'réponse coupée : limite de longueur atteinte',
+  endAborted: 'arrêté avant la fin',
+  endInterrupted: 'le moteur s\'est arrêté pendant le tour',
+  endBlocked: 'bloqué par une règle de l\'espace',
+  endForked: 'poursuivi dans une autre session',
+  endError: 'le modèle a renvoyé une erreur',
+  endUnknown: 'fin inattendue',
 }
 
 /** The same slot, mirrored: the registry requires zh. */
