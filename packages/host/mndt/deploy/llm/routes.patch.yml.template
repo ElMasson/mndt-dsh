@@ -6,6 +6,11 @@
 # the renderer substitutes and refuses to leave empty.
 #
 # - scaleway-genapi: Scaleway Generative APIs, OpenAI-compatible, per project.
+#   Its reasoning models REASON BY DEFAULT when reasoning_effort is absent, and
+#   those tokens are billed (Scaleway, « query reasoning models »). Declared
+#   « reasoningEfforts: false », the adapter sent nothing, so every turn reasoned.
+#   Declared below with off -> none: a turn that asks no effort sends
+#   reasoning_effort: none. Levels per Scaleway's model cards: none, low, high, max.
 # - vllm-qwen: the vLLM server on the H100, reachable from the Scaleway private
 #   network only. pi-ai's OpenAI client still wants a key: VLLM_API_KEY may hold
 #   any placeholder when the server runs without --api-key.
@@ -19,8 +24,8 @@
         baseURL: https://api.scaleway.ai/${SCW_PROJECT_ID}/v1
         compat: {supportsStore: false, supportsDeveloperRole: false}
         models:
-          - {id: deepseek-v4.1-flash, name: DeepSeek V4.1 Flash (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: false}
-          - {id: glm-5.3, name: GLM 5.3 (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: false}
+          - {id: deepseek-v4.1-flash, name: DeepSeek V4.1 Flash (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: {off: none, low: low, high: high, max: max}}
+          - {id: glm-5.3, name: GLM 5.3 (Scaleway), contextWindow: 256000, maxTokens: 8192, reasoningEfforts: {off: none, low: low, high: high, max: max}}
       vllm-qwen:
         displayName: Qwen (vLLM, Scaleway)
         apiKeyEnv: VLLM_API_KEY

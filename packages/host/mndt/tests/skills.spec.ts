@@ -235,3 +235,35 @@ describe('one skill attached or detached at a time (POST /agents/:id/skills)', (
     expect((await b.call('POST', `/agents/${id}/skills`, 'operator', { add: 'relance-des-impayes' })).status).toBe(403)
   })
 })
+
+describe('the two minors of #145', () => {
+  it('a change that changes nothing journals nothing', async () => {
+    const b = bench()
+    await b.call('POST', '/skills', 'owner', { markdown: SKILL })
+    const id = await b.agent('alpha')
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'relance-des-impayes' })
+    const before = (await b.service.snapshot()).events.length
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'relance-des-impayes' })
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { remove: 'absente' })
+    expect((await b.service.snapshot()).events.length).toBe(before)
+    await b.call('POST', `/agents/${id}/skills`, 'owner', { remove: 'relance-des-impayes' })
+    const events = (await b.service.snapshot()).events
+    expect(events.length).toBe(before + 1)
+    expect(events.at(-1)).toMatchObject({ action: 'agent.updated', subject: id, detail: 'skills -relance-des-impayes' })
+  })
+
+  it('too-many-skills has the same status on both routes: 409', async () => {
+    const b = bench()
+    for (const n of [1, 2, 3, 4]) await b.call('POST', '/skills', 'owner', { markdown: `---\nname: Méthode ${n}\n---\ncorps ${n}` })
+    const id = await b.agent('alpha')
+    const whole = await b.call('POST', `/agents/${id}`, 'owner', { skills: ['methode-1', 'methode-2', 'methode-3', 'methode-4'] })
+    for (const n of [1, 2, 3]) await b.call('POST', `/agents/${id}/skills`, 'owner', { add: `methode-${n}` })
+    const one = await b.call('POST', `/agents/${id}/skills`, 'owner', { add: 'methode-4' })
+    expect([whole.status, whole.body.code]).toEqual([409, 'too-many-skills'])
+    expect([one.status, one.body.code]).toEqual([409, 'too-many-skills'])
+    // And an unknown skill is 404 on both (an agent with none: the ceiling is checked first).
+    const beta = await b.agent('beta')
+    expect((await b.call('POST', `/agents/${beta}`, 'owner', { skills: ['inconnue'] })).status).toBe(404)
+    expect((await b.call('POST', `/agents/${beta}/skills`, 'owner', { add: 'inconnue' })).status).toBe(404)
+  })
+})
