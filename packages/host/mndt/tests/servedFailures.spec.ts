@@ -6,9 +6,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryStore, Refusal, TURN_FAILURE_SENTENCE, WorkbenchService } from '../src/core/index.ts'
+import type { TurnFailureKind } from '../src/core/index.ts'
+import { turnFailure } from '../src/public-failure.ts'
 import type { Message, PriceGrid } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
-import { TurnScheduler } from '../src/turns.ts'
+import { TurnBudgetReached, TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 
 const owner = 'duke@datanalysis.re'
@@ -103,6 +105,48 @@ describe('every end of a turn carries its kind, and its reason is the host\'s se
     release()
     const { turn } = await pending
     expect(turn).toMatchObject({ status: 'cancelled', reasonKind: 'restart', reason: 'interrompu par un redémarrage' })
+  })
+
+  it('the twelve kinds: each one\'s reason is the host\'s sentence, never the text it came from', async () => {
+    // Nine come from what failed (an engine's end, a refusal of the host)…
+    const fromFailure: [TurnFailureKind, unknown][] = [
+      ['no-answer', new Error('the agent returned no text (settled: {"secret":1})')],
+      ['cut', new Error('the agent turn ended max-tokens')],
+      ['cancelled', new Error('cancelled by duke@datanalysis.re')],
+      ['tools', new Refusal('outils indisponibles : qonto (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé')],
+      ['failed', new Error('the agent turn failed: 500 from upstream req_99')],
+      ['budget', new TurnBudgetReached({ input: 1, output: 1 })],
+      ['blocked', new Error('the agent turn ended blocked')],
+      ['aborted', new Error('the agent turn ended aborted')],
+      ['interrupted', new Error('the agent turn ended interrupted')],
+    ]
+    const log: string[] = []
+    for (const [kind, error] of fromFailure) {
+      const served = turnFailure(error, line => log.push(line), 'a turn')
+      expect(served.kind).toBe(kind)
+      const own = error instanceof Refusal ? error.message : TURN_FAILURE_SENTENCE[kind]
+      expect(served.reason).toBe(own)
+      if (!(error instanceof Refusal)) expect(served.reason).not.toBe((error as Error).message)
+    }
+    // … and three from the turn's life: a refusal before it ran, a turn gone stale, a restart.
+    const refused = (await turnBench(() => ({ text: 'x' }), {}).turnOf('@alpha bonjour')).turn
+    expect([refused?.reasonKind, refused?.reason?.startsWith('Prix du modèle non configuré')]).toEqual(['refused', true])
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const b = turnBench(async () => { await held; return { text: 'x' } })
+    const pending = b.turnOf('@alpha bonjour')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const asked = ((await b.service.snapshot()).messages ?? []).find(message => message.author.kind === 'human')
+    await b.service.deleteMessage(asked?.channelId ?? '', asked?.id ?? '', owner)
+    release()
+    await pending
+    // A deleted message is served without its turns: read the turn as stored.
+    const stale = ((await b.service.snapshot()).messages ?? []).find(message => message.id === asked?.id)?.turns?.[0]
+    expect([stale?.reasonKind, stale?.reason]).toEqual(['stale', 'Message supprimé par son auteur.'])
+    // restart: the test above (« a restart closes a running turn as « restart » »).
+    const kinds: TurnFailureKind[] = [...fromFailure.map(([kind]) => kind), 'refused', 'stale', 'restart']
+    expect(new Set(kinds).size).toBe(12)
+    expect(Object.keys(TURN_FAILURE_SENTENCE).sort()).toEqual([...kinds].sort())
   })
 
   it('whatever the engine says, a failed turn\'s reason is one of the host\'s sentences', async () => {

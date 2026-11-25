@@ -346,10 +346,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     try {
       return await conversation(request, path, identity)
     } catch (error) {
-      // A refusal the product means (a plain Error, or a typed one named
-      // « …Refusal ») is served with its words. Anything else (a TypeError, a
-      // JSON error, a system error carrying a path) is an internal fault: the
-      // caller gets « internal error », the detail goes to the operator's log.
+      // A refusal of the host (a Refusal, core/refusal.ts, the typed refusals
+      // included) is served with its words. Anything else (a plain Error from a
+      // library, a TypeError, a JSON error, a system error carrying a path) is
+      // an internal fault: the caller gets « internal error », the detail goes
+      // to the operator's log (public-failure.ts).
       if (!isRefusal(error)) return respond(500, { error: failure(error, 'internal error', `internal error on ${request.method} ${path}`) })
       const reason = failure(error, 'internal error', `internal error on ${request.method} ${path}`)
       if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
@@ -379,6 +380,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   }
   const unreadableGrants = (reason: string): MndtApiResponse =>
     respond(503, { code: 'grants-unreadable', error: unreadableGrantsSentence(reason) })
+  /**
+   * The machine service's answer (sessions, a desktop's or a browser's action):
+   * on success its payload, the result asked for; on a refusal the host's
+   * sentence and a code, its body in the operator's log, never relayed.
+   * @param answer - its HTTP answer.
+   * @param body - its parsed body.
+   * @returns what is served.
+   */
+  const machineAnswer = (answer: { readonly ok: boolean; readonly status: number }, body: Record<string, unknown>): MndtApiResponse => {
+    if (answer.ok) return respond(answer.status, machinePayload(body))
+    warnInternal(`mndt: the machine service answered ${answer.status}: ${JSON.stringify(body).slice(0, 300)}`)
+    return respond(answer.status, { error: 'the machine service refused the request', code: 'machine-refused' })
+  }
   /** @param what - the machine asked for. @returns its refusal, said by the host. */
   const machineRefused = (what: string): MndtApiResponse =>
     respond(502, { error: `the machine service could not start ${what}`, code: 'machine-start-failed' })
@@ -1296,7 +1310,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body)
       }
 
       if (request.method === 'POST' && path === '/machines/desktop/start') {
@@ -1311,7 +1325,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body)
         return respond(200, { ok: true, started: true })
       }
 
@@ -1346,7 +1360,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body)
       }
 
       if (request.method === 'POST' && path === '/machines/desktop/stop') {
@@ -1361,7 +1375,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body)
       }
 
       if (request.method === 'POST' && path === '/machines/browser/start') {
@@ -1376,7 +1390,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body)
         return respond(200, { ok: true, started: true })
       }
 
@@ -1411,7 +1425,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: failure(error, 'the browser agent is unreachable', 'the browser agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body)
       }
 
       if (request.method === 'POST' && path === '/machines/browser/stop') {
@@ -1426,7 +1440,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body)
       }
 
       if (request.method === 'POST' && path === '/machines/capture') {
@@ -1448,7 +1462,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: failure(error, 'the machine service is unreachable', 'the machine service is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body)
         return respond(200, {
           ok: true,
           bytes: body.bytes,
@@ -1718,6 +1732,15 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       return respond(client ? 409 : 400, { error: reason })
     }
   }
+}
+
+/**
+ * @param body - a successful answer of the machine service.
+ * @returns it, as served: the result of the action asked (a list of sessions, a
+ * screenshot, a page's text). Only a success is served this way (machineAnswer).
+ */
+function machinePayload(body: Record<string, unknown>): Record<string, unknown> {
+  return body
 }
 
 /** What a member reads of a role table that cannot be read: its file and its error stay in the operator's log. */

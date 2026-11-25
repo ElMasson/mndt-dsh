@@ -713,8 +713,9 @@ export class WorkbenchService {
    * @returns the failed mission.
    */
   failMission(id: string, reason: string): Promise<Mission> {
-    const detail = reason.trim()
-    if (detail === '') return Promise.reject(new Refusal('a failure needs a reason'))
+    // An empty reason (an error thrown without a message) must not leave the
+    // mission running: it fails with a reason of its own, said as « failed ».
+    const detail = reason.trim() === '' ? 'the run failed without a reason' : reason.trim()
     return this.#write((state) => {
       const mission = state.missions.find(candidate => candidate.id === id)
       if (mission === undefined) throw new Refusal(`no mission ${id}`)
@@ -2168,7 +2169,7 @@ export class WorkbenchService {
           ? {}
           : {
             turns: message.turns.map(turn => (turn.status === 'queued' || turn.status === 'running'
-              ? { ...turn, status: 'cancelled' as const, reason: 'Message supprimé par son auteur.', finishedAt: at }
+              ? { ...turn, status: 'cancelled' as const, reason: 'Message supprimé par son auteur.', reasonKind: 'stale' as const, finishedAt: at }
               : turn)),
           }),
       }

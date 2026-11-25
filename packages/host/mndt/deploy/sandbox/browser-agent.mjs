@@ -108,7 +108,9 @@ const server = createServer((req, res) => {
       try {
         reply(200, await run(JSON.parse(raw === '' ? '{}' : raw)))
       } catch (error) {
-        reply(400, { error: error instanceof Error ? error.message : String(error) })
+        // Its own words go to stderr; the caller reads one sentence.
+        process.stderr.write(`browser-agent: an action failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        reply(400, { error: 'the action failed' })
       }
     })()
   })

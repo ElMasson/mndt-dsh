@@ -11,6 +11,20 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
+/** A refusal this server writes: its words are served. Any other error's text goes to stderr only. */
+class ToolRefusal extends Error {}
+
+/**
+ * @param error - what failed under a tool call.
+ * @param label - this server's name, for stderr.
+ * @returns what the answer may say: the server's own refusal, or a fixed sentence.
+ */
+function publicMessage(error, label) {
+  if (error instanceof ToolRefusal) return error.message
+  process.stderr.write(`${label}: a call failed: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}\n`)
+  return 'the call failed'
+}
+
 const MACHINES = (process.env.MACHINES_URL ?? 'http://machines:8796').replace(/\/$/, '')
 const TOKEN = process.env.MACHINES_TOKEN ?? ''
 const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? ''
@@ -42,8 +56,8 @@ async function session(kind) {
   const cached = sessions[kind]
   if (cached !== undefined && cached.actor === actor) return cached
   sessions[kind] = undefined
-  if (TOKEN === '') throw new Error('the machine service token is not configured')
-  if (actor === '') throw new Error('the person is not configured')
+  if (TOKEN === '') throw new ToolRefusal('the machine service token is not configured')
+  if (actor === '') throw new ToolRefusal('the person is not configured')
   const answer = await fetch(`${MACHINES}/${kind}s/start`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-machine-token': TOKEN },
@@ -51,7 +65,9 @@ async function session(kind) {
   })
   const body = await answer.json().catch(() => ({}))
   if (!answer.ok || typeof body.host !== 'string') {
-    throw new Error(body.error ?? `the machine service refused to start a ${kind}`)
+    // The machine service's own words go to stderr; the host's sentence is served.
+    if (typeof body.error === 'string') throw new Error(`the machine service refused to start a ${kind}: ${body.error}`)
+    throw new ToolRefusal(`the machine service refused to start a ${kind}`)
   }
   const live = { actor, host: body.host, token: String(body.token ?? TOKEN), port: kind === 'browser' ? 9223 : 9224 }
   sessions[kind] = live
@@ -73,7 +89,9 @@ async function act(kind, body) {
   })
   const payload = await answer.json().catch(() => ({}))
   if (!answer.ok || payload.ok !== true) {
-    throw new Error(payload.error ?? `the ${kind} answered ${answer.status}`)
+    // The agent's own words go to stderr; the host's sentence is served.
+    if (typeof payload.error === 'string') throw new Error(`the ${kind} answered ${answer.status}: ${payload.error}`)
+    throw new ToolRefusal(`the ${kind} answered ${answer.status}`)
   }
   return payload
 }
@@ -110,7 +128,7 @@ async function currentActor() {
  */
 async function requestApproval(kind, title, detail) {
   const actor = await currentActor()
-  if (actor === '') throw new Error('the person is not configured')
+  if (actor === '') throw new ToolRefusal('the person is not configured')
   const record = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
   const missionId = record.trim() === '' ? undefined : JSON.parse(record).missionId
   const answer = await fetch(`${API}/approvals`, {
@@ -124,7 +142,7 @@ async function requestApproval(kind, title, detail) {
     }),
   })
   const body = await answer.json().catch(() => ({}))
-  if (!answer.ok || body.approval === undefined) throw new Error(body.error ?? `the product refused the approval (${answer.status})`)
+  if (!answer.ok || body.approval === undefined) throw new ToolRefusal(body.error ?? `the product refused the approval (${answer.status})`)
   return body.approval
 }
 
@@ -138,9 +156,9 @@ async function approvedFor(approvalId) {
   const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
   const body = await answer.json().catch(() => ({}))
   const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
-  if (found === undefined) throw new Error(`no approval ${approvalId}`)
-  if (found.requestedBy !== actor) throw new Error('this approval was requested by another person')
-  if (found.state !== 'approved') throw new Error(`the approval is ${found.state}, not approved`)
+  if (found === undefined) throw new ToolRefusal(`no approval ${approvalId}`)
+  if (found.requestedBy !== actor) throw new ToolRefusal('this approval was requested by another person')
+  if (found.state !== 'approved') throw new ToolRefusal(`the approval is ${found.state}, not approved`)
   return found
 }
 
@@ -157,7 +175,7 @@ async function awaitApproval(approvalId, timeoutSeconds) {
     const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
     const body = await answer.json().catch(() => ({}))
     const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
-    if (found === undefined) throw new Error(`no approval ${approvalId}`)
+    if (found === undefined) throw new ToolRefusal(`no approval ${approvalId}`)
     if (found.state !== 'pending') return found
     if (Date.now() >= deadline) return found
     await new Promise(resolve => setTimeout(resolve, 4000))
@@ -388,7 +406,7 @@ async function call(name, args) {
       return { content: [{ type: 'text', text: 'sessions fermees' }] }
     }
     default:
-      throw new Error(`unknown tool ${name}`)
+      throw new ToolRefusal(`unknown tool ${name}`)
   }
 }
 
@@ -428,7 +446,7 @@ lines.on('line', (line) => {
     const args = message.params?.arguments ?? {}
     void call(name, args)
       .then(result => send(id, result))
-      .catch(error => fail(id, -32000, error instanceof Error ? error.message : String(error)))
+      .catch(error => fail(id, -32000, publicMessage(error, 'machine-mcp')))
     return
   }
   if (message.method === 'ping') {

@@ -14,12 +14,12 @@ import { createMndtApi } from '../src/api.ts'
 import { publicFailure } from '../src/public-failure.ts'
 
 /** A line that serves something: an HTTP answer, a machine tool's answer, a reason (a role table's, a turn's, a step's). */
-const SERVES = /respond\(|JSON\.stringify\(\{ ok: false|\breason:|\breason =/
+const SERVES = /respond\(|JSON\.stringify\(\{ ok: false|\breason:|\breason =|reply\(|\bfail\(id|res\.end\(|^return `/
 /** An error's own text: its message, or the error made a string. */
 const RAW = /messageOf\(|\b(error|err|e|cause)\.message\b|String\((error|err|e)\)|rawDetail\(/
 
 /** Another service's answer relayed as it came: `respond(<status>, <answer>.body)`. */
-const RELAYED = /respond\([^,]+,\s*[\w.]+\.body\s*\)/
+const RELAYED = /respond\([^,]+,\s*(body|[\w.]+\.body)\s*\)/
 
 /** @param text - a source file. @returns the lines that serve an error's own text, or relay another service's answer. */
 function rawServed(text: string): string[] {
@@ -27,11 +27,15 @@ function rawServed(text: string): string[] {
 }
 
 describe('a served failure', () => {
-  it('no file of src/ serves an error\'s own text but through publicFailure', () => {
-    const src = join(import.meta.dirname, '..', 'src')
-    const found = readdirSync(src, { recursive: true, encoding: 'utf8' })
-      .filter(file => file.endsWith('.ts') && file.split('\\').join('/') !== 'public-failure.ts')
-      .flatMap(file => rawServed(readFileSync(join(src, file), 'utf8')).map(line => `${file}: ${line}`))
+  it('no file of src/ nor of deploy/ (its MCP servers, its gateway) serves an error\'s own text', () => {
+    const root = join(import.meta.dirname, '..')
+    const found = [
+      ...readdirSync(join(root, 'src'), { recursive: true, encoding: 'utf8' })
+        .filter(file => file.endsWith('.ts') && file.split('\\').join('/') !== 'public-failure.ts').map(file => `src/${file}`),
+      ...readdirSync(join(root, 'deploy'), { recursive: true, encoding: 'utf8' })
+        .filter(file => file.endsWith('.mjs') && !file.includes('node_modules') && !file.split('\\').join('/').startsWith('rehearsal/'))
+        .map(file => `deploy/${file}`),
+    ].flatMap(file => rawServed(readFileSync(join(root, file), 'utf8')).map(line => `${file}: ${line}`))
     expect(found).toEqual([])
   })
 
@@ -43,6 +47,11 @@ describe('a served failure', () => {
     expect(rawServed('          const reason = error instanceof Error ? error.message : String(error)')).toHaveLength(1)
     expect(rawServed('        if (!started.ok) return respond(502, started.body)')).toHaveLength(1)
     expect(rawServed('          return respond(answer.status, answer.body)')).toHaveLength(1)
+    expect(rawServed('        return respond(answer.status, body)')).toHaveLength(1)
+    expect(rawServed("      error => reply({ result: { isError: true, content: [{ type: 'text', text: `office365: ${error.message}` }] } }),")).toHaveLength(1)
+    expect(rawServed('      .catch(error => fail(id, -32000, error instanceof Error ? error.message : String(error)))')).toHaveLength(1)
+    expect(rawServed('    res.end(`gateway: upstream failed: ${error.message}`)')).toHaveLength(1)
+    expect(rawServed('    return `facts file unavailable: ${error.message}`')).toHaveLength(1)
     expect(rawServed("      return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent') })")).toEqual([])
     expect(rawServed('      await service.failMission(started.id, messageOf(error))')).toEqual([])
   })
