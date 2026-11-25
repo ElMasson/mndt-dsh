@@ -398,6 +398,25 @@ describe('the cause of a turn, said in the page\'s words first', () => {
     expect(first!.textContent).toBe('The turn did not complete: unexpected ending')
     expect(second!.textContent).toBe('Plafond mensuel atteint pour @assistant')
   })
+
+  it('every ending passes the one rule: a category without a sentence says its word, in any status', async () => {
+    const chat = double()
+    const a = await chat.post('chn_1', '@assistant un')
+    const b = await chat.post('chn_1', '@assistant deux')
+    chat.messages = () => Promise.resolve({
+      messages: [
+        { ...a, turns: [{ id: 'trn_a', agentId: 'agt_1', status: 'cancelled', reasonKind: 'restart', reason: '' }] },
+        { ...b, turns: [{ id: 'trn_b', agentId: 'agt_1', status: 'failed', reasonKind: 'cut' }] },
+      ],
+      cursor: AT,
+    })
+    chat.changes = () => Promise.resolve({ messages: [], cursor: AT })
+    render(thread(chat))
+    await waitFor(() => { expect(screen.getAllByTestId('chat-turn-reason')).toHaveLength(2) })
+    const [restart, cut] = screen.getAllByTestId('chat-turn-reason')
+    expect(restart!.textContent).toBe('interrupted by a restart')
+    expect(cut!.textContent).toBe('The turn did not complete: answer cut off: length limit reached')
+  })
 })
 
 describe('times and numbers follow the page language, not the browser', () => {

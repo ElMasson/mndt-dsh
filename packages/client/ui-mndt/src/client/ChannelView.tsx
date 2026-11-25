@@ -181,11 +181,11 @@ function TurnLine(props: {
       {turn.status === 'done' && tokens !== undefined && turn.eur !== undefined ? (
         <span className="mndt-hint" data-testid="chat-turn-cost">{t('turnCost', { tokens: tokens.toLocaleString(pageLanguage()), eur: euros(turn.eur) })}</span>
       ) : undefined}
-      {turn.reason === undefined ? undefined : (
-        // A failed turn carries the engine's own cause, often in English: a sentence of the page's
-        // language goes before it, chosen by the status, never by reading the cause.
+      {turnEndWords(turn, t) === undefined ? undefined : (
+        // Why it ended, by the one rule (turnReason.ts) the team page uses too: the host's sentence or
+        // the category's word, never the engine's raw text; a failed turn's is introduced by the page.
         <span className="mndt-hint" data-testid="chat-turn-reason">
-          {turn.status === 'failed' ? t('turnFailedBecause', { reason: turnEndWords(turn, t) ?? '' }) : turn.reason}
+          {turn.status === 'failed' ? t('turnFailedBecause', { reason: turnEndWords(turn, t) ?? '' }) : turnEndWords(turn, t)}
         </span>
       )}
       {turn.sessionId === undefined ? undefined : props.openTrace === undefined ? (
