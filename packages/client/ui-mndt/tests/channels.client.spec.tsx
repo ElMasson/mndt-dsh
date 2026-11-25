@@ -378,7 +378,7 @@ describe('an agent\'s answer is read, not shown as raw Markdown', () => {
 })
 
 describe('the cause of a turn, said in the page\'s words first', () => {
-  it('a failed turn reads a sentence of the page before the engine\'s cause; a refusal keeps the Host\'s own', async () => {
+  it('a failed turn never shows the engine\'s raw cause; a refusal keeps the Host\'s own', async () => {
     const chat = double()
     const failed = await chat.post('chn_1', '@assistant un tour qui échoue')
     const refused = await chat.post('chn_1', '@assistant un tour refusé')
@@ -394,8 +394,28 @@ describe('the cause of a turn, said in the page\'s words first', () => {
     render(thread(chat))
     await waitFor(() => { expect(screen.getAllByTestId('chat-turn-reason')).toHaveLength(2) })
     const [first, second] = screen.getAllByTestId('chat-turn-reason')
-    expect(first!.textContent).toBe('The turn did not complete: llm-pi-ai: no credential for provider route')
+    // An older turn without the core's category: never the provider's raw text, « unexpected ending ».
+    expect(first!.textContent).toBe('The turn did not complete: unexpected ending')
     expect(second!.textContent).toBe('Plafond mensuel atteint pour @assistant')
+  })
+
+  it('every ending passes the one rule: a category without a sentence says its word, in any status', async () => {
+    const chat = double()
+    const a = await chat.post('chn_1', '@assistant un')
+    const b = await chat.post('chn_1', '@assistant deux')
+    chat.messages = () => Promise.resolve({
+      messages: [
+        { ...a, turns: [{ id: 'trn_a', agentId: 'agt_1', status: 'cancelled', reasonKind: 'restart', reason: '' }] },
+        { ...b, turns: [{ id: 'trn_b', agentId: 'agt_1', status: 'failed', reasonKind: 'cut' }] },
+      ],
+      cursor: AT,
+    })
+    chat.changes = () => Promise.resolve({ messages: [], cursor: AT })
+    render(thread(chat))
+    await waitFor(() => { expect(screen.getAllByTestId('chat-turn-reason')).toHaveLength(2) })
+    const [restart, cut] = screen.getAllByTestId('chat-turn-reason')
+    expect(restart!.textContent).toBe('interrupted by a restart')
+    expect(cut!.textContent).toBe('The turn did not complete: answer cut off: length limit reached')
   })
 })
 

@@ -74,9 +74,12 @@ describe('the feed, as mndt-web draws it', () => {
   })
 
   it('a turn not started for want of its tools says why on its line', () => {
-    const failed = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reason: 'outils indisponibles : approvals (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé' }] })
+    const failed = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reasonKind: 'tools', toolsUnavailable: ['approvals'],
+      reason: 'Outils indisponibles.' }] })
     render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
-    expect(screen.getByTestId('chat-turn').textContent).toContain('outils indisponibles : approvals')
+    expect(screen.getByTestId('chat-turn').textContent).toContain('Outils indisponibles.')
+    // Which ones: the servers' names, from the served list, under the line.
+    expect(screen.getByTestId('tools-unavailable').textContent).toContain('approvals')
   })
 
   it('says a finished turn with its agent and cost; duration, tokens and model on hover', () => {
@@ -105,7 +108,7 @@ describe('the feed, as mndt-web draws it', () => {
     expect(screen.getByRole('status').textContent).toBe('L\'agent répond…')
     rerender((
       <WebMessage
-        message={message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reason: 'quota' }] })}
+        message={message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reason: 'Erreur pendant l’exécution.', reasonKind: 'failed' }] })}
         header
         agents={agents}
         cards={[]}
@@ -114,7 +117,7 @@ describe('the feed, as mndt-web draws it', () => {
         t={chatFrench}
       />
     ))
-    expect(screen.getByTestId('chat-turn').textContent).toBe('Le tour de l\'agent n\'a pas abouti : quota')
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Le tour de l\'agent n\'a pas abouti : Erreur pendant l’exécution.')
   })
 
   it('leads from a waiting card to À traiter', () => {
@@ -262,15 +265,26 @@ describe('the feed, after review', () => {
 })
 
 describe('a failed turn in the feed', () => {
-  it('says « réponse coupée » rather than the engine\'s words, the raw text on hover', () => {
-    const reason = 'the agent turn ended max-tokens'
-    const turn = { id: 'trn_9', agentId: assistant.id, status: 'failed' as const, reason, eur: 0.019 }
+  it('says its category in words, and no raw text anywhere, not even on hover', () => {
+    const turn = {
+      id: 'trn_9', agentId: assistant.id, status: 'failed' as const, reason: 'Réponse coupée.', reasonKind: 'cut', eur: 0.019,
+    }
     const failed = message({ turns: [turn] })
     render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
-    const line = screen.getByText(/réponse coupée/u)
-    expect(line.textContent).toContain('n\'a pas abouti : réponse coupée : limite de longueur atteinte')
+    const line = screen.getByText(/Réponse coupée/u)
+    // With a category, the host's sentence as written.
+    expect(line.textContent).toContain('n\'a pas abouti : Réponse coupée.')
+    expect(line.getAttribute('title')).toBeNull()
+  })
+
+  it('an older failed turn says « fin inattendue », never its raw reason', () => {
+    const turn = { id: 'trn_8', agentId: assistant.id, status: 'failed' as const, reason: 'the agent turn ended max-tokens' }
+    const older = message({ turns: [turn] })
+    render(<WebMessage message={older} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    const line = screen.getByTestId('chat-turn')
+    expect(line.textContent).toContain('fin inattendue')
     expect(line.textContent).not.toContain('max-tokens')
-    expect(line.getAttribute('title')).toBe('the agent turn ended max-tokens')
+    expect(line.querySelector('[title]')).toBeNull()
   })
 })
 

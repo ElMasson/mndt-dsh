@@ -1,34 +1,46 @@
 /**
- * A failed turn's reason in words. The core writes the runtime's ending as a fixed technical
- * string (runner.ts: « the agent turn ended <kind> », « the agent turn failed: <message> », joined by
- * « ; »); this reads that format, it judges nothing. An ending it does not know is not hidden: it
- * shows as « fin inattendue », its raw text on hover.
+ * Why a failed turn ended. Since #157 a turn that carries `reasonKind` carries a sentence of the host
+ * in `reason` (guaranteed and tested by the core): it is shown as written, the category's word
+ * standing in only when the sentence is empty. A turn without `reasonKind` is older: its `reason` may
+ * be the runtime's raw text (a provider's message can carry an internal detail), so it is never shown
+ * and the turn reads « fin inattendue ». No hover anywhere.
  */
 import type { ChatTranslate } from './chatLocales.ts'
 
-/** The runtime's endings (session TurnEndReason) the screen says in words. */
-const ENDINGS: Readonly<Record<string, 'endMaxTokens' | 'endAborted' | 'endInterrupted' | 'endBlocked' | 'endForked'>> = {
-  'max-tokens': 'endMaxTokens',
-  aborted: 'endAborted',
-  interrupted: 'endInterrupted',
-  blocked: 'endBlocked',
-  forked: 'endForked',
-}
+/** The core's categories of a turn's ending (#157): their word, used only when the host's sentence is empty. */
+type EndWord = 'endNoAnswer' | 'endMaxTokens' | 'endCancelled' | 'endTools' | 'endError' | 'endBudget' | 'endBlocked'
+  | 'endAborted' | 'endInterrupted' | 'endRefused' | 'endStale' | 'endRestart'
+const KINDS: ReadonlyMap<string, EndWord> = new Map<string, EndWord>([
+  ['no-answer', 'endNoAnswer'],
+  ['cut', 'endMaxTokens'],
+  ['cancelled', 'endCancelled'],
+  ['tools', 'endTools'],
+  ['failed', 'endError'],
+  ['budget', 'endBudget'],
+  ['blocked', 'endBlocked'],
+  ['aborted', 'endAborted'],
+  ['interrupted', 'endInterrupted'],
+  ['refused', 'endRefused'],
+  ['stale', 'endStale'],
+  ['restart', 'endRestart'],
+])
 
-/** @param reason - a turn's reason as served. @param t - the copy. @returns its words, and the raw text for hover. */
-export function turnReasonWords(reason: string, t: ChatTranslate): { readonly words: string; readonly raw: string } {
-  const parts = reason.split('; ').map((part) => {
-    const ended = /^the agent turn ended ([a-z-]+)$/u.exec(part)
-    if (ended !== null) {
-      // Own keys only: « ended constructor » must not read an object's inherited member.
-      const kind = ended[1] ?? ''
-      return Object.hasOwn(ENDINGS, kind) ? t(ENDINGS[kind] ?? 'endUnknown') : t('endUnknown')
-    }
-    // A model or provider error: said as one, its own message kept on hover.
-    if (part.startsWith('the agent turn failed: ')) return t('endError')
-    return undefined
-  })
-  // Anything that is not the runtime's format is the core's own sentence: shown as written.
-  if (parts.every(part => part === undefined)) return { words: reason, raw: reason }
-  return { words: [...new Set(parts.map(part => part ?? t('endUnknown')))].join(' ; '), raw: reason }
+/**
+ * @param turn - a turn as served (its status, its category).
+ * @param t - the copy.
+ * @returns the words after « n'a pas abouti : » for a failed turn; for a refused or cancelled one,
+ * the host's own sentence; undefined when there is nothing to say.
+ */
+export function turnEndWords(
+  turn: { readonly status: string; readonly reason?: string | undefined; readonly reasonKind?: unknown },
+  t: ChatTranslate,
+): string | undefined {
+  const kind = typeof turn.reasonKind === 'string' && turn.reasonKind !== '' ? turn.reasonKind : undefined
+  const sentence = turn.reason?.trim() ?? ''
+  // With a category, the reason is the host's sentence (any category, an unknown one included).
+  if (kind !== undefined) return sentence !== '' ? sentence : t(KINDS.get(kind) ?? 'endUnknown')
+  // Without one, a refused or cancelled turn keeps the host's sentence it always carried;
+  // a failed one is older, its reason possibly raw: never shown.
+  if (turn.status !== 'failed') return turn.reason
+  return t('endUnknown')
 }

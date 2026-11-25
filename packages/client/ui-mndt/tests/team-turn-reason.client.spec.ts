@@ -1,42 +1,51 @@
 import { describe, expect, it } from 'vitest'
 import { chatFrench } from '../src/client/chatLocales.ts'
-import { turnReasonWords } from '../src/client/turnReason.ts'
+import { turnEndWords } from '../src/client/turnReason.ts'
 
-describe('a failed turn\'s reason, in words', () => {
-  const say = (reason: string): { words: string; raw: string } => turnReasonWords(reason, chatFrench)
+describe('why a failed turn ended', () => {
+  const failed = (reasonKind: unknown, reason?: string) =>
+    turnEndWords({ status: 'failed', ...(reason === undefined ? {} : { reason }), ...(reasonKind === undefined ? {} : { reasonKind }) }, chatFrench)
 
-  it('names the runtime\'s known endings, the raw text kept for hover', () => {
-    expect(say('the agent turn ended max-tokens')).toEqual({
-      words: 'réponse coupée : limite de longueur atteinte', raw: 'the agent turn ended max-tokens',
-    })
-    expect(say('the agent turn ended interrupted').words).toBe('le moteur s\'est arrêté pendant le tour')
-    expect(say('the agent turn ended aborted').words).toBe('arrêté avant la fin')
-    expect(say('the agent turn ended blocked').words).toBe('bloqué par une règle de l\'espace')
-    expect(say('the agent turn ended forked').words).toBe('poursuivi dans une autre session')
+  it('with a category, the host\'s sentence as written (a useful one is kept)', () => {
+    expect(failed('tools', 'outils indisponibles : approvals (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé'))
+      .toBe('outils indisponibles : approvals (démarrage en cours ou connecteur en panne) ; le tour n’a pas été lancé')
   })
 
-  it('a model error is said as one; its own message stays on hover', () => {
-    const r = say('the agent turn failed: 429 rate limited')
-    expect(r.words).toBe('le modèle a renvoyé une erreur')
-    expect(r.raw).toBe('the agent turn failed: 429 rate limited')
+  it('with a category and an empty sentence, the category\'s word', () => {
+    expect(failed('no-answer', '')).toBe('le modèle n\'a rien répondu')
+    expect(failed('cut', '   ')).toBe('réponse coupée : limite de longueur atteinte')
+    expect(failed('cancelled')).toBe('annulé')
+    expect(failed('tools')).toBe('un outil nécessaire était indisponible')
+    expect(failed('failed')).toBe('le modèle a renvoyé une erreur')
   })
 
-  it('an ending it does not know is never hidden: « fin inattendue », raw on hover', () => {
-    expect(say('the agent turn ended paused')).toEqual({ words: 'fin inattendue', raw: 'the agent turn ended paused' })
+  it('A1\'s other categories: the sentence as written, their word when it is empty', () => {
+    expect(failed('budget', 'le coût du tour a atteint sa borne pendant l’appel')).toBe('le coût du tour a atteint sa borne pendant l’appel')
+    expect(failed('budget', '')).toBe('le coût du tour a atteint sa borne')
+    expect(failed('blocked', '')).toBe('le tour a été bloqué')
+    expect(failed('aborted', '')).toBe('le tour a été abandonné')
+    expect(failed('interrupted', '')).toBe('le tour a été interrompu')
+    expect(turnEndWords({ status: 'cancelled', reasonKind: 'stale', reason: 'L’agent a quitté le canal.' }, chatFrench)).toBe('L’agent a quitté le canal.')
+    expect(turnEndWords({ status: 'cancelled', reasonKind: 'restart', reason: '' }, chatFrench)).toBe('interrompu par un redémarrage')
+    expect(turnEndWords({ status: 'refused', reasonKind: 'refused', reason: 'Plafond mensuel atteint pour @x' }, chatFrench)).toBe('Plafond mensuel atteint pour @x')
   })
 
-  it('an ending named like an inherited member is unknown, not a function', () => {
-    for (const kind of ['constructor', 'tostring', 'valueof', 'hasownproperty']) {
-      expect(say(`the agent turn ended ${kind}`).words).toBe('fin inattendue')
-    }
+  it('an unknown category keeps the host\'s sentence (it is always one)', () => {
+    expect(failed('new-kind', 'Une phrase de l’hôte.')).toBe('Une phrase de l’hôte.')
   })
 
-  it('several endings joined by the core are each said, once', () => {
-    expect(say('the agent turn ended max-tokens; the agent turn ended max-tokens; the agent turn failed: x').words)
-      .toBe('réponse coupée : limite de longueur atteinte ; le modèle a renvoyé une erreur')
+  it('an unknown category with an empty sentence, or one named like an inherited member, reads « fin inattendue »', () => {
+    for (const kind of ['paused', 'constructor', 'toString']) expect(failed(kind, '')).toBe('fin inattendue')
   })
 
-  it('a sentence of the core\'s own (not the runtime\'s format) is shown as written', () => {
-    expect(say('agent retired').words).toBe('agent retired')
+  it('without a category (an older turn), never its reason: it may be the engine\'s raw text', () => {
+    expect(failed(undefined, 'the agent turn failed: 500 upstream sk-live-123')).toBe('fin inattendue')
+    expect(failed(42, 'llm-pi-ai: no credential for provider route')).toBe('fin inattendue')
+    expect(failed('', 'raw')).toBe('fin inattendue')
+  })
+
+  it('a refused or cancelled turn keeps the host\'s own sentence', () => {
+    expect(turnEndWords({ status: 'refused', reason: 'plafond mensuel atteint' }, chatFrench)).toBe('plafond mensuel atteint')
+    expect(turnEndWords({ status: 'cancelled' }, chatFrench)).toBeUndefined()
   })
 })

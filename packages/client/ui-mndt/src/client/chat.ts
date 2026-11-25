@@ -89,6 +89,8 @@ export interface ChatTurn {
   readonly eur?: number
   /** In French: why it was refused, failed or stopped. */
   readonly reason?: string
+  /** Why a failed turn ended, as the core's category (no-answer, cut, cancelled, tools, failed). */
+  readonly reasonKind?: string
   readonly startedAt?: string
   readonly finishedAt?: string
   /** The steps of a coordinated turn (#84), read through `stepsOf`, never trusted as is. */
