@@ -7,6 +7,7 @@
  * whether a turn runs or is refused, what it cost. A message never decides anything; a card is
  * decided only through its button. A refusal is shown with the Host's reason, never as emptiness.
  */
+import { turnReasonWords } from './turnReason.ts'
 import { helpOf } from './help.tsx'
 import { councilOf } from './council.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -184,7 +185,7 @@ function TurnLine(props: {
         // A failed turn carries the engine's own cause, often in English: a sentence of the page's
         // language goes before it, chosen by the status, never by reading the cause.
         <span className="mndt-hint" data-testid="chat-turn-reason">
-          {turn.status === 'failed' ? t('turnFailedBecause', { reason: turn.reason }) : turn.reason}
+          {turn.status === 'failed' ? t('turnFailedBecause', { reason: turnReasonWords(turn.reason, t).words }) : turn.reason}
         </span>
       )}
       {turn.sessionId === undefined ? undefined : props.openTrace === undefined ? (
@@ -572,7 +573,7 @@ function LaneWelcome(props: {
                 type="button"
                 className="mw-pill"
                 aria-label={t('pillAddAgent', { handle: a.handle })}
-                onClick={() => { void arrival.addable?.onAdd(a.id).then(setAddError) }}
+                onClick={() => { setAddError(undefined); void arrival.addable?.onAdd(a.id).then(setAddError) }}
               >
                 @{a.handle}
               </button>
@@ -624,7 +625,7 @@ function ChannelWelcome(props: { readonly addable?: LaneArrival['addable']; read
                 type="button"
                 className="mw-pill"
                 aria-label={t('pillAddAgent', { handle: a.handle })}
-                onClick={() => { void addable.onAdd(a.id).then(setAddError) }}
+                onClick={() => { setAddError(undefined); void addable.onAdd(a.id).then(setAddError) }}
               >
                 @{a.handle}
               </button>

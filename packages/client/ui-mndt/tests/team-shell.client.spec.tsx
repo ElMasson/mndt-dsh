@@ -797,6 +797,25 @@ describe('a new team channel no agent reads', { timeout: 20_000 }, () => {
     expect(within(welcome).queryByTestId('channel-add-agents')).toBeNull()
   })
 
+  it('a refusal is cleared when the person tries again', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
+    let first = true
+    const once = {
+      ...chat,
+      addAgents: (id: string, agents: readonly string[]) => {
+        if (first) { first = false; return Promise.reject(new ChatRefusal('try later', 503)) }
+        return chat.addAgents(id, agents)
+      },
+    }
+    render(<CollabPage api={face(state())} chat={once} tc={chatFrench} team={{}} />)
+    const welcome = await screen.findByTestId('channel-welcome', {}, { timeout: 5000 })
+    const pill = within(within(welcome).getByTestId('channel-add-agents')).getByRole('button', { name: 'Ajouter @assistant au canal' })
+    fireEvent.click(pill)
+    expect(await within(welcome).findByRole('alert')).toBeTruthy()
+    fireEvent.click(pill)
+    await waitFor(() => { expect(screen.queryByTestId('channel-welcome')).toBeNull() })
+  })
+
   it('an agent added that refuses is said', async () => {
     const chat = createMockChat({ you, agents: [assistant], channels: [fresh] }, () => Date.parse(at))
     const refusing = { ...chat, addAgents: () => Promise.reject(new ChatRefusal('no agent agt_1', 404)) }
