@@ -40,7 +40,7 @@ import type {
   WorkbenchState,
 } from './types.ts'
 import type { WorkbenchStore } from './store.ts'
-import type { Mandate } from './types.ts'
+import type { Mandate, MissionFailureKind } from './types.ts'
 import type { MandateDraft } from '../mandates.ts'
 import { draftRefusal, signRefusal } from '../mandates.ts'
 import type { Role } from '@deepseek-ai/dsh-client-ui-governance/src/rbac.ts'
@@ -339,12 +339,39 @@ export interface MemoryFilter {
 }
 
 /**
- * @param reason - why a briefing did not finish, in the runtime's words.
- * @returns the host's short line published in the lane, on one line.
+ * The kind of a mission's failure, read from the host's own wording of it (the
+ * runner's and the service's messages, a technical format, not a judgment):
+ * what is served instead of those words, which may carry a provider's detail.
+ * @param reason - the failure's reason, as recorded on the mission.
+ * @returns its kind.
  */
-function failedLine(reason: string): string {
-  const said = reason.replace(/\s+/g, ' ').trim()
-  return `Le briefing n’a pas abouti : ${said.length > 300 ? `${said.slice(0, 299)}…` : said}`
+export function missionFailureKind(reason: string): MissionFailureKind {
+  if (reason.startsWith('cancelled by ')) return 'cancelled'
+  if (reason.startsWith('outils indisponibles')) return 'tools'
+  if (/ended max-tokens|ended length/.test(reason)) return 'cut'
+  if (/returned no text|no usable content/.test(reason)) return 'no-answer'
+  return 'failed'
+}
+
+/** The host's sentence for each kind: all that the lane says of a failure. */
+const FAILURE_SENTENCE: Readonly<Record<MissionFailureKind, string>> = {
+  'no-answer': 'le modèle n’a pas répondu.',
+  cut: 'réponse coupée (limite de longueur atteinte).',
+  cancelled: 'annulé.',
+  tools: 'des outils n’étaient pas disponibles ; il n’a pas été lancé.',
+  failed: 'erreur pendant l’exécution.',
+}
+
+/**
+ * @param kind - the failure's kind.
+ * @param by - who cancelled it, for a cancellation.
+ * @param restarted - whether a restart of the workbench interrupted it.
+ * @returns the host's line published in the lane: never the runtime's words.
+ */
+function failedLine(kind: MissionFailureKind, by?: string, restarted = false): string {
+  if (kind === 'cancelled' && by !== undefined) return `Le briefing n’a pas abouti : annulé par ${by}.`
+  if (restarted) return 'Le briefing n’a pas abouti : interrompu par un redémarrage.'
+  return `Le briefing n’a pas abouti : ${FAILURE_SENTENCE[kind]}`
 }
 
 /** What building one service needs. */
@@ -396,7 +423,13 @@ export class WorkbenchService {
    * @param at - when.
    * @returns the state with the message (and the lane, created when absent), and their journal lines.
    */
-  #inLane(state: WorkbenchState, mission: Mission, text: string, at: string): { state: WorkbenchState; events: WorkbenchEvent[] } {
+  #inLane(
+    state: WorkbenchState,
+    mission: Mission,
+    text: string,
+    at: string,
+    reasonKind?: MissionFailureKind,
+  ): { state: WorkbenchState; events: WorkbenchEvent[] } {
     const owner = mission.createdBy
     if (this.#options.briefingsInLane !== true || mission.kind !== 'briefing' || !owner.includes('@')) return { state, events: [] }
     const events: WorkbenchEvent[] = []
@@ -430,6 +463,7 @@ export class WorkbenchService {
         status: mission.status === 'done' ? 'done' : 'failed',
         ...(mission.eur === undefined ? {} : { eur: mission.eur }),
         ...((mission.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(mission.toolsUnavailable ?? [])] }),
+        ...(reasonKind === undefined ? {} : { reasonKind }),
       },
       createdAt: at,
       updatedAt: at,
@@ -637,7 +671,8 @@ export class WorkbenchService {
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: detail }
       const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
-      const published = this.#inLane({ ...state, missions }, next, failedLine(detail), at)
+      const kind = missionFailureKind(detail)
+      const published = this.#inLane({ ...state, missions }, next, failedLine(kind, undefined, detail.startsWith('interrupted by a workbench restart')), at, kind)
       return {
         state: published.state,
         event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail }, ...published.events],
@@ -669,7 +704,7 @@ export class WorkbenchService {
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: `cancelled by ${actor}` }
       const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
-      const published = this.#inLane({ ...state, missions }, next, failedLine(`annulé par ${actor}`), at)
+      const published = this.#inLane({ ...state, missions }, next, failedLine('cancelled', actor), at, 'cancelled')
       return {
         state: published.state,
         event: [{ at, actor, action: 'mission.cancelled', subject: id }, ...published.events],

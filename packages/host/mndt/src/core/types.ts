@@ -555,7 +555,15 @@ export interface MessageMission {
   readonly status: 'done' | 'failed'
   readonly eur?: number
   readonly toolsUnavailable?: readonly string[]
+  /** On a failure: its kind, the text being the host's sentence for it. The runtime's own words are journaled only. */
+  readonly reasonKind?: MissionFailureKind
 }
+
+/**
+ * Why a mission did not finish, by kind: what is served (the runtime's or the
+ * provider's own words may carry an internal detail; they go to the journal).
+ */
+export type MissionFailureKind = 'no-answer' | 'cut' | 'cancelled' | 'tools' | 'failed'
 
 /** Everything the product persists. */
 export interface WorkbenchState {
