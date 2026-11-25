@@ -1,8 +1,9 @@
 /**
- * Why a failed turn ended, in words. The core serves its own category (`turn.reasonKind`) and a
- * sentence of the host; the runtime's raw text is never served, and never shown, not even on hover
- * (a provider's message may carry an internal detail). A turn without a known category — an older
- * one, or a category this screen does not know — reads « fin inattendue ».
+ * Why a failed turn ended. Since #157 a turn that carries `reasonKind` carries a sentence of the host
+ * in `reason` (guaranteed and tested by the core): it is shown as written, the category's word
+ * standing in only when the sentence is empty. A turn without `reasonKind` is older: its `reason` may
+ * be the runtime's raw text (a provider's message can carry an internal detail), so it is never shown
+ * and the turn reads « fin inattendue ». No hover anywhere.
  */
 import type { ChatTranslate } from './chatLocales.ts'
 
@@ -26,6 +27,9 @@ export function turnEndWords(
   t: ChatTranslate,
 ): string | undefined {
   if (turn.status !== 'failed') return turn.reason
-  const key = typeof turn.reasonKind === 'string' ? KINDS.get(turn.reasonKind) : undefined
-  return t(key ?? 'endUnknown')
+  // An older turn, its reason possibly raw: never shown.
+  if (typeof turn.reasonKind !== 'string' || turn.reasonKind === '') return t('endUnknown')
+  const sentence = turn.reason?.trim() ?? ''
+  if (sentence !== '') return sentence
+  return t(KINDS.get(turn.reasonKind) ?? 'endUnknown')
 }

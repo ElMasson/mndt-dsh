@@ -77,7 +77,7 @@ describe('the feed, as mndt-web draws it', () => {
     const failed = message({ turns: [{ id: 't', agentId: 'agt_1', status: 'failed', reasonKind: 'tools', toolsUnavailable: ['approvals'],
       reason: 'Outils indisponibles.' }] })
     render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
-    expect(screen.getByTestId('chat-turn').textContent).toContain('un outil nécessaire était indisponible')
+    expect(screen.getByTestId('chat-turn').textContent).toContain('Outils indisponibles.')
     // Which ones: the servers' names, from the served list, under the line.
     expect(screen.getByTestId('tools-unavailable').textContent).toContain('approvals')
   })
@@ -117,7 +117,7 @@ describe('the feed, as mndt-web draws it', () => {
         t={chatFrench}
       />
     ))
-    expect(screen.getByTestId('chat-turn').textContent).toBe('Le tour de l\'agent n\'a pas abouti : le modèle a renvoyé une erreur')
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Le tour de l\'agent n\'a pas abouti : Erreur pendant l’exécution.')
   })
 
   it('leads from a waiting card to À traiter', () => {
@@ -271,8 +271,9 @@ describe('a failed turn in the feed', () => {
     }
     const failed = message({ turns: [turn] })
     render(<WebMessage message={failed} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
-    const line = screen.getByText(/réponse coupée/u)
-    expect(line.textContent).toContain('n\'a pas abouti : réponse coupée : limite de longueur atteinte')
+    const line = screen.getByText(/Réponse coupée/u)
+    // With a category, the host's sentence as written.
+    expect(line.textContent).toContain('n\'a pas abouti : Réponse coupée.')
     expect(line.getAttribute('title')).toBeNull()
   })
 
