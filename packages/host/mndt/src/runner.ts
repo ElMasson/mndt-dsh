@@ -18,7 +18,8 @@ import { dateLine, instanceTimeZone } from './core/index.ts'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
 import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
-import { eurOf } from './core/index.ts'
+import { eurOf, priceOf } from './core/index.ts'
+import type { PriceGrid } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
 import { ALWAYS_SERVERS, channelPolicy, NO_TOOLS_POLICY, noCardsPolicy, scopeToolPolicy } from './tool-policy.ts'
 import { ToolsReadiness } from './tools-ready.ts'
@@ -28,6 +29,8 @@ import { clearOperatorWarning, warnOperator, warnOperatorOnce } from './operator
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
+  /** The price grid: a mission's cost is reported when its model's price is known. */
+  readonly prices?: PriceGrid
   /** Extra framing per mission kind, prepended to the caller's instruction. */
   readonly frame?: (mission: Mission) => string
   /**
@@ -313,8 +316,10 @@ export class DshMissionRunner {
       const tokens = reported
         ? { input: usageTotals.input, output: usageTotals.output, cacheRead: usageTotals.cacheRead, cacheWrite: usageTotals.cacheWrite }
         : settledTokensOf(settled)
+      const price = selection === undefined || this.#options.prices === undefined ? undefined : priceOf(this.#options.prices, selection)
       return {
         title: titleOf(mission, text), markdown: text, sources: [], ...(tokens === undefined ? {} : { tokens }),
+        ...(tokens === undefined || price === undefined ? {} : { eur: eurOf(tokens, price) }),
         ...(mission.kind === 'briefing' && !facts ? { toolsUnavailable: ['workbench_facts'] } : {}),
       }
     } finally {

@@ -65,6 +65,8 @@ export interface MissionRequest {
   readonly createdBy: string
   readonly visibility?: Visibility
   readonly mandateId?: string
+  /** The automation's name, when an automation runs it. */
+  readonly title?: string
 }
 
 /** What a runtime reports when a run finishes. */
@@ -75,6 +77,8 @@ export interface MissionResult {
   readonly tokens?: { readonly input: number; readonly output: number }
   /** Servers the mission ran without (a briefing on a space with no facts server). */
   readonly toolsUnavailable?: readonly string[]
+  /** What the run cost, in euros, when the model's price is known. */
+  readonly eur?: number
 }
 
 /** What a caller must say to ask for a decision. */
@@ -334,6 +338,15 @@ export interface MemoryFilter {
   readonly limit?: number
 }
 
+/**
+ * @param reason - why a briefing did not finish, in the runtime's words.
+ * @returns the host's short line published in the lane, on one line.
+ */
+function failedLine(reason: string): string {
+  const said = reason.replace(/\s+/g, ' ').trim()
+  return `Le briefing n’a pas abouti : ${said.length > 300 ? `${said.slice(0, 299)}…` : said}`
+}
+
 /** What building one service needs. */
 export interface ServiceOptions {
   readonly store: WorkbenchStore
@@ -341,6 +354,12 @@ export interface ServiceOptions {
   readonly nextId?: (prefix: string) => string
   /** Where the service says what it changed on its own at load (a mandate retired). */
   readonly warn?: (message: string) => void
+  /**
+   * A team instance: a finished briefing is published in the lane of the person
+   * who ran it (decision of 24/11), the page having no other place where the
+   * owner reads it. Off on a solo workstation, whose page shows its briefs.
+   */
+  readonly briefingsInLane?: boolean
 }
 
 /** The service. */
@@ -364,6 +383,59 @@ export class WorkbenchService {
   #id(prefix: string): string {
     if (this.#options.nextId !== undefined) return this.#options.nextId(prefix)
     return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`
+  }
+
+  /**
+   * A finished briefing, published in the lane of the person who ran it, as a
+   * system message carrying the mission (decision of 24/11; see Message.mission).
+   * Nothing on a solo workstation, for another kind of mission, or for a run
+   * recorded under no person (an automation before a team instance names its owner).
+   * @param state - the state with the mission already finished.
+   * @param mission - the finished mission.
+   * @param text - the report, or the short line of a failure.
+   * @param at - when.
+   * @returns the state with the message (and the lane, created when absent), and their journal lines.
+   */
+  #inLane(state: WorkbenchState, mission: Mission, text: string, at: string): { state: WorkbenchState; events: WorkbenchEvent[] } {
+    const owner = mission.createdBy
+    if (this.#options.briefingsInLane !== true || mission.kind !== 'briefing' || !owner.includes('@')) return { state, events: [] }
+    const events: WorkbenchEvent[] = []
+    let lane = (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === owner)
+    let channels = state.channels ?? []
+    if (lane === undefined) {
+      lane = {
+        id: this.#id('chn'),
+        name: `solo-${this.#id('l').slice(-8)}`,
+        title: `Ma lane (${owner})`,
+        kind: 'solo',
+        members: [owner],
+        agents: [],
+        connectors: [],
+        createdBy: owner,
+        createdAt: at,
+      }
+      channels = [...channels, lane]
+      events.push({ at, actor: owner, action: 'channel.lane', subject: lane.id })
+    }
+    const message: Message = {
+      id: this.#id('msg'),
+      channelId: lane.id,
+      author: { kind: 'system' },
+      text,
+      mentions: [],
+      mission: {
+        id: mission.id,
+        kind: mission.kind,
+        title: mission.title ?? 'Briefing',
+        status: mission.status === 'done' ? 'done' : 'failed',
+        ...(mission.eur === undefined ? {} : { eur: mission.eur }),
+        ...((mission.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(mission.toolsUnavailable ?? [])] }),
+      },
+      createdAt: at,
+      updatedAt: at,
+    }
+    events.push({ at, actor: owner, action: 'message.posted', subject: message.id, detail: lane.id })
+    return { state: { ...state, channels, messages: [...(state.messages ?? []), message] }, events }
   }
 
   /** @returns the loaded state, loading it once. */
@@ -456,6 +528,7 @@ export class WorkbenchService {
       visibility: request.visibility ?? 'team',
       createdAt: this.#at(),
       ...(request.mandateId === undefined ? {} : { mandateId: request.mandateId }),
+      ...(request.title === undefined || request.title.trim() === '' ? {} : { title: request.title.trim() }),
     }
     return this.#write(state => ({
       state: { ...state, missions: [mission, ...state.missions] },
@@ -526,20 +599,23 @@ export class WorkbenchService {
         briefId: brief.id,
         ...(result.tokens === undefined ? {} : { tokens: result.tokens }),
         ...((result.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(result.toolsUnavailable ?? [])] }),
+        ...(result.eur === undefined || !Number.isFinite(result.eur) || result.eur < 0 ? {} : { eur: result.eur }),
       }
+      const done = {
+        ...state,
+        missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)),
+        briefs: [brief, ...state.briefs],
+      }
+      const published = this.#inLane(done, next, markdown, at)
       return {
-        state: {
-          ...state,
-          missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)),
-          briefs: [brief, ...state.briefs],
-        },
-        event: {
+        state: published.state,
+        event: [{
           at,
           actor: mission.createdBy,
           action: 'mission.done',
           subject: id,
           detail: result.tokens === undefined ? brief.id : `${brief.id}, ${result.tokens.input} in / ${result.tokens.output} out`,
-        },
+        }, ...published.events],
         value: { mission: next, brief },
       }
     })
@@ -560,9 +636,11 @@ export class WorkbenchService {
       if (mission.status === 'done' || mission.status === 'failed') throw new Error(`mission ${id} already ${mission.status}`)
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: detail }
+      const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
+      const published = this.#inLane({ ...state, missions }, next, failedLine(detail), at)
       return {
-        state: { ...state, missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)) },
-        event: { at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail },
+        state: published.state,
+        event: [{ at, actor: mission.createdBy, action: 'mission.failed', subject: id, detail }, ...published.events],
         value: next,
       }
     })
@@ -590,9 +668,11 @@ export class WorkbenchService {
       }
       const at = this.#at()
       const next: Mission = { ...mission, status: 'failed', finishedAt: at, error: `cancelled by ${actor}` }
+      const missions = state.missions.map(candidate => (candidate.id === id ? next : candidate))
+      const published = this.#inLane({ ...state, missions }, next, failedLine(`annulé par ${actor}`), at)
       return {
-        state: { ...state, missions: state.missions.map(candidate => (candidate.id === id ? next : candidate)) },
-        event: { at, actor, action: 'mission.cancelled', subject: id },
+        state: published.state,
+        event: [{ at, actor, action: 'mission.cancelled', subject: id }, ...published.events],
         value: next,
       }
     })
