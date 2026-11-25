@@ -825,3 +825,29 @@ describe('a new team channel no agent reads', { timeout: 20_000 }, () => {
     expect((await within(welcome).findByRole('alert')).textContent).not.toBe('')
   })
 })
+
+describe('cards raised to the deciders (À traiter)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-25T08:00:00.000Z'
+  const raised = (over: Record<string, unknown>) => ({
+    id: 'apr_9', kind: 'send-email', title: 'Relancer Orange', requestedBy: 'smarion@datanalysis.re', requestedAt: at,
+    state: 'pending', canDecide: true, channelId: 'chn_lane_smarion', ...over,
+  })
+  const openPending = async (cards: readonly unknown[]) => {
+    const chat = createMockChat({ you, agents: [], channels: [], cards: cards as never }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{ names: { 'smarion@datanalysis.re': 'Sophie Marion' } }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    return screen.findByTestId('team-pending', {}, { timeout: 5000 })
+  }
+
+  it('from a lane: whose, and no link to it', async () => {
+    const pending = await openPending([raised({ origin: { kind: 'lane' } })])
+    expect((await within(pending).findByTestId('queue-from-lane')).textContent).toBe('depuis la lane de Sophie Marion')
+    expect(within(pending).queryByRole('button', { name: /lane/u })).toBeNull()
+  })
+
+  it('from a channel with no decider: said, no title, no link', async () => {
+    const pending = await openPending([raised({ origin: { kind: 'channel' }, channelId: 'chn_x' })])
+    expect((await within(pending).findByTestId('queue-from-channel')).textContent).toBe('depuis un canal sans décideur')
+  })
+})
