@@ -3,6 +3,7 @@
 admin-no-mission
 admin-no-owner-brief
 agent-turn
+briefing-in-lane
 briefing-private
 briefing-without-facts
 channel
@@ -34,6 +35,7 @@ help-escalated-anonymous
 help-revealed
 image-clean
 landing-text
+lane-card-rises
 live-no-leak
 live-searched
 live-unplanted
@@ -47,6 +49,7 @@ mission-no-bash
 mission-run
 no-leak
 no-modal
+no-raw-failure
 page
 probe-sees
 probe-turn

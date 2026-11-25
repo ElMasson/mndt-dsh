@@ -13,6 +13,7 @@ const BASE = 'http://127.0.0.1:18080'
 const OWNER = 'duke@datanalysis.re'
 const SECOND = 'smarion@datanalysis.re'
 const ADMIN = 'jadmin@datanalysis.re'
+const OPERATOR = 'operateur@datanalysis.re'
 const results = []
 const check = (step, ok, note) => { results.push({ step, ok }); console.log(`${ok ? 'OK ' : 'KO '} ${step.padEnd(14)} ${note}`) }
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
@@ -222,6 +223,62 @@ const leakedIds = ownerBriefs.filter(brief => JSON.stringify(journal.body.entrie
 const approve = ownerBriefs[0] === undefined ? { status: 0 } : await api('POST', `/briefs/${ownerBriefs[0].id}/approve`, {}, adminContext)
 check('admin-no-owner-brief', ownerBriefs.length > 0 && leakedIds === 0 && approve.status === 404,
   `journal ${journal.status}: ${leakedIds} of the owner's ${ownerBriefs.length} brief(s) named; approve by ${ADMIN}: ${approve.status}`)
+// The briefing just run is published in the owner's lane (#154), never in another's.
+const laneOf = async context => ((await api('GET', '/channels', undefined, context)).body.channels ?? []).find(c => c.kind === 'solo')
+const ownerLane = await laneOf(owner)
+const laneBriefs = ownerLane === undefined ? [] : ((await api('GET', `/channels/${ownerLane.id}/messages`)).body.messages ?? [])
+  .filter(m => m.author?.kind === 'system' && m.mission?.kind === 'briefing')
+const viewerLane = await laneOf(viewer)
+const viewerSees = viewerLane === undefined ? [] : ((await api('GET', `/channels/${viewerLane.id}/messages`, undefined, viewer)).body.messages ?? [])
+  .filter(m => m.mission !== undefined)
+const ownerLaneByViewer = ownerLane === undefined ? 0 : (await api('GET', `/channels/${ownerLane.id}/messages`, undefined, viewer)).status
+check('briefing-in-lane', laneBriefs.length > 0 && typeof laneBriefs.at(-1)?.text === 'string' && laneBriefs.at(-1).text !== ''
+  && ['done', 'failed'].includes(laneBriefs.at(-1)?.mission?.status) && viewerSees.length === 0 && ownerLaneByViewer === 404,
+  `owner's lane: ${laneBriefs.length} briefing message(s), last ${laneBriefs.at(-1)?.mission?.status ?? '-'} « ${laneBriefs.at(-1)?.mission?.title ?? '-'} »; ${SECOND}'s lane: ${viewerSees.length}; the owner's lane read by ${SECOND}: ${ownerLaneByViewer}`)
+
+// (#153) A card asked in an operator's lane (no decider among its members)
+// rises to the owner, who decides it without reading the lane.
+const operatorContext = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-email': OPERATOR } })
+const settle = async (context, channelId, messageId) => {
+  let turn
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    turn = ((await api('GET', `/channels/${channelId}/messages`, undefined, context)).body.messages ?? []).find(m => m.id === messageId)?.turns?.[0]
+    if (turn !== undefined && !['queued', 'running'].includes(turn.status)) return turn
+    await sleep(2000)
+  }
+  return turn
+}
+const operatorLane = await laneOf(operatorContext)
+let rose
+let decided = 0
+let laneRead = 0
+let roseTurn
+if (operatorLane !== undefined && qwen !== undefined) {
+  await api('POST', `/channels/${operatorLane.id}/agents`, { add: [qwen.id] }, operatorContext)
+  const asked = (await api('POST', `/channels/${operatorLane.id}/messages`, { text: '@qwen sonde-outils-lane' }, operatorContext)).body.message
+  roseTurn = asked === undefined ? undefined : await settle(operatorContext, operatorLane.id, asked.id)
+  rose = ((await api('GET', '/approvals?state=pending&mine=1')).body.approvals ?? []).find(card => card.channelId === operatorLane.id)
+  laneRead = (await api('GET', `/channels/${operatorLane.id}/messages`)).status
+  decided = rose === undefined ? 0 : (await api('POST', `/approvals/${rose.id}/decide`, { decision: 'rejected', reason: 'répétition' })).status
+}
+const viewerCards = ((await api('GET', '/approvals?state=all', undefined, viewer)).body.approvals ?? []).filter(card => card.channelId === operatorLane?.id)
+check('lane-card-rises', rose !== undefined && rose.canDecide === true && rose.origin?.kind === 'lane' && laneRead === 404 && decided === 200 && viewerCards.length === 0,
+  `turn in ${OPERATOR}'s lane ${roseTurn?.status ?? '-'}; the owner's « À traiter »: ${rose === undefined ? 'no card' : `« ${rose.title} », canDecide ${rose.canDecide}, origin ${JSON.stringify(rose.origin)}`}; the lane read by the owner: ${laneRead}; decided ${decided}; seen by ${SECOND}: ${viewerCards.length}`)
+
+// (#157) A turn whose provider fails serves the host's sentence and its kind,
+// never the provider's words; those reach the operator's log.
+let failedTurn
+let failedMessages = ''
+if (channel !== undefined && qwen !== undefined) {
+  const asked = (await api('POST', `/channels/${channel.id}/messages`, { text: '@qwen sonde-panne' })).body.message
+  failedTurn = asked === undefined ? undefined : await settle(owner, channel.id, asked.id)
+  failedMessages = JSON.stringify((await api('GET', `/channels/${channel.id}/messages`)).body)
+}
+const servedRaw = failedMessages.includes('PANNE-SONDE') || failedMessages.includes('10.9.9.9')
+const loggedRaw = docker('logs', `${project}-workbench`).includes('PANNE-SONDE') || (() => { try { return docker('exec', `${project}-workbench`, 'sh', '-c', 'cat /state/web.log 2>/dev/null || true').includes('PANNE-SONDE') } catch { return false } })()
+check('no-raw-failure', failedTurn?.status === 'failed' && typeof failedTurn.reasonKind === 'string' && !servedRaw,
+  `turn ${failedTurn?.status ?? '-'}, reasonKind ${failedTurn?.reasonKind ?? '-'}, « ${failedTurn?.reason ?? '-'} »; the provider's words served: ${servedRaw ? 'YES' : 'no'}; in the operator's log: ${loggedRaw ? 'yes' : 'no'}`)
+
 // A member has the team page, nothing of the shell: neither /dsh/ nor its WebSocket.
 const viewerShell = await viewer.request.fetch(`${BASE}/dsh/`, { maxRedirects: 0 })
 const viewerApi = await viewer.request.fetch(`${BASE}/api/session`, { maxRedirects: 0 })

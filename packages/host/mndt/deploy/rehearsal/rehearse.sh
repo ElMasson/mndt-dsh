@@ -214,7 +214,7 @@ ENV
 MNDT_HOME=$data python3 "$deploy/llm/render-llm-routes.py" --env-file "$data/model.env" || die routes "the LLM routes were not written"
 fake_scaleway
 # An admin who is not the owner: missions and automations stay closed to them.
-printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" } ] }\n' $owner $viewer $admin > "$data/grants.json"
+printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" }, { "subject": "%s", "role": "operator" } ] }\n' $owner $viewer $admin operateur@datanalysis.re > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
     -e "s#image: mndt-workbench:local#image: $image#" \
     -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
