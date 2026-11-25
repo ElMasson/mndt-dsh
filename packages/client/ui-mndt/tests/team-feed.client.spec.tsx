@@ -298,9 +298,11 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
     expect(document.querySelector('.mw-message-name')?.textContent).not.toBe('mndt')
   })
 
-  it('failed: the host\'s one line, as plain text, never Markdown', () => {
+  it('failed: said in the host\'s words, never the text nor Markdown', () => {
     draw(report({ id: 'msn_2', kind: 'briefing', title: 'Briefing', status: 'failed' }, 'Le briefing n\'a pas abouti : **the agent returned no text**'))
-    expect(screen.getByTestId('mission-failed').textContent).toBe('Le briefing n\'a pas abouti : **the agent returned no text**')
+    // Without a category, the text (possibly a raw reason) is never shown: the generic words.
+    expect(screen.getByTestId('mission-failed').textContent).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+    expect(screen.getByTestId('mission-failed').querySelector('strong')).toBeNull()
     expect(screen.queryByTestId('mission-report')).toBeNull()
     expect(screen.queryByTestId('mission-eur')).toBeNull()
     expect(screen.queryByTestId('mission-tools-unavailable')).toBeNull()
@@ -339,5 +341,52 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
     const first = report({ title: 'Briefing du matin', status: 'done' })
     const second = { ...report({ title: 'Briefing du soir', status: 'done' }), id: 'msg_2' } as ChatMessage
     expect(placeOf(first, second).header).toBe(true)
+  })
+})
+
+describe('a briefing that failed says why from the host\'s category', () => {
+  const failed = (mission: unknown): ChatMessage =>
+    ({ ...message({ author: { kind: 'system' }, text: 'Le briefing n\'a pas abouti : réponse coupée (limite de longueur atteinte).' }), mission }) as unknown as ChatMessage
+  const draw = (m: ChatMessage): string => {
+    render(<WebMessage message={m} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    return screen.getByTestId('mission-failed').textContent ?? ''
+  }
+
+  it('each known category in words', () => {
+    const words: Record<string, string> = {
+      'no-answer': 'le modèle n\'a rien répondu', cut: 'réponse coupée : limite de longueur atteinte',
+      cancelled: 'annulé', tools: 'un outil nécessaire manquait', failed: 'une erreur est survenue pendant l\'exécution',
+    }
+    for (const [kind, said] of Object.entries(words)) {
+      expect(draw(failed({ title: 'Briefing', status: 'failed', reasonKind: kind }))).toBe(`Le briefing n'a pas abouti : ${said}`)
+      cleanup()
+    }
+  })
+
+  it('an unknown or absent category never shows the text (it may carry a raw reason): the generic one', () => {
+    const raw = ({ ...message({ author: { kind: 'system' }, text: 'Le briefing n\'a pas abouti : 500 upstream sk-live-123' }),
+      mission: { title: 'Briefing', status: 'failed', reasonKind: 'constructor' } }) as unknown as ChatMessage
+    expect(draw(raw)).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+    expect(screen.getByTestId('mission-failed').textContent).not.toContain('sk-live')
+    expect(screen.getByTestId('mission-failed').getAttribute('title')).toBeNull()
+    cleanup()
+    expect(draw(failed({ title: 'Briefing', status: 'failed' }))).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+  })
+})
+
+describe('a card raised from a lane, for its member', () => {
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: '2026-11-25T08:00:00.000Z' }
+  it('waits for an owner or an admin, said so', () => {
+    render(<WebCard card={card()} canDecide={false} onDecide={vi.fn()} channel={lane} t={chatFrench} />)
+    expect(screen.getByTestId('card-raised').textContent).toBe('En attente de décision par un owner ou un admin.')
+  })
+  it('a decider\'s raised card reads « À décider », never « en attente »', () => {
+    const up = { ...card(), origin: { kind: 'lane' } } as unknown as ThreadCard
+    render(<WebCard card={up} canDecide={false} onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('card-raised').textContent).toBe('À décider.')
+  })
+  it('in a team channel without origin, the usual sentence', () => {
+    render(<WebCard card={card()} canDecide={false} onDecide={vi.fn()} channel={{ ...lane, kind: 'team' }} t={chatFrench} />)
+    expect(screen.getByTestId('card-raised').textContent).toBe('Vous ne pouvez pas décider de cette approbation.')
   })
 })

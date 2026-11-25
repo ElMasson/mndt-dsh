@@ -301,17 +301,41 @@ export function WebCard(props: {
           {error === undefined ? undefined : <p role="alert" className="mw-decide-error">{error}</p>}
         </div>
       ) : (
-        <p className="mw-cannot">{t('webCannotDecide')}</p>
+        // In a lane nobody but its member reads, the card goes up to the owners and admins (À traiter).
+        <p className="mw-cannot" data-testid="card-raised">
+          {/* The member who waits reads « en attente »; a decider never does (an origin is served to deciders only). */}
+          {originOf(card) !== undefined ? t('webToDecide') : props.channel?.kind === 'solo' ? t('webAwaitsDecider') : t('webCannotDecide')}
+        </p>
       )}
     </article>
   )
 }
 
 /** One message of the feed, its turns and the cards they asked for. */
+/**
+ * Where a card raised to the deciders comes from, as the core serves it: a lane or a channel no decider
+ * is in. Never a title: a reader outside the channel gets none of its metadata.
+ * @param card - a card. @returns its origin, or undefined.
+ */
+export function originOf(card: ThreadCard): 'lane' | 'channel' | undefined {
+  const raw: unknown = (card as { readonly origin?: unknown }).origin
+  const kind = typeof raw === 'object' && raw !== null ? (raw as { readonly kind?: unknown }).kind : undefined
+  return kind === 'lane' || kind === 'channel' ? kind : undefined
+}
+
+/** The host's categories of a failed mission, said in words; any other value leaves the host's sentence. */
+const REASON_KINDS: readonly string[] = ['no-answer', 'cut', 'cancelled', 'tools', 'failed']
+const REASON_WORDS = {
+  'no-answer': 'missionReasonNoAnswer', cut: 'missionReasonCut', cancelled: 'missionReasonCancelled',
+  tools: 'missionReasonTools', failed: 'missionReasonFailed',
+} as const
+
 /** A mission's report published in a lane, as the page reads it. */
 interface PublishedMission {
   readonly title: string
   readonly failed: boolean
+  /** Why it failed, as the host's category (never the provider's text). */
+  readonly reasonKind?: 'no-answer' | 'cut' | 'cancelled' | 'tools' | 'failed'
   readonly eur?: number
   readonly servers: readonly string[]
 }
@@ -331,6 +355,7 @@ export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined
   return {
     title: typeof title === 'string' && title.trim() !== '' && title.length <= 120 ? title.trim() : '',
     failed: at('status') === 'failed',
+    ...(REASON_KINDS.includes(at('reasonKind') as never) ? { reasonKind: at('reasonKind') as NonNullable<PublishedMission['reasonKind']> } : {}),
     ...(typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? { eur } : {}),
     // Server names only (a technical format), as on a turn.
     servers: Array.isArray(tools) ? tools.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s)) : [],
@@ -416,7 +441,10 @@ export function WebMessage(props: {
         <div className="mw-message-body mw-agent-text" data-testid="chat-markdown">{renderBrief(m.text)}</div>
       ) : published !== undefined && published.failed ? (
         // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
-        <p className="mw-message-body mw-decide-error" data-testid="mission-failed">{m.text}</p>
+        <p className="mw-message-body mw-decide-error" data-testid="mission-failed">
+          {/* Never m.text: before the core's category is installed it may carry the provider's raw reason. */}
+          {t('missionFailedBecause', { reason: t(REASON_WORDS[published.reasonKind ?? 'failed']) })}
+        </p>
       ) : published !== undefined ? (
         // A model wrote it: read as an agent's text, its headings kept plain.
         m.text.trim() === ''

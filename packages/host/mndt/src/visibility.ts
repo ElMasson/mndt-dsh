@@ -4,7 +4,11 @@
  * events, a decision). A record is invisible by default; a route never decides
  * on its own.
  *
- * - A channel's card, message, update: its members only.
+ * - A channel's card, message, update: its members only. One exception, for a
+ *   card alone (decision of 24/11): when no member of its channel may decide
+ *   it (an operator's lane, a channel with no owner nor admin), it rises to
+ *   those who may decide (`rights.write`), its own content only — never the
+ *   channel, its messages nor its documents.
  * - A card outside any channel (a mission's): the one who asked it, and those
  *   who may decide (`rights.write`); on a team instance, the one who asked it
  *   alone, plus the owners for an old card asked under « scheduler ».
@@ -24,6 +28,11 @@ export interface Reader {
   readonly channels: ReadonlySet<string>
   /** Whether the person may decide cards and administer rights (`rights.write`). */
   readonly decider: boolean
+  /**
+   * Channels none of whose members may decide (`rights.write`): their cards
+   * rise to the deciders. Resolved for a decider only; empty otherwise.
+   */
+  readonly channelsWithoutDecider?: ReadonlySet<string>
   /**
    * Missions and briefs on a team instance: `owner` for the owner, `member` for
    * anyone else. Absent on a solo workstation, where the shared rule applies.
@@ -52,8 +61,14 @@ export function canReadMission(reader: Reader, item: { readonly visibility?: 'te
  * @returns whether the reader may see this card at all (title and payload included).
  */
 export function canReadApproval(reader: Reader, approval: Approval): boolean {
-  if (approval.channelId !== undefined)
-    return reader.channels.has(approval.channelId)
+  if (approval.channelId !== undefined) {
+    if (reader.channels.has(approval.channelId)) return true
+    // A card nobody in its channel may decide rises to the deciders: the card,
+    // not the channel (its messages and documents stay its members').
+    // A channel's context never rises (decision of 25/11): a decider from
+    // outside must not write the content of a channel they do not read.
+    return reader.decider && approval.kind !== 'propose_context' && (reader.channelsWithoutDecider?.has(approval.channelId) ?? false)
+  }
   // A card outside any channel is a mission's. On a team instance it follows its
   // brief: the one who asked it alone (for an automation, the owner who enabled
   // it), plus the owners for an old card asked under « scheduler ». Never a
@@ -63,6 +78,46 @@ export function canReadApproval(reader: Reader, approval: Approval): boolean {
       || (reader.missionRole === 'owner' && approval.requestedBy === AUTOMATION_AUTHOR)
   }
   return reader.decider || approval.requestedBy === reader.identity
+}
+
+/**
+ * Where a card comes from, for a reader outside its channel (a risen card): a
+ * lane, or a channel, and nothing else of it (no name, no title). The screen
+ * writes « depuis la lane de » its requester, or « depuis un canal sans décideur ».
+ * @param reader - who reads.
+ * @param approval - a card canReadApproval let through.
+ * @param state - the state, for the channel's kind.
+ * @returns the origin, or undefined for a card the reader reads in its channel (or with no channel).
+ */
+export function cardOrigin(reader: Reader, approval: Approval, state: WorkbenchState): { readonly kind: 'lane' | 'channel' } | undefined {
+  if (approval.channelId === undefined || reader.channels.has(approval.channelId)) return undefined
+  const channel = (state.channels ?? []).find(candidate => candidate.id === approval.channelId)
+  return { kind: channel?.kind === 'solo' ? 'lane' : 'channel' }
+}
+
+/** @returns the card as served to this reader: its origin added when it rose from a channel they do not read. */
+export function servedCard<T extends Approval>(reader: Reader, approval: T, state: WorkbenchState): T & { readonly origin?: { readonly kind: 'lane' | 'channel' } } {
+  const origin = cardOrigin(reader, approval, state)
+  return origin === undefined ? approval : { ...approval, origin }
+}
+
+/** What a risen card's journal line says to a reader outside its channel. */
+export const RISEN_CARD_DETAIL = 'carte d’un canal que vous ne lisez pas'
+
+/**
+ * A readable event as served to this reader: the line of a card risen from a
+ * channel they are not a member of carries nothing of that channel (its name,
+ * its context version): its detail is replaced by a generic text.
+ * @param reader - who reads.
+ * @param event - an event canReadEvent let through.
+ * @param state - the state, for the card.
+ * @returns the event to serve.
+ */
+export function servedEvent(reader: Reader, event: WorkbenchEvent, state: WorkbenchState): WorkbenchEvent {
+  if (!event.action.startsWith('approval.')) return event
+  const approval = state.approvals.find(candidate => candidate.id === event.subject)
+  if (approval?.channelId === undefined || reader.channels.has(approval.channelId)) return event
+  return { ...event, detail: RISEN_CARD_DETAIL }
 }
 
 /**

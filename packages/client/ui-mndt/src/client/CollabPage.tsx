@@ -19,7 +19,7 @@ import { TeamContext } from './TeamContext.tsx'
 import { ADMIN_CEILING_EUR, TeamAgentForm, modelsOf } from './TeamAgentForm.tsx'
 import { TeamAgentSheet } from './TeamAgentSheet.tsx'
 import { SkillsSection } from './skills.tsx'
-import { WebCard, shownName } from './TeamFeed.tsx'
+import { WebCard, originOf, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
@@ -1858,6 +1858,11 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             <button type="button" className="mw-queue-where" onClick={() => { setChatId(where.id); setView('chat') }}>
                               {where.kind === 'solo' ? tc('lane') : `# ${where.title || where.name}`}
                             </button>
+                          ) : originOf(card) === 'lane' ? (
+                            // Raised from a lane the decider does not read: who, never a link.
+                            <span className="mw-queue-from" data-testid="queue-from-lane">{tc('webFromLane', { name: shownName(card.requestedBy, team.names) })}</span>
+                          ) : originOf(card) === 'channel' ? (
+                            <span className="mw-queue-from" data-testid="queue-from-channel">{tc('webFromUndecidedChannel')}</span>
                           ) : card.missionId === undefined ? undefined : (
                             // A mission's card belongs to no channel: said, not a link (missions have no screen yet).
                             <span className="mw-queue-from" data-testid="queue-from-mission">{tc('webFromMission')}</span>

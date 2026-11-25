@@ -405,6 +405,16 @@ export const chatEn = {
   missionToolsUnavailable: 'Ran without: {servers}. The briefing did not consult them.',
   channelWelcomeAddAgent: 'No agent reads this channel yet. Add one:',
   channelWelcomeNoAgent: 'No agent reads this channel yet: someone who may write in the space adds one.',
+  missionFailedBecause: 'The briefing did not complete: {reason}',
+  missionReasonNoAnswer: 'the model gave no answer',
+  missionReasonCut: 'answer cut off: length limit reached',
+  missionReasonCancelled: 'cancelled',
+  missionReasonTools: 'a tool it needed was missing',
+  missionReasonFailed: 'an error occurred while it ran',
+  webAwaitsDecider: 'Awaiting a decision by an owner or an admin.',
+  webToDecide: 'To decide.',
+  webFromLane: 'from {name}\'s lane',
+  webFromUndecidedChannel: 'from a channel with no decider',
 } as const
 
 /** One copy key. */
@@ -810,6 +820,16 @@ export const chatFr: Record<ChatKey, string> = {
   missionToolsUnavailable: 'Exécuté sans : {servers}. Le briefing ne les a pas consultés.',
   channelWelcomeAddAgent: 'Aucun agent ne lit encore ce canal. Ajoutez-en un :',
   channelWelcomeNoAgent: 'Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.',
+  missionFailedBecause: 'Le briefing n\'a pas abouti : {reason}',
+  missionReasonNoAnswer: 'le modèle n\'a rien répondu',
+  missionReasonCut: 'réponse coupée : limite de longueur atteinte',
+  missionReasonCancelled: 'annulé',
+  missionReasonTools: 'un outil nécessaire manquait',
+  missionReasonFailed: 'une erreur est survenue pendant l\'exécution',
+  webAwaitsDecider: 'En attente de décision par un owner ou un admin.',
+  webToDecide: 'À décider.',
+  webFromLane: 'depuis la lane de {name}',
+  webFromUndecidedChannel: 'depuis un canal sans décideur',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

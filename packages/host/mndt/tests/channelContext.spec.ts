@@ -101,6 +101,22 @@ describe('a propose_context card', () => {
   const propose = (call: ReturnType<typeof bench>['call'], text: string, baseVersion: number) =>
     call('POST', '/approvals', 'operator', { kind: 'propose_context', payload: {}, title: 'Mon titre à moi', contextProposal: { text, baseVersion } }, { 'x-mndt-run': 'run_1' })
 
+  it('is refused before it is born in a channel with no owner nor admin among its members: no dead card', async () => {
+    const { call, run } = bench()
+    // An operator's channel, with a viewer: no member may decide.
+    const made = await call('POST', '/channels', 'operator', { name: 'terrain', members: [outsider] })
+    const id = (made.body.channel as Channel).id
+    expect([...(made.body.channel as Channel).members].sort()).toEqual([operator, outsider].sort())
+    run(id)
+    const refused = await propose(call, 'Client : Orange.', 0)
+    expect(refused.status).toBe(409)
+    expect(refused.body).toMatchObject({
+      code: 'no-context-decider',
+      error: 'le contexte de ce canal se décide par un owner ou un admin membre du canal ; ajoutez-en un au canal',
+    })
+    expect(((await call('GET', '/approvals', 'owner', undefined)).body.approvals as unknown[]).length).toBe(0)
+  })
+
   it('is asked from a channel turn only, with a title the server writes', async () => {
     const { call, channel, run } = bench()
     const id = await channel()

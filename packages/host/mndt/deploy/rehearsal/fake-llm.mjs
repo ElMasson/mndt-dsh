@@ -166,6 +166,18 @@ createServer((req, res) => {
       : prompted.includes('Voici les positions des autres membres') ? 'critique'
         : prompted.includes('Prends position seul') ? 'position' : undefined
     if (councilKind !== undefined) console.log(`fake-llm council-tools ${calls} ${councilKind}: ${offered.length}`)
+    // The reasoning effort each call sent, by kind of call (rehearse.sh
+    // scaleway-reasoning-none): a Scaleway model reasons by default, billed,
+    // unless the request says « none ».
+    const kind = councilKind !== undefined ? `council-${councilKind}`
+      : prompted.includes("chargé de trancher pour un conseil") ? 'council-synthesis'
+        : prompted.includes(', vérificateur dans le canal #') ? 'verifier'
+          : prompted.includes('est bloqué et te demande ton avis') ? 'help-peer'
+            : prompted.includes("Tu as demandé de l'aide sur :") ? 'help-reading'
+              : prompted.includes(', chargé de la synthèse dans le canal #') ? 'synthesis'
+                : prompted.includes('Tu travailles pour Duke Analytics.') ? 'mission'
+                  : 'turn'
+    console.log(`fake-llm effort ${calls} ${request.model} ${kind} ${request.reasoning_effort ?? '-'}`)
     // Only the last call of a probe carries every result: log them there once.
     const call = nextCall(messages, tag) ?? helpCall(messages)
     if (call === undefined && tag !== '-') logResults(messages, tag)

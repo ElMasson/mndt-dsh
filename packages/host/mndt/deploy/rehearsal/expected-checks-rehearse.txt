@@ -53,6 +53,7 @@ probe-turn
 restart-closes
 restart-closes-council
 routes-real-scaleway
+scaleway-reasoning-none
 scan-witness
 scheduler-first-pass
 searched
