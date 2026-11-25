@@ -197,9 +197,15 @@ export class WorkbenchGateway extends TypertRemoteService {
     this.statePath = config.statePath ?? process.env.DSH_MNDT_STATE ?? join(homedir(), '.dsh', 'mndt', 'state.json')
     this.schedulePath = join(dirname(this.statePath), 'briefing-schedule.json')
     this.automationsPath = join(dirname(this.statePath), 'automations.json')
-    this.service = new WorkbenchService({ store: new JsonFileStore(this.statePath), warn: (message) => { warnOperator(ctx, message) } })
     this.tokensFile = config.tokensFile ?? process.env.DSH_MNDT_TOKENS_FILE
     this.proxyUserHeader = config.proxyUserHeader ?? process.env.DSH_MNDT_PROXY_USER_HEADER
+    // Behind the proxy (a team instance), a finished briefing is published in the
+    // lane of the one who ran it: the team page has no other place to read it.
+    this.service = new WorkbenchService({
+      store: new JsonFileStore(this.statePath),
+      warn: (message) => { warnOperator(ctx, message) },
+      briefingsInLane: this.proxyUserHeader !== undefined && this.proxyUserHeader !== '',
+    })
     this.identity = (config.identity ?? process.env.DSH_MNDT_IDENTITY ?? config.localOwner ?? process.env.DSH_MNDT_LOCAL_OWNER ?? 'local').toLowerCase()
     const baseUrl = process.env.DSH_MNDT_AUTHORITY ?? config.authority?.baseUrl
     const token = process.env.DSH_MNDT_AUTHORITY_TOKEN ?? config.authority?.token
@@ -434,9 +440,11 @@ export class WorkbenchGateway extends TypertRemoteService {
     // disappearance LIFTS the facts' requirement: the runner says each such
     // passage once in the operator's log, and the mission records it.
     const factsConfigured = (): boolean => configuredInSpace(dirname(this.statePath))('workbench_facts')
+    // What a mission cost, from the same grid as the turns' (read at each runner).
+    const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
     return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
-      ? { readiness, configured, timeZone, factsConfigured }
-      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone, factsConfigured })
+      ? { readiness, configured, timeZone, factsConfigured, prices }
+      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone, factsConfigured, prices })
   }
 
   /**
