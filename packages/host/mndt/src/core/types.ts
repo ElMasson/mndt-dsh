@@ -198,6 +198,13 @@ export interface Mandate {
  * A named agent with its own LLM: it answers in the channels it belongs to,
  * when a person mentions it, and never decides anything.
  */
+/** A cost of an agent outside any turn, counted in its monthly ceiling. */
+export interface AgentCharge {
+  readonly at: string
+  readonly eur: number
+  readonly for: 'examples'
+}
+
 export interface Agent {
   readonly id: string
   /** Mentioned as `@handle`; unique, `[a-z0-9-]{2,32}`. */
@@ -219,6 +226,20 @@ export interface Agent {
   readonly retiredAt?: string
   /** Who retired it. */
   readonly retiredBy?: string
+  /**
+   * At most two requests a member could send it that would make it propose a
+   * card, written by the agent itself (a call with no tool) or corrected by an
+   * owner or an admin. Served only while `examplesFor` is the sheet's current
+   * fingerprint (agentFingerprint): stale ones are never served.
+   */
+  readonly examples?: readonly string[]
+  readonly examplesBy?: 'agent' | 'human'
+  /** The fingerprint of the sheet (instructions, connectors, skills and their versions) they were written for. */
+  readonly examplesFor?: string
+  /** The fingerprint the agent last tried to write them for: one attempt per version of the sheet, success or not. */
+  readonly examplesTried?: string
+  /** What the agent spent outside any turn (its example requests), counted in its monthly ceiling. */
+  readonly charges?: readonly AgentCharge[]
 }
 
 /** A team channel, or one person's own lane. */

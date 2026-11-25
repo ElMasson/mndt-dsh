@@ -47,7 +47,7 @@ import {
   skillsOf,
   priceOf,
   revisionPrompt,
-  spentThisMonth,
+  agentSpentThisMonth,
   synthesisPrompt,
   turnPrompt,
   turnServers,
@@ -325,7 +325,7 @@ export class TurnScheduler {
       const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, undefined, await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
-        : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
+        : ceilingRefusal(worker, prices, agentSpentThisMonth(await service.snapshot(), worker.id, new Date().toISOString()))
           ?? overBound(worker, prompt)
       if (worker === undefined || why !== undefined) {
         steps.push({ role: 'worker', agentId: workerId, verdict: 'skipped', notes: [why ?? 'indisponible'] })
@@ -371,7 +371,7 @@ export class TurnScheduler {
     const mark = randomUUID().slice(0, 8)
     const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark)
     const refusal = ceilingRefusal(synthesizer, prices,
-      spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
+      agentSpentThisMonth(await service.snapshot(), synthesizer.id, new Date().toISOString()))
       ?? overBound(synthesizer, prompt)
     if (refusal !== undefined) {
       steps.push({ role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [refusal] })
@@ -440,7 +440,7 @@ export class TurnScheduler {
     }
     // Every call of the help is the asker's: its own ceiling, with what the help already spent.
     const askerCeiling = async (): Promise<string | undefined> =>
-      ceilingRefusal(asker, prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
+      ceilingRefusal(asker, prices, agentSpentThisMonth(await service.snapshot(), asker.id, new Date().toISOString()) + spent())
     const closedBy = async (): Promise<{ by: string; at: string } | undefined> => {
       const reply = ((await service.snapshot()).messages ?? []).find(candidate =>
         candidate.channelId === channel.id && candidate.replyTo === messageId && candidate.author.kind === 'human'
@@ -626,7 +626,7 @@ export class TurnScheduler {
       const price = priceOf(prices, who)
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
       if (spent() + reserved > council.capEur) return { refused: `le coût du tour atteindrait sa borne (${council.capEur} €)` }
-      const monthly = spentThisMonth((await service.snapshot()).messages ?? [], who.id, new Date().toISOString())
+      const monthly = agentSpentThisMonth(await service.snapshot(), who.id, new Date().toISOString())
       const ceiling = ceilingRefusal(who, prices, monthly)
       if (ceiling !== undefined) return { refused: ceiling }
       try {
@@ -912,11 +912,10 @@ export class TurnScheduler {
       return
     }
     const now = new Date().toISOString()
-    const everything = (await service.snapshot()).messages ?? []
     const refusal = ceilingRefusal(
       agent,
       prices,
-      spentThisMonth(everything, agent.id, now),
+      agentSpentThisMonth(await service.snapshot(), agent.id, now),
     )
     if (refusal !== undefined) {
       await service.updateTurn(messageId, turn.id, {
@@ -1035,7 +1034,7 @@ export class TurnScheduler {
         const spent = verifier === undefined
           ? undefined
           : ceilingRefusal(verifier, prices,
-            spentThisMonth((await service.snapshot()).messages ?? [], verifier.id, new Date().toISOString()))
+            agentSpentThisMonth(await service.snapshot(), verifier.id, new Date().toISOString()))
         if (verifier === undefined) {
           steps.push({ role: 'verifier', agentId: coordination.verifierId, verdict: 'skipped', notes: ['le vérificateur n’est plus un agent actif de ce canal'] })
         } else if (spent !== undefined) {
@@ -1053,7 +1052,7 @@ export class TurnScheduler {
           // The author's own ceiling, again, before it pays for a correction.
           const authorRefusal = verdict.kind === 'issues'
             ? ceilingRefusal(agent, prices,
-              spentThisMonth((await service.snapshot()).messages ?? [], agent.id, new Date().toISOString()) + (first.eur ?? 0))
+              agentSpentThisMonth(await service.snapshot(), agent.id, new Date().toISOString()) + (first.eur ?? 0))
             : undefined
           if (verdict.kind === 'issues' && authorRefusal !== undefined) {
             steps.push({ role: 'revision', agentId: agent.id, verdict: 'skipped', notes: [authorRefusal] })
