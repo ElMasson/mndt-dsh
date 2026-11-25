@@ -303,7 +303,8 @@ export function WebCard(props: {
       ) : (
         // In a lane nobody but its member reads, the card goes up to the owners and admins (À traiter).
         <p className="mw-cannot" data-testid="card-raised">
-          {props.channel?.kind === 'solo' || originOf(card) !== undefined ? t('webAwaitsDecider') : t('webCannotDecide')}
+          {/* The member who waits reads « en attente »; a decider never does (an origin is served to deciders only). */}
+          {originOf(card) !== undefined ? t('webToDecide') : props.channel?.kind === 'solo' ? t('webAwaitsDecider') : t('webCannotDecide')}
         </p>
       )}
     </article>
@@ -441,7 +442,8 @@ export function WebMessage(props: {
       ) : published !== undefined && published.failed ? (
         // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
         <p className="mw-message-body mw-decide-error" data-testid="mission-failed">
-          {published.reasonKind === undefined ? m.text : t('missionFailedBecause', { reason: t(REASON_WORDS[published.reasonKind]) })}
+          {/* Never m.text: before the core's category is installed it may carry the provider's raw reason. */}
+          {t('missionFailedBecause', { reason: t(REASON_WORDS[published.reasonKind ?? 'failed']) })}
         </p>
       ) : published !== undefined ? (
         // A model wrote it: read as an agent's text, its headings kept plain.

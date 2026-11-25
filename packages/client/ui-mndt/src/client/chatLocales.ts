@@ -412,6 +412,7 @@ export const chatEn = {
   missionReasonTools: 'a tool it needed was missing',
   missionReasonFailed: 'an error occurred while it ran',
   webAwaitsDecider: 'Awaiting a decision by an owner or an admin.',
+  webToDecide: 'To decide.',
   webFromLane: 'from {name}\'s lane',
   webFromUndecidedChannel: 'from a channel with no decider',
 } as const
@@ -826,6 +827,7 @@ export const chatFr: Record<ChatKey, string> = {
   missionReasonTools: 'un outil nécessaire manquait',
   missionReasonFailed: 'une erreur est survenue pendant l\'exécution',
   webAwaitsDecider: 'En attente de décision par un owner ou un admin.',
+  webToDecide: 'À décider.',
   webFromLane: 'depuis la lane de {name}',
   webFromUndecidedChannel: 'depuis un canal sans décideur',
 }

@@ -851,3 +851,18 @@ describe('cards raised to the deciders (À traiter)', { timeout: 20_000 }, () =>
     expect((await within(pending).findByTestId('queue-from-channel')).textContent).toBe('depuis un canal sans décideur')
   })
 })
+
+describe('a card of a channel absent from the list, without origin', { timeout: 20_000 }, () => {
+  it('says nothing about where it comes from (no « canal sans décideur » it cannot prove)', async () => {
+    const you = 'stephane@datanalysis.re'
+    const at = '2026-11-25T08:00:00.000Z'
+    const card = { id: 'apr_8', kind: 'send-email', title: 'x', requestedBy: you, requestedAt: at, state: 'pending', canDecide: true, channelId: 'chn_gone' }
+    const chat = createMockChat({ you, agents: [], channels: [], cards: [card] as never }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: /À traiter/u }))
+    const pending = await screen.findByTestId('team-pending', {}, { timeout: 5000 })
+    await waitFor(() => { expect(within(pending).getAllByRole('article').length).toBeGreaterThan(0) })
+    expect(within(pending).queryByTestId('queue-from-channel')).toBeNull()
+    expect(within(pending).queryByTestId('queue-from-lane')).toBeNull()
+  })
+})

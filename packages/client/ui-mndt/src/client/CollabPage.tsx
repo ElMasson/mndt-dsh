@@ -1861,7 +1861,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                           ) : originOf(card) === 'lane' ? (
                             // Raised from a lane the decider does not read: who, never a link.
                             <span className="mw-queue-from" data-testid="queue-from-lane">{tc('webFromLane', { name: shownName(card.requestedBy, team.names) })}</span>
-                          ) : originOf(card) === 'channel' || (card.channelId !== undefined && chatChannels !== undefined) ? (
+                          ) : originOf(card) === 'channel' ? (
                             <span className="mw-queue-from" data-testid="queue-from-channel">{tc('webFromUndecidedChannel')}</span>
                           ) : card.missionId === undefined ? undefined : (
                             // A mission's card belongs to no channel: said, not a link (missions have no screen yet).

@@ -298,9 +298,11 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
     expect(document.querySelector('.mw-message-name')?.textContent).not.toBe('mndt')
   })
 
-  it('failed: the host\'s one line, as plain text, never Markdown', () => {
+  it('failed: said in the host\'s words, never the text nor Markdown', () => {
     draw(report({ id: 'msn_2', kind: 'briefing', title: 'Briefing', status: 'failed' }, 'Le briefing n\'a pas abouti : **the agent returned no text**'))
-    expect(screen.getByTestId('mission-failed').textContent).toBe('Le briefing n\'a pas abouti : **the agent returned no text**')
+    // Without a category, the text (possibly a raw reason) is never shown: the generic words.
+    expect(screen.getByTestId('mission-failed').textContent).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+    expect(screen.getByTestId('mission-failed').querySelector('strong')).toBeNull()
     expect(screen.queryByTestId('mission-report')).toBeNull()
     expect(screen.queryByTestId('mission-eur')).toBeNull()
     expect(screen.queryByTestId('mission-tools-unavailable')).toBeNull()
@@ -361,10 +363,14 @@ describe('a briefing that failed says why from the host\'s category', () => {
     }
   })
 
-  it('an unknown or absent category keeps the host\'s sentence; no raw text on hover', () => {
-    expect(draw(failed({ title: 'Briefing', status: 'failed', reasonKind: 'constructor' })))
-      .toBe('Le briefing n\'a pas abouti : réponse coupée (limite de longueur atteinte).')
+  it('an unknown or absent category never shows the text (it may carry a raw reason): the generic one', () => {
+    const raw = ({ ...message({ author: { kind: 'system' }, text: 'Le briefing n\'a pas abouti : 500 upstream sk-live-123' }),
+      mission: { title: 'Briefing', status: 'failed', reasonKind: 'constructor' } }) as unknown as ChatMessage
+    expect(draw(raw)).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+    expect(screen.getByTestId('mission-failed').textContent).not.toContain('sk-live')
     expect(screen.getByTestId('mission-failed').getAttribute('title')).toBeNull()
+    cleanup()
+    expect(draw(failed({ title: 'Briefing', status: 'failed' }))).toBe('Le briefing n\'a pas abouti : une erreur est survenue pendant l\'exécution')
   })
 })
 
@@ -373,6 +379,11 @@ describe('a card raised from a lane, for its member', () => {
   it('waits for an owner or an admin, said so', () => {
     render(<WebCard card={card()} canDecide={false} onDecide={vi.fn()} channel={lane} t={chatFrench} />)
     expect(screen.getByTestId('card-raised').textContent).toBe('En attente de décision par un owner ou un admin.')
+  })
+  it('a decider\'s raised card reads « À décider », never « en attente »', () => {
+    const up = { ...card(), origin: { kind: 'lane' } } as unknown as ThreadCard
+    render(<WebCard card={up} canDecide={false} onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('card-raised').textContent).toBe('À décider.')
   })
   it('in a team channel without origin, the usual sentence', () => {
     render(<WebCard card={card()} canDecide={false} onDecide={vi.fn()} channel={{ ...lane, kind: 'team' }} t={chatFrench} />)
