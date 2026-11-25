@@ -9,6 +9,8 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, UnreadableApproval } from './core/index.ts'
+import { checkedScheduleProposal, instanceTimeZone, nextRuns, runsThisMonth, ScheduleRefusal } from './core/index.ts'
+import type { Schedule, ScheduleDestination, ScheduleProposal } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -100,6 +102,8 @@ export interface MndtApiOptions {
   /** Where the team authority lives, for the member screen. */
   /** Where an unexpected error's detail is told to the operator (the web log); stderr by default. */
   readonly warn?: (message: string) => void
+  /** The instance's IANA zone (DSH_MNDT_TIME_ZONE): a task's runs fall in it. The process's by default. */
+  readonly timeZone?: string
   readonly authority?: {
     readonly baseUrl: string
     readonly token: string
@@ -405,6 +409,62 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   /** @param what - the machine asked for. @returns its refusal, said by the host. */
   const machineRefused = (what: string): MndtApiResponse =>
     respond(502, { error: `the machine service could not start ${what}`, code: 'machine-start-failed' })
+  /** The instance's zone: a task's runs fall in it. */
+  const zone = options.timeZone ?? instanceTimeZone(undefined).timeZone
+
+  /** @param approval - a card. @returns, for a pending propose_schedule card, its next three runs and the zone they are in. */
+  const cardRuns = (approval: Approval): { readonly nextRuns?: readonly string[]; readonly timeZone?: string } =>
+    approval.kind === 'propose_schedule' && approval.state === 'pending' && approval.scheduleProposal !== undefined
+      ? { nextRuns: nextRuns(approval.scheduleProposal.cadence, new Date(), zone).map(run => run.toISOString()), timeZone: zone }
+      : {}
+
+  /**
+   * @param schedule - a task.
+   * @param state - the state.
+   * @returns the id of its destination's channel (a lane: its person's), when it exists.
+   */
+  const destinationChannel = (schedule: Pick<Schedule, 'destination'>, state: WorkbenchState): string | undefined =>
+    schedule.destination.kind === 'channel'
+      ? schedule.destination.channelId
+      : (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === (schedule.destination as { member: string }).member)?.id
+
+  /**
+   * Who reads a task: the members of its destination and the one who asked it;
+   * a decider too when no member of its destination may decide (as its card, #153).
+   * @param schedule - a task. @param reader - who reads. @param state - the state.
+   * @returns whether they may read it.
+   */
+  const canReadSchedule = (schedule: Schedule, reader: Reader, state: WorkbenchState): boolean => {
+    if (schedule.requestedBy === reader.identity) return true
+    const channel = destinationChannel(schedule, state)
+    if (channel === undefined) return false
+    return reader.channels.has(channel) || (reader.decider && (reader.channelsWithoutDecider?.has(channel) ?? false))
+  }
+
+  /**
+   * A task as served to a reader: its next runs and the zone, what it may cost
+   * this month, and the gestures this reader may make (the requester or a
+   * decider pauses and deletes; only a decider resumes, a resume spends again).
+   * @param schedule - a task. @param reader - who reads. @param state - the state.
+   * @returns what is served.
+   */
+  const servedSchedule = (schedule: Schedule, reader: Reader, state: WorkbenchState): Record<string, unknown> => {
+    const { approvalId: _card, failures: _failures, ...rest } = schedule
+    const now = new Date()
+    const agent = (state.agents ?? []).find(candidate => candidate.id === schedule.agentId)
+    const planned = Math.round(schedule.eurPerRun * runsThisMonth(schedule.cadence, now, zone) * 100) / 100
+    const mine = schedule.requestedBy === reader.identity || reader.decider
+    return {
+      ...rest,
+      nextRuns: schedule.state === 'active' ? nextRuns(schedule.cadence, now, zone).map(run => run.toISOString()) : [],
+      timeZone: zone,
+      eurThisMonth: 0,
+      eurPerMonthMax: agent === undefined ? planned : Math.min(planned, agent.eurPerMonth),
+      missed: schedule.missed ?? 0,
+      can: { pause: schedule.state === 'active' && mine, resume: schedule.state === 'paused' && reader.decider, delete: mine },
+    }
+  }
+
   /** What may be served of a failure (public-failure.ts): the host's refusal, or the caller's fixed sentence. */
   const failure = (error: unknown, fallback: string, where: string): string => publicFailure(error, fallback, warnInternal, where)
 
@@ -1014,6 +1074,39 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(200, { brief })
       }
 
+      // Scheduled tasks: read where they publish, by the one who asked them, and by
+      // a decider when their destination has none (as their card, #153).
+      if (request.method === 'GET' && path === '/schedules') {
+        const reader = await readerOf(identity)
+        const snapshot = await service.snapshot()
+        const channelId = request.query?.channelId
+        const agentId = request.query?.agentId
+        const schedules = (await service.listSchedules())
+          .filter(schedule => canReadSchedule(schedule, reader, snapshot))
+          .filter(schedule => channelId === undefined || destinationChannel(schedule, snapshot) === channelId)
+          .filter(schedule => agentId === undefined || schedule.agentId === agentId)
+          .map(schedule => servedSchedule(schedule, reader, snapshot))
+        return respond(200, { schedules })
+      }
+      const scheduleRoute = /^\/schedules\/([^/]+)(?:\/(pause|resume))?$/.exec(path)
+      if (scheduleRoute !== null && ((request.method === 'POST' && scheduleRoute[2] !== undefined) || (request.method === 'DELETE' && scheduleRoute[2] === undefined))) {
+        const id = scheduleRoute[1] ?? ''
+        const reader = await readerOf(identity)
+        const snapshot = await service.snapshot()
+        const schedule = (snapshot.schedules ?? []).find(candidate => candidate.id === id)
+        if (schedule === undefined || !canReadSchedule(schedule, reader, snapshot)) return respond(404, { error: `no task ${id}` })
+        const change = scheduleRoute[2] === 'pause' ? 'pause' : scheduleRoute[2] === 'resume' ? 'resume' : 'delete'
+        // The requester or a decider pauses and deletes; only a decider resumes (it spends again).
+        const allowed = change === 'resume' ? reader.decider : reader.decider || schedule.requestedBy === identity
+        if (!allowed) {
+          return respond(403, { error: change === 'resume' ? 'only an owner or an admin resumes a task' : 'only the one who asked a task, or an owner or an admin, does this', code: 'not-allowed' })
+        }
+        const changed = await service.changeSchedule(id, change, identity)
+        return change === 'delete'
+          ? respond(200, { deleted: changed.id })
+          : respond(200, { schedule: servedSchedule(changed, reader, await service.snapshot()) })
+      }
+
       if (request.method === 'GET' && path === '/approvals') {
         const state = (request.query?.state ?? 'pending') as ApprovalState | 'all'
         // A card is read where it was asked (visibility.ts). `canDecide` says, for
@@ -1023,7 +1116,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const snapshot = await service.snapshot()
         const visible = (await service.listApprovals(state))
           .filter(approval => canReadApproval(reader, approval))
-          .map(approval => servedCard(reader, { ...approval, canDecide: reader.decider && approval.state === 'pending' }, snapshot))
+          .map(approval => servedCard(reader, { ...approval, canDecide: reader.decider && approval.state === 'pending', ...cardRuns(approval) }, snapshot))
         const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
         return respond(200, { approvals })
       }
@@ -1097,7 +1190,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (denied !== undefined) return denied
         const input = parseBody(request.body)
         const kind = input.kind
-        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent' && kind !== 'propose_context') {
+        if (kind !== 'send-email' && kind !== 'publish' && kind !== 'spend' && kind !== 'delete' && kind !== 'propose_agent' && kind !== 'propose_context'
+          && kind !== 'propose_schedule') {
           return respond(400, { error: `unknown approval kind: ${String(kind)}` })
         }
         // A propose_agent card carries the agent to create: the fields of POST /agents,
@@ -1157,11 +1251,27 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             })
           }
         }
+        // A propose_schedule card: its agent is the turn's, its destination the
+        // turn's channel (a lane: its person's), never what the request says.
+        let scheduleProposal: ScheduleProposal | undefined
+        if (kind === 'propose_schedule') {
+          if (thread === undefined) return respond(400, { error: 'a propose_schedule card is asked from a channel turn' })
+          const where = await service.channel(thread.channelId)
+          const destination: ScheduleDestination = where?.kind === 'solo' && where.members[0] !== undefined
+            ? { kind: 'lane', member: where.members[0] }
+            : { kind: 'channel', channelId: thread.channelId }
+          try {
+            scheduleProposal = checkedScheduleProposal(input.schedule, thread.agent.id, destination)
+          } catch (error) {
+            if (error instanceof ScheduleRefusal) return respond(400, { error: failure(error, 'refused', 'a task proposal failed'), code: error.code })
+            throw error
+          }
+        }
         const asked = service.requestApproval({
           kind,
           title: typeof input.title === 'string' && input.title.trim() !== ''
             ? input.title
-            : proposal !== undefined ? `Créer l'agent ${proposal.name}` : kind === 'propose_context' ? 'Contexte du canal' : '',
+            : proposal !== undefined ? `Créer l'agent ${proposal.name}` : kind === 'propose_context' ? 'Contexte du canal' : kind === 'propose_schedule' ? 'Tâche' : '',
           payload: typeof input.payload === 'object' && input.payload !== null ? input.payload : {},
           requestedBy: identity,
           ...(typeof input.missionId === 'string' ? { missionId: input.missionId } : {}),
@@ -1169,6 +1279,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           ...(thread === undefined ? {} : { channelId: thread.channelId, messageId: thread.messageId, requestedByAgent: thread.agent }),
           ...(proposal === undefined ? {} : { proposal }),
           ...(contextProposal === undefined ? {} : { contextProposal }),
+          ...(scheduleProposal === undefined ? {} : { scheduleProposal }),
         })
         // A card refused as asked (an invalid proposal, no title) is the caller's mistake.
         try {
@@ -1199,7 +1310,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           // What protects the decision is rights.write above and, at creation, the
           // owner alone above the default ceiling (approveAgentProposal).
           if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
-            return respond(409, { error: 'this card proposes an agent: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
+            return respond(409, {
+              error: 'this card proposes an agent: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)',
+              code: 'shows-proposal-required',
+            })
           }
           // The agent is created from the proposal recorded on the card, by whoever
           // approves it (an owner or an admin, rights.write above), with their role.
@@ -1218,11 +1332,34 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             return respond(400, { error: failure(error, 'the agent could not be created', 'an agent proposal failed') })
           }
         }
+        if (card.kind === 'propose_schedule' && decision === 'approved') {
+          // As for an agent: approved only from a screen that shows the whole task.
+          if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
+            return respond(409, {
+              error: 'this card proposes a task: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)',
+              code: 'shows-proposal-required',
+            })
+          }
+          const table = await grants.grants()
+          const readable = (state: WorkbenchState, approval: Approval): boolean =>
+            canReadApproval(readerIn(state, table, identity), approval)
+          try {
+            const created = await service.approveScheduleProposal(id, identity, readable)
+            const served = servedSchedule(created.schedule, await readerOf(identity), await service.snapshot())
+            return respond(200, { approval: created.approval, schedule: served })
+          } catch (error) {
+            if (error instanceof UnreadableApproval) return respond(404, { error: `no approval ${id}` })
+            return respond(400, { error: failure(error, 'the task could not be created', 'a task proposal failed') })
+          }
+        }
         if (card.kind === 'propose_context' && decision === 'approved') {
           // As for an agent: approved only from a screen that shows the whole text
           // (and the version it replaces). A screen guard, not a barrier.
           if (request.headers?.['x-mndt-shows-proposal'] !== '1') {
-            return respond(409, { error: 'this card proposes a channel context: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)' })
+            return respond(409, {
+              error: 'this card proposes a channel context: approve it from a screen that shows the whole proposal (x-mndt-shows-proposal)',
+              code: 'shows-proposal-required',
+            })
           }
           try {
             return respond(200, await service.approveContextProposal(id, identity))

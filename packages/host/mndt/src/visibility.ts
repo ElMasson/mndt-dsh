@@ -172,6 +172,18 @@ export function canReadEvent(
       )
       return mandate !== undefined && canReadMandate(reader.identity, reader.decider, mandate)
     }
+    case 'schedule': {
+      // A task's lines: a decider, the one who asked it, the members of where it publishes.
+      if (reader.decider) return true
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === event.subject)
+      if (schedule === undefined) return false
+      if (schedule.requestedBy === reader.identity) return true
+      const destination = schedule.destination
+      const channel = destination.kind === 'channel'
+        ? destination.channelId
+        : (state.channels ?? []).find(candidate => candidate.kind === 'solo' && candidate.members[0] === destination.member)?.id
+      return channel !== undefined && reader.channels.has(channel)
+    }
     case 'agent':
       return true
     // Role changes asked through the members routes: for those who administer rights.

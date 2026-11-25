@@ -8,6 +8,8 @@
  * decision.
  */
 import { Refusal } from './refusal.ts'
+import { ScheduleRefusal } from './schedule.ts'
+import type { Schedule, ScheduleProposal } from './schedule.ts'
 import { randomUUID } from 'node:crypto'
 import { coordinationAgents, emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
@@ -98,6 +100,8 @@ export interface ApprovalRequest {
   readonly contextProposal?: ContextProposal
   /** The agent whose turn asked it: set by the server from the running turn, never from a request. */
   readonly requestedByAgent?: { readonly id: string; readonly handle: string }
+  /** A propose_schedule card's task, checked by checkedScheduleProposal (its agent and destination the host's). */
+  readonly scheduleProposal?: ScheduleProposal
 }
 
 /** What creating an agent needs. */
@@ -849,6 +853,13 @@ export class WorkbenchService {
         return Promise.reject(new ContextRefusal('context-too-long', `a channel's context is ${MAX_CONTEXT_CHARS} characters at most (${length} given)`))
       }
     }
+    if (request.kind === 'propose_schedule') {
+      // A task is asked from a channel turn, by its agent: the card says what approval creates.
+      if (request.channelId === undefined || request.requestedByAgent === undefined) {
+        return Promise.reject(new Refusal('a propose_schedule card is asked from a channel turn'))
+      }
+      if (request.scheduleProposal === undefined) return Promise.reject(new ScheduleRefusal('schedule-invalid', 'a propose_schedule card needs a schedule'))
+    }
     if (request.kind === 'propose_agent') {
       // The proposal is checked when the card is made, with the rules of POST /agents.
       const refusal = request.proposal === undefined ? 'a propose_agent card needs a proposal' : agentRefusal(request.proposal)
@@ -875,8 +886,22 @@ export class WorkbenchService {
       ...(request.requestedByAgent === undefined
         ? {}
         : { requestedByAgent: { id: request.requestedByAgent.id, handle: request.requestedByAgent.handle } }),
+      ...(request.scheduleProposal === undefined || request.kind !== 'propose_schedule' ? {} : { scheduleProposal: request.scheduleProposal }),
     }
     return this.#write((state) => {
+      if (approval.kind === 'propose_schedule' && approval.scheduleProposal !== undefined) {
+        // The title is the server's, from the task: « Tâche : <its title> ».
+        const waiting = state.approvals.filter(card => card.kind === 'propose_schedule' && card.state === 'pending' && card.requestedBy === approval.requestedBy)
+        if (waiting.length >= MAX_PENDING_PROPOSALS) {
+          throw new Refusal(`${MAX_PENDING_PROPOSALS} task proposals already wait for a decision: decide them first`)
+        }
+        const titled: Approval = { ...approval, title: `Tâche : ${approval.scheduleProposal.title}` }
+        return {
+          state: { ...state, approvals: [titled, ...state.approvals] },
+          event: { at: titled.requestedAt, actor: titled.requestedBy, action: 'approval.requested', subject: titled.id, detail: titled.kind },
+          value: titled,
+        }
+      }
       if (approval.kind === 'propose_context') {
         // The title is the server's, from the channel and the change: an agent's
         // words never name what a person approves.
@@ -972,6 +997,94 @@ export class WorkbenchService {
    * @param role - their role.
    * @returns the approved card and the agent.
    */
+  /**
+   * Approve a propose_schedule card: the task it carries is created, active,
+   * exactly as proposed. Its agent must still be active and in its destination.
+   * @param id - the card.
+   * @param actor - who approves it (rights.write, checked by the route).
+   * @param readable - the decider's reading of the card, checked in the write.
+   * @returns the approved card and the task.
+   */
+  approveScheduleProposal(
+    id: string,
+    actor: string,
+    readable?: (state: WorkbenchState, approval: Approval) => boolean,
+  ): Promise<{ approval: Approval; schedule: Schedule }> {
+    return this.#write((state) => {
+      const approval = state.approvals.find(candidate => candidate.id === id)
+      if (approval === undefined) throw new Refusal(`no approval ${id}`)
+      if (readable !== undefined && !readable(state, approval)) throw new UnreadableApproval(id)
+      if (approval.kind !== 'propose_schedule' || approval.scheduleProposal === undefined) throw new Refusal(`approval ${id} proposes no task`)
+      if (approval.state !== 'pending') throw new Refusal(`approval ${id} is already ${approval.state}`)
+      const proposal = approval.scheduleProposal
+      const agent = (state.agents ?? []).find(candidate => candidate.id === proposal.agentId)
+      if (agent === undefined || agent.retiredAt !== undefined) throw new Refusal(`no agent ${proposal.agentId}`)
+      const at = this.#at()
+      const schedule: Schedule = {
+        ...proposal,
+        id: this.#id('sch'),
+        state: 'active',
+        requestedBy: approval.requestedBy,
+        approvedBy: actor.trim(),
+        approvedAt: at,
+        approvalId: approval.id,
+      }
+      const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, scheduleId: schedule.id }
+      return {
+        state: {
+          ...state,
+          schedules: [...(state.schedules ?? []), schedule],
+          approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
+        },
+        event: [
+          { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `task ${schedule.id} created` },
+          { at, actor: actor.trim(), action: 'schedule.created', subject: schedule.id, detail: schedule.title },
+        ],
+        value: { approval: next, schedule },
+      }
+    })
+  }
+
+  /** @returns every scheduled task (the routes keep those the reader may read). */
+  async listSchedules(): Promise<readonly Schedule[]> {
+    return (await this.#ready()).schedules ?? []
+  }
+
+  /**
+   * Pause, resume or delete a task. Who may is the route's to say (the
+   * requester or a decider; a resume, a decider only): the service applies it.
+   * @param id - the task.
+   * @param change - what to do.
+   * @param actor - who does it.
+   * @returns the task as it now is (deleted: as it was).
+   */
+  changeSchedule(id: string, change: 'pause' | 'resume' | 'delete', actor: string): Promise<Schedule> {
+    return this.#write((state) => {
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      if (schedule === undefined) throw new Refusal(`no task ${id}`)
+      const at = this.#at()
+      if (change === 'delete') {
+        return {
+          state: { ...state, schedules: (state.schedules ?? []).filter(candidate => candidate.id !== id) },
+          event: { at, actor: actor.trim(), action: 'schedule.deleted', subject: id, detail: schedule.title },
+          value: schedule,
+        }
+      }
+      const { pausedBecause: _was, ...rest } = schedule
+      const next: Schedule = change === 'pause'
+        ? { ...rest, state: 'paused', pausedBecause: 'owner' }
+        : { ...rest, state: 'active', failures: 0 }
+      if (next.state === schedule.state && (change === 'resume' || schedule.pausedBecause === 'owner')) {
+        return { state, event: [], value: schedule }
+      }
+      return {
+        state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at, actor: actor.trim(), action: change === 'pause' ? 'schedule.paused' : 'schedule.resumed', subject: id, detail: schedule.title },
+        value: next,
+      }
+    })
+  }
+
   approveAgentProposal(
     id: string,
     actor: string,

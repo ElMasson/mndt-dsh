@@ -25,7 +25,7 @@ export interface ToolsRegistryLike {
  * server is ready from its first tool.
  */
 export const REQUIRED_TOOLS: Readonly<Record<string, readonly string[]>> = {
-  approvals: ['request_approval', 'propose_agent', 'propose_context', 'ask_peers', 'list_pending_approvals', 'read_approval'],
+  approvals: ['request_approval', 'propose_agent', 'propose_context', 'propose_schedule', 'ask_peers', 'list_pending_approvals', 'read_approval'],
 }
 
 /** How long a turn waits at most for its servers' tools, in milliseconds. */

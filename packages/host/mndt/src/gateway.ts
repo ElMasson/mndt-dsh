@@ -265,6 +265,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         grants: this.grants,
         // An internal fault of a route: its detail to the web log, never to the caller.
         warn: (message: string) => { warnOperator(ctx, message) },
+        timeZone: this.timeZoneFor(ctx),
         schedulePath: this.schedulePath,
         automationsPath: this.automationsPath,
         ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
