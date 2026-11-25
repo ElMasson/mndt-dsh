@@ -227,6 +227,34 @@ describe('a success of the machine service serves its route\'s fields only', () 
   })
 })
 
+describe('an action\'s page address and title', () => {
+  it('an internal host or the agent\'s own is not served; a page\'s address loses its query and fragment; a title is plain and bounded', async () => {
+    const act = async (url: string, title = 'Page') => {
+      vi.stubGlobal('fetch', async (asked: string) => (String(asked).endsWith('/browsers/start')
+        ? new Response(JSON.stringify({ ok: true, host: 'browser-7.internal', token: 'agent-token' }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, url, title }), { status: 200 })))
+      const api = createMndtApi({
+        service: new WorkbenchService({ store: new MemoryStore() }),
+        runner: noMissions,
+        identity: { tokens: { owner: { user: owner } } },
+        grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }] }) },
+        machines: { baseUrl: 'http://machines.test', token: 'machine-token' },
+      })
+      return (await api({ method: 'POST', path: '/machines/browser/act', authorization: 'Bearer owner', body: JSON.stringify({ op: 'open', url: 'x' }) })).body as Record<string, unknown>
+    }
+    expect((await act('http://10.0.3.7:9223/?token=x')).url).toBeUndefined()
+    expect((await act('https://exemple.fr/p?code=1#a')).url).toBe('https://exemple.fr/p')
+    for (const internal of ['http://localhost:3000/', 'http://127.0.0.2/', 'http://[::1]/', 'http://192.168.1.4/', 'http://172.20.0.3/', 'http://169.254.169.254/latest', 'http://browser-7.internal:9224/', 'https://user:pass@exemple.fr/', 'file:///etc/passwd']) {
+      expect((await act(internal)).url).toBeUndefined()
+    }
+    expect((await act('https://172.32.0.1/ok')).url).toBe('https://172.32.0.1/ok')
+    const long = await act('https://exemple.fr/', `Titre\n\u0007très ${'long '.repeat(80)}`)
+    expect(long.title).toMatch(/^Titre très long/)
+    expect([...String(long.title)].length).toBe(200)
+    expect(String(long.title)).not.toMatch(/[\n\u0007]/)
+  })
+})
+
 describe('the host\'s own refusals that named another', () => {
   it('/state serves nothing of a role table that cannot be read: no write, and its detail in the operator\'s log', async () => {
     const warned: string[] = []

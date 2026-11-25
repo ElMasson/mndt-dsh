@@ -388,15 +388,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    * @param answer - its HTTP answer.
    * @param body - its parsed body.
    * @param fields - the route's list of served fields.
+   * @param agentHost - for an action: the agent's own host, never served as a page's address.
    * @returns what is served.
    */
   const machineAnswer = (
     answer: { readonly ok: boolean; readonly status: number },
     body: Record<string, unknown>,
     fields: MachineFields,
+    agentHost?: string,
   ): MndtApiResponse => {
     // A body that says an error, even under a 2xx, is a refusal: its words are not served.
-    if (answer.ok && typeof body.error !== 'string') return respond(answer.status, machinePayload(body, fields))
+    if (answer.ok && typeof body.error !== 'string') return respond(answer.status, servedAction(machinePayload(body, fields), agentHost))
     warnInternal(`mndt: the machine service answered ${answer.status}: ${JSON.stringify(body).slice(0, 300)}`)
     return respond(answer.ok ? 502 : answer.status, { error: 'the machine service refused the request', code: 'machine-refused' })
   }
@@ -1367,7 +1369,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED)
+        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED, host)
       }
 
       if (request.method === 'POST' && path === '/machines/desktop/stop') {
@@ -1432,7 +1434,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(502, { error: failure(error, 'the browser agent is unreachable', 'the browser agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED)
+        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED, host)
       }
 
       if (request.method === 'POST' && path === '/machines/browser/stop') {
@@ -1778,6 +1780,57 @@ export function machinePayload(body: Record<string, unknown>, fields: MachineFie
         .map(([field]) => [field, row[field]])))
   }
   return kept
+}
+
+/** The longest page title served: plain text, one line. */
+export const MAX_SERVED_TITLE = 200
+
+/**
+ * @param host - a URL's host name (IPv6 between brackets as the URL gives it).
+ * @returns whether it names this machine or a private network: never served
+ * as the address of a visited page (it may be the agent itself, or a service
+ * behind it).
+ */
+function internalHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/^\[|\]$/g, '')
+  if (name === 'localhost' || name.endsWith('.localhost') || name === '::1' || name === '0.0.0.0' || name === '') return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(name)
+  if (v4 !== null) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)
+  }
+  // IPv6: unique local (fc00::/7), link-local (fe80::/10), an IPv4 mapped one.
+  if (name.includes(':')) return /^f[cd]/.test(name) || /^fe[89ab]/.test(name) || /^::ffff:/.test(name)
+  return false
+}
+
+/**
+ * An action's result as served: the visited page's address without its query
+ * nor its fragment, omitted when it names an internal host or the agent itself;
+ * its title as plain text, one line, MAX_SERVED_TITLE characters at most.
+ * @param payload - the fields of the route's list.
+ * @param agentHost - the agent's own host, when known.
+ * @returns what is served.
+ */
+export function servedAction(payload: Record<string, unknown>, agentHost?: string): Record<string, unknown> {
+  const { url, title, ...rest } = payload
+  const served: Record<string, unknown> = { ...rest }
+  if (typeof url === 'string') {
+    try {
+      const parsed = new URL(url)
+      const own = agentHost !== undefined && agentHost !== '' && parsed.hostname.toLowerCase() === agentHost.toLowerCase()
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && !internalHost(parsed.hostname) && !own && parsed.username === '' && parsed.password === '') {
+        served.url = `${parsed.origin}${parsed.pathname}`
+      }
+    } catch {
+      // Not an address: not served.
+    }
+  }
+  if (typeof title === 'string') {
+    const plain = title.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (plain !== '') served.title = [...plain].slice(0, MAX_SERVED_TITLE).join('')
+  }
+  return served
 }
 
 /** What a member reads of a role table that cannot be read: its file and its error stay in the operator's log. */

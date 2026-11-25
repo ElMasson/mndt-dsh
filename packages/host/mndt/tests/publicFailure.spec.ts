@@ -43,7 +43,7 @@ describe('a served failure', () => {
     const api = readFileSync(join(import.meta.dirname, '..', 'src', 'api.ts'), 'utf8')
     const calls = api.split('\n').filter(line => /machineAnswer\(answer/.test(line))
     expect(calls.length).toBe(8)
-    expect(calls.every(line => /MACHINE_FIELDS\.[A-Z]+\)/.test(line))).toBe(true)
+    expect(calls.every(line => /MACHINE_FIELDS\.[A-Z]+(, host)?\)/.test(line))).toBe(true)
     expect(machinePayload({ ok: true, png: 'p', host: 'h', token: 't', error: 'e', text: 3 }, MACHINE_FIELDS.ACTED)).toEqual({ ok: true, png: 'p' })
     expect(machinePayload({ sessions: [{ name: 'n', status: 's', token: 't' }, 'x'] }, MACHINE_FIELDS.SESSIONS)).toEqual({ sessions: [{ name: 'n', status: 's' }] })
   })
