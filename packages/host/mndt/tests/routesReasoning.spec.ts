@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -88,4 +89,14 @@ describe('the reasoning of the Scaleway routes', () => {
       })
     })
   }
+})
+
+describe('the host never asks a reasoning effort', () => {
+  it('no call of a turn, a verifier, a council, a help, a synthesis or a mission names one: each gets its route\'s « off », sent as « none »', () => {
+    const src = join(import.meta.dirname, '..', 'src')
+    const named = readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter(file => file.endsWith('.ts'))
+      .filter(file => /reasoningEffort|reasoning_effort/.test(readFileSync(join(src, file), 'utf8')))
+    expect(named).toEqual([])
+  })
 })
