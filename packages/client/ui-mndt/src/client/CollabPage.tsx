@@ -2255,6 +2255,12 @@ function PostView(props: {
         <span className="mndt-tag">{body.visibility === 'team' ? t('ui.equipe-2') : t('ui.privee')}</span>
         {body.mandate === undefined ? undefined : <span className="mndt-tag">{body.mandate.slice(0, 32)}</span>}
         {body.error === undefined ? undefined : <span className="mndt-error mndt-error-banner">{body.error}</span>}
+        {body.toolsUnavailable.length === 0 ? undefined : (
+          // A briefing written without its facts says so on the mission, before anyone reads the brief as complete.
+          <span className="mndt-hint" role="note" data-testid="mission-tools-unavailable">
+            {t('ui.mission-sans-outils', { servers: body.toolsUnavailable.join(', ') })}
+          </span>
+        )}
         {body.brief === undefined ? undefined : (
           <button type="button" className="mndt-button" onClick={toggle}>{open ? t('ui.masquer-le-brief') : t('ui.ouvrir-le-brief')}</button>
         )}

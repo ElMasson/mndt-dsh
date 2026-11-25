@@ -24,6 +24,8 @@ export interface MissionRow {
   readonly createdAt: string
   readonly visibility?: string
   readonly error?: string
+  /** Servers the mission ran without (a briefing on a space with no facts server), as the core serves them. */
+  readonly toolsUnavailable?: readonly string[]
 }
 
 /** A brief as the page reads it. */
