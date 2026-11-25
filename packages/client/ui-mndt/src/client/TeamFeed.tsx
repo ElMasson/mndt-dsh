@@ -369,7 +369,7 @@ export function WebMessage(props: {
   const name = m.author.kind === 'human'
     ? shownName(m.author.email, props.names)
     : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}`
-      : published !== undefined ? (published.title === '' ? t('briefingLabel') : published.title) : 'mndt'
+      : published !== undefined ? t('briefingLabel') : 'mndt'
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const waiting = props.cards.filter(card => (card.state ?? 'pending') === 'pending').length
@@ -397,6 +397,10 @@ export function WebMessage(props: {
           <span className="mw-message-name" title={published === undefined ? undefined : t('briefingByModel')}>{name}</span>
           {m.author.kind === 'agent' ? <span className="mw-chip mw-chip-strong">{t('webAgent')}</span> : undefined}
           {published === undefined ? undefined : <span className="mw-chip" data-testid="mission-origin">{t('briefingChip')}</span>}
+          {/* The title is the model's (its first heading): second-tier text, never the author's name. */}
+          {published === undefined || published.title === '' ? undefined : (
+            <span className="mw-message-time" data-testid="mission-title">{published.title}</span>
+          )}
           {published?.eur === undefined ? undefined : <span className="mw-message-time" data-testid="mission-eur">{euros(published.eur)}</span>}
           <span className="mw-message-time">{clock(m.createdAt)}</span>
         </div>

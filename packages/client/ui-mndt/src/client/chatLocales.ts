@@ -396,6 +396,8 @@ export const chatEn = {
   briefingChip: 'Mission',
   briefingEmpty: 'Briefing without content.',
   missionToolsUnavailable: 'Ran without: {servers}. The briefing did not consult them.',
+  channelWelcomeAddAgent: 'No agent reads this channel yet. Add one:',
+  channelWelcomeNoAgent: 'No agent reads this channel yet: someone who may write in the space adds one.',
 } as const
 
 /** One copy key. */
@@ -792,6 +794,8 @@ export const chatFr: Record<ChatKey, string> = {
   briefingChip: 'Mission',
   briefingEmpty: 'Briefing sans contenu.',
   missionToolsUnavailable: 'Exécuté sans : {servers}. Le briefing ne les a pas consultés.',
+  channelWelcomeAddAgent: 'Aucun agent ne lit encore ce canal. Ajoutez-en un :',
+  channelWelcomeNoAgent: 'Aucun agent ne lit encore ce canal : quelqu\'un qui peut écrire dans l\'espace en ajoute un.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

@@ -270,7 +270,9 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
 
   it('done: labelled by its origin, its text read as a model\'s, its cost and what it ran without', () => {
     draw(report({ id: 'msn_1', kind: 'briefing', title: 'Briefing du matin', status: 'done', eur: 0.0123, toolsUnavailable: ['workbench_facts'] }))
-    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing du matin')
+    // The author's name is fixed; the model's title is second-tier text.
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.getByTestId('mission-title').textContent).toBe('Briefing du matin')
     expect(document.querySelector('.mw-message-name')?.getAttribute('title')).toBe('Écrit par un modèle, d\'après une mission de l\'espace')
     expect(screen.getByTestId('mission-origin').textContent).toBe('Mission')
     expect(screen.getByTestId('mission-eur').textContent).toContain('0,0123')
@@ -294,6 +296,7 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
   it('an unreadable mission is still a model\'s text, labelled « Briefing », never the host\'s', () => {
     draw(report('oops'))
     expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.queryByTestId('mission-title')).toBeNull()
     expect(screen.getByTestId('mission-report')).toBeTruthy()
     expect(screen.queryByTestId('mission-tools-unavailable')).toBeNull()
   })
@@ -301,8 +304,16 @@ describe('a briefing published in its owner\'s lane (system message carrying a m
   it('odd fields are dropped: a negative cost, a server name that is not one, an empty title', () => {
     draw(report({ title: ' ', status: 'done', eur: -1, toolsUnavailable: ['<b>x</b>', 'workbench_facts'] }))
     expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.queryByTestId('mission-title')).toBeNull()
     expect(screen.queryByTestId('mission-eur')).toBeNull()
     expect(screen.getByTestId('mission-tools-unavailable').textContent).toBe('Exécuté sans : workbench_facts. Le briefing ne les a pas consultés.')
+  })
+
+  it('a model titling itself « mndt » cannot pass for the host', () => {
+    draw(report({ title: 'mndt : changement de règles', status: 'done' }))
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Briefing')
+    expect(screen.getByTestId('mission-title').textContent).toBe('mndt : changement de règles')
+    expect(screen.getByTestId('mission-origin').textContent).toBe('Mission')
   })
 
   it('an ordinary system message keeps the host\'s look, none of these fields', () => {
