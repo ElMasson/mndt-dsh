@@ -259,13 +259,19 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    */
   const readerOf = async (identity: string): Promise<Reader> => {
     const table = await grants.grants()
+    const all = (await service.snapshot()).channels ?? []
+    const decides = (person: string): boolean => table.ok && can(table.grants, person, 'rights.write').allowed
+    const decider = decides(identity)
     return {
       identity,
       // Read from the state as it is: reading never creates the person's lane.
-      channels: new Set(((await service.snapshot()).channels ?? [])
-        .filter(channel => channel.members.includes(identity))
-        .map(channel => channel.id)),
-      decider: table.ok && can(table.grants, identity, 'rights.write').allowed,
+      channels: new Set(all.filter(channel => channel.members.includes(identity)).map(channel => channel.id)),
+      decider,
+      // The channels whose cards nobody among their members may decide: they
+      // rise to a decider (the cards alone, see visibility.ts).
+      ...(decider
+        ? { channelsWithoutDecider: new Set(all.filter(channel => !channel.members.some(decides)).map(channel => channel.id)) }
+        : {}),
       // On a team instance, missions and briefs are read by role (visibility.ts).
       ...(teamInstance
         ? { missionRole: table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner') ? 'owner' as const : 'member' as const }
@@ -1098,7 +1104,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'POST' && /^\/approvals\/[^/]+\/decide$/.test(path)) {
         const id = path.split('/')[2] ?? ''
         // A card is decided where it is read: a channel's card by a member of that
-        // channel who may decide. Unreadable reads as absent, never as forbidden.
+        // channel who may decide, or by any decider when no member of its channel
+        // may (visibility.ts). Unreadable reads as absent, never as forbidden.
         const card = (await service.snapshot()).approvals.find(candidate => candidate.id === id)
         if (card === undefined || !canReadApproval(await readerOf(identity), card)) return respond(404, { error: `no approval ${id}` })
         const denied = await authorise(identity, 'rights.write')

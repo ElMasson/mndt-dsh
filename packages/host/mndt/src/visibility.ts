@@ -4,7 +4,11 @@
  * events, a decision). A record is invisible by default; a route never decides
  * on its own.
  *
- * - A channel's card, message, update: its members only.
+ * - A channel's card, message, update: its members only. One exception, for a
+ *   card alone (decision of 24/11): when no member of its channel may decide
+ *   it (an operator's lane, a channel with no owner nor admin), it rises to
+ *   those who may decide (`rights.write`), its own content only — never the
+ *   channel, its messages nor its documents.
  * - A card outside any channel (a mission's): the one who asked it, and those
  *   who may decide (`rights.write`); on a team instance, the one who asked it
  *   alone, plus the owners for an old card asked under « scheduler ».
@@ -24,6 +28,11 @@ export interface Reader {
   readonly channels: ReadonlySet<string>
   /** Whether the person may decide cards and administer rights (`rights.write`). */
   readonly decider: boolean
+  /**
+   * Channels none of whose members may decide (`rights.write`): their cards
+   * rise to the deciders. Resolved for a decider only; empty otherwise.
+   */
+  readonly channelsWithoutDecider?: ReadonlySet<string>
   /**
    * Missions and briefs on a team instance: `owner` for the owner, `member` for
    * anyone else. Absent on a solo workstation, where the shared rule applies.
@@ -52,8 +61,12 @@ export function canReadMission(reader: Reader, item: { readonly visibility?: 'te
  * @returns whether the reader may see this card at all (title and payload included).
  */
 export function canReadApproval(reader: Reader, approval: Approval): boolean {
-  if (approval.channelId !== undefined)
-    return reader.channels.has(approval.channelId)
+  if (approval.channelId !== undefined) {
+    if (reader.channels.has(approval.channelId)) return true
+    // A card nobody in its channel may decide rises to the deciders: the card,
+    // not the channel (its messages and documents stay its members').
+    return reader.decider && (reader.channelsWithoutDecider?.has(approval.channelId) ?? false)
+  }
   // A card outside any channel is a mission's. On a team instance it follows its
   // brief: the one who asked it alone (for an automation, the owner who enabled
   // it), plus the owners for an old card asked under « scheduler ». Never a
