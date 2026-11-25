@@ -24,6 +24,20 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
+/** A refusal this server writes: its words are served. Any other error's text goes to stderr only. */
+class ToolRefusal extends Error {}
+
+/**
+ * @param error - what failed under a tool call.
+ * @param label - this server's name, for stderr.
+ * @returns what the answer may say: the server's own refusal, or a fixed sentence.
+ */
+function publicMessage(error, label) {
+  if (error instanceof ToolRefusal) return error.message
+  process.stderr.write(`${label}: a call failed: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}\n`)
+  return 'the call failed'
+}
+
 const MODE = process.env.OFFICE365_MODE === 'application' ? 'application' : 'delegated'
 const TOKEN_FILE = process.env.OFFICE365_TOKEN_FILE ?? '/state/mcp-auth/office365.json'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
@@ -64,13 +78,13 @@ async function mailbox() {
   if (MODE === 'delegated') {
     if (OWNER === '' || actor === '' || !actor.includes('@')) return '/me'
     if (actor.toLowerCase() === OWNER.toLowerCase()) return '/me'
-    throw new Error(`the mailbox belongs to ${OWNER}; a mission by ${actor} cannot read it`)
+    throw new ToolRefusal('the mailbox belongs to someone else: this mission cannot read it')
   }
   const address = actor.toLowerCase()
-  if (address === '') throw new Error('no person is behind this turn, so no mailbox can be read')
-  if (!ADDRESS.test(address)) throw new Error(`${actor} is not a mailbox address; only the author of a mention can be read`)
+  if (address === '') throw new ToolRefusal('no person is behind this turn, so no mailbox can be read')
+  if (!ADDRESS.test(address)) throw new ToolRefusal(`${actor} is not a mailbox address; only the author of a mention can be read`)
   const domain = address.slice(address.lastIndexOf('@') + 1)
-  if (!DOMAINS.includes(domain)) throw new Error(`the mailbox of ${actor} is outside the allowed domains`)
+  if (!DOMAINS.includes(domain)) throw new ToolRefusal(`the mailbox of ${actor} is outside the allowed domains`)
   return `/users/${encodeURIComponent(address)}`
 }
 
@@ -78,7 +92,7 @@ async function mailbox() {
 async function clientSecret() {
   if (process.env.OFFICE365_CLIENT_SECRET) return process.env.OFFICE365_CLIENT_SECRET
   const file = process.env.OFFICE365_CLIENT_SECRET_FILE ?? ''
-  if (file === '') throw new Error('the Office365 application secret is not configured')
+  if (file === '') throw new ToolRefusal('the Office365 application secret is not configured')
   return (await readFile(file, 'utf8')).trim()
 }
 
@@ -90,7 +104,7 @@ async function accessToken() {
   if (MODE === 'application') {
     tenant = process.env.OFFICE365_TENANT_ID ?? ''
     const client = process.env.OFFICE365_CLIENT_ID ?? ''
-    if (tenant === '' || client === '') throw new Error('OFFICE365_TENANT_ID and OFFICE365_CLIENT_ID are required')
+    if (tenant === '' || client === '') throw new ToolRefusal('OFFICE365_TENANT_ID and OFFICE365_CLIENT_ID are required')
     body = new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: client,
@@ -112,7 +126,7 @@ async function accessToken() {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
   })
-  if (!response.ok) throw new Error(`the Office365 token request failed with ${response.status}`)
+  if (!response.ok) throw new ToolRefusal(`the Office365 token request failed with ${response.status}`)
   const answer = await response.json()
   cached = { token: answer.access_token, expiresAt: Date.now() + Number(answer.expires_in ?? 3600) * 1000 }
   return cached.token
@@ -128,6 +142,7 @@ async function graph(path, params) {
   const url = `${GRAPH}${path}?${new URLSearchParams(params).toString()}`
   const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } })
   const text = await response.text()
+  // Graph's own text stays on stderr (publicMessage); the model reads « the call failed ».
   if (!response.ok) throw new Error(`Graph ${response.status}: ${text.slice(0, 300)}`)
   return JSON.parse(text)
 }
@@ -192,7 +207,7 @@ async function run(name, args) {
   }
   if (name === 'mail_search') {
     const query = String(args.query ?? '').replace(/["\\]/g, ' ').trim()
-    if (query === '') throw new Error('query is required')
+    if (query === '') throw new ToolRefusal('query is required')
     const body = await graph(`${box}/messages`, {
       $search: `"${query}"`,
       $top: String(countOf(args, 5)),
@@ -221,7 +236,7 @@ async function run(name, args) {
       .map(row => `- ${short(row.start?.dateTime)} to ${short(row.end?.dateTime)} | ${row.subject ?? '(sans objet)'} | ${row.location?.displayName ?? ''}`)
       .join('\n')
   }
-  throw new Error(`unknown tool ${name}`)
+  throw new ToolRefusal(`unknown tool ${name}`)
 }
 
 const lines = createInterface({ input: process.stdin })
@@ -246,7 +261,7 @@ lines.on('line', (line) => {
   if (message.method === 'tools/call') {
     void run(message.params?.name, message.params?.arguments ?? {}).then(
       text => reply({ result: { content: [{ type: 'text', text }] } }),
-      error => reply({ result: { isError: true, content: [{ type: 'text', text: `office365: ${error.message}` }] } }),
+      error => reply({ result: { isError: true, content: [{ type: 'text', text: `office365: ${publicMessage(error, 'office365')}` }] } }),
     )
     return
   }

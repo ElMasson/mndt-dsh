@@ -8,6 +8,7 @@
  * was deleted, or whose agent left the channel, stops: before it starts, while
  * it runs (its engine is aborted), and before its answer is written.
  */
+import { turnFailure } from './public-failure.ts'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
@@ -52,7 +53,9 @@ import {
   turnPrompt,
   turnServers,
   verifierPrompt,
+  Refusal,
 } from './core/index.ts'
+import type { TurnFailureKind } from './core/index.ts'
 import type { ModelPrice, PriceGrid } from './core/index.ts'
 
 /**
@@ -84,7 +87,7 @@ const WORKER_FRAME = 'Dans ce tour, tu rassembles ce qui répond à la demande, 
   + 'Tu ne demandes aucune action et aucune carte : une action se demande ensuite en mentionnant un agent seul.'
 
 /** A step stopped by its cost bound, with what it had already used. */
-export class TurnBudgetReached extends Error {
+export class TurnBudgetReached extends Refusal {
   readonly tokens: NonNullable<Mission['tokens']>
   constructor(tokens: NonNullable<Mission['tokens']>) {
     super('le coût du tour a atteint sa borne pendant l’appel')
@@ -178,6 +181,8 @@ interface Running {
 /** Runs the turns of mentions, one at a time, in the order asked. */
 export class TurnScheduler {
   readonly #options: TurnSchedulerOptions
+  /** The operator's log: where the engine's or a provider's own words go, never served. */
+  readonly #log = (line: string): void => { this.#options.warn?.(line) }
   #queue: Promise<unknown> = Promise.resolve()
   readonly #pending = new Set<Promise<unknown>>()
   readonly #running = new Map<string, Running>()
@@ -349,9 +354,8 @@ export class TurnScheduler {
           steps.push({ role: 'worker', agentId: worker.id, verdict: 'skipped', notes: ['tour arrêté'] })
           throw error
         }
-        const reason = error instanceof TurnBudgetReached
-          ? error.message
-          : error instanceof Error ? error.message : String(error)
+        // The bound's sentence is the host's; anything else is said by its kind, its words to the log.
+        const reason = turnFailure(error, this.#log, 'a worker step failed').reason
         const price = priceOf(prices, worker)
         steps.push({
           role: 'worker', agentId: worker.id, verdict: 'skipped', notes: [reason],
@@ -506,7 +510,7 @@ export class TurnScheduler {
           }
           const price = priceOf(prices, peer)
           if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
-          const reason = error instanceof Error ? error.message : String(error)
+          const reason = turnFailure(error, this.#log, 'a peer\'s advice failed').reason
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason }] }
         }
         await save()
@@ -550,7 +554,7 @@ export class TurnScheduler {
         if (stopped(error)) throw error
         const price = priceOf(prices, asker)
         if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
-        return { refused: error instanceof Error ? error.message : String(error) }
+        return { refused: turnFailure(error, this.#log, 'a help reading failed').reason }
       }
     }
     let parsed = await read(1)
@@ -641,7 +645,7 @@ export class TurnScheduler {
         }
       } catch (error) {
         if (stopped(error)) throw error
-        const reason = error instanceof Error ? error.message : String(error)
+        const reason = turnFailure(error, this.#log, 'a council call failed').reason
         return error instanceof TurnBudgetReached && price !== undefined
           ? { refused: reason, eur: eurOf(error.tokens, price) }
           : { refused: reason }
@@ -888,10 +892,12 @@ export class TurnScheduler {
       const tokens = sumTokens(live)
       return { steps: [...live], ...(eur === undefined ? {} : { eur }), ...(tokens === undefined ? {} : { tokens }) }
     }
-    const cancel = async (reason: string): Promise<void> => {
+    /** @param reason - the host's sentence. @param kind - its kind: a stop, or a turn gone stale. */
+    const cancel = async (reason: string, kind: TurnFailureKind = 'cancelled'): Promise<void> => {
       await service.updateTurn(messageId, turn.id, {
         status: 'cancelled',
         reason,
+        reasonKind: kind,
         finishedAt: new Date().toISOString(),
         ...spentSoFar(),
       })
@@ -902,13 +908,13 @@ export class TurnScheduler {
       before.message === undefined ||
       before.channel === undefined
     ) {
-      await cancel(before.reason ?? 'Tour impossible.')
+      await cancel(before.reason ?? 'Tour impossible.', 'stale')
       return
     }
     const { message, channel } = before
     const agent = await service.agent(turn.agentId)
     if (agent === undefined || agent.retiredAt !== undefined) {
-      await cancel('Cet agent a été retiré.')
+      await cancel('Cet agent a été retiré.', 'stale')
       return
     }
     const now = new Date().toISOString()
@@ -922,6 +928,7 @@ export class TurnScheduler {
       await service.updateTurn(messageId, turn.id, {
         status: 'refused',
         reason: refusal,
+        reasonKind: 'refused',
         finishedAt: now,
       })
       await service.reply(channel.id, messageId, { kind: 'system' }, refusal)
@@ -1080,7 +1087,7 @@ export class TurnScheduler {
       }
       const after = await this.#stale(messageId, turn.agentId)
       if (controller.signal.aborted || after.reason !== undefined) {
-        await cancel(after.reason ?? 'Tour arrêté.')
+        await cancel(after.reason ?? 'Tour arrêté.', after.reason === undefined ? 'cancelled' : 'stale')
         return
       }
       const eur = steps === undefined
@@ -1134,12 +1141,16 @@ export class TurnScheduler {
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
       if (controller.signal.aborted || after.reason !== undefined) {
-        await cancel(after.reason ?? 'Tour arrêté.')
+        await cancel(after.reason ?? 'Tour arrêté.', after.reason === undefined ? 'cancelled' : 'stale')
         return
       }
+      // The engine's or the provider's words go to the operator's log only; the
+      // turn serves the host's sentence for its kind.
+      const failed = turnFailure(error, this.#log, `turn ${turn.id} of @${agent.handle} failed`)
       await service.updateTurn(messageId, turn.id, {
         status: 'failed',
-        reason: error instanceof Error ? error.message : String(error),
+        reason: failed.reason,
+        reasonKind: failed.kind,
         finishedAt: new Date().toISOString(),
         ...spentSoFar(),
       })

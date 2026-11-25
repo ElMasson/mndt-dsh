@@ -14,6 +14,20 @@ import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
+/** A refusal this server writes: its words are served. Any other error's text goes to stderr only. */
+class ToolRefusal extends Error {}
+
+/**
+ * @param error - what failed under a tool call.
+ * @param label - this server's name, for stderr.
+ * @returns what the answer may say: the server's own refusal, or a fixed sentence.
+ */
+function publicMessage(error, label) {
+  if (error instanceof ToolRefusal) return error.message
+  process.stderr.write(`${label}: a call failed: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}\n`)
+  return 'the call failed'
+}
+
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR = process.env.MNDT_ACTOR ?? 'duke@datanalysis.re'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
@@ -79,7 +93,9 @@ async function call(path, init = {}) {
   } catch {
     body = { raw: text }
   }
-  if (!response.ok) throw new Error(`API ${response.status}: ${body.error ?? text}`)
+  // The product's own refusal (its error, written by the host) is served; any other answer's text is not.
+  if (!response.ok && typeof body.error === 'string') throw new ToolRefusal(`API ${response.status}: ${body.error}`)
+  if (!response.ok) throw new Error(`API ${response.status}: ${text.slice(0, 300)}`)
   return body
 }
 
@@ -177,7 +193,7 @@ if (MAY_DECIDE) {
 /** @param name - tool name. @param args - tool arguments. @returns text answer. */
 async function run(name, args) {
   if (name === 'request_approval') {
-    if (!KINDS.includes(String(args.kind))) throw new Error(`kind ${String(args.kind)} is not one of ${KINDS.join(', ')}`)
+    if (!KINDS.includes(String(args.kind))) throw new ToolRefusal(`kind ${String(args.kind)} is not one of ${KINDS.join(', ')}`)
     const payload = {}
     for (const key of ['to', 'subject', 'body', 'amount', 'target']) {
       if (args[key] !== undefined) payload[key] = args[key]
@@ -231,7 +247,7 @@ async function run(name, args) {
     })
     return `approval ${body.approval.id} is now ${body.approval.state}`
   }
-  throw new Error(`unknown tool ${name}`)
+  throw new ToolRefusal(`unknown tool ${name}`)
 }
 
 const lines = createInterface({ input: process.stdin })
@@ -256,7 +272,7 @@ lines.on('line', (line) => {
   if (message.method === 'tools/call') {
     void run(message.params?.name, message.params?.arguments ?? {}).then(
       text => reply({ result: { content: [{ type: 'text', text }] } }),
-      error => reply({ result: { isError: true, content: [{ type: 'text', text: `approvals: ${error.message}` }] } }),
+      error => reply({ result: { isError: true, content: [{ type: 'text', text: `approvals: ${publicMessage(error, 'approvals')}` }] } }),
     )
     return
   }

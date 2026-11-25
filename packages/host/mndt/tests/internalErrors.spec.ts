@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JsonFileStore, MemoryStore, WorkbenchService } from '../src/core/index.ts'
+import { JsonFileStore, MemoryStore, Refusal, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
 
@@ -42,13 +42,17 @@ describe('a conversation route never serves an internal fault as a refusal', () 
     expect(logged[0]).toContain('/state/state.json')
   })
 
-  it('a refusal the product means keeps its status and its words', async () => {
-    const plain = bench(() => { throw new Error('a channel keeps at least one person') })
-    expect(await plain.create()).toMatchObject({ status: 400, body: { error: 'a channel keeps at least one person' } })
-    expect(plain.logged).toEqual([])
-    const missing = bench(() => { throw new Error('no channel ch_x') })
+  it('a refusal the product means keeps its status and its words; a plain Error is not one (a library\'s words)', async () => {
+    const meant = bench(() => { throw new Refusal('a channel keeps at least one person') })
+    expect(await meant.create()).toMatchObject({ status: 400, body: { error: 'a channel keeps at least one person' } })
+    expect(meant.logged).toEqual([])
+    const missing = bench(() => { throw new Refusal('no channel ch_x') })
     expect((await missing.create()).status).toBe(404)
-    class SampleRefusal extends Error {
+    // A plain Error may come from a library and carry a detail: never served.
+    const plain = bench(() => { throw new Error('upstream 10.0.3.7 refused') })
+    expect(await plain.create()).toMatchObject({ status: 500, body: { error: 'internal error' } })
+    expect(plain.logged).toEqual(['mndt: internal error on POST /channels: Error: upstream 10.0.3.7 refused'])
+    class SampleRefusal extends Refusal {
       readonly code = 'same-agent'
       constructor() { super('the author and the verifier must be two agents'); this.name = 'SampleRefusal' }
     }

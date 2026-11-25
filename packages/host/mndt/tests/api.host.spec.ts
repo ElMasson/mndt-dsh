@@ -176,10 +176,11 @@ describe('duke api', () => {
     })
 
     expect(response.status).toBe(502)
-    const body = response.body as { error: string; mission: { status: string; error: string } }
-    expect(body.error).toContain('model refused')
-    expect(body.mission.status).toBe('failed')
-    expect(body.mission.error).toContain('model refused')
+    const body = response.body as { error: string; mission: { status: string; error: string; reasonKind: string } }
+    // The host's sentence, never the runtime's words (those go to the operator's log).
+    expect(body.error).toBe('Erreur pendant l’exécution.')
+    expect(body.mission).toMatchObject({ status: 'failed', error: 'Erreur pendant l’exécution.', reasonKind: 'failed' })
+    expect(JSON.stringify(body)).not.toContain('model refused')
   })
 
   it('keeps a private mission to its author', async () => {

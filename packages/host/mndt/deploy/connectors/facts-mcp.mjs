@@ -19,7 +19,9 @@ function facts() {
   try {
     return readFileSync(FACTS_FILE, 'utf8').trim()
   } catch (error) {
-    return `facts file unavailable: ${error.message}`
+    // Its path and the system's words go to stderr; the model reads one sentence.
+    process.stderr.write(`facts: cannot read the facts file: ${error instanceof Error ? error.message : String(error)}\n`)
+    return 'facts file unavailable'
   }
 }
 

@@ -61,18 +61,37 @@ describe('a finished briefing in its owner\'s lane', () => {
     expect((await b.read('member', theirs.id)).messages.filter(message => message.mission !== undefined)).toEqual([])
   })
 
-  it('failed: a short line of the host that says why, without cost or tools', async () => {
+  it('failed: the host\'s sentence and its kind, never the runtime\'s words; those are journaled only', async () => {
     const b = bench()
     const started = await briefing(b.service)
-    await b.service.failMission(started.id, 'the agent turn ended max-tokens\n(budget reached)')
+    const raw = 'the agent turn ended max-tokens (provider req_8f2c internal shard eu-3)'
+    await b.service.failMission(started.id, raw)
     const [published] = await b.missionMessages()
     expect(published).toMatchObject({
       author: { kind: 'system' },
-      text: 'Le briefing n’a pas abouti : the agent turn ended max-tokens (budget reached)',
-      mission: { id: started.id, status: 'failed', title: 'Briefing' },
+      text: 'Le briefing n’a pas abouti : réponse coupée (limite de longueur atteinte).',
+      mission: { id: started.id, status: 'failed', title: 'Briefing', reasonKind: 'cut' },
     })
     expect(published?.mission?.eur).toBeUndefined()
     expect(published?.channelId).toBe((await b.service.laneOf(owner)).id)
+    // Nowhere in what is served: the message, the mission, the journal line.
+    expect(JSON.stringify(await b.service.snapshot())).not.toContain('req_8f2c')
+  })
+
+  it('each kind of failure gets its sentence: no answer, tools, a restart, anything else', async () => {
+    const cases: [string, string, string][] = [
+      ['the agent returned no text (settled: {})', 'no-answer', 'le modèle n’a pas répondu.'],
+      ['outils indisponibles : workbench_facts (démarrage en cours ou connecteur en panne) ; la mission n’a pas été lancée', 'tools', 'des outils n’étaient pas disponibles ; il n’a pas été lancé.'],
+      ['interrupted by a workbench restart; no result was produced', 'failed', 'interrompu par un redémarrage.'],
+      ['the agent turn failed: 502 Bad Gateway from upstream 10.0.3.7', 'failed', 'erreur pendant l’exécution.'],
+    ]
+    for (const [raw, kind, sentence] of cases) {
+      const b = bench()
+      const started = await briefing(b.service)
+      await b.service.failMission(started.id, raw)
+      const [published] = await b.missionMessages()
+      expect([published?.mission?.reasonKind, published?.text]).toEqual([kind, `Le briefing n’a pas abouti : ${sentence}`])
+    }
   })
 
   it('an empty answer fails the mission, and the lane says so: never an empty report', async () => {
@@ -80,14 +99,16 @@ describe('a finished briefing in its owner\'s lane', () => {
     const started = await briefing(b.service)
     await expect(b.service.completeMission(started.id, { title: 'Briefing', markdown: '  ', sources: [] })).rejects.toThrow('no usable content')
     const published = await b.missionMessages()
-    expect(published.map(message => [message.mission?.status, message.text])).toEqual([['failed', 'Le briefing n’a pas abouti : the agent returned no usable content']])
+    expect(published.map(message => [message.mission?.status, message.mission?.reasonKind, message.text]))
+      .toEqual([['failed', 'no-answer', 'Le briefing n’a pas abouti : le modèle n’a pas répondu.']])
   })
 
   it('a cancelled briefing says who cancelled it', async () => {
     const b = bench()
     const started = await briefing(b.service)
     await b.service.cancelMission(started.id, owner, true)
-    expect((await b.missionMessages()).map(message => message.text)).toEqual([`Le briefing n’a pas abouti : annulé par ${owner}`])
+    expect((await b.missionMessages()).map(message => [message.mission?.reasonKind, message.text]))
+      .toEqual([['cancelled', `Le briefing n’a pas abouti : annulé par ${owner}.`]])
   })
 
   it('an automation\'s briefing carries its name, in the lane of the owner it ran for (the lane created if absent)', async () => {

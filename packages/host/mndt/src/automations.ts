@@ -224,8 +224,11 @@ export async function runAutomation(
     await service.completeMission(started.id, result)
     return { missionId: started.id, outcome: 'done' }
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    await service.failMission(started.id, reason).catch(() => undefined)
-    return { missionId: started.id, outcome: `failed: ${reason}` }
+    // The runtime's words, for failMission: it serves the host's sentence and logs these.
+    const raw = error instanceof Error ? error.message : String(error)
+    await service.failMission(started.id, raw).catch(() => undefined)
+    // Served on the automation (lastOutcome): the host's sentence, never the runtime's words.
+    const failed = await service.getMission(started.id)
+    return { missionId: started.id, outcome: `failed: ${failed?.error ?? 'Erreur pendant l’exécution.'}` }
   }
 }

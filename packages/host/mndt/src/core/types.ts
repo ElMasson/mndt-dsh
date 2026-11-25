@@ -42,8 +42,14 @@ export interface Mission {
   readonly sessionId?: string
   readonly startedAt?: string
   readonly finishedAt?: string
-  /** Why it failed, in the runtime's own words. Never a generic excuse. */
+  /**
+   * Why it failed, in the host's words for its kind (« Réponse coupée (limite
+   * de longueur atteinte). »): what is served. The runtime's or the provider's
+   * own words may carry an internal detail: they go to the operator's log only.
+   */
   readonly error?: string
+  /** The kind of its failure, with `error`. */
+  readonly reasonKind?: MissionFailureKind
   readonly tokens?: {
     readonly input: number
     readonly output: number
@@ -367,8 +373,14 @@ export interface Turn {
   readonly tokens?: Mission['tokens']
   /** What it cost, from the configured price of its model. */
   readonly eur?: number
-  /** Why it failed, was refused or cancelled, in plain words. */
+  /**
+   * Why it failed, was refused or cancelled, in the host's words: a refusal's own
+   * sentence, or the sentence of its kind (reasonKind) for a failure. The
+   * engine's or a provider's words go to the operator's log only.
+   */
   readonly reason?: string
+  /** On a failed turn: its kind (the screen says it in words). */
+  readonly reasonKind?: TurnFailureKind
   /** The channel's servers whose tools were not ready when the turn ran: it ran without them, and was told so. */
   readonly toolsUnavailable?: readonly string[]
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
@@ -555,7 +567,23 @@ export interface MessageMission {
   readonly status: 'done' | 'failed'
   readonly eur?: number
   readonly toolsUnavailable?: readonly string[]
+  /** On a failure: its kind, the text being the host's sentence for it. The runtime's own words are journaled only. */
+  readonly reasonKind?: MissionFailureKind
 }
+
+/**
+ * Why a mission did not finish, by kind: what is served (the runtime's or the
+ * provider's own words may carry an internal detail; they go to the journal).
+ */
+export type MissionFailureKind = 'no-answer' | 'cut' | 'cancelled' | 'tools' | 'failed'
+
+/**
+ * Why a turn did not finish, by kind: a mission's kinds; the engine's known
+ * ends (`max-tokens` is `cut`; a step stopped at its cost bound, a turn
+ * blocked, aborted or interrupted); a refusal before it ran (a ceiling, a
+ * price); a turn gone stale (its message deleted, its agent gone); a restart.
+ */
+export type TurnFailureKind = MissionFailureKind | 'budget' | 'blocked' | 'aborted' | 'interrupted' | 'refused' | 'stale' | 'restart'
 
 /** Everything the product persists. */
 export interface WorkbenchState {

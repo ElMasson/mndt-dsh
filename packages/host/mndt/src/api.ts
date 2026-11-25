@@ -8,7 +8,7 @@
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, StateFileError, UnreadableApproval } from './core/index.ts'
+import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, UnreadableApproval } from './core/index.ts'
 import type {
   ApprovalState,
   Brief,
@@ -21,7 +21,8 @@ import type { WorkbenchService, MissionResult, WorkbenchState, Approval } from '
 import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
-import { errorShape, operatorLine } from './operator-log.ts'
+import { operatorLine } from './operator-log.ts'
+import { isRefusal, publicFailure } from './public-failure.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -221,7 +222,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     capability: 'workflows.write' | 'rights.write' | 'rights.read' | 'agents.write' | 'sharing.write',
   ): Promise<MndtApiResponse | undefined> => {
     const table = await grants.grants()
-    if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
+    if (!table.ok) return unreadableGrants(table.reason)
     const decision = can(table.grants, identity, capability)
     return decision.allowed ? undefined : respond(403, { error: decision.reason })
   }
@@ -299,9 +300,11 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       const result = await runner.run(started)
       return respond(201, await service.completeMission(started.id, result))
     } catch (error) {
-      const reason = messageOf(error)
-      await service.failMission(started.id, reason)
-      return respond(502, { error: reason, mission: await service.getMission(started.id) })
+      // The runtime's words go to the operator's log (failMission); the caller
+      // reads the host's sentence for the failure, as on the mission.
+      await service.failMission(started.id, messageOf(error))
+      const failed = await service.getMission(started.id)
+      return respond(502, { error: failed?.error ?? 'Erreur pendant l’exécution.', mission: failed })
     }
   }
   /** @param channelId - a channel. @param identity - the caller. @returns it, when they are a member. */
@@ -343,27 +346,67 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     try {
       return await conversation(request, path, identity)
     } catch (error) {
-      // A refusal the product means (a plain Error, or a typed one named
-      // « …Refusal ») is served with its words. Anything else (a TypeError, a
-      // JSON error, a system error carrying a path) is an internal fault: the
-      // caller gets « internal error », the detail goes to the operator's log.
-      if (!isMeantRefusal(error)) {
-        warnInternal(`mndt: internal error on ${request.method} ${path}: ${internalDetail(error)}`)
-        return respond(500, { error: 'internal error' })
-      }
-      const reason = messageOf(error)
+      // A refusal of the host (a Refusal, core/refusal.ts, the typed refusals
+      // included) is served with its words. Anything else (a plain Error from a
+      // library, a TypeError, a JSON error, a system error carrying a path) is
+      // an internal fault: the caller gets « internal error », the detail goes
+      // to the operator's log (public-failure.ts).
+      if (!isRefusal(error)) return respond(500, { error: failure(error, 'internal error', `internal error on ${request.method} ${path}`) })
+      const reason = failure(error, 'internal error', `internal error on ${request.method} ${path}`)
       if (error instanceof CoordinationRefusal) return respond(400, { error: reason, code: error.code })
       if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: reason, code: error.code })
       // One status per skill refusal, whichever route meets it (POST /agents, /agents/:id, /agents/:id/skills).
       if (error instanceof SkillRefusal) return respond(skillRefusalStatus(error.code), { error: reason, code: error.code })
       if (/^no (channel|message|agent|turn) /.test(reason)) return respond(404, { error: reason })
       if (/taken|exists|not available/.test(reason)) return respond(409, { error: reason })
-      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as { code: string }).code } : {}) })
+      return respond(400, { error: reason, ...(typeof (error as { code?: unknown }).code === 'string' ? { code: (error as unknown as { code: string }).code } : {}) })
     }
   }
 
   /** The operator's log for an internal fault: the gateway's, or stderr on one clean line. */
   const warnInternal = options.warn ?? ((message: string): void => { process.stderr.write(`${operatorLine(message)}\n`) })
+  /**
+   * A role table that cannot be read: served as one sentence (« la table des
+   * rôles est illisible », code grants-unreadable); its file, row or code go to
+   * the operator's log, once per change of the reason.
+   */
+  let lastUnreadable: string | undefined
+  const unreadableGrantsSentence = (reason: string): string => {
+    if (reason !== lastUnreadable) {
+      lastUnreadable = reason
+      warnInternal(`mndt: the grant table cannot be read: ${reason}`)
+    }
+    return GRANTS_UNREADABLE
+  }
+  const unreadableGrants = (reason: string): MndtApiResponse =>
+    respond(503, { code: 'grants-unreadable', error: unreadableGrantsSentence(reason) })
+  /**
+   * The machine service's answer (sessions, a desktop's or a browser's action):
+   * on success the fields of the route's list only (no host, no token, no
+   * error text); on a refusal, or a body carrying an error, the host's sentence
+   * and a code, its body in the operator's log, never relayed.
+   * @param answer - its HTTP answer.
+   * @param body - its parsed body.
+   * @param fields - the route's list of served fields.
+   * @param agentHost - for an action: the agent's own host, never served as a page's address.
+   * @returns what is served.
+   */
+  const machineAnswer = (
+    answer: { readonly ok: boolean; readonly status: number },
+    body: Record<string, unknown>,
+    fields: MachineFields,
+    agentHost?: string,
+  ): MndtApiResponse => {
+    // A body that says an error, even under a 2xx, is a refusal: its words are not served.
+    if (answer.ok && typeof body.error !== 'string') return respond(answer.status, servedAction(machinePayload(body, fields), agentHost))
+    warnInternal(`mndt: the machine service answered ${answer.status}: ${JSON.stringify(body).slice(0, 300)}`)
+    return respond(answer.ok ? 502 : answer.status, { error: 'the machine service refused the request', code: 'machine-refused' })
+  }
+  /** @param what - the machine asked for. @returns its refusal, said by the host. */
+  const machineRefused = (what: string): MndtApiResponse =>
+    respond(502, { error: `the machine service could not start ${what}`, code: 'machine-start-failed' })
+  /** What may be served of a failure (public-failure.ts): the host's refusal, or the caller's fixed sentence. */
+  const failure = (error: unknown, fallback: string, where: string): string => publicFailure(error, fallback, warnInternal, where)
 
   const conversation = async (request: MndtApiRequest, path: string, identity: string): Promise<MndtApiResponse | undefined> => {
     const parts = path.split('/').slice(1)
@@ -402,9 +445,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           return respond(200, { agent })
         } catch (error) {
           if (error instanceof SkillRefusal) {
-            return respond(skillRefusalStatus(error.code), { error: error.message, code: error.code })
+            return respond(skillRefusalStatus(error.code), { error: failure(error, 'refused', 'a skill change failed'), code: error.code })
           }
-          if (error instanceof Error && error.message.startsWith('no agent ')) return respond(404, { error: error.message, code: 'unknown-agent' })
+          const said = isRefusal(error) ? failure(error, 'no agent', 'a skill change failed') : undefined
+          if (said?.startsWith('no agent ') === true) return respond(404, { error: said, code: 'unknown-agent' })
           throw error
         }
       }
@@ -627,7 +671,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     // part of the team. A role taken off grants.json applies on the next request.
     if (teamInstance && path !== '/me' && path !== '/org') {
       const table = await grants.grants()
-      if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+      if (!table.ok) return unreadableGrants(table.reason)
       if (roleOf(table.grants, identity) === undefined) return respond(403, { error: 'no role on this team: ask its owner' })
     }
 
@@ -647,7 +691,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         // gateway knows it (x-mndt-shell), even when their own row is the one set aside.
         // A role file that cannot be read refuses everyone (503): its reason is told
         // to the tenant's owner as the gateway knows it, who can fix it (#75 review).
-        const grantsError = !table.ok && teamInstance && shell ? table.reason : undefined
+        const grantsError = !table.ok && teamInstance && shell ? unreadableGrantsSentence(table.reason) : undefined
         const skipped = table.ok && table.skipped !== undefined && table.skipped.length > 0
           && (can(table.grants, identity, 'rights.write').allowed || (teamInstance && shell))
           ? table.skipped
@@ -668,7 +712,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (request.method === 'GET' && path === '/people') {
         // The team as the role file lists it, for the screen to show names: only to someone of the team.
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         if (roleOf(table.grants, identity) === undefined) return respond(403, { error: `${identity} holds no role in this team` })
         const names = (await grants.names?.()) ?? {}
         const subjects = [...new Set(table.grants.map(grant => grant.subject))]
@@ -741,7 +785,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const table = await grants.grants()
         const decision = table.ok
           ? can(table.grants, identity, 'workflows.write')
-          : { allowed: false, reason: table.reason }
+          : { allowed: false, reason: unreadableGrantsSentence(table.reason) }
         const role = table.ok ? roleOf(table.grants, identity) : undefined
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
         const canShare = table.ok ? can(table.grants, identity, 'sharing.write').allowed : false
@@ -781,7 +825,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         const input = parseBody(request.body)
         const canAdmin = can(table.grants, identity, 'rights.write').allowed
         const delegant = typeof input.delegant === 'string' && canAdmin ? input.delegant.trim().toLowerCase() : identity
@@ -807,7 +851,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           })
           return respond(201, mandate)
         } catch (error) {
-          return respond(400, { error: messageOf(error) })
+          return respond(400, { error: failure(error, 'the mandate could not be created', 'a mandate failed') })
         }
       }
 
@@ -816,12 +860,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mandate = await service.signMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
         } catch (error) {
-          return respond(403, { error: messageOf(error) })
+          return respond(403, { error: failure(error, 'the mandate could not be signed', 'a mandate signature failed') })
         }
       }
 
@@ -830,12 +874,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'workflows.write')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mandate = await service.retireMandate(id, identity, roleOf(table.grants, identity))
           return respond(200, mandate)
         } catch (error) {
-          return respond(403, { error: messageOf(error) })
+          return respond(403, { error: failure(error, 'the mandate could not be retired', 'a mandate retirement failed') })
         }
       }
 
@@ -896,12 +940,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const target = await service.getMission(id)
         if (target === undefined || !canReadMission(await readerOf(identity), target)) return respond(404, { error: `no mission ${id}` })
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         try {
           const mission = await service.cancelMission(id, identity, can(table.grants, identity, 'rights.write').allowed)
           return respond(200, mission)
         } catch (error) {
-          return respond(409, { error: messageOf(error) })
+          return respond(409, { error: failure(error, 'the mission could not be cancelled', 'a mission cancellation failed') })
         }
       }
 
@@ -1005,7 +1049,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           }, list('peers'))
           return respond(201, { help: { state: help.state, peers: help.peerIds.length, capEur: help.capEur } })
         } catch (error) {
-          if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: error.message, code: error.code })
+          if (error instanceof HelpRefusal) return respond(error.code === 'not-running' ? 400 : 409, { error: failure(error, 'refused', 'a help failed'), code: error.code })
           throw error
         }
       }
@@ -1014,7 +1058,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       if (path === '/skills' || path.startsWith('/skills/')) {
         const skillStatus = (error: unknown): MndtApiResponse | undefined => {
           if (!(error instanceof SkillRefusal)) return undefined
-          return respond(skillRefusalStatus(error.code), { error: error.message, code: error.code })
+          return respond(skillRefusalStatus(error.code), { error: failure(error, 'refused', 'a skill failed'), code: error.code })
         }
         if (request.method === 'GET' && path === '/skills') return respond(200, { skills: await service.listSkills() })
         if (request.method !== 'POST') return respond(404, { error: `no route ${request.method} ${path}` })
@@ -1130,7 +1174,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         try {
           return respond(201, { approval: await asked })
         } catch (error) {
-          return respond(400, { error: messageOf(error), ...(error instanceof ContextRefusal ? { code: error.code } : {}) })
+          return respond(400, { error: failure(error, 'the card could not be asked', 'a card failed'), ...(error instanceof ContextRefusal ? { code: error.code } : {}) })
         }
       }
 
@@ -1171,7 +1215,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             return respond(200, await service.approveAgentProposal(id, identity, role, readable))
           } catch (error) {
             if (error instanceof UnreadableApproval) return respond(404, { error: `no approval ${id}` })
-            return respond(400, { error: messageOf(error) })
+            return respond(400, { error: failure(error, 'the agent could not be created', 'an agent proposal failed') })
           }
         }
         if (card.kind === 'propose_context' && decision === 'approved') {
@@ -1183,8 +1227,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           try {
             return respond(200, await service.approveContextProposal(id, identity))
           } catch (error) {
-            if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: messageOf(error), code: error.code })
-            return respond(400, { error: messageOf(error) })
+            const said = failure(error, 'the context could not be changed', 'a context proposal failed')
+            if (error instanceof ContextRefusal) return respond(error.code === 'context-changed' ? 409 : 400, { error: said, code: error.code })
+            return respond(400, { error: said })
           }
         }
         // Read again inside the write that decides: a card whose channel gained a
@@ -1274,7 +1319,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body, MACHINE_FIELDS.SESSIONS)
       }
 
       if (request.method === 'POST' && path === '/machines/desktop/start') {
@@ -1289,7 +1334,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body, MACHINE_FIELDS.STARTED)
         return respond(200, { ok: true, started: true })
       }
 
@@ -1306,7 +1351,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).then(async answer => ({ ok: answer.ok, body: await answer.json().catch(() => ({})) as Record<string, unknown> }))
           .catch(() => undefined)
         if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
-        if (!started.ok) return respond(502, started.body)
+        // The machine service's own answer is not relayed: a fixed sentence and a code.
+        if (!started.ok) return machineRefused('the desktop')
         const host = typeof started.body.host === 'string' ? started.body.host : ''
         const token = typeof started.body.token === 'string' ? started.body.token : ''
         if (host === '') return respond(502, { error: 'the desktop agent did not provide a host' })
@@ -1320,10 +1366,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify(input),
           })
         } catch (error) {
-          return respond(502, { error: `the desktop agent is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the desktop agent is unreachable', 'the desktop agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED, host)
       }
 
       if (request.method === 'POST' && path === '/machines/desktop/stop') {
@@ -1338,7 +1384,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body, MACHINE_FIELDS.STOPPED)
       }
 
       if (request.method === 'POST' && path === '/machines/browser/start') {
@@ -1353,7 +1399,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body, MACHINE_FIELDS.STARTED)
         return respond(200, { ok: true, started: true })
       }
 
@@ -1370,7 +1416,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).then(async answer => ({ ok: answer.ok, body: await answer.json().catch(() => ({})) as Record<string, unknown> }))
           .catch(() => undefined)
         if (started === undefined) return respond(502, { error: 'the machine service is unreachable' })
-        if (!started.ok) return respond(502, started.body)
+        // The machine service's own answer is not relayed: a fixed sentence and a code.
+        if (!started.ok) return machineRefused('the browser')
         const host = typeof started.body.host === 'string' ? started.body.host : ''
         const token = typeof started.body.token === 'string' ? started.body.token : ''
         if (host === '') return respond(502, { error: 'the browser agent did not provide a host' })
@@ -1384,10 +1431,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify(input),
           })
         } catch (error) {
-          return respond(502, { error: `the browser agent is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the browser agent is unreachable', 'the browser agent is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body, MACHINE_FIELDS.ACTED, host)
       }
 
       if (request.method === 'POST' && path === '/machines/browser/stop') {
@@ -1402,7 +1449,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }).catch(() => undefined)
         if (answer === undefined) return respond(502, { error: 'the machine service is unreachable' })
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        return respond(answer.status, body)
+        return machineAnswer(answer, body, MACHINE_FIELDS.STOPPED)
       }
 
       if (request.method === 'POST' && path === '/machines/capture') {
@@ -1421,10 +1468,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             body: JSON.stringify({ identity, url }),
           })
         } catch (error) {
-          return respond(502, { error: `the machine service is unreachable: ${messageOf(error)}` })
+          return respond(502, { error: failure(error, 'the machine service is unreachable', 'the machine service is unreachable') })
         }
         const body = await answer.json().catch(() => ({})) as Record<string, unknown>
-        if (!answer.ok) return respond(answer.status, body)
+        if (!answer.ok) return machineAnswer(answer, body, MACHINE_FIELDS.CAPTURED)
         return respond(200, {
           ok: true,
           bytes: body.bytes,
@@ -1580,7 +1627,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'rights.read')
         if (denied !== undefined) return denied
         const table = await grants.grants()
-        if (!table.ok) return respond(503, { error: `cannot read the grant table: ${table.reason}` })
+        if (!table.ok) return unreadableGrants(table.reason)
         const canAdmin = can(table.grants, identity, 'rights.write').allowed
         return respond(200, { members: table.grants, canAdmin })
       }
@@ -1616,7 +1663,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           // The authority is called with this deployment's token, not the caller's:
           // who may change whose role is decided here, on the current table.
           const table = await grants.grants()
-          if (!table.ok) return respond(503, { code: 'grants-unreadable', error: `cannot read the grant table: ${table.reason}` })
+          if (!table.ok) return unreadableGrants(table.reason)
           const before = roleOf(table.grants, subject)
           const refusal = roleChangeRefusal(table.grants, identity, subject, next)
           if (refusal !== undefined) {
@@ -1645,14 +1692,17 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
             })
             return timedOut
               ? respond(504, { error: `the authority did not answer within ${(authority.timeoutMs ?? AUTHORITY_TIMEOUT_MS) / 1000} s: the role is unchanged` })
-              : respond(502, { error: `authority unreachable: ${messageOf(error)}` })
+              : respond(502, { error: failure(error, 'authority unreachable: the role is unchanged', 'the role authority is unreachable') })
           }
           await service.recordRoleChange(identity, subject, {
             before,
             after: next,
             outcome: answer.status === 200 ? 'applied' : `not applied: authority answered ${answer.status}`,
           })
-          return respond(answer.status, answer.body)
+          // The authority's own answer is not relayed: its status, with the host's words.
+          if (answer.status === 200) return respond(200, { applied: true, subject, role: next })
+          warnInternal(`mndt: the role authority answered ${answer.status}: ${JSON.stringify(answer.body).slice(0, 300)}`)
+          return respond(answer.status, { error: 'the authority refused the change: the role is unchanged', code: 'authority-refused' })
         })
       }
 
@@ -1683,14 +1733,108 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
 
       return respond(404, { error: `no route ${request.method} ${path}` })
     } catch (error) {
-      const reason = messageOf(error)
-      // A state error is the caller's fault, anything else is ours; both are
-      // reported, neither is swallowed.
+      // A refusal of the host is the caller's: said, with its words. Anything
+      // else is ours: « internal error », its detail in the operator's log.
+      if (!isRefusal(error)) return respond(500, { error: failure(error, 'internal error', `internal error on ${request.method} ${request.path}`) })
+      const reason = failure(error, 'internal error', `internal error on ${request.method} ${request.path}`)
       const client = /needs|unknown|already|only|cannot|does not/.test(reason)
-      return respond(client ? 409 : 500, { error: reason })
+      return respond(client ? 409 : 400, { error: reason })
     }
   }
 }
+
+/** A route's served fields: each a scalar kept when of its type, or a list of rows kept field by field. */
+type MachineFields = Readonly<Record<string, 'string' | 'number' | 'boolean' | Readonly<Record<string, 'string' | 'number' | 'boolean'>>>>
+
+/**
+ * What each machine route serves of a success: what the page reads (face.ts
+ * MachineShot, BrowserAnswer), nothing else. A start serves no host and no
+ * token: they stay in the host, which acts with them.
+ */
+export const MACHINE_FIELDS = {
+  SESSIONS: { sessions: { name: 'string', status: 'string' } },
+  STARTED: { ok: 'boolean' },
+  ACTED: { ok: 'boolean', png: 'string', text: 'string', url: 'string', title: 'string' },
+  STOPPED: { ok: 'boolean' },
+  CAPTURED: { ok: 'boolean', bytes: 'number', seconds: 'number', png: 'string' },
+} as const satisfies Readonly<Record<string, MachineFields>>
+
+/**
+ * @param body - a successful answer of the machine service.
+ * @param fields - the route's list.
+ * @returns only those fields, of their type: the result asked for, never another
+ * field of the service (a host, a token, a detail).
+ */
+export function machinePayload(body: Record<string, unknown>, fields: MachineFields): Record<string, unknown> {
+  const kept: Record<string, unknown> = {}
+  for (const [name, type] of Object.entries(fields)) {
+    const value = body[name]
+    if (typeof type === 'string') {
+      if (typeof value === type) kept[name] = value
+      continue
+    }
+    if (!Array.isArray(value)) continue
+    kept[name] = value.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null)
+      .map(row => Object.fromEntries(Object.entries(type)
+        .filter(([field, kind]) => typeof row[field] === kind)
+        .map(([field]) => [field, row[field]])))
+  }
+  return kept
+}
+
+/** The longest page title served: plain text, one line. */
+export const MAX_SERVED_TITLE = 200
+
+/**
+ * @param host - a URL's host name (IPv6 between brackets as the URL gives it).
+ * @returns whether it names this machine or a private network: never served
+ * as the address of a visited page (it may be the agent itself, or a service
+ * behind it).
+ */
+function internalHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/^\[|\]$/g, '')
+  if (name === 'localhost' || name.endsWith('.localhost') || name === '::1' || name === '0.0.0.0' || name === '') return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(name)
+  if (v4 !== null) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)
+  }
+  // IPv6: unique local (fc00::/7), link-local (fe80::/10), an IPv4 mapped one.
+  if (name.includes(':')) return /^f[cd]/.test(name) || /^fe[89ab]/.test(name) || /^::ffff:/.test(name)
+  return false
+}
+
+/**
+ * An action's result as served: the visited page's address without its query
+ * nor its fragment, omitted when it names an internal host or the agent itself;
+ * its title as plain text, one line, MAX_SERVED_TITLE characters at most.
+ * @param payload - the fields of the route's list.
+ * @param agentHost - the agent's own host, when known.
+ * @returns what is served.
+ */
+export function servedAction(payload: Record<string, unknown>, agentHost?: string): Record<string, unknown> {
+  const { url, title, ...rest } = payload
+  const served: Record<string, unknown> = { ...rest }
+  if (typeof url === 'string') {
+    try {
+      const parsed = new URL(url)
+      const own = agentHost !== undefined && agentHost !== '' && parsed.hostname.toLowerCase() === agentHost.toLowerCase()
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && !internalHost(parsed.hostname) && !own && parsed.username === '' && parsed.password === '') {
+        served.url = `${parsed.origin}${parsed.pathname}`
+      }
+    } catch {
+      // Not an address: not served.
+    }
+  }
+  if (typeof title === 'string') {
+    const plain = title.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (plain !== '') served.title = [...plain].slice(0, MAX_SERVED_TITLE).join('')
+  }
+  return served
+}
+
+/** What a member reads of a role table that cannot be read: its file and its error stay in the operator's log. */
+export const GRANTS_UNREADABLE = 'la table des rôles est illisible'
 
 /**
  * @param reader - who reads.
@@ -1783,30 +1927,4 @@ export function eventLine(event: WorkbenchEvent): string {
 /** @param brief - a produced brief. @returns its title. */
 export function briefTitle(brief: Brief): string {
   return brief.title
-}
-
-/**
- * @param error - what a conversation route threw.
- * @returns whether it is a refusal the product means: a plain Error (the
- * service's « no channel … », « a channel keeps at least one person »…) or a
- * typed refusal (a class named « …Refusal », with its code). A system error
- * (syscall, errno: its message carries a path) and any other class are not.
- */
-function isMeantRefusal(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  if ('syscall' in error || 'errno' in error) return false
-  return error.constructor === Error || error.name.endsWith('Refusal')
-}
-
-/**
- * @param error - an internal fault of a route.
- * @returns what the operator's log says of it: a SyntaxError by its name and
- * position only (Node's message quotes the text it read, a team's messages for
- * the state); a state file error with its path, which callers never see; any
- * other by its name and message.
- */
-function internalDetail(error: unknown): string {
-  if (error instanceof SyntaxError) return errorShape(error)
-  if (error instanceof StateFileError) return `${error.name}: ${error.message} (${error.path})`
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

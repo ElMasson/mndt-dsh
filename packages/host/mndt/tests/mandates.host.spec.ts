@@ -72,7 +72,8 @@ describe('mandate rules', () => {
       signedBy: admin, signedAt: `${today}T08:00:00.000Z`,
     } as Mandate
     expect(missionRefusal(mandate, { identity: 'contact@datanalysis.re', kind: 'briefing', usedToday: 0 }, today))
-      .toBe(`this mandate belongs to ${operator}`)
+      // Says the mandate is not theirs, never whose it is.
+      .toBe('this mandate is not yours')
     expect(missionRefusal(mandate, { identity: operator, kind: 'account-review', usedToday: 0 }, today))
       .toBe('this mandate does not allow a account-review mission')
     expect(missionRefusal(mandate, { identity: operator, kind: 'briefing', usedToday: 2 }, today))
