@@ -313,3 +313,29 @@ describe('the question moved under its message, after a help with no advice', ()
     expect(within(pending).getByTestId('pending-unanswered').textContent).toBe('@qwen n\'a pas pu répondre (le modèle a renvoyé une erreur).')
   })
 })
+
+describe('review of #170', () => {
+  it('only the last answer of the agent to the failed turn is greyed', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: [you], agents: ['agt_2'], connectors: [], createdBy: you, createdAt: at }
+    const asking = { id: 'msg_h', channelId: 'chn_1', author: { kind: 'human' as const, email: you }, text: '@analyste ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'failed' as const, reasonKind: 'failed', reason: 'Erreur pendant l’exécution.' }] }
+    const earlier = { id: 'msg_a1', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'premier', mentions: [], replyTo: 'msg_h', createdAt: at, updatedAt: at }
+    const later = { ...earlier, id: 'msg_a2', text: 'je serai relancé', createdAt: '2026-11-23T08:01:00.000Z', updatedAt: '2026-11-23T08:01:00.000Z' }
+    const seed = { you, agents: [...agents.values()], channels: [channel], messages: [asking, earlier, later] }
+    render(<ChannelThread chat={createMockChat(seed, () => Date.parse(at))} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" />)
+    await waitFor(() => { expect(screen.getAllByTestId('chat-markdown')).toHaveLength(2) })
+    const [first, second] = screen.getAllByTestId('chat-markdown')
+    expect(first?.getAttribute('data-stale')).toBeNull()
+    expect(second?.getAttribute('data-stale')).toBe('true')
+  })
+
+  it('a peer the page does not know: no line, no error', () => {
+    const h = read({ state: 'done', request, advices: [], skipped: [{ slot: 'A', agentId: 'agt_unknown', reason: 'x', reasonKind: 'failed' }],
+      escalation: { question: 'Le montant diffère du relevé', at, messageId: 'msg_q' } })
+    render(<HelpThread help={h} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-question')).toBeTruthy()
+    expect(screen.queryByTestId('help-could-not-answer')).toBeNull()
+  })
+})

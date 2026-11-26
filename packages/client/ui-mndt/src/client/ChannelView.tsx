@@ -660,13 +660,16 @@ function unansweredOf(help: TurnHelp, agents: readonly ChatAgent[], t: ChatTrans
 
 /**
  * @param m - a message. @param thread - its thread.
- * @returns whether it is an agent's answer whose turn then failed: what it announced will not happen.
+ * @returns whether it is the LAST answer of an agent to a message whose turn for that agent then
+ * failed: what it announced will not happen. Its earlier answers to the same message stay as they are.
  */
 function turnFailedFor(m: ChatMessage, thread: readonly ChatMessage[]): boolean {
   if (m.author.kind !== 'agent' || m.replyTo === undefined) return false
   const agentId = m.author.agentId
   const asking = thread.find(other => other.id === m.replyTo)
-  return (asking?.turns ?? []).some(turn => turn.agentId === agentId && turn.status === 'failed')
+  if (!(asking?.turns ?? []).some(turn => turn.agentId === agentId && turn.status === 'failed')) return false
+  const answers = thread.filter(other => other.replyTo === m.replyTo && other.author.kind === 'agent' && other.author.agentId === agentId)
+  return answers[answers.length - 1]?.id === m.id
 }
 
 /* ------------------------------------------------------------------ the composer */
