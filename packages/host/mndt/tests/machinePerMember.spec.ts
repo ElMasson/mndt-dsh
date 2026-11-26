@@ -11,9 +11,9 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -62,10 +62,11 @@ async function freePort(): Promise<number> {
 }
 
 /** @returns a running sidecar on a fake docker, and helpers. */
-async function sidecar(env: Record<string, string> = {}) {
+async function sidecar(env: Record<string, string> = {}, prepare?: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), 'pc-'))
   writeFileSync(join(dir, 'docker'), FAKE_DOCKER)
   chmodSync(join(dir, 'docker'), 0o755)
+  prepare?.(dir)
   const port = await freePort()
   const child = spawn('python3', [SIDECAR], {
     env: {
@@ -83,7 +84,7 @@ async function sidecar(env: Record<string, string> = {}) {
     try { if ((await call('GET', '/health')).status === 200) break } catch { /* not up yet */ }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  const calls = (): string[][] => readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').filter(line => line !== '').map(line => line.split('|'))
+  const calls = (): string[][] => (existsSync(join(dir, 'calls')) ? readFileSync(join(dir, 'calls'), 'utf8') : '').trim().split('\n').filter(line => line !== '').map(line => line.split('|'))
   return { call, calls, dir, base: `http://127.0.0.1:${port}` }
 }
 
@@ -198,7 +199,46 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     expect(start({ MACHINES_TOKEN: '' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MACHINES_TOKEN is empty') as unknown })
     expect(start({ MACHINES_HOST: '0.0.0.0' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MACHINES_HOST must name') as unknown })
     expect(start({ MACHINES_HOST: '' })).toMatchObject({ status: 2 })
+    // Every spelling of « every interface », and a name resolving to it.
+    for (const host of ['0', '[::]', '::', '::ffff:0.0.0.0', 'no-such-host.invalid']) {
+      expect(start({ MACHINES_HOST: host }), host).toMatchObject({ status: 2, stderr: expect.stringContaining('MACHINES_HOST must name') as unknown })
+    }
     expect(start({ MNDT_MACHINE_RUNTIME: 'runc' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MNDT_MACHINE_ALLOW_RUNC=1') as unknown })
+  })
+
+  it('a computer left running by a previous sidecar (its token lost) is stopped, never adopted; started again, it gets a new token', async () => {
+    const survivor = 'jean@datanalysis.re'
+    const left = (dir: string) => { writeFileSync(join(dir, 'running'), `${survivor}\tmndt-pc-${key(survivor)}\n`) }
+    // The reaper stops it: unusable, it must not hold one of the four places.
+    const reaped = await sidecar({ MNDT_MACHINE_REAP_SECONDS: '0.2' }, left)
+    for (let i = 0; i < 40 && !reaped.calls().some(args => args[0] === 'rm' && args[2] === `mndt-pc-${key(survivor)}`); i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    expect(reaped.calls()).toContainEqual(['rm', '-f', `mndt-pc-${key(survivor)}`])
+    expect((await reaped.call('GET', '/pcs')).body).toMatchObject({ capacity: { used: 0 } })
+    // Asked to start before the reaper passes: stopped, then started with its own token.
+    const started = await sidecar({ MNDT_MACHINE_REAP_SECONDS: '3600' }, left)
+    expect((await started.call('POST', '/pcs/start', { identity: survivor })).status).toBe(200)
+    const calls = started.calls()
+    const removed = calls.findIndex(args => args[0] === 'rm' && args[2] === `mndt-pc-${key(survivor)}`)
+    const run = calls.findIndex(args => args[0] === 'run')
+    expect(removed).toBeGreaterThanOrEqual(0)
+    expect(run).toBeGreaterThan(removed)
+    expect(calls[run]?.some(arg => /^AGENT_TOKEN=[0-9a-f]{32}$/.test(arg))).toBe(true)
+  })
+
+  it('a token header that is not ASCII is refused, not a crash', async () => {
+    const s = await sidecar()
+    const status = await new Promise<number>((resolve, reject) => {
+      const request = httpRequest(`${s.base}/pcs`, { method: 'GET', headers: { 'x-machine-token': Buffer.from('tök', 'latin1').toString('latin1') } }, (answer) => {
+        answer.resume()
+        resolve(answer.statusCode ?? 0)
+      })
+      request.on('error', reject)
+      request.end()
+    })
+    expect(status).toBe(403)
+    expect((await s.call('GET', '/pcs')).status).toBe(200)
   })
 
   it('refuses a request without its token, or for an identity that is not an address', async () => {

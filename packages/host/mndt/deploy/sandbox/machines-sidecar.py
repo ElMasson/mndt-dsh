@@ -14,10 +14,12 @@ Environment:
 """
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -391,11 +393,20 @@ def start_pc(identity):
         return _start_pc(identity)
 
 
+def _known_token(identity):
+    with _PCS_LOCK:
+        return (_PCS.get(identity) or {}).get('agentToken', '')
+
+
 def _start_pc(identity):
     name = pc_name(identity)
     if identity in running_pcs():
-        touch_pc(identity)
-        return {'ok': True}
+        if _known_token(identity) != '':
+            touch_pc(identity)
+            return {'ok': True}
+        # Running, but its token was lost (this service restarted): unusable, and
+        # it would hold a place. Stopped, then started again with a new token.
+        _stop_pc(identity)
     if len(running_pcs()) >= MAX_PCS:
         return {'ok': False, 'busy': True}
     network = pc_network(identity)
@@ -407,8 +418,9 @@ def _start_pc(identity):
     os.makedirs(home, exist_ok=True)
     try:
         os.chown(home, PC_UID, PC_UID)
-    except OSError:
-        pass  # a test run without root: the folder stays the caller's
+    except OSError as error:
+        # A test run without root, or a folder the sidecar cannot hand over: said, not hidden.
+        sys.stderr.write('machines-sidecar: could not hand ' + home + ' to uid ' + str(PC_UID) + ': ' + error.strerror + '\n')
     # Its agents' token is its own, drawn at each start and kept here in memory:
     # the machine service's token never enters a computer.
     agent_token = secrets.token_hex(16)
@@ -465,16 +477,21 @@ def _stop_pc(identity):
 
 
 def reap_idle():
-    """Stop every computer idle for IDLE_SECONDS. One found running unknown (this service restarted) starts its clock now."""
+    """Stop every computer idle for IDLE_SECONDS, and every one running without a
+    known token (this service restarted: unusable, and holding a place)."""
     for identity in running_pcs():
-        # Under the start lock, the idleness is read again: a touch or a start
-        # between the listing and the stop keeps the computer.
+        # Under the start lock, the idleness is read again: a start between the
+        # listing and the stop keeps the computer. The decision and the removal of
+        # its entry are one step under the entries' lock: a touch after it finds
+        # no entry, and the computer is stopping anyway.
         with _START_LOCK:
-            now = time.time()
             with _PCS_LOCK:
-                known = _PCS.setdefault(identity, {'startedAt': iso(now), 'lastUsed': now})
-                idle = now - known['lastUsed'] >= IDLE_SECONDS
-            if idle:
+                known = _PCS.get(identity)
+                stale = known is None or not known.get('agentToken')
+                idle = not stale and time.time() - known['lastUsed'] >= IDLE_SECONDS
+                if stale or idle:
+                    _PCS.pop(identity, None)
+            if stale or idle:
                 _stop_pc(identity)
 
 
@@ -512,7 +529,9 @@ class Handler(BaseHTTPRequestHandler):
         # and a request without the right one is refused, compared in constant time.
         if TOKEN == '':
             return False
-        return secrets.compare_digest(self.headers.get('x-machine-token') or '', TOKEN)
+        # As bytes: compare_digest refuses two str when one is not ASCII (a header can be anything).
+        given = (self.headers.get('x-machine-token') or '').encode('utf-8', 'surrogateescape')
+        return secrets.compare_digest(given, TOKEN.encode('utf-8'))
 
     def do_GET(self):
         if not self.authorised():
@@ -609,11 +628,36 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+def listens_everywhere(host):
+    """@returns whether binding host would listen on every interface, or host names nothing.
+
+    An address is read as one (0.0.0.0, ::, [::], ::ffff:0.0.0.0); a name is
+    resolved, as the bind would (« 0 » resolves to 0.0.0.0). Unresolvable: refused.
+    """
+    name = host.strip()
+    if name.startswith('[') and name.endswith(']'):
+        name = name[1:-1]
+    if name == '':
+        return True
+    try:
+        addresses = [ipaddress.ip_address(name)]
+    except ValueError:
+        try:
+            addresses = [ipaddress.ip_address(info[4][0].split('%')[0]) for info in socket.getaddrinfo(name, None)]
+        except (OSError, ValueError):
+            return True
+    for address in addresses:
+        mapped = getattr(address, 'ipv4_mapped', None)
+        if address.is_unspecified or (mapped is not None and mapped.is_unspecified):
+            return True
+    return len(addresses) == 0
+
+
 def startup_refusal():
     """@returns why this service must not start, or None: fail closed."""
     if TOKEN == '':
         return 'MACHINES_TOKEN is empty: the service refuses to start without its token'
-    if os.environ.get('MACHINES_HOST', '').strip() in ('', '0.0.0.0', '::'):
+    if listens_everywhere(os.environ.get('MACHINES_HOST', '')):
         return 'MACHINES_HOST must name the internal network address to listen on, never every interface'
     if PC_RUNTIME == 'runc' and not PC_ALLOW_RUNC:
         return 'MNDT_MACHINE_RUNTIME=runc runs the computers without gVisor: set MNDT_MACHINE_ALLOW_RUNC=1 to say so'
@@ -628,4 +672,12 @@ if __name__ == '__main__':
     if PC_RUNTIME != 'runsc':
         sys.stderr.write('machines-sidecar: WARNING: the computers run under ' + PC_RUNTIME + ', not gVisor (runsc): the gVisor proof is still to be made\n')
     threading.Thread(target=reaper, daemon=True).start()
-    ThreadingHTTPServer((os.environ['MACHINES_HOST'].strip(), int(os.environ.get('MACHINES_PORT', '8796'))), Handler).serve_forever()
+    host = os.environ['MACHINES_HOST'].strip()
+    if host.startswith('[') and host.endswith(']'):
+        host = host[1:-1]
+    server_class = ThreadingHTTPServer
+    if ':' in host:
+        class V6Server(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        server_class = V6Server
+    server_class((host, int(os.environ.get('MACHINES_PORT', '8796'))), Handler).serve_forever()
