@@ -187,6 +187,11 @@ export interface AutomationsAnswer {
   readonly timeZone?: string
   /** The scheduler's last pass (#166); absent when no scheduler runs in this process. */
   readonly schedulerAt?: string
+  /**
+   * The server's clock when it answered (the response's HTTP `Date`), to age schedulerAt on one clock:
+   * the browser's may be off by minutes. Absent when the header did not come through.
+   */
+  readonly serverAt?: string
 }
 
 /** The Host face this page needs. */

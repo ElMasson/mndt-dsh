@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { available, createHttpFace } from '../src/client/httpFace.ts'
 
 /** @param body - JSON body. @param status - HTTP status. @returns a Response-like object. */
-function answer(body: unknown, status = 200): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body } as unknown as Response
+function answer(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body, headers: new Headers(headers) } as unknown as Response
 }
 
 /** @param routes - path to body. @returns the recorded calls. */
@@ -126,5 +126,14 @@ describe('HTTP face', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw 'texte brut' }))
     expect((await face.shareMemory('mem_1', 'team')).error).toBe('texte brut')
     expect(await available()).toBe(false)
+  })
+})
+
+describe('the automations carry the server\'s clock', () => {
+  it('from the response\'s Date header; absent when the header is', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => answer({ items: [], canAdmin: true, schedulerAt: '2026-11-26T07:59:30.000Z' }, 200, { date: 'Thu, 26 Nov 2026 08:00:00 GMT' })))
+    expect((await createHttpFace().automations()).serverAt).toBe('Thu, 26 Nov 2026 08:00:00 GMT')
+    vi.stubGlobal('fetch', vi.fn(async () => answer({ items: [], canAdmin: true })))
+    expect((await createHttpFace().automations()).serverAt).toBeUndefined()
   })
 })

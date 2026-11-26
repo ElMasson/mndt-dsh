@@ -61,6 +61,8 @@ export function ScheduledScreen(props: {
   const { api, t } = props
   const [rows, setRows] = useState<readonly AutomationRow[] | undefined>(undefined)
   const [zone, setZone] = useState<string | undefined>(undefined)
+  // How long the scheduler has been silent, on the server's clock alone; undefined when unknown.
+  const [silentFor, setSilentFor] = useState<number | undefined>(undefined)
   const [schedulerAt, setSchedulerAt] = useState<string | undefined>(undefined)
   // The line whose hour is being changed in place, and the hour typed.
   const [editing, setEditing] = useState<{ readonly id: string; readonly at: string } | undefined>(undefined)
@@ -74,7 +76,12 @@ export function ScheduledScreen(props: {
       const answer = await api.automations()
       setRows(answer.items)
       setZone(typeof answer.timeZone === 'string' && answer.timeZone !== '' ? answer.timeZone : undefined)
-      setSchedulerAt(typeof answer.schedulerAt === 'string' && !Number.isNaN(Date.parse(answer.schedulerAt)) ? answer.schedulerAt : undefined)
+      const last = typeof answer.schedulerAt === 'string' ? Date.parse(answer.schedulerAt) : Number.NaN
+      const server = typeof answer.serverAt === 'string' ? Date.parse(answer.serverAt) : Number.NaN
+      // Both instants come from the server: a browser clock off by minutes changes nothing. Either
+      // unreadable or missing, the age is unknown and nothing is said.
+      setSchedulerAt(Number.isNaN(last) ? undefined : answer.schedulerAt)
+      setSilentFor(Number.isNaN(last) || Number.isNaN(server) ? undefined : server - last)
       setFailed(false)
     } catch {
       // Not the thrown text: a fixed sentence (an owner-only 404 or a network error alike).
@@ -137,7 +144,7 @@ export function ScheduledScreen(props: {
       <h1 className="mw-title">{props.title}</h1>
       {failed ? <p className="mw-empty" role="alert">{t('scheduledUnreadable')}</p> : undefined}
       {/* A scheduler silent for over 2 minutes is said, with its last sign of life; no field, no alarm. */}
-      {schedulerAt === undefined || Date.now() - Date.parse(schedulerAt) <= 120_000 ? undefined : (
+      {schedulerAt === undefined || silentFor === undefined || silentFor <= 120_000 ? undefined : (
         <p className="mw-decide-error" role="alert" data-testid="scheduler-stopped">
           {t('scheduledSchedulerStopped', { at: runTime(schedulerAt, zone) })}
         </p>

@@ -413,3 +413,11 @@ describe('an automation\'s result in the lane (#166)', () => {
     expect(screen.getByTestId('mission-title').textContent).toBe('Relance des approbations')
   })
 })
+
+describe('a result of an unknown kind', () => {
+  it('reads « Tâche planifiée », never « Briefing »', () => {
+    const m = ({ ...message({ author: { kind: 'system' }, text: 'Fait.' }), mission: { kind: 'some-new-kind', title: 'x', status: 'done' } }) as unknown as ChatMessage
+    render(<WebMessage message={m} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Tâche planifiée')
+  })
+})

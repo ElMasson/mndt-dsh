@@ -1084,18 +1084,45 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect(within(rows[0] as HTMLElement).getByTestId('scheduled-zone').textContent).toBe(' (heure de La Réunion)')
   })
 
-  it('a scheduler silent for over 2 minutes is said with its last sign of life; a recent one, or none, says nothing', async () => {
-    const said = async (schedulerAt: string | undefined): Promise<HTMLElement | null> => {
+  it('a scheduler silent for over 2 minutes, on the server\'s clock, is said; a recent one, none, or no server clock says nothing', async () => {
+    const said = async (schedulerAt: string | undefined, serverAt: string | undefined): Promise<HTMLElement | null> => {
       cleanup()
-      const api = automationsFace({ automations: async () => ({ items: [briefing], canAdmin: true, timeZone: 'Indian/Reunion', ...(schedulerAt === undefined ? {} : { schedulerAt }) }) })
-      fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+      const answer = { items: [briefing], canAdmin: true, timeZone: 'Indian/Reunion',
+        ...(schedulerAt === undefined ? {} : { schedulerAt }), ...(serverAt === undefined ? {} : { serverAt }) }
+      fireEvent.click(within(await open(true, automationsFace({ automations: async () => answer }))).getByRole('button', { name: 'Tâches planifiées' }))
       await screen.findAllByTestId('scheduled-row')
       return screen.queryByTestId('scheduler-stopped')
     }
-    const stale = await said(new Date(Date.now() - 10 * 60_000).toISOString())
-    expect(stale?.textContent).toContain('Le planificateur ne tourne plus depuis')
-    expect(await said(new Date(Date.now() - 30_000).toISOString())).toBeNull()
-    expect(await said(undefined)).toBeNull()
+    const server = 'Thu, 26 Nov 2026 08:00:00 GMT'
+    expect((await said('2026-11-26T07:50:00.000Z', server))?.textContent).toContain('Le planificateur ne tourne plus depuis')
+    expect(await said('2026-11-26T07:59:30.000Z', server)).toBeNull()
+    expect(await said(undefined, server)).toBeNull()
+    // Without the server's clock (the Date header did not come through), the age is unknown: nothing.
+    expect(await said('2026-11-26T07:00:00.000Z', undefined)).toBeNull()
+    expect(await said('2026-11-26T07:00:00.000Z', 'not a date')).toBeNull()
+  })
+
+  it('a browser clock off by 10 minutes, either way, changes nothing', async () => {
+    const realNow = Date.now
+    try {
+      for (const offset of [10 * 60_000, -10 * 60_000]) {
+        cleanup()
+        Date.now = () => Date.parse('2026-11-26T08:00:00.000Z') + offset
+        // A recent pass on the server's clock: never « arrêté », whatever the browser thinks.
+        const recent = { items: [briefing], canAdmin: true, schedulerAt: '2026-11-26T07:59:30.000Z', serverAt: 'Thu, 26 Nov 2026 08:00:00 GMT' }
+        fireEvent.click(within(await open(true, automationsFace({ automations: async () => recent }))).getByRole('button', { name: 'Tâches planifiées' }))
+        await screen.findAllByTestId('scheduled-row')
+        expect(screen.queryByTestId('scheduler-stopped')).toBeNull()
+        cleanup()
+        // A silent one on the server's clock: always said.
+        const silent = { ...recent, schedulerAt: '2026-11-26T07:50:00.000Z' }
+        fireEvent.click(within(await open(true, automationsFace({ automations: async () => silent }))).getByRole('button', { name: 'Tâches planifiées' }))
+        await screen.findAllByTestId('scheduled-row')
+        expect(screen.getByTestId('scheduler-stopped')).toBeTruthy()
+      }
+    } finally {
+      Date.now = realNow
+    }
   })
 
   it('a bad-time refusal reads its fixed sentence', async () => {
