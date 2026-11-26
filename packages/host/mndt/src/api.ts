@@ -9,7 +9,7 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { DEFAULT_EUR_PER_COUNCIL_TURN, DEFAULT_EUR_PER_PARALLEL_TURN, isMissionKind, ContextRefusal, CoordinationRefusal, HelpRefusal, servedMessage, SkillRefusal, UnreadableApproval } from './core/index.ts'
-import { checkedScheduleProposal, instanceTimeZone, nextRuns, runsThisMonth, ScheduleRefusal } from './core/index.ts'
+import { checkedScheduleProposal, instanceTimeZone, nextRuns, runsThisMonth, ScheduleRefusal, wallClock } from './core/index.ts'
 import type { Schedule, ScheduleDestination, ScheduleProposal } from './core/index.ts'
 import type {
   ApprovalState,
@@ -421,10 +421,22 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   const zone = options.timeZone ?? instanceTimeZone(undefined).timeZone
 
   /** @param approval - a card. @returns, for a pending propose_schedule card, its next three runs and the zone they are in. */
-  const cardRuns = (approval: Approval): { readonly nextRuns?: readonly string[]; readonly timeZone?: string } =>
-    approval.kind === 'propose_schedule' && approval.state === 'pending' && approval.scheduleProposal !== undefined
-      ? { nextRuns: nextRuns(approval.scheduleProposal.cadence, new Date(), zone).map(run => run.toISOString()), timeZone: zone }
-      : {}
+  const cardRuns = (
+    approval: Approval,
+    state?: WorkbenchState,
+  ): { readonly nextRuns?: readonly string[]; readonly timeZone?: string; readonly eurPerMonthMax?: number } => {
+    if (approval.kind !== 'propose_schedule' || approval.state !== 'pending' || approval.scheduleProposal === undefined) return {}
+    const proposal = approval.scheduleProposal
+    const now = new Date()
+    // What it may cost this month, bounded by its agent's ceiling (#162): the decider reads it before saying yes.
+    const planned = Math.round(proposal.eurPerRun * runsThisMonth(proposal.cadence, now, zone) * 100) / 100
+    const agent = (state?.agents ?? []).find(candidate => candidate.id === proposal.agentId)
+    return {
+      nextRuns: nextRuns(proposal.cadence, now, zone).map(run => run.toISOString()),
+      timeZone: zone,
+      eurPerMonthMax: agent === undefined ? planned : Math.min(planned, agent.eurPerMonth),
+    }
+  }
 
   /**
    * A task as served to a reader: its next runs and the zone, what it may cost
@@ -434,7 +446,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
    * @returns what is served.
    */
   const servedSchedule = (schedule: Schedule, reader: Reader, state: WorkbenchState): Record<string, unknown> => {
-    const { approvalId: _card, failures: _failures, ...rest } = schedule
+    const { approvalId: _card, failures: _failures, lastSlotAt: _slot, runningSince, ...rest } = schedule
     const now = new Date()
     const agent = (state.agents ?? []).find(candidate => candidate.id === schedule.agentId)
     const planned = Math.round(schedule.eurPerRun * runsThisMonth(schedule.cadence, now, zone) * 100) / 100
@@ -443,9 +455,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
       ...rest,
       nextRuns: schedule.state === 'active' ? nextRuns(schedule.cadence, now, zone).map(run => run.toISOString()) : [],
       timeZone: zone,
-      eurThisMonth: 0,
+      // Its runs of this month, as published (the zone's month).
+      eurThisMonth: scheduleSpentThisMonth(state, schedule.id, now, zone),
       eurPerMonthMax: agent === undefined ? planned : Math.min(planned, agent.eurPerMonth),
       missed: schedule.missed ?? 0,
+      // A run going on now: the screen says « en cours ».
+      running: runningSince !== undefined,
       can: { pause: schedule.state === 'active' && mine, resume: schedule.state === 'paused' && reader.decider, delete: mine },
     }
   }
@@ -1101,7 +1116,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const snapshot = await service.snapshot()
         const visible = (await service.listApprovals(state))
           .filter(approval => canReadApproval(reader, approval))
-          .map(approval => servedCard(reader, { ...approval, canDecide: reader.decider && approval.state === 'pending', ...cardRuns(approval) }, snapshot))
+          .map(approval => servedCard(reader, { ...approval, canDecide: reader.decider && approval.state === 'pending', ...cardRuns(approval, snapshot) }, snapshot))
         const approvals = request.query?.mine === '1' ? visible.filter(approval => approval.canDecide) : visible
         return respond(200, { approvals })
       }
@@ -2128,6 +2143,27 @@ export function servedAction(payload: Record<string, unknown>, agentHost?: strin
     if (plain !== '') served.title = [...plain].slice(0, MAX_SERVED_TITLE).join('')
   }
   return served
+}
+
+/**
+ * @param state - the state.
+ * @param scheduleId - a task.
+ * @param now - the moment.
+ * @param timeZone - the instance's zone: its month.
+ * @returns what the task's runs published this month cost, in euros.
+ */
+export function scheduleSpentThisMonth(state: WorkbenchState, scheduleId: string, now: Date, timeZone: string): number {
+  const month = (date: Date): string => {
+    const wall = wallClock(date, timeZone)
+    return `${wall.year}-${wall.month}`
+  }
+  const current = month(now)
+  let eur = 0
+  for (const message of state.messages ?? []) {
+    const run = message.mission
+    if (run?.kind === 'scheduled' && run.scheduleId === scheduleId && run.eur !== undefined && month(new Date(message.createdAt)) === current) eur += run.eur
+  }
+  return Math.round(eur * 1_000_000) / 1_000_000
 }
 
 /** What a member reads of a role table that cannot be read: its file and its error stay in the operator's log. */

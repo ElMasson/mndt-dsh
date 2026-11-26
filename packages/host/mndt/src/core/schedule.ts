@@ -6,6 +6,7 @@
  * is, when its next runs fall in the instance's time zone.
  */
 import { Refusal } from './refusal.ts'
+import type { TurnFailureKind } from './types.ts'
 
 /** When a task runs: a day, days of the week, a day of the month, at a time; or a cron of five fields. */
 export type ScheduleCadence =
@@ -30,7 +31,7 @@ export interface ScheduleProposal {
 }
 
 /** Why a task is paused when no person paused it. */
-export type SchedulePauseReason = 'failures' | 'agent-retired' | 'agent-left' | 'owner'
+export type SchedulePauseReason = 'failures' | 'agent-retired' | 'agent-left' | 'requester-left' | 'owner'
 
 /** A scheduled task, as the state keeps it. */
 export interface Schedule extends ScheduleProposal {
@@ -44,6 +45,17 @@ export interface Schedule extends ScheduleProposal {
   readonly approvalId: string
   readonly lastRunAt?: string
   readonly lastEur?: number
+  /**
+   * How its last run ended: done, failed (with its kind, the screen says it in
+   * words), or refused before any call (its agent's ceiling reached, its model
+   * without a price): not a failure, it runs again by itself next month.
+   */
+  readonly lastStatus?: 'done' | 'failed' | 'refused'
+  readonly lastReasonKind?: TurnFailureKind
+  /** The last slot the scheduler handled, run or missed: the next slot is after it. */
+  readonly lastSlotAt?: string
+  /** A run started and not yet published: a restart that cut it is said on the next pass. */
+  readonly runningSince?: string
   readonly missed?: number
   readonly failures?: number
   /**

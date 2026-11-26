@@ -11,6 +11,7 @@
 import { turnFailure } from './public-failure.ts'
 import { randomUUID } from 'node:crypto'
 import { takeToolRefusals } from './machine-tools.ts'
+import { reservedFor, reserveSpend, TURN_RESERVE_EUR } from './spend-reservations.ts'
 import { join } from 'node:path'
 import type {
   Agent,
@@ -926,11 +927,9 @@ export class TurnScheduler {
     }
     const now = new Date().toISOString()
     const everything = (await service.snapshot()).messages ?? []
-    const refusal = ceilingRefusal(
-      agent,
-      prices,
-      spentThisMonth(everything, agent.id, now),
-    )
+    // What was spent, plus what its turns and task runs in flight reserved.
+    const spent = spentThisMonth(everything, agent.id, now) + reservedFor(agent.id)
+    const refusal = ceilingRefusal(agent, prices, spent)
     if (refusal !== undefined) {
       await service.updateTurn(messageId, turn.id, {
         status: 'refused',
@@ -961,6 +960,8 @@ export class TurnScheduler {
       startedAt: now,
       ...(actor === '' ? {} : { actor }),
     })
+    // Its estimate is reserved for as long as it runs (spend-reservations.ts).
+    const release = reserveSpend(agent.id, Math.min(TURN_RESERVE_EUR, Math.max(0, agent.eurPerMonth - spent)))
     try {
       const history = await service.messages(channel.id)
       const agents = await service.listAgents(true)
@@ -1165,6 +1166,7 @@ export class TurnScheduler {
         ...refusedSoFar(),
       })
     } finally {
+      release()
       this.#running.delete(turn.id)
     }
   }

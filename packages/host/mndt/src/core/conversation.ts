@@ -175,6 +175,9 @@ export function spentThisMonth(
       }
       if (turn.agentId === agentId && turn.eur !== undefined) eur += turn.eur
     }
+    // A scheduled task's run, published in its destination: it counts for the agent that ran it.
+    const run = message.mission
+    if (run?.kind === 'scheduled' && run.agentId === agentId && run.eur !== undefined && message.createdAt >= since) eur += run.eur
   }
   return Math.round(eur * 1_000_000) / 1_000_000
 }
