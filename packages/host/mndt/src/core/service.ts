@@ -1046,16 +1046,36 @@ export class WorkbenchService {
         approvalId: approval.id,
       }
       const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, scheduleId: schedule.id }
+      const events: WorkbenchEvent[] = [
+        { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `task ${schedule.id} created` },
+        { at, actor: actor.trim(), action: 'schedule.created', subject: schedule.id, detail: schedule.title },
+      ]
+      // A task in its requester's lane: its agent is added to that lane (created
+      // when absent), as its requester wanted it there, in their private space.
+      let channels = state.channels ?? []
+      if (proposal.destination.kind === 'lane') {
+        const member = proposal.destination.member
+        const lane = channels.find(channel => isLaneOf(channel, member))
+        if (lane === undefined) {
+          const created: Channel = {
+            id: this.#id('chn'), name: `solo-${this.#id('l').slice(-8)}`, title: `Ma lane (${member})`, kind: 'solo',
+            members: [member], agents: [agent.id], connectors: [], createdBy: member, createdAt: at,
+          }
+          channels = [...channels, created]
+          events.push({ at, actor: member, action: 'channel.lane', subject: created.id })
+        } else if (!lane.agents.includes(agent.id)) {
+          channels = channels.map(channel => (channel.id === lane.id ? { ...channel, agents: [...channel.agents, agent.id] } : channel))
+          events.push({ at, actor: actor.trim(), action: 'channel.agent-added', subject: lane.id, detail: `@${agent.handle} for task ${schedule.id}` })
+        }
+      }
       return {
         state: {
           ...state,
+          channels,
           schedules: [...(state.schedules ?? []), schedule],
           approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
         },
-        event: [
-          { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `task ${schedule.id} created` },
-          { at, actor: actor.trim(), action: 'schedule.created', subject: schedule.id, detail: schedule.title },
-        ],
+        event: events,
         value: { approval: next, schedule },
       }
     })
@@ -1171,9 +1191,10 @@ export class WorkbenchService {
       if (schedule === undefined) return { state, event: [], value: undefined }
       if (schedule.state === 'active' && schedule.deletedAt === undefined) return { state, event: [], value: schedule }
       const { runningSince: _never, ...rest } = schedule
+      const at = this.#at()
       return {
         state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? rest : candidate)) },
-        event: [],
+        event: { at, actor: 'mndt', action: 'schedule.run.skipped', subject: id, detail: schedule.deletedAt === undefined ? `paused (${schedule.pausedBecause ?? 'owner'})` : 'deleted' },
         value: undefined,
       }
     })

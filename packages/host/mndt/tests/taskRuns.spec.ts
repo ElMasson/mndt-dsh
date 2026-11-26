@@ -14,14 +14,17 @@ import type { Message, PriceGrid, Schedule, ScheduleProposal } from '../src/core
 import { createMndtApi, scheduleSpentThisMonth } from '../src/api.ts'
 import type { GrantSource } from '../src/policy.ts'
 import { CUT_BY_RESTART_TEXT, MAX_PARALLEL_RUNS, NO_RUN_TEXT, slotsOf, TaskScheduler } from '../src/task-runs.ts'
+import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
+import { reservedFor } from '../src/spend-reservations.ts'
 
 const ZONE = 'Indian/Reunion'
 const owner = 'duke@datanalysis.re'
 const operator = 'jdoe@datanalysis.re'
 const viewer = 'smarion@datanalysis.re'
 const other = 'aautre@datanalysis.re'
-const PRICES: PriceGrid = { 'route-a/*': { input: 1, output: 2 } }
+// route-a is priced; vllm-qwen is declared free (our H100: a 0 price, never an unknown one).
+const PRICES: PriceGrid = { 'route-a/*': { input: 1, output: 2 }, 'vllm-qwen/*': { input: 0, output: 0 } }
 /** A time at La Réunion on a day of November 2026 (UTC+4). */
 const reunion = (day: number, hour: number, minute: number): Date => new Date(Date.UTC(2026, 10, day, hour - 4, minute))
 
@@ -133,15 +136,15 @@ describe('a run', () => {
     expect(b.lines.some(line => line.includes('2 slot(s) missed'))).toBe(true)
   })
 
-  it('in its requester\'s lane: the agent\'s connectors that the lane allows, the result in that lane', async () => {
+  it('in its requester\'s lane, from a lane never set up: approval puts its agent there, a run uses the agent\'s connectors, the result lands there', async () => {
     const b = await bench()
-    const lane = await b.service.laneOf(operator)
-    await b.service.updateChannel(lane.id, { addAgents: [b.agent.id], connectors: ['office365'] }, operator)
     const task = await b.approve({ destination: { kind: 'lane', member: operator } })
+    const lane = ((await b.service.snapshot()).channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === operator)
+    expect(lane?.agents).toEqual([b.agent.id])
     b.set(reunion(26, 8, 1))
     await b.pass()
-    expect(b.engine.runs[0]?.servers).toEqual(['office365'])
-    expect((await b.runsIn(lane.id))[0]?.mission).toMatchObject({ scheduleId: task.id, status: 'done' })
+    expect(b.engine.runs[0]?.servers).toEqual(['attio', 'office365'])
+    expect((await b.runsIn(lane?.id ?? ''))[0]?.mission).toMatchObject({ scheduleId: task.id, status: 'done' })
   })
 
   it('a failure publishes the host\'s sentence, never the provider\'s words; three in a row pause it', async () => {
@@ -192,19 +195,56 @@ describe('a run', () => {
 })
 
 describe('the ceiling', () => {
-  it('reached: refused before any model call, recorded as refused, not a failure, never published, said once a day', async () => {
-    const b = await bench({ eurPerMonth: 0.0001 })
+  it('reached with this run\'s bound: refused before any model call, recorded as refused, not a failure, never published, said once a day', async () => {
+    // A ceiling of 0.39 €, a run bound at 0.40 €: this run alone would pass it.
+    const b = await bench({ eurPerMonth: 0.39 })
     const task = await b.approve()
-    b.set(reunion(26, 8, 1))
-    await b.pass()
-    for (const day of [27, 28]) {
-      b.set(reunion(day, 8, 1))
+    for (const [day, minute] of [[26, 1], [26, 2], [27, 1]] as const) {
+      b.set(reunion(day, 8, minute))
       await b.pass()
     }
-    expect(b.engine.runs).toHaveLength(1)
-    expect(await b.runsIn(b.channel.id)).toHaveLength(1)
-    expect(await b.schedule(task.id)).toMatchObject({ state: 'active', lastStatus: 'refused', lastReasonKind: 'refused', failures: 0 })
+    expect(b.engine.runs).toHaveLength(0)
+    expect(await b.runsIn(b.channel.id)).toHaveLength(0)
+    expect(await b.schedule(task.id)).toMatchObject({ state: 'active', lastStatus: 'refused', lastReasonKind: 'refused' })
+    expect((await b.schedule(task.id))?.failures ?? 0).toBe(0)
+    // Once a day: the 26th, then the 27th.
     expect(b.lines.filter(line => line.includes('not run: its agent\'s ceiling'))).toHaveLength(2)
+  })
+})
+
+describe('a route declared free', () => {
+  it('a task of an agent on a route priced 0 (declared, not unknown) runs, and costs 0 €', async () => {
+    const b = await bench()
+    const qwen = await b.service.createAgent({ handle: 'qwen', name: 'Qwen', provider: 'vllm-qwen', model: 'qwen3.5', connectors: [], eurPerMonth: 5 }, owner)
+    await b.service.updateChannel(b.channel.id, { addAgents: [qwen.id] }, owner)
+    const task = await b.approve({ title: 'Veille' }, qwen)
+    b.set(reunion(26, 8, 1))
+    await b.pass()
+    expect(b.engine.runs.map(run => run.agent.id)).toEqual([qwen.id])
+    expect((await b.runsIn(b.channel.id))[0]?.mission).toMatchObject({ status: 'done', eur: 0, scheduleId: task.id })
+    expect(await b.schedule(task.id)).toMatchObject({ lastStatus: 'done', lastEur: 0 })
+  })
+})
+
+describe('the ceiling, with what is in flight', () => {
+  it('a conversation\'s turn in flight and a run of the same agent never go over its ceiling together', async () => {
+    const b = await bench({ eurPerMonth: 0.6 })
+    await b.approve()
+    // A conversation's turn of the same agent, held running: it reserves its estimate.
+    let release!: () => void
+    const held: TurnEngine = { run: async () => { await new Promise<void>((resolve) => { release = resolve }); return { text: 'ok', tokens: { input: 1, output: 1 } } } }
+    const turns = new TurnScheduler({ service: b.service, engine: held, prices: PRICES, dataDir: '/tmp/mndt-task-runs' })
+    const posted = await b.service.postMessage(b.channel.id, operator, '@compta bonjour')
+    turns.launch(posted)
+    await until(() => reservedFor(b.agent.id) > 0)
+    // The run's bound (0.4 €) plus the turn's reservation (0.5 €) would pass 0.6 €: refused, no model call.
+    b.set(reunion(26, 8, 1))
+    await b.pass()
+    expect(b.engine.runs).toHaveLength(0)
+    expect((await b.schedule((await b.service.snapshot()).schedules?.[0]?.id ?? ''))?.lastStatus).toBe('refused')
+    release()
+    await turns.settled()
+    expect(reservedFor(b.agent.id)).toBe(0)
   })
 })
 
@@ -350,6 +390,7 @@ describe('a task that changes during its run', () => {
     expect(await b.service.confirmScheduleRun(task.id)).toBeUndefined()
     const after = ((await b.service.snapshot()).schedules ?? []).find(item => item.id === task.id)
     expect(after?.runningSince).toBeUndefined()
+    expect((await b.service.snapshot()).events.some(event => event.action === 'schedule.run.skipped' && event.subject === task.id)).toBe(true)
   })
 })
 
@@ -421,9 +462,8 @@ describe('what is served, and to whom', () => {
 
   it('a run in an operator\'s lane: its message, its task and its journal lines read by nobody else but the deciders', async () => {
     const b = await bench()
-    const lane = await b.service.laneOf(operator)
-    await b.service.updateChannel(lane.id, { addAgents: [b.agent.id] }, operator)
     const task = await b.approve({ destination: { kind: 'lane', member: operator } })
+    const lane = await b.service.laneOf(operator)
     b.set(reunion(26, 8, 1))
     await b.pass()
     expect(await b.runsIn(lane.id)).toHaveLength(1)

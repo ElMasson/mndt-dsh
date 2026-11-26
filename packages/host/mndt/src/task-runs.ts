@@ -25,6 +25,7 @@ import { ceilingRefusal, dateLine, eurOf, isLaneOf, nextRuns, priceOf, skillsOf,
 import type { Agent, Channel, Message, PriceGrid, Schedule, WorkbenchService, WorkbenchState } from './core/index.ts'
 import type { GrantSource, GrantTable } from './policy.ts'
 import { turnFailure } from './public-failure.ts'
+import { reservedFor, reserveSpend } from './spend-reservations.ts'
 import { channelFolder } from './turns.ts'
 import type { TurnEngine } from './turns.ts'
 
@@ -248,6 +249,7 @@ export class TaskScheduler {
     const runId = newRunId()
     const started = this.#now()
     const startedAt = started.toISOString()
+    let release = (): void => undefined
     try {
       // Read again under a write: still active, not deleted. Otherwise nothing runs.
       const schedule = await service.confirmScheduleRun(id)
@@ -265,9 +267,11 @@ export class TaskScheduler {
       const agent = gone.agent
       const channel = destinationOf(schedule, state)
       if (channel === undefined) throw new Error('its destination is gone')
-      // Its agent's monthly ceiling, its runs included; a model without a price never runs.
-      // A refusal is not a failure: the task runs again by itself next month.
-      const refused = ceilingRefusal(agent, prices, spentThisMonth(state.messages ?? [], agent.id, startedAt))
+      // Its agent's monthly ceiling: what was spent, plus what its turns and runs
+      // in flight reserved, plus this run's bound. A model without a price never
+      // runs. A refusal is not a failure: the task runs again by itself next month.
+      const spent = spentThisMonth(state.messages ?? [], agent.id, startedAt) + reservedFor(agent.id)
+      const refused = ceilingRefusal(agent, prices, spent) ?? (spent + schedule.eurPerRun > agent.eurPerMonth ? 'over the ceiling with this run' : undefined)
       const price = priceOf(prices, agent)
       if (refused !== undefined || price === undefined) {
         await service.recordScheduleRefusal(id, startedAt)
@@ -285,6 +289,8 @@ export class TaskScheduler {
       }
       const skills = skillsOf(agent, state.skills ?? []).kept
       const prompt = `${dateLine(started, timeZone)}\n\n${turnPrompt(agent, channel, [], asked, state.agents ?? [], undefined, skills)}`
+      // Its bound is reserved for as long as it runs: a conversation's turn of the same agent sees it.
+      release = reserveSpend(agent.id, schedule.eurPerRun)
       const output = await engine.run({
         turnId: runId,
         runId,
@@ -294,8 +300,10 @@ export class TaskScheduler {
         actor: schedule.requestedBy,
         prompt,
         cwd: channelFolder(dataDir, channel.id),
-        // Until the personal connections (connectors, phase 1): the agent's and the destination's, both.
-        servers: turnServers(agent, channel),
+        // In a channel, the agent's that the channel allows; in its requester's
+        // lane (private to them), the agent's own. The requester's personal
+        // connections narrow this with connectors, phase 1.
+        servers: schedule.destination.kind === 'lane' ? [...agent.connectors].sort() : turnServers(agent, channel),
         budget: { eur: schedule.eurPerRun, price },
         signal: new AbortController().signal,
       })
@@ -314,6 +322,8 @@ export class TaskScheduler {
       // The engine's or a provider's words go to the operator's log; the destination reads the host's sentence.
       const failed = turnFailure(error, warn, `task ${id} (run ${runId})`)
       await service.publishScheduleRun(id, { runId, text: failed.reason, status: 'failed', startedAt, reasonKind: failed.kind })
+    } finally {
+      release()
     }
   }
 }
