@@ -866,3 +866,136 @@ describe('a card of a channel absent from the list, without origin', { timeout: 
     expect(within(pending).queryByTestId('queue-from-lane')).toBeNull()
   })
 })
+
+describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-26T08:00:00.000Z'
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const briefing = { id: 'auto_briefing', name: 'Briefing du matin', kind: 'briefing', prompt: 'briefing', at: '07:30', days: [1, 2, 3, 4, 5],
+    enabled: true, createdBy: 'scheduler', lastFiredDate: '2026-11-26', lastOutcome: 'ok: mission mis_1' }
+  const relance = { id: 'auto_x', name: 'Relance', kind: 'custom', prompt: 'x', at: '09:00', enabled: false, createdBy: you }
+  const automationsFace = (over: Record<string, unknown> = {}): MndtFace => {
+    let items = [briefing, relance]
+    const base = face(state())
+    return new Proxy(base, {
+      get: (target, key) => {
+        if (key === 'automations') return over.automations ?? (async () => ({ items, canAdmin: true }))
+        if (key === 'runAutomationNow') return over.runAutomationNow ?? (async () => ({ ok: true, value: { outcome: 'ok' } }))
+        if (key === 'toggleAutomation' && over.toggleAutomation !== undefined) return over.toggleAutomation
+        if (key === 'toggleAutomation') return async (id: string, enabled: boolean) => {
+          items = items.map(a => (a.id === id ? { ...a, enabled } : a))
+          return { ok: true }
+        }
+        return (target as unknown as Record<string | symbol, unknown>)[key]
+      },
+    })
+  }
+  const open = async (owner: boolean, api: MndtFace = automationsFace()) => {
+    const chat = createMockChat({ you, agents: [], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={api} chat={chat} tc={chatFrench} team={{ owner }} />)
+    return screen.findByTestId('side-nav')
+  }
+
+  it('the owner has the entry; another member has none', async () => {
+    expect(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' })).toBeTruthy()
+    cleanup()
+    expect(within(await open(false)).queryByRole('button', { name: 'Tâches planifiées' })).toBeNull()
+  })
+
+  it('lists each one with its hour in words, its last run and its state', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    expect(rows[0]?.textContent).toContain('Briefing du matin · du lundi au vendredi à 07:30')
+    expect(within(rows[0] as HTMLElement).getByTestId('scheduled-last').textContent).toBe('dernier passage : 2026-11-26 · abouti')
+    expect(within(rows[1] as HTMLElement).getByTestId('scheduled-state').textContent).toBe('suspendue')
+  })
+
+  it('run now in one click; a briefing links to the lane, which one click opens', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const ran = await screen.findByTestId('scheduled-ran')
+    fireEvent.click(within(ran).getByRole('button', { name: 'Voir dans ma lane' }))
+    expect(await screen.findByTestId('lane-welcome')).toBeTruthy()
+  })
+
+  it('another kind is said to land elsewhere, never linked to the lane', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const ran = await screen.findByTestId('scheduled-ran')
+    expect(within(ran).queryByRole('button')).toBeNull()
+    expect(ran.textContent).toContain('pas dans votre lane')
+  })
+
+  it('suspend and activate in one click', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Activer' }))
+    await waitFor(() => { expect(screen.getAllByTestId('scheduled-state')[1]?.textContent).toBe('active') })
+  })
+
+  it('a refused run is said in a fixed sentence, never the served text', async () => {
+    const api = automationsFace({ runAutomationNow: async () => ({ ok: false, error: 'upstream sk-live-1', status: 500 }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const alert = await within(first as HTMLElement).findByRole('alert')
+    expect(alert.textContent).toBe('Elle n\'a pas pu être lancée : réessayez dans un moment.')
+  })
+
+  it('a 200 that says it failed reads a fixed sentence, never the rest of the text', async () => {
+    const api = automationsFace({ runAutomationNow: async () => ({ ok: true, value: { outcome: 'failed: upstream sk-live-1 at 10.0.0.4' } }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const alert = await within(first as HTMLElement).findByRole('alert')
+    expect(alert.textContent).toBe('Le lancement a échoué.')
+    expect(screen.queryByTestId('scheduled-ran')).toBeNull()
+  })
+
+  it('a member who is not the owner has neither the entry nor the screen', async () => {
+    const side = await open(false)
+    expect(within(side).queryByRole('button', { name: 'Tâches planifiées' })).toBeNull()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('two clicks make one call; a rejected call frees the line', async () => {
+    let calls = 0
+    let release: () => void = () => undefined
+    const api = automationsFace({
+      runAutomationNow: () => { calls += 1; return new Promise((_r, reject) => { release = () => { reject(new Error('down')) } }) },
+    })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    const button = within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(calls).toBe(1)
+    release()
+    expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Elle n\'a pas pu être lancée : réessayez dans un moment.')
+    await waitFor(() => { expect(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }).hasAttribute('disabled')).toBe(false) })
+  })
+
+  it('a refused toggle reads a fixed sentence', async () => {
+    const api = automationsFace({ toggleAutomation: async () => ({ ok: false, error: 'internal sk-live-2', status: 500 }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Activer' }))
+    expect((await within(rows[1] as HTMLElement).findByRole('alert')).textContent).toBe('Elle n\'a pas pu être modifiée : réessayez dans un moment.')
+  })
+
+  it('the last run reads lastRunAt first, else lastFiredDate, else nothing', async () => {
+    const items = [
+      { ...briefing, lastRunAt: '2026-11-26T05:12:00.000Z', lastFiredDate: '2026-11-20' },
+      { ...relance, id: 'auto_y', lastFiredDate: '2026-11-25' },
+      { ...relance, id: 'auto_z' },
+    ]
+    const api = automationsFace({ automations: async () => ({ items, canAdmin: true }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    expect(within(rows[0] as HTMLElement).getByTestId('scheduled-last').textContent).not.toContain('2026-11-20')
+    expect(within(rows[1] as HTMLElement).getByTestId('scheduled-last').textContent).toContain('2026-11-25')
+    expect(within(rows[2] as HTMLElement).queryByTestId('scheduled-last')).toBeNull()
+  })
+})

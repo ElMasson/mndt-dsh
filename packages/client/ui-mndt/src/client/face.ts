@@ -170,6 +170,8 @@ export interface AutomationRow {
   readonly enabled: boolean
   readonly createdBy: string
   readonly lastFiredDate?: string
+  /** When it last ran, a manual run included (A1, after #164); preferred to lastFiredDate. */
+  readonly lastRunAt?: string
   readonly lastMissionId?: string
   readonly lastOutcome?: string
   readonly failures?: number

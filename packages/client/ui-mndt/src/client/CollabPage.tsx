@@ -6,6 +6,7 @@
  * A channel is a perimeter of responsibility (the team, one mandate, the system),
  * every post is typed, and the approval card is the only place a decision is made.
  */
+import { ScheduledScreen } from './scheduledScreen.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
@@ -181,7 +182,7 @@ export interface TeamFrame {
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
-type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'settings'
+type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'settings'
 
 export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team, documents }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
@@ -889,7 +890,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const current = chatChannels?.find(c => c.id === chatId)
     const place: TeamPlace | undefined = view === 'chat'
       ? (current === undefined || current.kind === 'solo' ? 'lane' : 'channels')
-      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'settings'
+      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'scheduled' || view === 'settings'
         ? view
         : 'settings'
     return (
@@ -916,6 +917,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
         you={state?.you ?? ''}
         name={team.name}
         live={error === undefined}
+        scheduled={team.owner === true}
       >
         {page}
       </TeamShell>
@@ -2058,6 +2060,18 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 </ul>
               )}
             </section>
+          )}
+          {view !== 'scheduled' || team.owner !== true ? undefined : (
+            <ScheduledScreen
+              api={api}
+              title={t('shell.scheduled')}
+              onLane={() => {
+                const lane = chatChannels?.find(c => c.kind === 'solo')
+                if (lane !== undefined) setChatId(lane.id)
+                setView('chat')
+              }}
+              t={tc}
+            />
           )}
           {view !== 'settings' ? undefined : (
             <section className="mw-screen" data-testid="team-settings">
