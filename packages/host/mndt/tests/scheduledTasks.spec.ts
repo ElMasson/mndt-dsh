@@ -284,6 +284,17 @@ describe('the readers of a task and of its journal lines are one rule', () => {
     expect((await b.call('POST', `/schedules/${b.scheduleId}/pause`, 'operator')).status).toBe(404)
   })
 
+  it('a lane task names its person no more than its card already does (requestedBy, served by #153)', async () => {
+    const b = await laneTask(operator)
+    // The card risen to the owner already names who asked it; in a lane, that is its only member.
+    const card = ((await b.call('GET', '/approvals', 'owner', undefined, undefined, { state: 'all' })).body.approvals as Record<string, unknown>[])
+      .find(row => row.kind === 'propose_schedule') as { requestedBy: string; scheduleProposal: { destination: { member?: string } } }
+    expect(card.scheduleProposal.destination.member).toBe(card.requestedBy)
+    const [task] = (await b.call('GET', '/schedules', 'owner')).body.schedules as { requestedBy: string; destination: { member?: string } }[]
+    expect(task?.destination.member).toBe(task?.requestedBy)
+    expect(task?.requestedBy).toBe(operator)
+  })
+
   it('the card risen from a lane serves its own content, nothing of the lane', async () => {
     const b = await bench()
     const lane = await b.service.laneOf(operator)
