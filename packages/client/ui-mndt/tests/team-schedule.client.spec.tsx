@@ -258,3 +258,68 @@ describe('the month\'s bound on the card', () => {
     expect(screen.getByTestId('schedule-cost').textContent).not.toContain('par mois')
   })
 })
+
+describe('a run under way (#169)', () => {
+  it('« en cours » while running; nothing otherwise, nor for a field of another shape', async () => {
+    const draw = async (running: unknown): Promise<HTMLElement | null> => {
+      cleanup()
+      const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task({ running })] }, () => Date.parse(at))
+      render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+      await screen.findByTestId('schedule-row')
+      return screen.queryByTestId('schedule-running')
+    }
+    expect((await draw(true))?.textContent).toBe('en cours')
+    expect(await draw(false)).toBeNull()
+    expect(await draw('yes')).toBeNull()
+  })
+})
+
+/** @param over - fields of the task. @returns its line's text, a last run at 04:00 UTC given. */
+async function lastRunLine(over: Record<string, unknown>): Promise<string> {
+  cleanup()
+  const seed = { you, agents: [assistant], channels: [compta], schedules: [task({ lastRunAt: '2026-11-26T04:00:00.000Z', ...over })] }
+  render(<ScheduleList face={createMockChat(seed, () => Date.parse(at))} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+  return (await screen.findByTestId('schedule-row')).textContent ?? ''
+}
+
+describe('the last run\'s outcome in words (#169)', () => {
+  it('done, failed with its category, and a restart said as one, with the month\'s real cost', async () => {
+    expect(await lastRunLine({ lastStatus: 'done', lastEur: 0.08, eurThisMonth: 0.32 })).toMatch(/dernier :.*0,08.*· abouti.*ce mois : 0,32/u)
+    expect(await lastRunLine({ lastStatus: 'failed', lastReasonKind: 'refused' })).toContain('échec (refusé par l\'espace)')
+    const restarted = await lastRunLine({ lastStatus: 'failed', lastReasonKind: 'restart' })
+    expect(restarted).toContain('· interrompu par un redémarrage')
+    expect(restarted).not.toContain('échec')
+  })
+})
+
+describe('after #169\'s review: a refused run, a requester who left', () => {
+  const line = async (over: Record<string, unknown>): Promise<HTMLElement> => {
+    cleanup()
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task(over)] }, () => Date.parse(at))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    return screen.findByTestId('schedule-row')
+  }
+  it('a run refused before any call is said on the task, never as a failure', async () => {
+    const row = await line({ lastRunAt: '2026-11-26T04:00:00.000Z', lastStatus: 'refused', lastReasonKind: 'refused' })
+    expect(row.textContent).toContain('non lancée : plafond du mois atteint, ou modèle sans tarif')
+    expect(row.textContent).not.toContain('échec')
+  })
+  it('a task paused because its requester left says so', async () => {
+    const row = await line({ state: 'paused', pausedBecause: 'requester-left' })
+    expect(within(row).getByTestId('schedule-paused-because').textContent).toBe('En pause : son demandeur n\'y a plus accès.')
+  })
+})
+
+describe('review of #172', () => {
+  it('a run refused for a model with no price reads the same sentence (the core records both alike)', async () => {
+    const text = await lastRunLine({ lastStatus: 'refused', lastReasonKind: 'refused' })
+    expect(text).toContain('ou modèle sans tarif')
+    expect(text).not.toContain('échec')
+  })
+  it('a failure of a category the page does not know reads « échec », no cause', async () => {
+    const text = await lastRunLine({ lastStatus: 'failed', lastReasonKind: 'some-new-kind' })
+    expect(text).toContain('· échec')
+    expect(text).not.toContain('le modèle a renvoyé une erreur')
+    expect(text).not.toContain('échec (')
+  })
+})
