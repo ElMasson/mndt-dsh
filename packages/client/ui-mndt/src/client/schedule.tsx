@@ -179,11 +179,11 @@ export interface ScheduleRow {
   readonly state: 'active' | 'paused'
   /** A run is under way (#169): said « en cours ». */
   readonly running: boolean
-  readonly pausedBecause?: 'failures' | 'agent-retired' | 'agent-left' | 'owner'
+  readonly pausedBecause?: 'failures' | 'agent-retired' | 'agent-left' | 'requester-left' | 'owner'
   readonly nextRuns: readonly string[]
   readonly timeZone?: string
   readonly lastRunAt?: string
-  readonly lastStatus?: 'done' | 'failed'
+  readonly lastStatus?: 'done' | 'failed' | 'refused'
   readonly lastReasonKind?: string
   readonly lastEur?: number
   readonly eurThisMonth?: number
@@ -192,7 +192,7 @@ export interface ScheduleRow {
   readonly can: { readonly pause: boolean; readonly resume: boolean; readonly delete: boolean }
 }
 
-const PAUSED = ['failures', 'agent-retired', 'agent-left', 'owner'] as const
+const PAUSED = ['failures', 'agent-retired', 'agent-left', 'requester-left', 'owner'] as const
 
 /** @param n - a served amount. @returns it when finite and not negative. */
 function eurOf(n: unknown): number | undefined {
@@ -223,7 +223,7 @@ export function scheduleRowOf(raw: unknown): ScheduleRow | undefined {
     ...(timeZone === undefined ? {} : { timeZone }),
     ...(typeof r.lastRunAt === 'string' && !Number.isNaN(Date.parse(r.lastRunAt)) ? { lastRunAt: r.lastRunAt } : {}),
     ...(lastEur === undefined ? {} : { lastEur }),
-    ...(r.lastStatus === 'done' || r.lastStatus === 'failed' ? { lastStatus: r.lastStatus } : {}),
+    ...(r.lastStatus === 'done' || r.lastStatus === 'failed' || r.lastStatus === 'refused' ? { lastStatus: r.lastStatus } : {}),
     ...(typeof r.lastReasonKind === 'string' && r.lastReasonKind !== '' ? { lastReasonKind: r.lastReasonKind } : {}),
     ...(eurThisMonth === undefined ? {} : { eurThisMonth }),
     ...(eurPerMonthMax === undefined ? {} : { eurPerMonthMax }),
@@ -314,6 +314,9 @@ export function ScheduleList(props: {
               {r.nextRuns[0] === undefined || r.state === 'paused' ? '' : t('scheduleNextOne', { at: runTime(r.nextRuns[0], r.timeZone) })}
               {r.lastRunAt === undefined ? '' : ` · ${t('scheduleLast', { at: runTime(r.lastRunAt, r.timeZone) })}${r.lastEur === undefined ? '' : `, ${euros(r.lastEur)}`}`}
               {r.lastStatus === 'done' ? ` · ${t('scheduleLastDone')}` : ''}
+              {/* Refused before any call (the agent's month ceiling, or a model with no price): not a
+                  failure, nothing is published, so the task is where it is said; it starts again next month. */}
+              {r.lastStatus === 'refused' ? ` · ${t('scheduleLastRefused')}` : ''}
               {/* A restart interrupted the run; it is not a failure (#169): said as what it is. */}
               {r.lastStatus !== 'failed' ? '' : r.lastReasonKind === 'restart' ? ` · ${t('endRestart')}`
                 : ` · ${t('scheduleLastFailed', { reason: endWordOf(r.lastReasonKind, t) ?? t('endError') })}`}

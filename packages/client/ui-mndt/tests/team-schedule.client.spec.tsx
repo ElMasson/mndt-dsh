@@ -289,3 +289,21 @@ describe('the last run\'s outcome in words (#169)', () => {
     expect(restarted).not.toContain('échec')
   })
 })
+
+describe('after #169\'s review: a refused run, a requester who left', () => {
+  const line = async (over: Record<string, unknown>): Promise<HTMLElement> => {
+    cleanup()
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task(over)] }, () => Date.parse(at))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    return screen.findByTestId('schedule-row')
+  }
+  it('a run refused before any call is said on the task, never as a failure', async () => {
+    const row = await line({ lastRunAt: '2026-11-26T04:00:00.000Z', lastStatus: 'refused', lastReasonKind: 'refused' })
+    expect(row.textContent).toContain('non lancée : plafond du mois de l\'agent atteint')
+    expect(row.textContent).not.toContain('échec')
+  })
+  it('a task paused because its requester left says so', async () => {
+    const row = await line({ state: 'paused', pausedBecause: 'requester-left' })
+    expect(within(row).getByTestId('schedule-paused-because').textContent).toBe('En pause : son demandeur n\'y a plus accès.')
+  })
+})
