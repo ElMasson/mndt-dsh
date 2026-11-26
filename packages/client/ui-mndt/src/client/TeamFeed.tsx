@@ -359,7 +359,10 @@ function missionReasonWords(kind: string | undefined, t: ChatTranslate): string 
 /** A mission's report published in a lane, as the page reads it. */
 interface PublishedMission {
   readonly title: string
-  /** A scheduled task's run, or else a briefing (any other kind reads as a briefing). */
+  /**
+   * A run of a scheduled task or of any automation but the briefing (#166 publishes them all in the
+   * owner's lane): « Tâche planifiée »; a briefing, or a kind the page cannot read, stays « Briefing ».
+   */
   readonly scheduled: boolean
   readonly failed: boolean
   /** Why it failed, as the host's category (never the provider's text); any string, read by lookup. */
@@ -382,7 +385,7 @@ export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined
   const tools = at('toolsUnavailable')
   return {
     title: typeof title === 'string' && title.trim() !== '' && title.length <= 120 ? title.trim() : '',
-    scheduled: at('kind') === 'scheduled',
+    scheduled: typeof at('kind') === 'string' && at('kind') !== '' && at('kind') !== 'briefing',
     failed: at('status') === 'failed',
     ...(typeof at('reasonKind') === 'string' ? { reasonKind: at('reasonKind') as string } : {}),
     ...(typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? { eur } : {}),

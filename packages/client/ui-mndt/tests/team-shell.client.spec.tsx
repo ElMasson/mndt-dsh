@@ -926,13 +926,12 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect(await screen.findByTestId('lane-welcome')).toBeTruthy()
   })
 
-  it('another kind is said to land elsewhere, never linked to the lane', async () => {
+  it('any kind is linked to the lane (#166 publishes them all there)', async () => {
     fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
     const rows = await screen.findAllByTestId('scheduled-row')
     fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
     const ran = await screen.findByTestId('scheduled-ran')
-    expect(within(ran).queryByRole('button')).toBeNull()
-    expect(ran.textContent).toContain('pas dans votre lane')
+    expect(within(ran).getByRole('button', { name: 'Voir dans ma lane' })).toBeTruthy()
   })
 
   it('suspend and activate in one click', async () => {
@@ -1073,5 +1072,40 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     release()
     await waitFor(() => { expect(within(first as HTMLElement).getByTestId('scheduled-hour').hasAttribute('disabled')).toBe(false) })
     expect(calls).toBe(1)
+  })
+
+  it('the next run, in the served zone; none on a suspended one', async () => {
+    const items = [{ ...briefing, nextRunAt: '2026-11-27T03:30:00.000Z' }, { ...relance, nextRunAt: '2026-11-27T05:00:00.000Z' }]
+    const api = automationsFace({ automations: async () => ({ items, canAdmin: true, timeZone: 'Indian/Reunion' }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    expect(within(rows[0] as HTMLElement).getByTestId('scheduled-next').textContent).toContain('07:30')
+    expect(within(rows[1] as HTMLElement).queryByTestId('scheduled-next')).toBeNull()
+    expect(within(rows[0] as HTMLElement).getByTestId('scheduled-zone').textContent).toBe(' (heure de La Réunion)')
+  })
+
+  it('a scheduler silent for over 2 minutes is said with its last sign of life; a recent one, or none, says nothing', async () => {
+    const said = async (schedulerAt: string | undefined): Promise<HTMLElement | null> => {
+      cleanup()
+      const api = automationsFace({ automations: async () => ({ items: [briefing], canAdmin: true, timeZone: 'Indian/Reunion', ...(schedulerAt === undefined ? {} : { schedulerAt }) }) })
+      fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+      await screen.findAllByTestId('scheduled-row')
+      return screen.queryByTestId('scheduler-stopped')
+    }
+    const stale = await said(new Date(Date.now() - 10 * 60_000).toISOString())
+    expect(stale?.textContent).toContain('Le planificateur ne tourne plus depuis')
+    expect(await said(new Date(Date.now() - 30_000).toISOString())).toBeNull()
+    expect(await said(undefined)).toBeNull()
+  })
+
+  it('a bad-time refusal reads its fixed sentence', async () => {
+    const api = automationsFace({ saveAutomation: async () => ({ ok: false, error: 'the time must read HH:MM', status: 400, code: 'bad-time' }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(field, { target: { value: '06:45' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Cette heure est illisible : écrivez-la comme 07:30.')
   })
 })
