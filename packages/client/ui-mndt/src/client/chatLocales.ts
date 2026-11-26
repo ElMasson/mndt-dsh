@@ -487,6 +487,9 @@ export const chatEn = {
   scheduledHourInvalid: 'This hour cannot be read: write it like 07:30.',
   scheduledHourRefused: 'The hour could not be changed: try again in a moment.',
   scheduledSchedulerStopped: 'The scheduler has not run since {at}: the tasks do not start by themselves.',
+  helpPeerCouldNotAnswer: '@{handle} could not answer.',
+  helpPeerCouldNotAnswerWhy: '@{handle} could not answer ({why}).',
+  staleAfterFailure: 'The turn failed after this message: what it announces will not happen.',
 } as const
 
 /** One copy key. */
@@ -974,6 +977,9 @@ export const chatFr: Record<ChatKey, string> = {
   scheduledHourInvalid: 'Cette heure est illisible : écrivez-la comme 07:30.',
   scheduledHourRefused: 'L\'heure n\'a pas pu être changée : réessayez dans un moment.',
   scheduledSchedulerStopped: 'Le planificateur ne tourne plus depuis {at} : les tâches ne partent pas d\'elles-mêmes.',
+  helpPeerCouldNotAnswer: '@{handle} n\'a pas pu répondre.',
+  helpPeerCouldNotAnswerWhy: '@{handle} n\'a pas pu répondre ({why}).',
+  staleAfterFailure: 'Le tour a échoué après ce message : ce qu\'il annonce n\'aura pas lieu.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

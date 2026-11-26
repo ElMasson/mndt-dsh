@@ -47,6 +47,7 @@ export function PendingQuestion(props: {
       <p className="mw-help-question-text">
         {t(e.kind === 'council' ? 'councilQuestionFor' : 'helpQuestionFor', { question: e.question })}
       </p>
+      {(e.unanswered ?? []).map((line, i) => <p key={`un-${i}`} className="mw-ctx-small" data-testid="pending-unanswered">{line}</p>)}
       {e.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(e.summary, { plainHeadings: true })}</div>}
       {/* Without the published question's message (an older help), an answer would close nothing: the channel only. */}
       {props.onAnswer === undefined || e.questionMessageId === '' ? undefined : (

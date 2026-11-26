@@ -396,6 +396,8 @@ export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined
 
 export function WebMessage(props: {
   readonly message: ChatMessage
+  /** An agent's answer whose turn then failed: shown greyed, with what it announced said void. */
+  readonly staleAfterFailure?: boolean | undefined
   readonly header: boolean
   readonly agents: ReadonlyMap<string, ChatAgent>
   readonly cards: readonly ThreadCard[]
@@ -469,8 +471,14 @@ export function WebMessage(props: {
       {m.deletedAt !== undefined ? (
         <p className="mw-message-removed">{t('webRemoved')}</p>
       ) : m.author.kind === 'agent' ? (
-        // An agent writes Markdown (tables, lists, bold): read, never shown as raw markers.
-        <div className="mw-message-body mw-agent-text" data-testid="chat-markdown">{renderBrief(m.text)}</div>
+        // An agent writes Markdown (tables, lists, bold): read, never shown as raw markers. Its turn
+        // failed afterwards: what it announces (« je serai relancé ») will not happen, and is said so.
+        props.staleAfterFailure === true ? (
+          <div className="mw-message-body mw-agent-text mw-ctx-muted" data-testid="chat-markdown" data-stale="true">
+            {renderBrief(m.text)}
+            <p className="mw-ctx-small" data-testid="stale-after-failure">{t('staleAfterFailure')}</p>
+          </div>
+        ) : <div className="mw-message-body mw-agent-text" data-testid="chat-markdown">{renderBrief(m.text)}</div>
       ) : published !== undefined && published.failed ? (
         // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
         <p className="mw-message-body mw-decide-error" data-testid="mission-failed">
