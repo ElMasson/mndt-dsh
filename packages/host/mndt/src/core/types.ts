@@ -481,7 +481,11 @@ export interface HelpReading {
 /** A question put to the channel's people when the peers did not unblock the asker. */
 export interface HelpEscalation {
   readonly question: string
-  readonly summary: string
+  /**
+   * What the advices add to the question (how many, a remaining disagreement);
+   * absent when there is nothing to add (no advice): the question says it all.
+   */
+  readonly summary?: string
   readonly at: string
   /** The asker's message that publishes the question: a person answers it by replying to it. */
   readonly messageId?: string
@@ -503,7 +507,8 @@ export interface TurnHelp {
   /** What the help cost (advices and reading), counted for the asker. */
   readonly eur?: number
   readonly capEur: number
-  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string }[]
+  /** A peer that gave no advice: its reason in words, and its kind (the screen says it in its own words). */
+  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string; readonly reasonKind?: TurnFailureKind }[]
   readonly askedAt: string
 }
 
@@ -569,6 +574,11 @@ export interface Message {
   readonly text: string
   /** Agent ids the text mentions among the channel's agents. */
   readonly mentions: readonly string[]
+  /**
+   * The agents the text names that got no turn, and why: not an agent of this
+   * channel, or retired. Absent when every mention got its turn.
+   */
+  readonly mentionsIgnored?: readonly { readonly handle: string; readonly reason: 'not-in-channel' | 'retired' }[]
   /** An agent's answer points at the message that mentioned it. */
   readonly replyTo?: string
   /** On a human message: one turn per agent it mentions. */

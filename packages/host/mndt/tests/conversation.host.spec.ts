@@ -186,6 +186,21 @@ describe('channels, mentions and agent turns', () => {
     expect(inCompta?.servers).toEqual(['dolibarr', 'qonto'])
   })
 
+  it('a mention of an agent that is not in the channel, or retired, gets no turn and is said (mentionsIgnored)', async () => {
+    const b = bench()
+    const analyste = await agent(b, 'analyste')
+    await agent(b, 'qwen')
+    const ancien = await agent(b, 'ancien')
+    await b.service.retireAgent(ancien, 'duke@datanalysis.re')
+    const id = await channel(b, 'equipe', [analyste], [])
+    const posted = await say(b, id, '@analyste et @qwen : donnez-moi chacun votre avis ; @ancien aussi. Écris à jdoe@datanalysis.re.')
+    expect(posted.turns?.map(turn => turn.agentId)).toEqual([analyste])
+    expect(posted.mentionsIgnored).toEqual([{ handle: 'qwen', reason: 'not-in-channel' }, { handle: 'ancien', reason: 'retired' }])
+    // Every mention answered: no field.
+    expect((await say(b, id, '@analyste merci')).mentionsIgnored).toBeUndefined()
+    await b.turns.settled()
+  })
+
   it('a turn runs on the agent model, never the default one, and answers in the thread', async () => {
     const b = bench()
     const qwen = await agent(b, 'qwen', 'qwen3.5', 'vllm-qwen', [])
@@ -575,6 +590,9 @@ describe('the connectors of a channel, added and removed one at a time', () => {
     const refused = await b.call('POST', `/channels/${id}/connectors`, asOwner, { add: ['gmail'] })
     expect(refused.status).toBe(400)
     expect((refused.body as { error: string }).error).toContain('connector not mounted: gmail')
+    // The refusal names what is mounted: an agent proposes again without asking a person.
+    expect((refused.body as { error: string; code: string })).toMatchObject({ code: 'connector-not-mounted' })
+    expect((refused.body as { error: string }).error).toMatch(/Connecteurs disponibles : .*office365/)
   })
 
   it('journals each change of connectors, with who, what and when, for the channel\'s members only', async () => {

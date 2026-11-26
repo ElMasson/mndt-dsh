@@ -244,6 +244,21 @@ export function turnServers(agent: Agent, channel: Channel): string[] {
     .sort()
 }
 
+/**
+ * @param message - a message of the history.
+ * @param history - the history it is in.
+ * @returns the line of the question its agent put to the team, when it published one.
+ */
+function escalationQuestion(message: Message, history: readonly Message[]): string {
+  for (const candidate of history) {
+    for (const turn of candidate.turns ?? []) {
+      const escalation = turn.help?.escalation ?? turn.council?.escalation
+      if (escalation?.messageId === message.id) return `\nQuestion à l’équipe : ${escalation.question}`
+    }
+  }
+  return ''
+}
+
 /** @param author - a message author. @param agents - every agent. @returns the name shown. */
 function speaker(message: Message, agents: readonly Agent[]): string {
   const author = message.author
@@ -355,7 +370,9 @@ export function turnPrompt(
         m.createdAt <= asked.createdAt,
     )
     .slice(-HISTORY)
-    .map(m => `[${speaker(m, agents)}] ${m.text}`)
+    // A question put to the team is the escalation's, not in the text: given
+    // back here, the agents of the next turns still read it.
+    .map(m => `[${speaker(m, agents)}] ${m.text}${escalationQuestion(m, history)}`)
   return [
     `Tu es @${agent.handle} (${agent.name}), un agent du canal #${channel.name} de l'équipe DATANALYSIS.`,
     'Tu réponds en français, de façon dense et factuelle, à partir de ce canal et de ses documents.',

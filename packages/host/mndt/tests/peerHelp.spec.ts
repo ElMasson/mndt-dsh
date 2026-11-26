@@ -186,7 +186,8 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
       return original(input)
     }
     const { turn } = await ask(b, t.channel, '@alpha le point ?')
-    expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/), reason: 'avis non obtenu : erreur' }])
+    // By kind before the reading: the words a reader may see, and the kind the screen says in its own words.
+    expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/) as unknown, reason: 'avis non obtenu : erreur', reasonKind: 'failed' }])
     expect(JSON.stringify(served)).not.toMatch(/@beta|@gamma/)
     // After the reading, the peer named and the host's sentence: the engine's words go to the operator's log.
     expect(turn.help?.skipped[0]?.reason).toBe('Erreur pendant l’exécution.')
@@ -249,11 +250,13 @@ describe('ask_peers: escalation, answered by a member', () => {
     b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "La facture 42 est-elle HT ?"}'
     const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
     expect(turn.help?.escalation).toMatchObject({ question: 'La facture 42 est-elle HT ?' })
-    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ? Avis reçus : 2.')
+    // Only what the advices add to the question (no « Blocage : » repeating it).
+    expect(turn.help?.escalation?.summary).toBe('Avis reçus : 2.')
     // Each sentence ended once: never « ?. » nor « .. ».
     expect(turn.help?.escalation?.summary).not.toMatch(/\?\.|\.\./)
     const question = replies.at(-1) as Message
-    expect(question.text).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
+    // The question is the escalation's (shown under the message), not repeated in the text.
+    expect(question.text).not.toContain('Question à l’équipe')
     const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { turnId: string; question: string }[]
     expect(turn.help?.escalation?.messageId).toBe(question.id)
     expect(listed).toEqual([expect.objectContaining({
@@ -270,6 +273,9 @@ describe('ask_peers: escalation, answered by a member', () => {
     const relaunched = (await b.service.message((reply.body.message as { id: string }).id))?.turns ?? []
     expect(relaunched.map(r => r.agentId)).toEqual([t.alpha])
     expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+    // The question, out of the text, is given back to the next turns' history.
+    const relaunchedPrompt = b.engine.seen.at(-1)?.prompt ?? ''
+    expect(relaunchedPrompt).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
   })
 
   it('an escalated help keeps its peers withheld until a person answers', async () => {
@@ -387,8 +393,9 @@ describe('ask_peers: bounds', () => {
     expect(turn.help?.skipped.some(skip => /borne \(0\.2 €\)/.test(skip.reason))).toBe(true)
     expect(turn.help?.escalation).toBeDefined()
     // The summary, served by GET /escalations while the question waits, says the reason by kind.
-    expect(turn.help?.escalation?.summary).toContain('Sans avis : avis non obtenu : borne')
-    expect(turn.help?.escalation?.summary).not.toMatch(/@|€|agt_|route-/)
+    // The summary only says what the advices add; the peer without an advice is served by kind.
+    expect(turn.help?.escalation?.summary ?? '').not.toMatch(/Sans avis|Blocage|@|€|agt_|route-/)
+    expect(turn.help?.skipped.some(skip => skip.reasonKind !== undefined)).toBe(true)
   })
 
   it('a reading the bound refuses is said by kind in the published text: no € nor handle', async () => {

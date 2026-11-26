@@ -478,13 +478,13 @@ export class TurnScheduler {
         const peer = agents.find(candidate =>
           candidate.id === peerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
         if (peer === undefined) {
-          help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal' }] }
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal', reasonKind: 'stale' }] }
           continue
         }
         const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, undefined, await this.#skillsFor(peer))
         const why = await askerCeiling() ?? overCap(peer, text)
         if (why !== undefined) {
-          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why }] }
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why, reasonKind: 'refused' }] }
           continue
         }
         try {
@@ -492,7 +492,7 @@ export class TurnScheduler {
           const said = answered.output.text.trim()
           if (said === '') {
             other += answered.eur ?? 0
-            help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'aucun texte' }] }
+            help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'aucun texte', reasonKind: 'no-answer' }] }
           } else {
             help = {
               ...help,
@@ -505,14 +505,14 @@ export class TurnScheduler {
           }
         } catch (error) {
           if (stopped(error)) {
-            help = { ...help, state: 'done', skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'tour arrêté' }], eur: spent() }
+            help = { ...help, state: 'done', skipped: [...help.skipped, { slot, agentId: peer.id, reason: 'tour arrêté', reasonKind: 'cancelled' }], eur: spent() }
             await save()
             throw error
           }
           const price = priceOf(prices, peer)
           if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
-          const reason = turnFailure(error, this.#log, 'a peer\'s advice failed').reason
-          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason }] }
+          const failed = turnFailure(error, this.#log, 'a peer\'s advice failed')
+          help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: failed.reason, reasonKind: failed.kind }] }
         }
         await save()
       }
@@ -521,17 +521,18 @@ export class TurnScheduler {
     const escalate = async (question: string, body: string, disputed?: string): Promise<{ text?: string; eur: number }> => {
       const by = await closedBy()
       if (by !== undefined) return close(by)
-      // By kind: a raw reason (« Plafond mensuel atteint pour @x : … € ») would name a peer while the question waits.
-      const reasons = help.skipped.map(skip => reasonKind(skip.reason))
-      const summary = [
-        sentence(`Blocage : ${help.request.blocker}`),
-        `Avis reçus : ${help.advices.length}.`,
-        ...(reasons.length === 0 ? [] : [sentence(`Sans avis : ${reasons.join(' ; ')}`)]),
+      // Only what the advices add to the question: their count, a remaining
+      // disagreement. Without an advice, nothing: the question says it all, and
+      // the peers without an advice are served by kind (skipped[].reasonKind).
+      const parts = [
+        ...(help.advices.length === 0 ? [] : [`Avis reçus : ${help.advices.length}.`]),
         ...(disputed === undefined ? [] : [sentence(`Désaccord restant : ${disputed}`)]),
-      ].join(' ')
-      help = { ...help, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
+      ]
+      const summary = parts.length === 0 ? undefined : parts.join(' ')
+      help = { ...help, state: 'done', escalation: { question, ...(summary === undefined ? {} : { summary }), at: new Date().toISOString() }, eur: spent() }
       await save()
-      return { text: `${body}\n\nQuestion à l’équipe : ${question}`, eur: spent() }
+      // The question is the escalation's (shown under the message), never repeated in the text.
+      return { text: body, eur: spent() }
     }
     const firstClose = await round(1)
     if (firstClose !== undefined) return close(firstClose)
@@ -672,7 +673,8 @@ export class TurnScheduler {
       ].join(' ')
       council = { ...council, state: 'done', escalation: { question, summary, at: new Date().toISOString() }, eur: spent() }
       await save()
-      return { text: `${body}\n\nQuestion à l’équipe : ${question}`, eur: spent() }
+      // The question is the escalation's (shown under the message), never repeated in the text.
+      return { text: body, eur: spent() }
     }
     // 1. The chair frames the question; the host adds « none of these ».
     await save()
