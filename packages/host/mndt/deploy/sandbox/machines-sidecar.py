@@ -13,10 +13,13 @@ Environment:
   MACHINES_DIR     directory read by the product API for previews
 """
 import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -114,6 +117,27 @@ def release(identity):
         _ACTIVE[identity] = max(0, _ACTIVE.get(identity, 0) - 1)
 
 
+# Each desktop or browser session has its own agent token, drawn at its start and
+# kept here in memory; the machine service's token never enters a session a web
+# page can drive. A session found running without one (this service restarted)
+# is started again.
+_SESSION_TOKENS_LOCK = threading.Lock()
+_SESSION_TOKENS = {}
+
+
+def session_token(name, fresh=False):
+    """@returns the session's own token; a new one when fresh, else the known one or ''."""
+    with _SESSION_TOKENS_LOCK:
+        if fresh:
+            _SESSION_TOKENS[name] = secrets.token_hex(16)
+        return _SESSION_TOKENS.get(name, '')
+
+
+def forget_session(name):
+    with _SESSION_TOKENS_LOCK:
+        _SESSION_TOKENS.pop(name, None)
+
+
 def desktop_name(identity):
     return 'desktop-' + shell_slug(identity)
 
@@ -125,9 +149,11 @@ def ensure_desktop(identity):
     """
     name = desktop_name(identity)
     running = docker('inspect', name, '--format', '{{.State.Running}}').stdout.strip()
-    if running == 'true':
-        return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': TOKEN}
+    known = session_token(name)
+    if running == 'true' and known != '':
+        return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': known}
     docker('rm', '-f', name)
+    token = session_token(name, fresh=True)
     docker(
         'run', '-d', '--name', name,
         '--network', 'mndt-front_front',
@@ -140,7 +166,7 @@ def ensure_desktop(identity):
         '--pids-limit', '256',
         '--memory', '1g',
         '--cpus', '1',
-        '-e', 'DESKTOP_TOKEN=' + TOKEN,
+        '-e', 'DESKTOP_TOKEN=' + token,
         '-e', 'DESKTOP_PORT=' + str(DESKTOP_PORT),
         DESKTOP_IMAGE,
         timeout=60,
@@ -150,13 +176,14 @@ def ensure_desktop(identity):
                  + ".then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))")
         health = docker('exec', name, 'node', '-e', probe, timeout=20)
         if health.returncode == 0:
-            return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': TOKEN}
+            return {'ok': True, 'identity': identity, 'host': name, 'port': DESKTOP_PORT, 'token': token}
         time.sleep(2)
     return {'ok': False, 'identity': identity, 'error': 'the desktop agent did not answer'}
 
 
 def stop_desktop(identity):
     docker('rm', '-f', desktop_name(identity))
+    forget_session(desktop_name(identity))
     return {'ok': True, 'identity': identity, 'stopped': True}
 
 
@@ -173,9 +200,11 @@ def ensure_browser(identity):
     """
     name = browser_name(identity)
     running = docker('inspect', name, '--format', '{{.State.Running}}').stdout.strip()
-    if running == 'true':
-        return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': TOKEN}
+    known = session_token(name)
+    if running == 'true' and known != '':
+        return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': known}
     docker('rm', '-f', name)
+    token = session_token(name, fresh=True)
     docker(
         'run', '-d', '--name', name,
         '--network', 'mndt-front_front',
@@ -188,7 +217,7 @@ def ensure_browser(identity):
         '--pids-limit', '256',
         '--memory', '1g',
         '--cpus', '1',
-        '-e', 'AGENT_TOKEN=' + TOKEN,
+        '-e', 'AGENT_TOKEN=' + token,
         '-e', 'AGENT_PORT=' + str(BROWSER_AGENT_PORT),
         BROWSER_AGENT_IMAGE,
         timeout=60,
@@ -198,13 +227,14 @@ def ensure_browser(identity):
                  + ".then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))")
         health = docker('exec', name, 'node', '-e', probe, timeout=20)
         if health.returncode == 0:
-            return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': TOKEN}
+            return {'ok': True, 'identity': identity, 'host': name, 'port': BROWSER_AGENT_PORT, 'token': token}
         time.sleep(2)
     return {'ok': False, 'identity': identity, 'error': 'the browser agent did not answer'}
 
 
 def stop_browser(identity):
     docker('rm', '-f', browser_name(identity))
+    forget_session(browser_name(identity))
     return {'ok': True, 'identity': identity, 'stopped': True}
 
 
@@ -272,8 +302,13 @@ def ensure_shell(identity):
 # Its runtime is a setting: runsc by default; a rehearsal without gVisor sets
 # runc, and its checks say the gVisor proof is still to be made.
 PC_RUNTIME = os.environ.get('MNDT_MACHINE_RUNTIME', 'runsc')
+# Without gVisor only when said twice: runc as the runtime, and this flag (a rehearsal).
+PC_ALLOW_RUNC = os.environ.get('MNDT_MACHINE_ALLOW_RUNC', '') == '1'
 PC_IMAGE = os.environ.get('PC_IMAGE', DESKTOP_IMAGE)
 PC_PORT = int(os.environ.get('PC_PORT', str(DESKTOP_PORT)))
+# The member's own uid inside the computer: its files are handed to it.
+PC_UID = int(os.environ.get('PC_UID', '1000'))
+TMPFS_FLAGS = 'rw,nosuid,nodev,noexec'
 # Each member's files, and nothing else: Docker resolves the bind on the host.
 USERS_ROOT = os.environ.get('USERS_ROOT', '/state/users')
 USERS_ROOT_HOST = os.environ.get('USERS_ROOT_HOST', USERS_ROOT)
@@ -288,16 +323,27 @@ PC_LABEL = 'mndt.member'
 _PCS_LOCK = threading.Lock()
 # One start at a time: counting the running computers and starting one is one step.
 _START_LOCK = threading.Lock()
-# identity -> {'startedAt': iso, 'lastUsed': epoch seconds}
+# identity -> {'startedAt': iso, 'lastUsed': epoch seconds, 'agentToken': its own token}
 _PCS = {}
 
 
+def member_key(identity):
+    """A readable slug and 10 hex of the sha256 of the normalised address.
+
+    The slug alone folds jean.dupont@, jean-dupont@, jean_dupont@ and
+    jean+dupont@ into one name: one container, one network, one folder for four
+    people. The digest keeps them apart; the slug only helps a reader.
+    """
+    normalised = identity.strip().lower()
+    return shell_slug(normalised)[:40].strip('-') + '-' + hashlib.sha256(normalised.encode('utf-8')).hexdigest()[:10]
+
+
 def pc_name(identity):
-    return 'mndt-pc-' + shell_slug(identity)
+    return 'mndt-pc-' + member_key(identity)
 
 
 def pc_network(identity):
-    return 'mndt-pc-net-' + shell_slug(identity)
+    return 'mndt-pc-net-' + member_key(identity)
 
 
 def iso(epoch):
@@ -357,8 +403,15 @@ def _start_pc(identity):
     if docker('network', 'inspect', network).returncode != 0:
         docker('network', 'create', '--internal', '--label', PC_LABEL + '=' + identity, network)
     docker('network', 'connect', network, EGRESS_PROXY)
-    home = os.path.join(USERS_ROOT, shell_slug(identity))
+    home = os.path.join(USERS_ROOT, member_key(identity))
     os.makedirs(home, exist_ok=True)
+    try:
+        os.chown(home, PC_UID, PC_UID)
+    except OSError:
+        pass  # a test run without root: the folder stays the caller's
+    # Its agents' token is its own, drawn at each start and kept here in memory:
+    # the machine service's token never enters a computer.
+    agent_token = secrets.token_hex(16)
     docker('rm', '-f', name)
     proxy = 'http://' + EGRESS_PROXY + ':' + str(EGRESS_PORT)
     result = docker(
@@ -367,20 +420,22 @@ def _start_pc(identity):
         '--label', PC_LABEL + '=' + identity,
         '--network', network,
         '--read-only',
-        '--tmpfs', '/tmp:rw,size=1g',
-        '--tmpfs', '/dev/shm:rw,size=256m',
-        '--mount', 'type=bind,src=' + os.path.join(USERS_ROOT_HOST, shell_slug(identity)) + ',dst=/home/user',
+        '--tmpfs', '/tmp:' + TMPFS_FLAGS + ',size=1g',
+        '--tmpfs', '/dev/shm:' + TMPFS_FLAGS + ',size=256m',
+        '--mount', 'type=bind,src=' + os.path.join(USERS_ROOT_HOST, member_key(identity)) + ',dst=/home/user',
         '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges',
-        '--user', '1000:1000',
+        '--user', str(PC_UID) + ':' + str(PC_UID),
         '--pids-limit', '256',
         '--memory', '1g',
+        '--memory-swap', '1g',
         '--cpus', '1',
         '-e', 'HOME=/home/user',
         '-e', 'HTTP_PROXY=' + proxy, '-e', 'HTTPS_PROXY=' + proxy,
         '-e', 'http_proxy=' + proxy, '-e', 'https_proxy=' + proxy,
         '-e', 'NO_PROXY=localhost,127.0.0.1',
-        '-e', 'DESKTOP_TOKEN=' + TOKEN,
+        '-e', 'AGENT_TOKEN=' + agent_token,
+        '-e', 'DESKTOP_TOKEN=' + agent_token,
         '-e', 'DESKTOP_PORT=' + str(PC_PORT),
         PC_IMAGE,
         timeout=60,
@@ -389,11 +444,17 @@ def _start_pc(identity):
         return {'ok': False, 'error': 'the computer did not start'}
     now = time.time()
     with _PCS_LOCK:
-        _PCS[identity] = {'startedAt': iso(now), 'lastUsed': now}
+        _PCS[identity] = {'startedAt': iso(now), 'lastUsed': now, 'agentToken': agent_token}
     return {'ok': True}
 
 
 def stop_pc(identity):
+    """Stop the member's computer, under the start lock: never during its own start."""
+    with _START_LOCK:
+        return _stop_pc(identity)
+
+
+def _stop_pc(identity):
     docker('rm', '-f', pc_name(identity))
     network = pc_network(identity)
     docker('network', 'disconnect', '-f', network, EGRESS_PROXY)
@@ -405,13 +466,16 @@ def stop_pc(identity):
 
 def reap_idle():
     """Stop every computer idle for IDLE_SECONDS. One found running unknown (this service restarted) starts its clock now."""
-    now = time.time()
     for identity in running_pcs():
-        with _PCS_LOCK:
-            known = _PCS.setdefault(identity, {'startedAt': iso(now), 'lastUsed': now})
-            idle = now - known['lastUsed'] >= IDLE_SECONDS
-        if idle:
-            stop_pc(identity)
+        # Under the start lock, the idleness is read again: a touch or a start
+        # between the listing and the stop keeps the computer.
+        with _START_LOCK:
+            now = time.time()
+            with _PCS_LOCK:
+                known = _PCS.setdefault(identity, {'startedAt': iso(now), 'lastUsed': now})
+                idle = now - known['lastUsed'] >= IDLE_SECONDS
+            if idle:
+                _stop_pc(identity)
 
 
 def reaper():
@@ -444,9 +508,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def authorised(self):
+        # Closed without a token: the service refuses to start without one (below),
+        # and a request without the right one is refused, compared in constant time.
         if TOKEN == '':
-            return True
-        return self.headers.get('x-machine-token') == TOKEN
+            return False
+        return secrets.compare_digest(self.headers.get('x-machine-token') or '', TOKEN)
 
     def do_GET(self):
         if not self.authorised():
@@ -543,6 +609,23 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+def startup_refusal():
+    """@returns why this service must not start, or None: fail closed."""
+    if TOKEN == '':
+        return 'MACHINES_TOKEN is empty: the service refuses to start without its token'
+    if os.environ.get('MACHINES_HOST', '').strip() in ('', '0.0.0.0', '::'):
+        return 'MACHINES_HOST must name the internal network address to listen on, never every interface'
+    if PC_RUNTIME == 'runc' and not PC_ALLOW_RUNC:
+        return 'MNDT_MACHINE_RUNTIME=runc runs the computers without gVisor: set MNDT_MACHINE_ALLOW_RUNC=1 to say so'
+    return None
+
+
 if __name__ == '__main__':
+    refusal = startup_refusal()
+    if refusal is not None:
+        sys.stderr.write('machines-sidecar: ' + refusal + '\n')
+        sys.exit(2)
+    if PC_RUNTIME != 'runsc':
+        sys.stderr.write('machines-sidecar: WARNING: the computers run under ' + PC_RUNTIME + ', not gVisor (runsc): the gVisor proof is still to be made\n')
     threading.Thread(target=reaper, daemon=True).start()
-    ThreadingHTTPServer((os.environ.get('MACHINES_HOST', '0.0.0.0'), int(os.environ.get('MACHINES_PORT', '8796'))), Handler).serve_forever()
+    ThreadingHTTPServer((os.environ['MACHINES_HOST'].strip(), int(os.environ.get('MACHINES_PORT', '8796'))), Handler).serve_forever()

@@ -117,7 +117,11 @@ export interface MndtApiOptions {
   /** The automation registry, editable from the page. */
   readonly automationsPath?: string
   /** The machine sidecar: one browser session per person. */
-  readonly machines?: { readonly baseUrl: string; readonly token: string }
+  /**
+   * The machine service (the sidecar). timeoutMs bounds each call of « Mon
+   * ordinateur » to it (a start included): 90 s unless said (tests).
+   */
+  readonly machines?: { readonly baseUrl: string; readonly token: string; readonly timeoutMs?: number }
   readonly service: WorkbenchService
   readonly runner: MissionRunner
   readonly identity: IdentityOptions
@@ -1446,6 +1450,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
               method: verb === undefined ? 'GET' : 'POST',
               headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
               ...(verb === undefined ? {} : { body: JSON.stringify({ identity }) }),
+              // A sidecar that never answers must not hold the request: the error is served as a fixed sentence.
+              signal: AbortSignal.timeout(machines.timeoutMs ?? MACHINE_CALL_MS),
             },
           )
         } catch (error) {
@@ -1914,6 +1920,8 @@ type MachineFields = Readonly<Record<string, 'string' | 'number' | 'boolean' | R
  */
 /** The most computers the page announces when the sidecar does not say (MNDT_MACHINE_MAX, default 4). */
 export const MACHINE_MAX = 4
+/** The longest a call of « Mon ordinateur » to the sidecar may take, a start included (its docker run is bounded at 60 s). */
+const MACHINE_CALL_MS = 90_000
 const MACHINE_STATES = ['stopped', 'starting', 'running', 'stopping'] as const
 
 /**

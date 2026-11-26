@@ -8,10 +8,12 @@
  * Docker is a fake on PATH that records every call and keeps the running
  * computers in a file: these tests prove the flags, never an isolation.
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import type { ChildProcess } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,6 +22,13 @@ import { createMndtApi } from '../src/api.ts'
 
 const SIDECAR = join(import.meta.dirname, '..', 'deploy', 'sandbox', 'machines-sidecar.py')
 const children: ChildProcess[] = []
+
+/** @param identity - an address. @returns its readable slug and 10 hex of its sha256: the computer's name, network and folder. */
+function key(identity: string): string {
+  const normalised = identity.trim().toLowerCase()
+  return `${normalised.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/^-+|-+$/g, '')}-${createHash('sha256').update(normalised).digest('hex').slice(0, 10)}`
+}
+const SMARION = key('smarion@datanalysis.re')
 afterEach(() => { for (const child of children.splice(0)) child.kill() })
 
 /** A fake docker: logs each call (one line, args joined by « | »), keeps running computers by their label. */
@@ -29,6 +38,7 @@ running="$FAKE_DIR/running"; touch "$running"
 case "$1" in
   ps) cut -f1 "$running"; exit 0 ;;
   network) [ "$2" = inspect ] && exit 1; exit 0 ;;
+  inspect) exit 1 ;;
   rm) name="$3"; grep -v "^.*	$name\\$" "$running" > "$running.new"; mv "$running.new" "$running"; exit 0 ;;
   run)
     member=""; name=""; prev=""
@@ -84,23 +94,64 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     expect(started.status).toBe(200)
     expect(started.body).toMatchObject({ state: 'running', capacity: { used: 1, max: 4 } })
     const calls = s.calls()
-    expect(calls).toContainEqual(['network', 'create', '--internal', '--label', 'mndt.member=smarion@datanalysis.re', 'mndt-pc-net-smarion-datanalysis-re'])
-    expect(calls).toContainEqual(['network', 'connect', 'mndt-pc-net-smarion-datanalysis-re', 'mndt-egress'])
+    expect(calls).toContainEqual(['network', 'create', '--internal', '--label', 'mndt.member=smarion@datanalysis.re', `mndt-pc-net-${SMARION}`])
+    expect(calls).toContainEqual(['network', 'connect', `mndt-pc-net-${SMARION}`, 'mndt-egress'])
     const run = calls.find(args => args[0] === 'run') ?? []
     const flag = (name: string) => run[run.indexOf(name) + 1]
+    const flags = (name: string) => run.flatMap((arg, at) => (arg === name ? [run[at + 1]] : []))
+    expect(flag('--name')).toBe(`mndt-pc-${SMARION}`)
     expect(flag('--runtime')).toBe('runsc')
-    expect(flag('--network')).toBe('mndt-pc-net-smarion-datanalysis-re')
+    expect(flag('--network')).toBe(`mndt-pc-net-${SMARION}`)
     expect(run).toContain('--read-only')
     expect(flag('--cap-drop')).toBe('ALL')
+    expect(flag('--security-opt')).toBe('no-new-privileges')
+    expect(flag('--user')).toBe('1000:1000')
+    expect(flag('--pids-limit')).toBe('256')
     expect(flag('--memory')).toBe('1g')
-    expect(flag('--mount')).toBe('type=bind,src=/data/mndt/datanalysis/users/smarion-datanalysis-re,dst=/home/user')
+    expect(flag('--memory-swap')).toBe('1g')
+    expect(flag('--cpus')).toBe('1')
+    expect(flags('--tmpfs')).toEqual(['/tmp:rw,nosuid,nodev,noexec,size=1g', '/dev/shm:rw,nosuid,nodev,noexec,size=256m'])
+    expect(flag('--mount')).toBe(`type=bind,src=/data/mndt/datanalysis/users/${SMARION},dst=/home/user`)
     expect(run).toContain('HTTPS_PROXY=http://mndt-egress:3128')
-    // Nothing of the space: no /state, no Docker socket, no model key.
-    expect(run.join(' ')).not.toMatch(/\/state|docker\.sock|_KEY=|_TOKEN=(?!tok)/)
+    // Nothing of the space: no /state, no Docker socket, no model key, never the machine service's token.
+    expect(run.join(' ')).not.toMatch(/\/state|docker\.sock|_KEY=/)
+    expect(run.some(arg => arg.endsWith('=tok'))).toBe(false)
+    // Its agents' token is its own, drawn at its start: never the master token.
+    const token = run.find(arg => arg.startsWith('AGENT_TOKEN='))?.slice('AGENT_TOKEN='.length) ?? ''
+    expect(token).toMatch(/^[0-9a-f]{32}$/)
+    expect(token).not.toBe('tok')
+    expect(run).toContain(`DESKTOP_TOKEN=${token}`)
   })
 
-  it('MNDT_MACHINE_RUNTIME=runc runs it without gVisor (a rehearsal without runsc)', async () => {
-    const s = await sidecar({ MNDT_MACHINE_RUNTIME: 'runc' })
+  it('two addresses folding to one slug get two computers, two networks, two folders', async () => {
+    const s = await sidecar()
+    const people = ['jean.dupont@datanalysis.re', 'jean-dupont@datanalysis.re', 'jean_dupont@datanalysis.re', 'jean+dupont@datanalysis.re']
+    for (const who of people) expect((await s.call('POST', '/pcs/start', { identity: who })).status).toBe(200)
+    const runs = s.calls().filter(args => args[0] === 'run')
+    const names = new Set(runs.map(run => run[run.indexOf('--name') + 1]))
+    const networks = new Set(runs.map(run => run[run.indexOf('--network') + 1]))
+    const folders = new Set(runs.map(run => run[run.indexOf('--mount') + 1]))
+    expect([names.size, networks.size, folders.size]).toEqual([4, 4, 4])
+    expect([...names].every(name => name?.startsWith('mndt-pc-jean-dupont-datanalysis-re-'))).toBe(true)
+    // Stopping one never removes another's computer.
+    const before = s.calls().length
+    await s.call('POST', '/pcs/stop', { identity: 'jean.dupont@datanalysis.re' })
+    const removed = s.calls().slice(before).filter(args => args[0] === 'rm' && args[1] === '-f').map(args => args[2])
+    expect(removed).toEqual([`mndt-pc-${key('jean.dupont@datanalysis.re')}`])
+  })
+
+  it('a desktop or browser session gets its own token, never the machine service\'s', async () => {
+    const s = await sidecar()
+    const started = await s.call('POST', '/desktops/start', { identity: 'smarion@datanalysis.re' })
+    expect(started.status).toBe(200)
+    expect(started.body.token).toMatch(/^[0-9a-f]{32}$/)
+    const run = s.calls().find(args => args[0] === 'run') ?? []
+    expect(run).toContain(`DESKTOP_TOKEN=${String(started.body.token)}`)
+    expect(run.some(arg => arg.endsWith('=tok'))).toBe(false)
+  })
+
+  it('MNDT_MACHINE_RUNTIME=runc runs it without gVisor only when MNDT_MACHINE_ALLOW_RUNC=1 says so (a rehearsal without runsc)', async () => {
+    const s = await sidecar({ MNDT_MACHINE_RUNTIME: 'runc', MNDT_MACHINE_ALLOW_RUNC: '1' })
     await s.call('POST', '/pcs/start', { identity: 'duke@datanalysis.re' })
     const run = s.calls().find(args => args[0] === 'run') ?? []
     expect(run[run.indexOf('--runtime') + 1]).toBe('runc')
@@ -122,8 +173,8 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     const stopped = await s.call('POST', '/pcs/stop', { identity: 'smarion@datanalysis.re' })
     expect(stopped.body).toMatchObject({ state: 'stopped', capacity: { used: 0 } })
     const calls = s.calls()
-    expect(calls).toContainEqual(['rm', '-f', 'mndt-pc-smarion-datanalysis-re'])
-    expect(calls).toContainEqual(['network', 'rm', 'mndt-pc-net-smarion-datanalysis-re'])
+    expect(calls).toContainEqual(['rm', '-f', `mndt-pc-${SMARION}`])
+    expect(calls).toContainEqual(['network', 'rm', `mndt-pc-net-${SMARION}`])
     expect(calls.some(args => args.join(' ').includes('users') && args[0] === 'rm')).toBe(false)
   })
 
@@ -140,6 +191,14 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     expect((await s.call('GET', '/pcs/state?identity=smarion@datanalysis.re')).body).toMatchObject({ state: 'running' })
     await new Promise(resolve => setTimeout(resolve, 4500))
     expect((await s.call('GET', '/pcs/state?identity=smarion@datanalysis.re')).body).toMatchObject({ state: 'stopped' })
+  })
+
+  it('fails closed: refuses to start without its token, on every interface, or under runc unsaid', () => {
+    const start = (env: Record<string, string>) => spawnSync('python3', [SIDECAR], { env: { ...process.env, MACHINES_TOKEN: 'tok', MACHINES_HOST: '127.0.0.1', MACHINES_PORT: '0', ...env }, encoding: 'utf8', timeout: 10_000 })
+    expect(start({ MACHINES_TOKEN: '' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MACHINES_TOKEN is empty') as unknown })
+    expect(start({ MACHINES_HOST: '0.0.0.0' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MACHINES_HOST must name') as unknown })
+    expect(start({ MACHINES_HOST: '' })).toMatchObject({ status: 2 })
+    expect(start({ MNDT_MACHINE_RUNTIME: 'runc' })).toMatchObject({ status: 2, stderr: expect.stringContaining('MNDT_MACHINE_ALLOW_RUNC=1') as unknown })
   })
 
   it('refuses a request without its token, or for an identity that is not an address', async () => {
@@ -196,6 +255,25 @@ describe('« Mon ordinateur » through the API', { timeout: 30_000 }, () => {
     expect(listed.status).toBe(200)
     expect(listed.body).toMatchObject({ machines: [{ member: 'smarion@datanalysis.re', state: 'running' }], capacity: { used: 1, max: 4 } })
     expect((await b.api('GET', '/machines/members', 'smarion@datanalysis.re')).status).toBe(403)
+  })
+
+  it('a sidecar that never answers: the request ends, with a fixed sentence', async () => {
+    const hanging = createHttpServer(() => { /* never answers */ })
+    await new Promise<void>((resolve) => { hanging.listen(0, '127.0.0.1', () => { resolve() }) })
+    try {
+      const api = createMndtApi({
+        service: new WorkbenchService({ store: new MemoryStore() }),
+        runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+        identity: { tokens: { owner: { user: 'duke@datanalysis.re' } } },
+        grants: { grants: async () => ({ ok: true, grants: [{ subject: 'duke@datanalysis.re', role: 'owner' }] }) },
+        machines: { baseUrl: `http://127.0.0.1:${(hanging.address() as { port: number }).port}`, token: 'tok', timeoutMs: 300 },
+      })
+      const answer = await api({ method: 'POST', path: '/me/machine/start', authorization: 'Bearer owner' })
+      expect(answer).toEqual({ status: 502, body: { error: 'the machine service is unreachable' } })
+    } finally {
+      hanging.closeAllConnections()
+      hanging.close()
+    }
   })
 
   it('without a machine service, a clear refusal', async () => {

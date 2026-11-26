@@ -6,3 +6,5 @@ export function isPublicAddress(ip: string, denied?: readonly string[]): boolean
 export function publicTarget(host: string, denied?: readonly string[]): Promise<string | undefined>
 /** @returns the proxy server, not yet listening. */
 export function egressProxy(denied?: readonly string[]): Server
+/** @returns a plain request's headers as sent upstream: without this proxy's or this hop's. */
+export function forwardedHeaders(headers: Readonly<Record<string, unknown>>, host: string): Record<string, unknown>

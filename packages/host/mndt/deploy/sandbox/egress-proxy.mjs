@@ -11,6 +11,12 @@
  * - It connects to the address it checked, never resolves twice: a name that
  *   answers a public address then a private one (DNS rebinding) cannot pass.
  * - A refusal answers 403 with one line; it never says more of the network.
+ * - Bounded: EGRESS_MAX_CONNECTIONS connections at once (256), an upstream that
+ *   does not answer within 10 s is dropped, a tunnel or a request idle for
+ *   EGRESS_IDLE_SECONDS (300) is closed. The computer's own proxy headers
+ *   (proxy-authorization, proxy-connection) are never relayed upstream.
+ * - It refuses to start without EGRESS_DENY: the instance's own addresses must
+ *   be named (the compose names them), never forgotten.
  *
  *   EGRESS_PORT=3128 EGRESS_DENY=51.159.161.149 node egress-proxy.mjs
  */
@@ -18,6 +24,12 @@ import { createServer, request as httpRequest } from 'node:http'
 import { connect, isIP } from 'node:net'
 import { lookup } from 'node:dns/promises'
 import { fileURLToPath } from 'node:url'
+
+const CONNECT_TIMEOUT_MS = 10_000
+const IDLE_MS = Number(process.env.EGRESS_IDLE_SECONDS ?? 300) * 1000
+const MAX_CONNECTIONS = Number(process.env.EGRESS_MAX_CONNECTIONS ?? 256)
+/** Headers meant for this proxy or this hop: never sent upstream. */
+const HOP_HEADERS = ['proxy-authorization', 'proxy-connection', 'proxy-authenticate', 'connection', 'keep-alive', 'te', 'trailer', 'upgrade']
 
 const V4_DENIED = [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
@@ -67,8 +79,12 @@ export function isPublicAddress(ip, denied = []) {
   const groups = v6Groups(ip)
   if (groups.length !== 8 || groups.some(group => Number.isNaN(group))) return false
   const [a, b] = groups
-  if (groups.every(group => group === 0)) return false // ::
-  if (groups.slice(0, 7).every(group => group === 0) && groups[7] === 1) return false // ::1
+  // ::/96: ::, ::1 and the deprecated IPv4-compatible ::a.b.c.d, all refused.
+  if (groups.slice(0, 6).every(group => group === 0)) return false
+  if (a === 0x2002) return false // 2002::/16, 6to4: an IPv4 inside, refused whole
+  if (a === 0x2001 && b === 0x0000) return false // 2001::/32, Teredo: an obfuscated IPv4 inside
+  if (a === 0x0100 && groups.slice(1, 4).every(group => group === 0)) return false // 100::/64, discard
+  if (a === 0x64 && b === 0xff9b && groups[2] === 1) return false // 64:ff9b:1::/48, local-use NAT64
   if ((a & 0xfe00) === 0xfc00) return false // fc00::/7, unique local
   if ((a & 0xffc0) === 0xfe80) return false // fe80::/10, link-local
   if ((a & 0xff00) === 0xff00) return false // multicast
@@ -94,6 +110,17 @@ export async function publicTarget(host, denied = []) {
 }
 
 /**
+ * @param headers - a plain request's headers, from the computer.
+ * @param host - the target's host.
+ * @returns what is sent upstream: its headers without this proxy's or this hop's.
+ */
+export function forwardedHeaders(headers, host) {
+  const forwarded = { ...headers, host }
+  for (const name of HOP_HEADERS) delete forwarded[name]
+  return forwarded
+}
+
+/**
  * @param denied - the instance's own addresses.
  * @returns the proxy server (not yet listening).
  */
@@ -113,11 +140,14 @@ export function egressProxy(denied = []) {
     if (url.protocol !== 'http:' || (url.port !== '' && url.port !== '80')) return refuse(res, false)
     const address = await publicTarget(url.hostname, denied)
     if (address === undefined) return refuse(res, false)
-    const upstream = httpRequest({ host: address, port: 80, method: req.method, path: url.pathname + url.search, headers: { ...req.headers, host: url.host } }, (answer) => {
+    const headers = forwardedHeaders(req.headers, url.host)
+    const upstream = httpRequest({ host: address, port: 80, method: req.method, path: url.pathname + url.search, headers, timeout: CONNECT_TIMEOUT_MS }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, answer.headers)
       answer.pipe(res)
     })
+    upstream.on('timeout', () => { upstream.destroy(new Error('upstream timeout')) })
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end() })
+    req.socket.setTimeout(IDLE_MS, () => { upstream.destroy(); req.socket.destroy() })
     req.pipe(upstream)
   })
   server.on('connect', async (req, socket, head) => {
@@ -126,18 +156,31 @@ export function egressProxy(denied = []) {
     const address = await publicTarget(host, denied)
     if (address === undefined) return refuse(socket, true)
     const upstream = connect(443, address, () => {
+      clearTimeout(connecting)
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       if (head.length > 0) upstream.write(head)
       upstream.pipe(socket)
       socket.pipe(upstream)
     })
-    upstream.on('error', () => socket.destroy())
-    socket.on('error', () => upstream.destroy())
+    // No answer within 10 s: dropped. Then idle for EGRESS_IDLE_SECONDS: closed.
+    const connecting = setTimeout(() => { upstream.destroy(); socket.destroy() }, CONNECT_TIMEOUT_MS)
+    const close = () => { clearTimeout(connecting); upstream.destroy(); socket.destroy() }
+    upstream.setTimeout(IDLE_MS, close)
+    socket.setTimeout(IDLE_MS, close)
+    upstream.on('error', close)
+    socket.on('error', close)
+    upstream.on('close', close)
+    socket.on('close', close)
   })
+  server.maxConnections = MAX_CONNECTIONS
   return server
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const denied = (process.env.EGRESS_DENY ?? '').split(',').map(item => item.trim()).filter(item => item !== '')
+  if (denied.length === 0) {
+    process.stderr.write('egress-proxy: EGRESS_DENY is empty: name the instance\'s own addresses; refusing to start\n')
+    process.exit(2)
+  }
   egressProxy(denied).listen(Number(process.env.EGRESS_PORT ?? 3128), '0.0.0.0')
 }

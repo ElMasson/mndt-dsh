@@ -7,7 +7,9 @@ import { connect } from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Server } from 'node:http'
-import { egressProxy, isPublicAddress, publicTarget } from '../deploy/sandbox/egress-proxy.mjs'
+import { spawnSync } from 'node:child_process'
+import { join } from 'node:path'
+import { egressProxy, forwardedHeaders, isPublicAddress, publicTarget } from '../deploy/sandbox/egress-proxy.mjs'
 
 const servers: Server[] = []
 afterEach(() => { for (const server of servers.splice(0)) server.close() })
@@ -34,7 +36,10 @@ describe('which addresses are public', () => {
   it('refuses every private, local, reserved or metadata address, in IPv4 and IPv6 forms', () => {
     for (const denied of ['127.0.0.1', '10.0.3.7', '172.16.0.1', '172.31.255.255', '192.168.1.4', '169.254.169.254', '100.64.0.1', '0.0.0.0',
       '224.0.0.1', '255.255.255.255', '192.0.2.10', '198.18.0.1', '::1', '::', 'fc00::1', 'fd12:3456::1', 'fe80::1', 'ff02::1',
-      '::ffff:10.0.0.1', '::ffff:169.254.169.254', '64:ff9b::a00:1', '2001:db8::1', 'not-an-ip']) {
+      '::ffff:10.0.0.1', '::ffff:169.254.169.254', '64:ff9b::a00:1', '2001:db8::1', 'not-an-ip',
+      // IPv4 carried inside IPv6: compatible (::/96), 6to4, Teredo, local-use NAT64; and discard.
+      '::10.0.0.1', '::a9fe:a9fe', '::1.1.1.1', '2002:a00:1::1', '2002:101:101::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2',
+      '64:ff9b:1::a00:1', '64:ff9b:1::101:101', '100::1']) {
       expect(isPublicAddress(denied), denied).toBe(false)
     }
     for (const allowed of ['1.1.1.1', '93.184.216.34', '172.32.0.1', '2606:4700:4700::1111', '::ffff:1.1.1.1']) {
@@ -54,6 +59,19 @@ describe('which addresses are public', () => {
 })
 
 describe('the proxy', () => {
+  it('refuses to start without the instance\'s own addresses', () => {
+    const script = join(import.meta.dirname, '..', 'deploy', 'sandbox', 'egress-proxy.mjs')
+    const started = spawnSync(process.execPath, [script], { env: { ...process.env, EGRESS_DENY: ' , ', EGRESS_PORT: '0' }, encoding: 'utf8', timeout: 10_000 })
+    expect(started.status).toBe(2)
+    expect(started.stderr).toContain('EGRESS_DENY is empty')
+  })
+
+  it('is bounded in connections, and never relays the computer\'s proxy headers upstream', () => {
+    expect(egressProxy(['51.159.161.149']).maxConnections).toBe(256)
+    const sent = forwardedHeaders({ 'proxy-authorization': 'Basic c2VjcmV0', 'proxy-connection': 'keep-alive', connection: 'close', accept: 'text/html', host: 'evil' }, 'example.org')
+    expect(sent).toEqual({ accept: 'text/html', host: 'example.org' })
+  })
+
   it('refuses a tunnel to a local address, and to any port but 443', async () => {
     const port = await proxy()
     expect(await ask(port, 'CONNECT 127.0.0.1:443 HTTP/1.1\r\nhost: 127.0.0.1:443\r\n\r\n')).toBe('HTTP/1.1 403 Forbidden')
