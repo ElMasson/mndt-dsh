@@ -612,7 +612,9 @@ def act_pc(identity, kind, body):
             }
         # Bounded inside the computer too (80 s, under this service's 90 s): past
         # it, the call dies there, not only its docker exec client here.
-        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', name, 'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', kind],
+        # As the member, said (the Docker guard refuses an exec whose user is not 1000).
+        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', '-u', str(PC_UID) + ':' + str(PC_UID), name,
+                                               'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', kind],
                                               timeout=90, limit=PC_MAX_ANSWER, stdin=json.dumps(body))
         lines = [line for line in out.splitlines() if line.strip() != '']
         try:

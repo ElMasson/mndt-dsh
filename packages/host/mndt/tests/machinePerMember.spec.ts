@@ -305,7 +305,7 @@ describe('an action on a member\'s computer (/pcs/act)', { timeout: 30_000 }, ()
     expect(read.body).toMatchObject({ ok: true, text: 'page lue', echo: { op: 'goto', url: 'https://example.org' } })
     expect((read.body.echo as Record<string, unknown>).identity).toBeUndefined()
     // Bounded inside the computer too: past 80 s the call dies there, not only its docker exec client here.
-    expect(s.calls()).toContainEqual(['exec', '-i', `mndt-pc-${SMARION}`, 'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', 'browser'])
+    expect(s.calls()).toContainEqual(['exec', '-i', '-u', '1000:1000', `mndt-pc-${SMARION}`, 'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', 'browser'])
   })
 
   it('a command that floods its output is clipped as it is read, and said so', async () => {
@@ -459,6 +459,8 @@ describe('the sidecar alone holds Docker: no request reaches a flag (tenant: MAC
     for (const exec of calls.filter(args => args[0] === 'exec')) {
       let at = 1
       for (; (exec[at] ?? '').startsWith('-'); at += exec[at] === '-i' ? 1 : 2) expect(['-u', '-w', '-i']).toContain(exec[at])
+      // Every exec says its user: the member's (the Docker guard refuses any other).
+      expect(exec[exec.indexOf('-u') + 1]).toBe('1000:1000')
       expect(exec[at]).toMatch(/^mndt-pc-[a-z0-9-]+$/)
     }
     // Nowhere a flag the requests named (the terminal's own words, after the computer's name, aside).

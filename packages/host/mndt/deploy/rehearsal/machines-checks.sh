@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The members' computers (« Mon ordinateur », eighth jump), checked on a running
-# rehearsal stack: the sidecar, the socket proxy, the egress proxy and the
+# rehearsal stack: the sidecar, the Docker guard, the egress proxy and the
 # computers it starts, through the API and the gateway as on the instance.
 #
 #   machines-checks.sh <project> <owner> <operator> [space]

@@ -112,11 +112,16 @@ if [ -z "$egress_extra" ]; then
   test_root=${MNDT_ROOT:-}
   if [ -n "$test_root" ]; then metadata="file://$test_root/run/scaleway-metadata"; else metadata=http://169.254.42.42/conf; fi
   public_ip=$( { curl -s -m 3 "$metadata" 2>/dev/null || true; } | sed -n 's/^PUBLIC_IP_ADDRESS=//p' | head -1 | tr -d "'\"[:space:]")
+  stand_in=0
   if [ -n "$test_root" ] && [ ! -e "$test_root/run/scaleway-metadata" ]; then
-    public_ip=203.0.113.1; echo "  test root: the instance's public address stands as 203.0.113.1 (no $test_root/run/scaleway-metadata)"
+    public_ip=203.0.113.1; stand_in=1; echo "  test root: the instance's public address stands as 203.0.113.1 (no $test_root/run/scaleway-metadata)"
   fi
-  if [[ ! $public_ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
-    echo "refused: this instance's public address is unknown (no PUBLIC_IP_ADDRESS from $metadata); give it with --egress-deny <address>; nothing was written" >&2
+  # A public address only: a private, loopback, shared (CGNAT) or link-local
+  # one would read as the instance's and leave its real address reachable.
+  if [ "$stand_in" = 0 ] && ! python3 -c 'import ipaddress, sys
+a = ipaddress.ip_address(sys.argv[1])
+sys.exit(0 if a.version == 4 and a.is_global and not a.is_private and a not in ipaddress.ip_network("100.64.0.0/10") else 1)' "$public_ip" 2>/dev/null; then
+    echo "refused: this instance's public address is unknown or not public (« $public_ip » from $metadata); give it with --egress-deny <address>; nothing was written" >&2
     exit 1
   fi
 fi
@@ -144,7 +149,7 @@ if [ -z "$client_id" ]; then
   client_id=$(grep -E '^client_id' "$root$client_conf" | head -1 | cut -d'"' -f2)
 fi
 [ -n "$client_id" ] || { echo "no client_id found" >&2; exit 1; }
-mkdir -p "$root$conf" "$root$app" "$root$data"/{home,tools,mcp-auth,connectors,users}
+mkdir -p "$root$conf" "$root$app" "$root$data"/{home,tools,mcp-auth,connectors,users,actor}
 chmod 755 "$root$conf"
 if [ ! -f "$root$conf/client_secret" ]; then
   [ -f "$root$client_secret_file" ] || { echo "missing the Entra client secret $client_secret_file" >&2; exit 1; }

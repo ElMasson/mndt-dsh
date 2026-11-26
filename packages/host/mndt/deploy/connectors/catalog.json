@@ -1,5 +1,5 @@
 {
-  "_comment": "Read-only connectors of the agentic Slack lot 1. One entry per connector: mount it with `mount-connector.sh <name> --preset`. approvals: MNDT_API stays in approvals.env as deployed today; deciding is denied twice (env and proxy). Secrets never live here: each entry names an env file under /data/mndt/live/connectors, mode 600. allow/deny are tool-name patterns (trailing * = prefix); deny wins. The proxy refuses every tool outside allow before the call reaches the server. Code and dependencies of qonto (mcp-remote, pinned by runtime/qonto.package-lock.json), dolibarr and swing (Python, pinned by runtime/*.requirements.txt) are installed under the tenant's tools folder by tenant/install-connectors.sh; nothing is fetched when the workbench starts. qonto: every tool that answers with a presigned download URL (attachments, statements) is denied. machine: « Mon ordinateur », in computer mode only (MACHINES_MODE=pc): every tool acts on the computer of the person the running turn acts for, through the API (as that person, with the gateway's secret from its file); the connector holds no machine token. A submit asks a card first.",
+  "_comment": "Read-only connectors of the agentic Slack lot 1. One entry per connector: mount it with `mount-connector.sh <name> --preset`. approvals: MNDT_API stays in approvals.env as deployed today; deciding is denied twice (env and proxy). Secrets never live here: each entry names an env file under /data/mndt/live/connectors, mode 600. allow/deny are tool-name patterns (trailing * = prefix); deny wins. The proxy refuses every tool outside allow before the call reaches the server. Code and dependencies of qonto (mcp-remote, pinned by runtime/qonto.package-lock.json), dolibarr and swing (Python, pinned by runtime/*.requirements.txt) are installed under the tenant's tools folder by tenant/install-connectors.sh; nothing is fetched when the workbench starts. qonto: every tool that answers with a presigned download URL (attachments, statements) is denied. machine: « Mon ordinateur », in computer mode only (MACHINES_MODE=pc): every tool acts on the computer of the person the running turn acts for, through the API (as that person, with the gateway's secret from its file); the connector holds no machine token. A submit asks a card first. Every connector runs under Landlock (render-connectors.py): it reads the system, the image and its tools, writes /tmp and /state/mcp-auth, and reads of /state only its readPaths; gatewaySecret (approvals, machine) grants the gateway's secret, from this catalog only, to a descriptor whose command is the catalog's.",
   "office365": {
     "command": [
       "node",
@@ -9,14 +9,17 @@
     "env": {
       "OFFICE365_MODE": "application",
       "OFFICE365_ALLOWED_DOMAINS": "datanalysis.re",
-      "MNDT_ACTOR_FILE": "/state/mission-actor.json"
+      "MNDT_ACTOR_FILE": "/state/actor/mission-actor.json"
     },
     "allow": [
       "mail_recent",
       "mail_search",
       "calendar_upcoming"
     ],
-    "deny": []
+    "deny": [],
+    "readPaths": [
+      "/state/actor"
+    ]
   },
   "qonto": {
     "command": [
@@ -37,7 +40,8 @@
       "get_statement",
       "list_statements",
       "list_transaction_attachments"
-    ]
+    ],
+    "readPaths": []
   },
   "dolibarr": {
     "command": [
@@ -59,7 +63,8 @@
     ],
     "deny": [
       "dolibarr_raw_api"
-    ]
+    ],
+    "readPaths": []
   },
   "swing": {
     "command": [
@@ -81,7 +86,8 @@
     ],
     "deny": [
       "get_rehydration_prompt"
-    ]
+    ],
+    "readPaths": []
   },
   "approvals": {
     "command": [
@@ -90,7 +96,7 @@
     ],
     "envFile": "approvals.env",
     "env": {
-      "MNDT_ACTOR_FILE": "/state/mission-actor.json",
+      "MNDT_ACTOR_FILE": "/state/actor/mission-actor.json",
       "MNDT_APPROVALS_ALLOW_DECIDE": "0",
       "MNDT_GATEWAY_SECRET_FILE": "/run/secrets/mndt-gateway"
     },
@@ -105,7 +111,11 @@
     ],
     "deny": [
       "decide_approval"
-    ]
+    ],
+    "readPaths": [
+      "/state/actor"
+    ],
+    "gatewaySecret": true
   },
   "machine": {
     "command": [
@@ -115,12 +125,16 @@
     "envFile": "machine.env",
     "env": {
       "MACHINES_MODE": "pc",
-      "MNDT_ACTOR_FILE": "/state/mission-actor.json",
+      "MNDT_ACTOR_FILE": "/state/actor/mission-actor.json",
       "MNDT_GATEWAY_SECRET_FILE": "/run/secrets/mndt-gateway"
     },
     "allow": [
       "machine_*"
     ],
-    "deny": []
+    "deny": [],
+    "readPaths": [
+      "/state/actor"
+    ],
+    "gatewaySecret": true
   }
 }

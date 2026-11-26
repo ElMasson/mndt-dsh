@@ -15,6 +15,12 @@ if [ -z "$WEB_BIND" ]; then
 fi
 [ -n "$WEB_BIND" ] || WEB_BIND=127.0.0.1
 mkdir -p "$STATE"
+# The folder of the running turn's actor, there before any connector starts:
+# each connector runs under Landlock and reads this folder only if it exists
+# then (render-connectors.py).
+# On a tenant it succeeds (root, /state mounted); where /state cannot be written
+# (a test of this script) it is skipped, and the API creates it at the first run.
+mkdir -p "$(dirname "${MNDT_MISSION_ACTOR_FILE:-/state/actor/mission-actor.json}")" 2>/dev/null || true
 # The shell prints its launch token in this log: on a team tenant it lives with
 # the published token, outside /state (DSH_MNDT_WEB_LOG).
 LOG="${DSH_MNDT_WEB_LOG:-$STATE/web.log}"

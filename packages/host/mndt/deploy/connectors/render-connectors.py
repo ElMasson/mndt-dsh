@@ -44,18 +44,41 @@ FILE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+\*?$')
 MODULE = '@deepseek-ai/dsh-mcp-client'
 # Every connector runs under Landlock (the workbench image's landlock-run): it
-# reads the system, the image, its tools and the state, writes its temp and
-# the MCP auth folder, and reads nothing of /run, where the workbench keeps the
-# machine service's token, the gateway's secret and the shell's launch token.
-# Only our own connectors that act as a person through the API (approvals,
-# machine) read the gateway's secret, granted by their server name, never by
-# what a descriptor says. A workbench without the launcher starts no connector.
+# reads the system, the image and its tools, writes its temp and the MCP auth
+# folder, and reads nothing else: not /state (state.json, the role table, the
+# other connectors' secrets), not /proc (the workbench's environment), not
+# /run (the machine service's token, the gateway's secret, the shell's launch
+# token). What else a connector reads comes from the versioned catalog only
+# (its readPaths; gatewaySecret: the gateway's secret, for approvals and
+# machine), and only for a descriptor whose command is the catalog's: a
+# descriptor that names itself `machine` with another command gets nothing.
+# A workbench without the launcher starts no connector.
 LANDLOCK_DEFAULT = '/app/native/system/packages/linux-$(uname -m | sed -e s/x86_64/x64/ -e s/aarch64/arm64/)/bin/landlock-run'
-READ_ROOTS = ('/usr', '/lib', '/lib64', '/bin', '/sbin', '/etc', '/app', '/opt/mndt-tools', '/state', '/proc', '/sys',
+READ_ROOTS = ('/usr', '/lib', '/lib64', '/bin', '/sbin', '/etc', '/app', '/opt/mndt-tools',
               '/dev/null', '/dev/zero', '/dev/urandom', '/dev/random')
 WRITE_ROOTS = ('/tmp', '/state/mcp-auth')
 GATEWAY_SECRET = '/run/secrets/mndt-gateway'
-GATEWAY_READERS = ('approvals', 'machine')
+STATE_PATH = re.compile(r'^/state/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$')
+
+
+def load_catalog():
+    """@returns the versioned catalog beside this renderer (CONNECTOR_CATALOG), or {} when there is none."""
+    path = os.environ.get('CONNECTOR_CATALOG') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'catalog.json')
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def catalog_grants(server, command):
+    """@returns (paths a connector may read beyond the roots, whether it reads the gateway's secret):
+    the catalog's, only when the descriptor runs the catalog's own command."""
+    entry = load_catalog().get(server)
+    if not isinstance(entry, dict) or entry.get('command') != command:
+        return [], False
+    paths = [path for path in (entry.get('readPaths') or []) if isinstance(path, str) and STATE_PATH.match(path)]
+    return paths, entry.get('gatewaySecret') is True
 
 
 def load_patchfile():
@@ -115,16 +138,17 @@ def script_for(data, server):
         script += f'export MCP_PROXY_ALLOW={shlex.quote(",".join(allow))}; '
         script += f'export MCP_PROXY_DENY={shlex.quote(",".join(deny))}; '
         words = ['node', shlex.quote(PROXY_IN_CONTAINER)] + words
-    return script + confined(server) + ' '.join(words)
+    return script + confined(*catalog_grants(server, command)) + ' '.join(words)
 
 
-def confined(server):
-    """@param server - the connector's server name.
+def confined(paths, gateway):
+    """@param paths - what the connector reads beyond the roots (its catalog readPaths).
+    @param gateway - whether it reads the gateway's secret (its catalog says so).
     @returns the shell that ends a connector's script: its Landlock grants (the
     paths that exist), then `exec` of the launcher, which runs the command after
     `--`. MNDT_CONNECTOR_LANDLOCK=off (a workstation without the image) runs it
     as it is; a missing launcher otherwise refuses it, said on stderr."""
-    reads = list(READ_ROOTS) + ([GATEWAY_SECRET] if server in GATEWAY_READERS else [])
+    reads = list(READ_ROOTS) + list(paths) + ([GATEWAY_SECRET] if gateway else [])
     grants = ' '.join(shlex.quote(path) for path in reads)
     writes = ' '.join(shlex.quote(path) for path in WRITE_ROOTS)
     return (

@@ -138,7 +138,7 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     // The descriptor 47169065bf wrote: no gateway secret, so every card is a 401.
     writeFileSync(join(data, 'connectors', 'approvals.json'), JSON.stringify({
       serverName: 'approvals', command: ['node', '/opt/mndt-tools/approvals-mcp.mjs'], envFile: 'approvals.env',
-      env: { MNDT_ACTOR_FILE: '/state/mission-actor.json', MNDT_APPROVALS_ALLOW_DECIDE: '0' }, deny: ['decide_approval'],
+      env: { MNDT_ACTOR_FILE: '/state/actor/mission-actor.json', MNDT_APPROVALS_ALLOW_DECIDE: '0' }, deny: ['decide_approval'],
     }))
     const bin = join(root, 'bin')
     mkdirSync(bin)

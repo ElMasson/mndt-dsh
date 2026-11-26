@@ -666,7 +666,7 @@ Pré-requis par connecteur, dans `/data/mndt/live/connectors/` (mode 600) :
 - `office365.env` : `OFFICE365_TENANT_ID`, `OFFICE365_CLIENT_ID`,
   `OFFICE365_CLIENT_SECRET` (ou `OFFICE365_CLIENT_SECRET_FILE`). Mode
   `application` : la boîte lue est celle de l'auteur de la mention, publiée par
-  le workbench dans `/state/mission-actor.json`, limitée à `datanalysis.re` ;
+  le workbench dans `/state/actor/mission-actor.json`, limitée à `datanalysis.re` ;
 - `qonto.env` : rien de secret ; le cache OAuth `mcp-remote` de Qonto est déposé
   dans `/data/mndt/live/mcp-auth`, comme pour Attio ;
 - `dolibarr.env` : `DOLIBARR_URL`, `DOLIBARR_API_KEY` d'un compte de service en

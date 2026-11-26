@@ -264,6 +264,15 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     })
     expect(unknown.status).toBe(1)
     expect(unknown.stderr).toContain('public address is unknown')
+    // An address that is not public (private, loopback, CGNAT, link-local) is refused too.
+    for (const address of ['10.1.2.3', '127.0.0.1', '100.64.1.1', '169.254.42.42', '192.168.1.1']) {
+      writeFileSync(join(blind, 'run', 'scaleway-metadata'), `PUBLIC_IP_ADDRESS='${address}'\n`)
+      const privateOne = spawnSync('bash', [tenantScript, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+        env: { ...process.env, MNDT_ROOT: blind }, encoding: 'utf8',
+      })
+      expect(privateOne.status, address).toBe(1)
+      expect(privateOne.stderr).toContain('not public')
+    }
     expect(existsSync(join(blind, 'opt/mndt/datanalysis/docker-compose.yml'))).toBe(false)
     // A value that is not addresses or ranges is refused before anything is written.
     const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')

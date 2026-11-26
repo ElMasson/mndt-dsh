@@ -118,6 +118,16 @@ def container_space(name):
     return labels.get(TENANT_LABEL, '')
 
 
+def network_space(name):
+    """@returns the space label of a network, '' when it has none, None when Docker does not know it."""
+    status, body = upstream('GET', '/networks/' + name)
+    if status == 404:
+        return None
+    if status != 200:
+        raise Refused('the network ' + name + ' could not be inspected (' + str(status) + ')')
+    return (json.loads(body or b'{}').get('Labels') or {}).get(TENANT_LABEL, '')
+
+
 def ours(name):
     """Refuse unless the container carries this space's label. @returns whether Docker knows it."""
     if not NAME.match(name):
@@ -147,9 +157,12 @@ def check_create(query, body):
     network = host.get('NetworkMode') or ''
     if not network.startswith(NET_PREFIX):
         raise Refused('a computer joins its own network ' + NET_PREFIX + '…, not ' + network)
-    endpoints = list(((spec.get('NetworkingConfig') or {}).get('EndpointsConfig') or {}).keys())
+    endpoints = ((spec.get('NetworkingConfig') or {}).get('EndpointsConfig') or {})
     if any(not endpoint.startswith(NET_PREFIX) for endpoint in endpoints):
         raise Refused('a computer joins no other network: ' + ', '.join(endpoints))
+    for endpoint, config in endpoints.items():
+        if any(not empty(value) for value in (config or {}).values()):
+            raise Refused('a computer\'s network takes no address, link nor alias of its own (' + endpoint + ')')
     if host.get('ReadonlyRootfs') is not True:
         raise Refused('a computer has a read-only root')
     if 'ALL' not in [str(cap).upper() for cap in (host.get('CapDrop') or [])]:
@@ -160,10 +173,23 @@ def check_create(query, body):
     if len(mounts) != 1:
         raise Refused('a computer has one bind, its member\'s folder')
     mount = mounts[0]
+    if any(key not in ('Type', 'Source', 'Target', 'ReadOnly', 'Consistency') and not empty(value) for key, value in mount.items()):
+        raise Refused('a computer\'s bind takes no propagation nor option')
+    if not empty(mount.get('Consistency')) and mount.get('Consistency') != 'default':
+        raise Refused('a computer\'s bind takes no consistency option')
     source = str(mount.get('Source') or '')
     folder = source[len(USERS_ROOT) + 1:] if USERS_ROOT and source.startswith(USERS_ROOT + '/') else ''
     if mount.get('Type') != 'bind' or mount.get('Target') != '/home/user' or not re.match(r'^[a-z0-9-]{1,80}$', folder):
         raise Refused('a computer binds one folder under the members\' folders onto /home/user, not ' + source)
+    log = host.get('LogConfig') or {}
+    if not empty(log.get('Type')) or not empty(log.get('Config')):
+        raise Refused('a computer keeps Docker\'s default log driver (another would send out of the egress)')
+    if host.get('CgroupnsMode') not in (None, '', 'private'):
+        raise Refused('a computer has its own cgroup namespace')
+    # Absent only: an empty list is not « unset » for Docker, it removes the
+    # default masking (what --security-opt systempaths=unconfined sends).
+    if host.get('MaskedPaths') is not None or host.get('ReadonlyPaths') is not None:
+        raise Refused('a computer keeps Docker\'s masked and read-only paths')
     for path in (host.get('Tmpfs') or {}):
         if path not in TMPFS:
             raise Refused('a computer has no tmpfs at ' + path)
@@ -192,8 +218,8 @@ def check_exec(body):
     spec = json.loads(body or b'{}')
     if spec.get('Privileged'):
         raise Refused('an exec is never privileged')
-    if str(spec.get('User') or '1000').split(':')[0] not in ('1000',):
-        raise Refused('an exec runs as the member (1000)')
+    if spec.get('User') not in ('1000', '1000:1000'):
+        raise Refused('an exec runs as the member, said: 1000 or 1000:1000')
 
 
 def authorise(method, path, query, body):
@@ -202,10 +228,16 @@ def authorise(method, path, query, body):
         return None
     if method == 'GET' and path == '/containers/json':
         filters = json.loads((query.get('filters') or ['{}'])[0] or '{}')
-        label = filters.get('label') or {}
-        labels = list(label.keys()) if isinstance(label, dict) else list(label)
-        if TENANT_LABEL + '=' + SPACE not in labels:
-            raise Refused('the containers are listed with the filter ' + TENANT_LABEL + '=' + SPACE)
+        label = filters.get('label') if isinstance(filters, dict) else None
+        if isinstance(label, dict) and all(value is True for value in label.values()):
+            labels = set(label.keys())
+        elif isinstance(label, list):
+            labels = set(label)
+        else:
+            labels = set()
+        expected = ({TENANT_LABEL + '=' + SPACE}, {TENANT_LABEL + '=' + SPACE, 'mndt.member'})
+        if set(filters.keys()) != {'label'} or labels not in expected:
+            raise Refused('the containers are listed with the filter ' + TENANT_LABEL + '=' + SPACE + ' (and mndt.member) only')
         return None
     if method == 'POST' and path == '/containers/create':
         check_create(query, body)
@@ -232,7 +264,9 @@ def authorise(method, path, query, body):
             known = match.group(1) in _EXECS
         if not known:
             raise Refused('an exec this guard did not see created: ' + match.group(1))
-        return None
+        if match.group(2) == 'json' and method != 'GET' or match.group(2) != 'json' and method != 'POST':
+            raise Refused(method + ' ' + path)
+        return 'exec-start' if match.group(2) == 'start' else None
     if method == 'POST' and path == '/networks/create':
         spec = json.loads(body or b'{}')
         if not str(spec.get('Name') or '').startswith(NET_PREFIX) or spec.get('Internal') is not True \
@@ -246,12 +280,17 @@ def authorise(method, path, query, body):
         if not network.startswith(NET_PREFIX) or not NAME.match(network):
             raise Refused('not a network of this space: ' + network)
         action = match.group(2)
-        if action is None and method in ('GET', 'DELETE'):
-            return None
-        if action is not None and method == 'POST':
-            if json.loads(body or b'{}').get('Container') != EGRESS:
-                raise Refused('only the egress proxy joins a computer\'s network')
-            return None
+        if not ((action is None and method in ('GET', 'DELETE')) or (action is not None and method == 'POST')):
+            raise Refused(method + ' ' + path)
+        if action is not None and json.loads(body or b'{}').get('Container') != EGRESS:
+            raise Refused('only the egress proxy joins a computer\'s network')
+        # The prefix alone is not a proof (mndt-a-pcnet- is a prefix of space a-pcnet's): its label, from Docker.
+        space = network_space(network)
+        if space is None:
+            return 'absent-network'
+        if space != SPACE:
+            raise Refused('the network ' + network + ' is not of this space')
+        return None
     raise Refused(method + ' ' + path)
 
 
@@ -274,34 +313,42 @@ class Handler(BaseHTTPRequestHandler):
         versioned = VERSIONED.match(url.path)
         path = versioned.group(1) if versioned else url.path
         query = parse_qs(url.query)
+        # One request per connection: whatever follows on it (a pipelined request)
+        # is never read; the connection closes after each answer.
+        self.close_connection = True
+        if self.headers.get('transfer-encoding') is not None:
+            return self.refuse('a Transfer-Encoding (a body is sent with its length)')
         length = int(self.headers.get('content-length') or 0)
-        if self.headers.get('transfer-encoding', '').lower() == 'chunked':
-            return self.refuse('a chunked body')
         body = self.rfile.read(length) if length > 0 else b''
         try:
             after = authorise(self.command, path, query, body)
         except (Refused, ValueError) as error:
             return self.refuse(str(error))
-        if after == 'absent':
-            payload = json.dumps({'message': 'No such container'}).encode('utf-8')
+        # The raw relay (a hijacked connection) is an authorised exec's start, and nothing else.
+        upgrade = 'upgrade' in (self.headers.get('connection') or '').lower() or self.headers.get('upgrade') is not None
+        if upgrade and after != 'exec-start':
+            return self.refuse('an upgraded connection outside an exec\'s start')
+        if after in ('absent', 'absent-network'):
+            payload = json.dumps({'message': 'No such container' if after == 'absent' else 'network not found'}).encode('utf-8')
             self.send_response(404)
             self.send_header('content-type', 'application/json')
             self.send_header('content-length', str(len(payload)))
+            self.send_header('connection', 'close')
             self.end_headers()
             self.wfile.write(payload)
             return
-        self.relay(body, after)
+        self.relay(body, after, upgrade)
 
-    def relay(self, body, after):
+    def relay(self, body, after, upgrade):
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         conn.connect(SOCKET)
-        hijack = 'upgrade' in (self.headers.get('connection') or '').lower()
+        hijack = upgrade and after == 'exec-start'
         head = self.command + ' ' + self.path + ' HTTP/1.1\r\n'
         for key, value in self.headers.items():
-            if key.lower() in ('connection', 'content-length', 'keep-alive', 'proxy-connection'):
+            if key.lower() in ('connection', 'content-length', 'keep-alive', 'proxy-connection', 'upgrade', 'transfer-encoding'):
                 continue
             head += key + ': ' + value + '\r\n'
-        head += ('Connection: Upgrade\r\n' if hijack else 'Connection: close\r\n') + 'Content-Length: ' + str(len(body)) + '\r\n\r\n'
+        head += ('Connection: Upgrade\r\nUpgrade: tcp\r\n' if hijack else 'Connection: close\r\n') + 'Content-Length: ' + str(len(body)) + '\r\n\r\n'
         conn.sendall(head.encode('latin-1') + body)
         client = self.connection
         if after == 'exec':

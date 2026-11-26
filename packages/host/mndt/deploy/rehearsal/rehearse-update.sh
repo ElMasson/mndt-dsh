@@ -295,6 +295,12 @@ if [ "$old_seen" -ge 1 ]; then broke=1; echo "OK old-brief-shared  the viewer re
 elif [ "$old_own" -ge 1 ]; then broke=1; echo "OK old-brief-private  already private on the old version: the owner reads $old_own, the viewer none"
 else broke=0; echo "KO old-brief-missing  nobody reads the old brief: no starting point"; exit 1; fi
 
+# The guide's backups (§13.9 c.), before anything of the new version is written:
+# the rollback rehearsal (reverse-rollback-8.sh) puts them back, as the guide does.
+mkdir -p "$root/backup"
+cp -a "$app" "$root/backup/compose" && cp -a "$root/etc/mndt/datanalysis" "$root/backup/etc" \
+  && cp -a "$data/state.json" "$data/grants.json" "$data/connectors/approvals.json" "$root/backup/compose/" \
+  || die backup "the guide's backups could not be made"
 step "B1. step 13: create-tenant.sh with the same arguments, the LLM routes"
 own
 tenant "$deploy" || die tenant "create-tenant.sh of this version failed"

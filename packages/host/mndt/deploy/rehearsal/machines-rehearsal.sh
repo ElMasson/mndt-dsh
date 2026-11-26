@@ -35,7 +35,7 @@ machines_rehearsal_compose() { # <compose file>
     -e "s#^      MNDT_GUARD_EGRESS: .*#      MNDT_GUARD_EGRESS: $machines_space-egress#" "$1"
 }
 
-# Both images must be there: the socket proxy refuses every pull, by design.
+# Both images must be there: the Docker guard refuses every pull, by design.
 machines_images_present() {
   local missing=""
   for wanted in "$machines_image" "$pc_image"; do docker image inspect "$wanted" >/dev/null 2>&1 || missing="$missing $wanted"; done
@@ -51,25 +51,26 @@ machines_cleanup() {
   docker network rm "${project}_machines" "${project}_docker-guard-net" "${project}_egress-out" >/dev/null 2>&1
 }
 
-# A connector reads neither the machine service's token nor, unless it is
-# approvals or machine, the gateway's secret: each connector's script as the
+# A connector reads neither the machine service's token, nor state.json, nor
+# the workbench's environment (/proc/1/environ), nor, unless it is approvals or
+# machine (the catalog's gatewaySecret), the gateway's secret: each connector's script as the
 # workbench renders it (its Landlock grants), its command replaced by reading
 # both files, run inside the running workbench. The workbench itself reads both
 # (the witness: otherwise a refusal would prove nothing).
 connector_secrets_check() { # <data dir> <workbench container>
   local data=$1 container=$2 line verdict="" ok=1 others=0 server script
-  local witness; witness=$(docker exec "$container" sh -c 'test -r /run/secrets/mndt-machines && test -r /run/secrets/mndt-gateway && echo readable')
+  local witness; witness=$(docker exec "$container" sh -c 'test -r /run/secrets/mndt-machines && test -r /run/secrets/mndt-gateway && test -r /state/state.json && echo readable')
   while IFS=$'\t' read -r server script; do
     [ -z "$server" ] && continue
     line=$(docker exec "$container" sh -c "$script" 2>&1 | tr '\n' ' ')
     verdict="$verdict $server: ${line% };"
     case $server in
-      approvals|machine) [[ $line == *"refused /run/secrets/mndt-machines"*"read /run/secrets/mndt-gateway"* ]] || ok=0 ;;
-      *) others=$((others + 1)); [[ $line == *"refused /run/secrets/mndt-machines"*"refused /run/secrets/mndt-gateway"* ]] || ok=0 ;;
+      approvals|machine) [[ $line == *"refused /run/secrets/mndt-machines"*"read /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"* ]] || ok=0 ;;
+      *) others=$((others + 1)); [[ $line == *"refused /run/secrets/mndt-machines"*"refused /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"* ]] || ok=0 ;;
     esac
   done < <(python3 - "$data/home/profiles/web/cordis.patch.yml" <<'PY'
 import sys, yaml
-probe = "sh -c 'for f in /run/secrets/mndt-machines /run/secrets/mndt-gateway; do if cat \"$f\" >/dev/null 2>&1; then echo \"read $f\"; else echo \"refused $f\"; fi; done'"
+probe = "sh -c 'for f in /run/secrets/mndt-machines /run/secrets/mndt-gateway /state/state.json /proc/1/environ; do if cat \"$f\" >/dev/null 2>&1; then echo \"read $f\"; else echo \"refused $f\"; fi; done'"
 for block in yaml.safe_load(open(sys.argv[1])) or []:
     for row in block.get('insert') or []:
         config = row.get('config') or {}
@@ -81,7 +82,7 @@ PY
   if [ "$witness" = readable ] && [ "$ok" = 1 ] && [ "$others" -ge 1 ] && [[ $verdict == *approvals:* ]] && [[ $verdict == *machine:* ]]; then
     echo "OK  connector-no-secrets  the workbench reads both; under each connector's Landlock grants:$verdict"
   else
-    echo "KO  connector-no-secrets  workbench « ${witness:-not readable} »;$verdict (the others must read neither; approvals and machine the gateway's secret only)"
+    echo "KO  connector-no-secrets  workbench « ${witness:-not readable} »;$verdict (none reads the machine token, state.json or the workbench's environment; approvals and machine alone read the gateway's secret)"
     return 1
   fi
 }

@@ -59,9 +59,14 @@ describe('connector rows', { timeout: 30_000 }, () => {
       expect(allow).toBeGreaterThan(sourced)
       // Under Landlock: the launcher, then the proxy and the server after `--`.
       expect(script).toContain('exec "$@" node /opt/mndt-tools/mcp-proxy.mjs ')
-      // The gateway's secret is granted to our two connectors that act as a person, and to no other.
+      // The gateway's secret: to our two connectors that act as a person (the catalog's gatewaySecret), to no other.
       expect(script.includes('/run/secrets/mndt-gateway')).toBe(['approvals', 'machine'].includes(row.config.serverName))
       expect(script).not.toContain('mndt-machines')
+      // Of /state, only the catalog's readPaths (the actor's folder) and the MCP auth folder; never /state itself, nor /proc.
+      const reads = /for p in ([^;]*); do \[ -e "\$p" \] && set -- "\$@" --ro/.exec(script)?.[1]?.split(' ') ?? []
+      expect(reads.filter(path => path.startsWith('/state'))).toEqual(['approvals', 'machine', 'office365'].includes(row.config.serverName) ? ['/state/actor'] : [])
+      expect(reads).not.toContain('/proc')
+      expect(reads).not.toContain('/sys')
     }
     const dolibarr = rows.find(row => row.config.serverName === 'dolibarr')!.config.args[1]!
     expect(dolibarr).toContain('export MCP_PROXY_DENY=dolibarr_raw_api;')
@@ -102,6 +107,17 @@ describe('connector rows', { timeout: 30_000 }, () => {
     // Said off (a workstation without the image): the command itself.
     const plain = started('office365', { MNDT_LANDLOCK_RUN: fake, MNDT_CONNECTOR_LANDLOCK: 'off' })
     expect(plain.stdout ?? '').not.toContain('--ro')
+  })
+
+  test('a descriptor that names itself like one of ours, with another command, gets none of its rights', () => {
+    const { live, patch } = home()
+    writeFileSync(join(live, 'connectors', 'machine.json'), JSON.stringify({ serverName: 'machine', command: ['node', '/tmp/not-ours.mjs'], allow: ['machine_*'] }))
+    run(live)
+    const rows = (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
+    const script = rows.find(row => row.config.serverName === 'machine')!.config.args[1]!
+    expect(script).toContain('/tmp/not-ours.mjs')
+    expect(script).not.toContain('/run/secrets/mndt-gateway')
+    expect(script).not.toContain('/state/actor')
   })
 
   test('a rerender keeps the own rows and does not pile up markers', () => {

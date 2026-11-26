@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The members' computers under gVisor, proved on a machine that has runsc
 # (mndt-repetition): the tenant's own compose, rendered by create-tenant.sh into
-# a temporary root, its three services only (the sidecar, the socket proxy, the
+# a temporary root, its three services only (the sidecar, the Docker guard, the
 # egress proxy), then one computer started, acted on and stopped by the sidecar
 # itself. No workbench, no model, nothing of an instance.
 #
@@ -137,7 +137,7 @@ else fail pc-isolation "${terminal:0:300}"; fi
 if echo "$terminal" | grep -qE 'web=(200|301|302)'; then pass pc-web "the public web answers through the egress proxy (example.org)"
 else echo "NOTE pc-web  the public web did not answer (${terminal:0:120}): this machine may have no way out; not counted"; fi
 browser=$(sidecar POST /pcs/act "{\"identity\":\"$member\",\"kind\":\"browser\",\"op\":\"status\"}")
-if [[ $browser == 200* ]] && echo "$browser" | grep -qE '"ok": *true'; then pass pc-browser "the browser agent answers (docker exec -i, stdin, through the socket proxy)"
+if [[ $browser == 200* ]] && echo "$browser" | grep -qE '"ok": *true'; then pass pc-browser "the browser agent answers (docker exec -i, stdin, through the Docker guard)"
 else fail pc-browser "${browser:0:200}"; fi
 
 codes=""
