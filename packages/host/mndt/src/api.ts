@@ -1464,13 +1464,9 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           noteToolRefusal(running.missionId, { server: 'machine', reasonKind: 'busy' })
           return respond(409, { error: `les ${capacity?.max ?? MACHINE_MAX} ordinateurs sont occupés`, code: 'machines-busy', ...(capacity === undefined ? {} : { capacity }) })
         }
-        if (!answer.ok) {
-          warnInternal(`mndt: the machine service answered ${answer.status} on ${kind}: ${JSON.stringify(body).slice(0, 300)}`)
-          return respond(answer.status === 400 ? 400 : 502, { error: answer.status === 400 ? 'the action is not valid' : 'the action failed on the computer', code: answer.status === 400 ? 'machine-invalid' : 'machine-refused' })
-        }
-        const served: Record<string, unknown> = {}
-        for (const key of MACHINE_RESULT_FIELDS) if (body[key] !== undefined) served[key] = body[key]
-        return respond(200, { result: served })
+        // The route's list of fields, servedAction (no internal host, no query, a plain
+        // bounded title), each text clipped; a refusal is the host's sentence.
+        return machineAnswer(answer, boundedComputer(body), MACHINE_FIELDS.COMPUTER)
       }
 
       // « Mon ordinateur » (option B, 26/11): each member's own computer, started on
@@ -1971,9 +1967,6 @@ const MACHINE_CALL_MS = 90_000
 
 /** The fields of one action a turn sends its actor's computer (browser, desktop or terminal). */
 const MACHINE_OPERATION_FIELDS = ['op', 'url', 'selector', 'text', 'key', 'x', 'y', 'full', 'command', 'timeoutSeconds'] as const
-
-/** What a computer's action answers to the connector: the page, the capture, the command's result; never a host or a token. */
-const MACHINE_RESULT_FIELDS = ['png', 'text', 'url', 'title', 'exitCode', 'timedOut', 'stdout', 'stderr', 'truncated'] as const
 const MACHINE_STATES = ['stopped', 'starting', 'running', 'stopping'] as const
 
 /**
@@ -2007,7 +2000,34 @@ export const MACHINE_FIELDS = {
   ACTED: { ok: 'boolean', png: 'string', text: 'string', url: 'string', title: 'string' },
   STOPPED: { ok: 'boolean' },
   CAPTURED: { ok: 'boolean', bytes: 'number', seconds: 'number', png: 'string' },
+  /** An action on a member's computer (« Mon ordinateur »): the page, the capture, the command's result. */
+  COMPUTER: {
+    png: 'string', text: 'string', url: 'string', title: 'string',
+    exitCode: 'number', timedOut: 'boolean', stdout: 'string', stderr: 'string', truncated: 'boolean',
+  },
 } as const satisfies Readonly<Record<string, MachineFields>>
+
+/** The longest text of a computer's answer the connector relays (a page, a stream). */
+export const MAX_COMPUTER_TEXT = 16_000
+/** The largest capture it relays, base64 characters (about 6 MB of PNG). */
+export const MAX_COMPUTER_PNG = 8_000_000
+
+/**
+ * @param body - a computer's answer.
+ * @returns it with each text clipped (and said truncated), and a capture too large left out.
+ */
+export function boundedComputer(body: Record<string, unknown>): Record<string, unknown> {
+  const bounded: Record<string, unknown> = { ...body }
+  for (const field of ['text', 'stdout', 'stderr']) {
+    const value = bounded[field]
+    if (typeof value === 'string' && value.length > MAX_COMPUTER_TEXT) {
+      bounded[field] = value.slice(0, MAX_COMPUTER_TEXT)
+      bounded.truncated = true
+    }
+  }
+  if (typeof bounded.png === 'string' && bounded.png.length > MAX_COMPUTER_PNG) delete bounded.png
+  return bounded
+}
 
 /**
  * @param body - a successful answer of the machine service.

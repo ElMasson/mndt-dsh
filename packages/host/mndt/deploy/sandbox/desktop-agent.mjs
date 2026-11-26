@@ -93,7 +93,7 @@ const server = createServer((req, res) => {
   })
 })
 
-// Inside a member's computer it listens on the loopback only (DESKTOP_HOST=127.0.0.1).
-server.listen(PORT, process.env.DESKTOP_HOST ?? '0.0.0.0', () => {
+// The loopback unless told: a capture desktop, reached over the front network, says DESKTOP_HOST=0.0.0.0.
+server.listen(PORT, process.env.DESKTOP_HOST ?? '127.0.0.1', () => {
   console.log(`desktop agent: listening on ${PORT}, display ${DISPLAY}`)
 })

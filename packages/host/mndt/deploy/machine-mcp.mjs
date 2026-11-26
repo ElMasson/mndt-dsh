@@ -16,6 +16,7 @@
  * a command in that computer's terminal. Every computer taken: the tool is
  * refused with the host's sentence, « les 4 ordinateurs sont occupés ».
  */
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
@@ -39,6 +40,17 @@ const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? '
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
 const PC_MODE = process.env.MACHINES_MODE === 'pc'
+// The API believes the identity header only with the gateway's secret (a file outside /state).
+const GATEWAY_SECRET = (() => {
+  const path = process.env.MNDT_GATEWAY_SECRET_FILE ?? ''
+  if (path === '') return process.env.MNDT_GATEWAY_SECRET ?? ''
+  try { return readFileSync(path, 'utf8').trim() } catch { return '' }
+})()
+
+/** @param actor - who the call acts for. @returns the headers of a call to the API as that person. */
+function asPerson(actor) {
+  return { 'x-forwarded-email': actor, ...(GATEWAY_SECRET === '' ? {} : { 'x-mndt-gateway': GATEWAY_SECRET }) }
+}
 
 const sessions = { browser: undefined, desktop: undefined }
 
@@ -48,14 +60,18 @@ const sessions = { browser: undefined, desktop: undefined }
  * @returns the actor, or the empty string when neither is available.
  */
 async function actorNow() {
-  if (ACTOR_FILE === '') return IDENTITY
+  // « Ordinateur » mode: the published actor of the running turn, and nobody
+  // else. No fallback to the shell's identity (the owner): a turn without an
+  // actor uses no computer, never the owner's.
+  const fallback = PC_MODE ? '' : IDENTITY
+  if (ACTOR_FILE === '') return fallback
   const raw = await readFile(ACTOR_FILE, 'utf8').catch(() => '')
-  if (raw.trim() === '') return IDENTITY
+  if (raw.trim() === '') return fallback
   try {
     const record = JSON.parse(raw)
-    return typeof record.actor === 'string' && record.actor !== '' ? record.actor : IDENTITY
+    return typeof record.actor === 'string' && record.actor !== '' ? record.actor : fallback
   } catch {
-    return IDENTITY
+    return fallback
   }
 }
 
@@ -117,11 +133,11 @@ async function actOnComputer(kind, body) {
   if (actor === '') throw new ToolRefusal('no person is behind this turn, so no computer can be used')
   const answer = await fetch(`${API}/me/machine/act`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-forwarded-email': actor },
+    headers: { 'content-type': 'application/json', ...asPerson(actor) },
     body: JSON.stringify({ ...body, kind }),
   })
   const payload = await answer.json().catch(() => ({}))
-  if (answer.ok && typeof payload.result === 'object' && payload.result !== null) return payload.result
+  if (answer.ok && typeof payload === 'object' && payload !== null) return payload
   // The API's refusals are the host's own sentences (busy, not yours, invalid): served.
   if ((answer.status === 409 || answer.status === 403 || answer.status === 400 || answer.status === 503) && typeof payload.error === 'string') {
     throw new ToolRefusal(payload.error)
@@ -157,7 +173,7 @@ function render(payload) {
  * @returns the actor.
  */
 async function currentActor() {
-  return (await actorNow()) || IDENTITY
+  return PC_MODE ? actorNow() : ((await actorNow()) || IDENTITY)
 }
 
 /**
@@ -174,7 +190,7 @@ async function requestApproval(kind, title, detail) {
   const missionId = record.trim() === '' ? undefined : JSON.parse(record).missionId
   const answer = await fetch(`${API}/approvals`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-forwarded-email': actor },
+    headers: { 'content-type': 'application/json', ...asPerson(actor) },
     body: JSON.stringify({
       kind,
       title,
@@ -197,7 +213,7 @@ async function requestApproval(kind, title, detail) {
  */
 async function approvedFor(approvalId) {
   const actor = await currentActor()
-  const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
+  const answer = await fetch(`${API}/approvals?state=all`, { headers: asPerson(actor) })
   const body = await answer.json().catch(() => ({}))
   const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
   if (found === undefined) throw new ToolRefusal(`no approval ${approvalId}`)
@@ -216,7 +232,7 @@ async function awaitApproval(approvalId, timeoutSeconds) {
   const actor = await currentActor()
   const deadline = Date.now() + Math.max(5, Math.min(timeoutSeconds, 600)) * 1000
   for (;;) {
-    const answer = await fetch(`${API}/approvals?state=all`, { headers: { 'x-forwarded-email': actor } })
+    const answer = await fetch(`${API}/approvals?state=all`, { headers: asPerson(actor) })
     const body = await answer.json().catch(() => ({}))
     const found = Array.isArray(body.approvals) ? body.approvals.find(entry => entry.id === approvalId) : undefined
     if (found === undefined) throw new ToolRefusal(`no approval ${approvalId}`)

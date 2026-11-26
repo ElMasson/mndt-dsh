@@ -16,8 +16,9 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
-import type { PriceGrid, Turn } from '../src/core/index.ts'
-import { createMndtApi } from '../src/api.ts'
+import type { PriceGrid } from '../src/core/index.ts'
+import { createMndtApi, startMndtApi } from '../src/api.ts'
+import { fileGrants } from '../src/grants.ts'
 import { clearActor, noteToolRefusal, publishActor, takeToolRefusals } from '../src/machine-tools.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
@@ -89,7 +90,8 @@ describe('POST /me/machine/act: a turn acts on its actor\'s computer, never anot
     await publishActor(member, 'turn-1')
     expect((await act(owner, { kind: 'terminal', command: 'ls' })).body).toMatchObject({ code: 'machine-not-yours' })
     const answer = await act(member, { kind: 'terminal', command: 'ls', identity: owner, timeoutSeconds: 30 })
-    expect(answer).toEqual({ status: 200, body: { result: { exitCode: 0, stdout: 'hi' } } })
+    // The route's list of fields: never the computer's host, token or other words.
+    expect(answer).toEqual({ status: 200, body: { exitCode: 0, stdout: 'hi' } })
     expect(sidecar.received).toHaveLength(1)
     // The published actor, never an identity a body names.
     expect(sidecar.received[0]).toMatchObject({ path: '/pcs/act', headers: { 'x-machine-token': 'tok' }, body: { identity: member, kind: 'terminal', command: 'ls', timeoutSeconds: 30 } })
@@ -112,7 +114,7 @@ describe('POST /me/machine/act: a turn acts on its actor\'s computer, never anot
     await publishActor(member, 'turn-3')
     expect((await act(member, { kind: 'shell', command: 'ls' })).status).toBe(400)
     const failed = await act(member, { kind: 'browser', op: 'text' })
-    expect(failed).toEqual({ status: 502, body: { error: 'the action failed on the computer', code: 'machine-refused' } })
+    expect(failed).toEqual({ status: 502, body: { error: 'the machine service refused the request', code: 'machine-refused' } })
   })
 })
 
@@ -145,7 +147,7 @@ describe('the turn carries its actor and the tools refused during it', () => {
     await call('POST', `/channels/${channel}/messages`, { text: '@alpha bonjour' })
     await turns.settled()
     const all = await service.messages(channel)
-    const turnsOf = all.flatMap(message => message.turns ?? []) as Turn[]
+    const turnsOf = all.flatMap(message => message.turns ?? [])
     expect(turnsOf).toHaveLength(2)
     expect(turnsOf[0]).toMatchObject({ status: 'done', actor: owner, toolRefusals: [{ server: 'machine', reasonKind: 'busy' }] })
     expect(turnsOf[1]).toMatchObject({ status: 'done', actor: owner })
@@ -158,14 +160,14 @@ function connector(env: Record<string, string>) {
   const child = spawn(process.execPath, [MACHINE_MCP], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...env } })
   children.push(child)
   const replies = new Map<number, Record<string, unknown>>()
-  createInterface({ input: child.stdout! }).on('line', (line) => {
+  createInterface({ input: child.stdout }).on('line', (line) => {
     try {
-      const reply = JSON.parse(line) as { id: number }
-      replies.set(reply.id, reply as unknown as Record<string, unknown>)
+      const reply = JSON.parse(line) as { id: number } & Record<string, unknown>
+      replies.set(reply.id, reply)
     } catch { /* not protocol */ }
   })
   return async (id: number, method: string, params: unknown = {}) => {
-    child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
     for (let i = 0; i < 300; i += 1) {
       const reply = replies.get(id)
       if (reply !== undefined) return reply
@@ -180,7 +182,7 @@ describe('the machine connector, « ordinateur » mode', () => {
     const product = await fake((body) => {
       if (body.command === 'busy') return { status: 409, body: { error: 'les 4 ordinateurs sont occupés', code: 'machines-busy' } }
       if (body.command === 'boom') return { status: 500, body: { error: 'Error: ECONNRESET at internal' } }
-      return { status: 200, body: { result: { exitCode: 0, stdout: 'hi', stderr: '' } } }
+      return { status: 200, body: { exitCode: 0, stdout: 'hi', stderr: '' } }
     })
     const actorFile = join(mkdtempSync(join(tmpdir(), 'mcp-actor-')), 'actor.json')
     writeFileSync(actorFile, JSON.stringify({ actor: member, missionId: 'turn-9' }))
@@ -202,11 +204,58 @@ describe('the machine connector, « ordinateur » mode', () => {
   })
 
   it('no person behind the turn: refused, the API never asked', async () => {
-    const product = await fake(() => ({ status: 200, body: { result: {} } }))
+    const product = await fake(() => ({ status: 200, body: {} }))
     const actorFile = join(mkdtempSync(join(tmpdir(), 'mcp-actor-')), 'none.json')
-    const pc = connector({ MACHINES_MODE: 'pc', MNDT_API: product.base, MNDT_ACTOR_FILE: actorFile, MNDT_IDENTITY: '', DSH_MNDT_IDENTITY: '' })
+    // The shell's identity is the owner's: never a fallback for a computer.
+    const pc = connector({ MACHINES_MODE: 'pc', MNDT_API: product.base, MNDT_ACTOR_FILE: actorFile, MNDT_IDENTITY: owner, DSH_MNDT_IDENTITY: owner })
     const refused = await pc(1, 'tools/call', { name: 'machine_browser_read', arguments: {} })
     expect(refused.error).toMatchObject({ message: 'no person is behind this turn, so no computer can be used' })
     expect(product.received).toHaveLength(0)
+  })
+})
+
+describe('the machine connector through the real API (identityOf, the gateway\'s secret)', () => {
+  it('acts as the published actor with the gateway\'s secret; without it, the API refuses and the tool says nothing of why', async () => {
+    const sidecar = await fake(() => ({ status: 200, body: { ok: true, exitCode: 0, stdout: 'bonjour', host: '10.0.0.9' } }))
+    const dir = mkdtempSync(join(tmpdir(), 'machine-real-'))
+    const secretFile = join(dir, 'gateway')
+    writeFileSync(secretFile, 'gateway-secret-for-tests\n')
+    writeFileSync(join(dir, 'grants.json'), JSON.stringify({ grants: [{ subject: owner, role: 'owner' }, { subject: member, role: 'operator' }] }))
+    const server = startMndtApi({
+      service: new WorkbenchService({ store: new MemoryStore() }),
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: 'gateway-secret-for-tests' },
+      grants: fileGrants(join(dir, 'grants.json')),
+      machines: { baseUrl: sidecar.base, token: 'tok' },
+      port: 0,
+      host: '127.0.0.1',
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => { if (server.listening) resolve(); else server.once('listening', () => { resolve() }) })
+    const api = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    await publishActor(member, 'turn-real')
+    const actorFile = process.env.MNDT_MISSION_ACTOR_FILE ?? ''
+    const signed = connector({ MACHINES_MODE: 'pc', MNDT_API: api, MNDT_ACTOR_FILE: actorFile, MNDT_GATEWAY_SECRET_FILE: secretFile })
+    const ran = await signed(1, 'tools/call', { name: 'machine_terminal_run', arguments: { command: 'echo bonjour' } })
+    expect(ran.result).toEqual({ content: [{ type: 'text', text: 'exit 0\nstdout:\nbonjour' }] })
+    expect(sidecar.received[0]?.body).toMatchObject({ identity: member, kind: 'terminal' })
+    const unsigned = connector({ MACHINES_MODE: 'pc', MNDT_API: api, MNDT_ACTOR_FILE: actorFile, MNDT_GATEWAY_SECRET_FILE: '', MNDT_GATEWAY_SECRET: '' })
+    const refused = await unsigned(2, 'tools/call', { name: 'machine_terminal_run', arguments: { command: 'echo bonjour' } })
+    expect(refused.error).toMatchObject({ message: 'the call failed' })
+    expect(sidecar.received).toHaveLength(1)
+  })
+})
+
+describe('whose computer a run uses', () => {
+  it('an owner\'s automation runs as that owner (its mission is theirs), so its tools act on the owner\'s computer', async () => {
+    const sidecar = await fake(() => ({ status: 200, body: { ok: true, exitCode: 0, stdout: '' } }))
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const mission = await service.createMission({ kind: 'custom', prompt: 'x', createdBy: owner })
+    // The runner publishes the mission's requester (runner.ts, publishActor(mission.createdBy, …)).
+    await publishActor(mission.createdBy, mission.id)
+    const act = api(sidecar.base)
+    expect((await act(member, { kind: 'terminal', command: 'ls' })).body).toMatchObject({ code: 'machine-not-yours' })
+    expect((await act(owner, { kind: 'terminal', command: 'ls' })).status).toBe(200)
+    expect(sidecar.received[0]?.body).toMatchObject({ identity: owner })
   })
 })

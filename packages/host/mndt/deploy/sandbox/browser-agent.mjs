@@ -119,7 +119,7 @@ const server = createServer((req, res) => {
   })
 })
 
-// Inside a member's computer it listens on the loopback only (AGENT_HOST=127.0.0.1).
-server.listen(PORT, process.env.AGENT_HOST ?? '0.0.0.0', () => {
+// The loopback unless told: a capture session, reached over the front network, says AGENT_HOST=0.0.0.0.
+server.listen(PORT, process.env.AGENT_HOST ?? '127.0.0.1', () => {
   console.log(`browser agent: listening on ${PORT}`)
 })

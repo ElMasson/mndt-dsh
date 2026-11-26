@@ -463,9 +463,56 @@ def _start_pc(identity):
     return {'ok': True}
 
 
-def _clip(text):
-    text = text or ''
-    return (text[:TERMINAL_MAX_OUTPUT], len(text) > TERMINAL_MAX_OUTPUT)
+# What an action may bring back: a command's streams are clipped at
+# TERMINAL_MAX_OUTPUT each; an agent's answer (a capture) at PC_MAX_ANSWER.
+PC_MAX_ANSWER = int(os.environ.get('PC_MAX_ANSWER', str(8 * 1024 * 1024)))
+
+
+def run_bounded(args, timeout, limit, stdin=None):
+    """Run a command, reading its streams as they come and keeping at most
+    `limit` characters of each: `yes` for 300 s, or a huge capture, never fills
+    this service's memory. Past `timeout`, the command is killed.
+
+    @returns (exit code, stdout, stderr, whether a stream was clipped).
+    """
+    process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    kept = {'out': [], 'err': []}
+    clipped = {'out': False, 'err': False}
+
+    def drain(stream, name):
+        size = 0
+        # Read to the end (the command must not block on a full pipe); keep the first `limit` bytes.
+        for chunk in iter(lambda: stream.read(65536), b''):
+            room = limit - size
+            if room > 0:
+                kept[name].append(chunk[:room])
+                size += min(len(chunk), room)
+            if len(chunk) > max(room, 0):
+                clipped[name] = True
+        stream.close()
+
+    readers = [threading.Thread(target=drain, args=(process.stdout, 'out'), daemon=True),
+               threading.Thread(target=drain, args=(process.stderr, 'err'), daemon=True)]
+    for reader in readers:
+        reader.start()
+    if stdin is not None:
+        try:
+            process.stdin.write(stdin.encode('utf-8'))
+            process.stdin.close()
+        except OSError:
+            pass
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=5)
+    text = {name: b''.join(parts).decode('utf-8', 'replace')[:limit] for name, parts in kept.items()}
+    return code, text['out'], text['err'], clipped['out'] or clipped['err']
 
 
 def act_pc(identity, kind, body):
@@ -494,30 +541,36 @@ def act_pc(identity, kind, body):
             except (TypeError, ValueError):
                 seconds = TERMINAL_DEFAULT_SECONDS
             seconds = max(1, min(seconds, TERMINAL_MAX_SECONDS))
-            result = docker(
-                'exec', '-u', str(PC_UID) + ':' + str(PC_UID), '-w', '/home/user', name,
-                'timeout', '-k', '5', str(seconds), 'bash', '-lc', command,
-                timeout=seconds + 20,
+            # The agents' tokens are taken out of the command's environment (env -u):
+            # they guard the agents against a page in the browser, not against the
+            # member's own terminal. GNU timeout, without --foreground, signals the
+            # command's whole process group: its children die with it.
+            code, stdout, stderr, clipped = run_bounded(
+                ['docker', 'exec', '-u', str(PC_UID) + ':' + str(PC_UID), '-w', '/home/user', name,
+                 'env', '-u', 'AGENT_TOKEN', '-u', 'DESKTOP_TOKEN',
+                 'timeout', '-k', '5', str(seconds), 'bash', '-lc', command],
+                timeout=seconds + 20, limit=TERMINAL_MAX_OUTPUT,
             )
-            stdout, cut_out = _clip(result.stdout)
-            stderr, cut_err = _clip(result.stderr)
             return {
                 'ok': True,
-                'exitCode': result.returncode,
-                'timedOut': result.returncode == 124,
+                'exitCode': code,
+                'timedOut': code == 124,
                 'stdout': stdout,
                 'stderr': stderr,
-                'truncated': cut_out or cut_err,
+                'truncated': clipped,
             }
-        result = docker('exec', '-i', name, 'node', '/app/pc-call.mjs', kind, stdin=json.dumps(body), timeout=90)
-        lines = [line for line in (result.stdout or '').splitlines() if line.strip() != '']
+        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', name, 'node', '/app/pc-call.mjs', kind],
+                                              timeout=90, limit=PC_MAX_ANSWER, stdin=json.dumps(body))
+        lines = [line for line in out.splitlines() if line.strip() != '']
         try:
-            payload = json.loads(lines[-1]) if lines else {}
+            payload = json.loads(lines[-1]) if lines and not clipped else {}
         except ValueError:
             payload = {}
         if not isinstance(payload, dict) or payload.get('ok') is not True:
-            reason = payload.get('error') if isinstance(payload, dict) else None
-            return {'ok': False, 'error': 'the ' + kind + ' answered: ' + str(reason or (result.stderr or '')[-200:] or 'nothing')}
+            # Docker's and the agent's own words go to this service's log; the caller reads one sentence.
+            sys.stderr.write('machines-sidecar: the ' + kind + ' of ' + name + ' failed (exit ' + str(code)
+                             + (', answer clipped' if clipped else '') + '): ' + err[-300:].replace('\n', ' ') + '\n')
+            return {'ok': False, 'error': 'the action failed on the computer'}
         return payload
     finally:
         touch_pc(identity)

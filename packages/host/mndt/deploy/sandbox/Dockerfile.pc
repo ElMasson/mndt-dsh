@@ -5,7 +5,8 @@
 # reaches them through `docker exec` of pc-call.mjs, so the computer needs no
 # network but its egress proxy. Read-only root, no capability, user 1000; its
 # writable places are /tmp, /dev/shm and the member's own files (/home/user).
-FROM node:22-bookworm-slim
+# Pinned by digest: the computer's base never changes under a rebuild unannounced.
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -41,4 +42,6 @@ ENV HOME=/home/user \
     DESKTOP_HOST=127.0.0.1 \
     DESKTOP_PORT=9224
 
+# The member's uid, also when the image runs without --user.
+USER 1000:1000
 ENTRYPOINT ["/app/pc-entrypoint.sh"]
