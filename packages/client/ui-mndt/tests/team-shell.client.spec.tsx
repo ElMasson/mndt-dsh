@@ -1055,4 +1055,23 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Cette heure est illisible : écrivez-la comme 07:30.')
     expect(saved).toEqual([])
   })
+
+  it('a double Enter saves once', async () => {
+    let calls = 0
+    let release: () => void = () => undefined
+    const api = automationsFace({
+      saveAutomation: () => { calls += 1; return new Promise((resolve) => { release = () => { resolve({ ok: true }) } }) },
+    })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(field, { target: { value: '06:45' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(calls).toBe(1)
+    release()
+    await waitFor(() => { expect(within(first as HTMLElement).getByTestId('scheduled-hour').hasAttribute('disabled')).toBe(false) })
+    expect(calls).toBe(1)
+  })
 })
