@@ -127,6 +127,11 @@ export interface TurnInput {
    * turn's thread (x-mndt-run), not outside any channel.
    */
   readonly runId?: string
+  /**
+   * The server's key of the prompts' fingerprints (WorkbenchService.promptMeasureKey):
+   * the operator's line measures the prompt with it, never shows it.
+   */
+  readonly measureKey?: string
   /** Aborted when the turn must stop. */
   readonly signal: AbortSignal
 }
@@ -989,6 +994,7 @@ export class TurnScheduler {
         const output = await engine.run({
           turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
           runId: turn.id,
+          measureKey: await service.promptMeasureKey(),
           agent: who,
           channel,
           actor,

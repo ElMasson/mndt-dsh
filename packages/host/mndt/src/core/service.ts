@@ -10,7 +10,7 @@
 import { Refusal } from './refusal.ts'
 import { ScheduleRefusal } from './schedule.ts'
 import type { Schedule, ScheduleProposal } from './schedule.ts'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { coordinationAgents, emptyState, isMissionKind, needsApproval } from './types.ts'
 import type {
   Agent,
@@ -299,17 +299,52 @@ export class ContextRefusal extends Refusal {
  * @throws ContextRefusal when too long, or when the context moved since baseVersion.
  */
 /**
- * @param marks - the channels' prompt marks.
- * @param channelId - the channel a text was written in.
- * @param text - what was written (a message, a context).
- * @returns the marks, that channel's dropped when the text shows it (it is drawn again at its next use):
- * a mark seen is a mark a text could use to close its block early.
+ * Walk what a write added or changed, by reference against the state before it:
+ * an unchanged branch is skipped, an array's element already there is skipped.
+ * @param before - the value before the write (undefined: all of `after` is new).
+ * @param after - the value after it.
+ * @param found - called with every string the write brought.
  */
-function unleakedMarks(marks: WorkbenchState['promptMarks'], channelId: string, text: string): Pick<WorkbenchState, 'promptMarks'> {
-  const mark = marks?.[channelId]
-  if (marks === undefined || mark === undefined || !text.includes(mark)) return marks === undefined ? {} : { promptMarks: marks }
-  const { [channelId]: _seen, ...rest } = marks
-  return { promptMarks: rest }
+function freshStrings(before: unknown, after: unknown, found: (text: string) => void): void {
+  if (before === after) return
+  if (typeof after === 'string') {
+    found(after)
+    return
+  }
+  if (after === null || typeof after !== 'object') return
+  if (Array.isArray(after)) {
+    const known = new Set<unknown>(Array.isArray(before) ? before : [])
+    for (const item of after) if (!known.has(item)) freshStrings(undefined, item, found)
+    return
+  }
+  const previous = before !== null && typeof before === 'object' && !Array.isArray(before) ? before as Record<string, unknown> : {}
+  for (const [key, value] of Object.entries(after as Record<string, unknown>)) {
+    found(key)
+    freshStrings(previous[key], value, found)
+  }
+}
+
+/**
+ * The one guard of the channels' prompt marks, applied to every write (#write):
+ * a message, a reply, a context, a mission's result, a scheduled run, a help's
+ * escalation or advices, a card an agent wrote — whatever enters the state and
+ * shows a channel's mark drops that mark, drawn again at its next use. A mark
+ * seen is a mark a text could use to close its block early.
+ * @param before - the state before the write.
+ * @param after - the state the write would commit.
+ * @returns `after`, without the marks one of its new texts shows.
+ */
+export function withoutLeakedMarks(before: WorkbenchState, after: WorkbenchState): WorkbenchState {
+  const marks = Object.entries(after.promptMarks ?? {})
+  if (marks.length === 0) return after
+  const { promptMarks: _marks, promptMeasureKey: _key, ...written } = after
+  const { promptMarks: _marksBefore, promptMeasureKey: _keyBefore, ...writtenBefore } = before
+  const seen = new Set<string>()
+  freshStrings(writtenBefore, written, (text) => {
+    for (const [channel, mark] of marks) if (text.includes(mark)) seen.add(channel)
+  })
+  if (seen.size === 0) return after
+  return { ...after, promptMarks: Object.fromEntries(marks.filter(([channel]) => !seen.has(channel))) }
 }
 
 function withContext(channel: Channel, text: string, baseVersion: number, actor: string, at: string): Channel {
@@ -618,7 +653,10 @@ export class WorkbenchService {
       const next = await work(state)
       // One change may journal several facts (a channel updated and a coordination ended).
       const recorded = Array.isArray(next.event) ? next.event : [next.event as WorkbenchEvent]
-      const committed: WorkbenchState = { ...next.state, events: [...next.state.events, ...recorded].slice(-500) }
+      // Every write passes the marks' guard: no surface publishes a text without it.
+      const committed: WorkbenchState = withoutLeakedMarks(state, {
+        ...next.state, events: [...next.state.events, ...recorded].slice(-500),
+      })
       await this.#options.store.save(committed)
       this.#state = committed
       result = next.value
@@ -995,7 +1033,6 @@ export class WorkbenchService {
           ...state,
           channels: (state.channels ?? []).map(candidate => (candidate.id === channel.id ? next : candidate)),
           approvals: state.approvals.map(candidate => (candidate.id === id ? decided : candidate)),
-          ...unleakedMarks(state.promptMarks, channel.id, approval.contextProposal.text),
         },
         event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `context of #${channel.name} at version ${next.context?.version ?? 0}` },
         value: { approval: decided, channel: next },
@@ -1107,8 +1144,25 @@ export class WorkbenchService {
     return this.#write((state) => {
       const again = state.promptMarks?.[channelId]
       if (again !== undefined) return { state, event: [], value: again }
-      const mark = randomUUID().replaceAll('-', '').slice(0, 12)
+      // 128 bits: never found by trying candidates, even against a fingerprint.
+      const mark = randomBytes(16).toString('hex')
       return { state: { ...state, promptMarks: { ...(state.promptMarks ?? {}), [channelId]: mark } }, event: [], value: mark }
+    })
+  }
+
+  /**
+   * @returns the key of the prompts' fingerprints (WorkbenchState.promptMeasureKey),
+   * drawn and kept at its first use: never served, never logged. With it, the
+   * operator's line compares two prompts' heads without letting anyone who reads
+   * the log try a candidate mark against them.
+   */
+  async promptMeasureKey(): Promise<string> {
+    const known = (await this.#ready()).promptMeasureKey
+    if (known !== undefined) return known
+    return this.#write((state) => {
+      if (state.promptMeasureKey !== undefined) return { state, event: [], value: state.promptMeasureKey }
+      const key = randomBytes(32).toString('hex')
+      return { state: { ...state, promptMeasureKey: key }, event: [], value: key }
     })
   }
 
@@ -2374,7 +2428,6 @@ export class WorkbenchService {
         state: {
           ...state,
           channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)),
-          ...unleakedMarks(state.promptMarks, id, text),
         },
         event: { at: this.#at(), actor, action: 'channel.context', subject: id, detail: `version ${next.context?.version ?? 0}` },
         value: next,
@@ -2549,7 +2602,7 @@ export class WorkbenchService {
         updatedAt: at,
       }
       return {
-        state: { ...state, messages: [...(state.messages ?? []), message], ...unleakedMarks(state.promptMarks, channelId, body) },
+        state: { ...state, messages: [...(state.messages ?? []), message] },
         event: { at: message.createdAt, actor: author, action: 'message.posted', subject: message.id, detail: channelId },
         value: message,
       }
@@ -2666,7 +2719,7 @@ export class WorkbenchService {
         }
       })
       return {
-        state: { ...state, messages: [...linked, message], ...unleakedMarks(state.promptMarks, channelId, text) },
+        state: { ...state, messages: [...linked, message] },
         event: { at: message.createdAt, actor: author.kind === 'agent' ? author.agentId : 'mndt', action: 'message.reply', subject: message.id, detail: channelId },
         value: message,
       }

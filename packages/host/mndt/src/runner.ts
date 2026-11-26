@@ -7,7 +7,7 @@
  * produced, and the failure contracts that a settled run does not report by
  * itself. A run that produced nothing is an error here, not an empty brief.
  */
-import { createHash, randomUUID } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the agents service and the session/workflow event maps.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -495,12 +495,20 @@ export class DshTurnRunner implements TurnEngine {
 }
 
 /**
- * @param input - a turn.
+ * @param input - a turn, with the server's key of the fingerprints (TurnInput.measureKey).
  * @param tokens - what the model counted, when it said.
  * @returns the operator's line that measures its prompt, without any of its text.
+ * The heads' fingerprints are HMACs under a key the log never shows: two turns
+ * with one head show one value (the prefix cache can serve it), but no reader of
+ * the log can try a candidate (a channel's mark, with the rest of a head a
+ * member mostly knows) against it. Without the key, no fingerprint at all.
  */
-export function promptMeasure(input: Pick<TurnInput, 'turnId' | 'agent' | 'prompt'>, tokens: { readonly input: number; readonly output: number; readonly cacheRead?: number } | undefined): string {
-  const head = (length: number): string => createHash('sha256').update(input.prompt.slice(0, length)).digest('hex').slice(0, 12)
+export function promptMeasure(
+  input: Pick<TurnInput, 'turnId' | 'agent' | 'prompt' | 'measureKey'>,
+  tokens: { readonly input: number; readonly output: number; readonly cacheRead?: number } | undefined,
+): string {
+  const key = input.measureKey ?? ''
+  const head = (length: number): string => (key === '' ? 'unkeyed' : createHmac('sha256', key).update(input.prompt.slice(0, length)).digest('hex').slice(0, 12))
   const counted = tokens === undefined ? 'tokens unknown' : `input ${tokens.input}, cacheRead ${tokens.cacheRead ?? 0}, output ${tokens.output}`
   return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}; ${counted}`
 }

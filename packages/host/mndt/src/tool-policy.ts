@@ -135,6 +135,24 @@ export interface LineageAgentLike {
 export interface PromptAssemblyLike {
   readonly sections: readonly { readonly name: string }[]
   readonly contexts: readonly { readonly name: string }[]
+  /** The tools the model is offered, in the order it reads them (absent on a fake assembly). */
+  readonly tools?: readonly { readonly name: string }[]
+}
+
+/**
+ * The order the model reads its tools in: the engine's own tools first, then the
+ * MCP tools by server, then by name, by code point. The registry keeps the order
+ * the servers registered in (their start, a reconnection): two turns of one
+ * agent must offer one list, or the prefix cache serves nothing past the tools.
+ * @param a - a tool.
+ * @param b - another.
+ * @returns their order.
+ */
+export function toolOrder(a: { readonly name: string }, b: { readonly name: string }): number {
+  const serverA = mcpServerOf(a.name) ?? ''
+  const serverB = mcpServerOf(b.name) ?? ''
+  if (serverA !== serverB) return serverA < serverB ? -1 : 1
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
 }
 
 /** A waterfall listener on an agent's prompt assembly. */
@@ -155,8 +173,9 @@ export const DEV_PROMPT_CONTEXTS: readonly string[] = ['harness:source', 'app:we
 
 /**
  * Leave the DSH development prompt out of one agent's assemblies (a team turn's
- * or mission's agent and its descendants). Registered on the agent's own scope:
- * the owner's shell, outside every run's lineage, keeps it.
+ * or mission's agent and its descendants), and offer its tools in one order
+ * (toolOrder). Registered on the agent's own scope: the owner's shell, outside
+ * every run's lineage, keeps both as they are.
  * @param agent - an agent of the run's lineage.
  */
 export function withoutDevPrompt(agent: LineageAgentLike): void {
@@ -166,6 +185,7 @@ export function withoutDevPrompt(agent: LineageAgentLike): void {
       ...assembled,
       sections: assembled.sections.filter(section => !DEV_PROMPT_SECTIONS.includes(section.name)),
       contexts: assembled.contexts.filter(entry => !DEV_PROMPT_CONTEXTS.includes(entry.name)),
+      ...(assembled.tools === undefined ? {} : { tools: [...assembled.tools].sort(toolOrder) }),
     }
   })
 }

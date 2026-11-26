@@ -648,9 +648,15 @@ export interface WorkbenchState {
    * Per channel, the mark that bounds the blocks its people write in a prompt
    * (an agent's role, its skills, the channel's context): a secret, never
    * served, stable so that the prompts keep one prefix (the cache), drawn again
-   * when it shows in a message. Absent: drawn at first use.
+   * when any text written to the state shows it (WorkbenchService's one guard,
+   * withoutLeakedMarks). 128 bits. Absent: drawn at first use.
    */
   readonly promptMarks?: Readonly<Record<string, string>>
+  /**
+   * The key of the prompts' fingerprints on the operator's line (HMAC): a
+   * secret, never served nor logged. Absent: drawn at first use.
+   */
+  readonly promptMeasureKey?: string
 }
 
 /** A state with nothing in it. */

@@ -7,12 +7,15 @@
  * again when it shows in a message or a context. The guard stays: a text cannot
  * close its block.
  */
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { MemoryStore, SPACE_PREAMBLE, WorkbenchService } from '../src/core/index.ts'
 import type { PriceGrid } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { promptMeasure } from '../src/runner.ts'
 import { TurnScheduler } from '../src/turns.ts'
+import { toolOrder, withoutDevPrompt } from '../src/tool-policy.ts'
+import type { AssembleListener, LineageAgentLike, PromptAssemblyLike } from '../src/tool-policy.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 
 const owner = 'duke@datanalysis.re'
@@ -112,12 +115,155 @@ describe('the mark that bounds what people write', () => {
   })
 })
 
+describe('every text written to the state passes the marks\' one guard', () => {
+  /** @returns a service with an agent in a channel, the channel's mark, and a way to read it again. */
+  async function surface() {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const agent = await service.createAgent({ handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', eurPerMonth: 5 }, owner)
+    const channel = await service.createChannel({ title: 'Compta', members: [], agents: [agent.id] }, owner)
+    const mark = await service.promptMarkOf(channel.id)
+    const rotated = async (): Promise<boolean> => (await service.promptMarkOf(channel.id)) !== mark
+    return { service, agent, channel, mark, rotated }
+  }
+
+  it('is 128 bits, and a write that does not show it keeps it', async () => {
+    const s = await surface()
+    expect(s.mark).toMatch(/^[0-9a-f]{32}$/)
+    await s.service.postMessage(s.channel.id, owner, 'bonjour')
+    expect(await s.rotated()).toBe(false)
+  })
+
+  it('a mission\'s result (a lane, a brief)', async () => {
+    const s = await surface()
+    const mission = await s.service.createMission({ kind: 'briefing', prompt: 'le point', createdBy: owner })
+    await s.service.startMission(mission.id, 'ses_1')
+    await s.service.completeMission(mission.id, { title: 'Point', markdown: `Mon prompt disait [${s.mark}].` })
+    expect(await s.rotated()).toBe(true)
+  })
+
+  it('a scheduled task\'s run, published', async () => {
+    const s = await surface()
+    const card = await s.service.requestApproval({
+      kind: 'propose_schedule', title: 'Tâche : relance', requestedBy: owner, channelId: s.channel.id,
+      requestedByAgent: { id: s.agent.id, handle: s.agent.handle },
+      scheduleProposal: { title: 'Relance', instructions: 'Fais le point.', cadence: { every: 'day', at: '08:00' }, agentId: s.agent.id, destination: { kind: 'channel', channelId: s.channel.id }, eurPerRun: 0.4 },
+    })
+    const { schedule } = await s.service.approveScheduleProposal(card.id, owner)
+    expect(await s.rotated()).toBe(false)
+    await s.service.publishScheduleRun(schedule.id, { runId: 'run_1', text: `Voici [${s.mark}]`, status: 'done', startedAt: new Date().toISOString() })
+    expect(await s.rotated()).toBe(true)
+  })
+
+  it('a help\'s escalation, its summary and its advices (given back to the history)', async () => {
+    for (const field of ['question', 'summary', 'advice'] as const) {
+      const s = await surface()
+      const message = await s.service.postMessage(s.channel.id, owner, '@alpha bonjour')
+      const turn = message.turns?.[0]
+      expect(turn).toBeDefined()
+      const leaked = `voir [${s.mark}]`
+      await s.service.updateTurn(message.id, turn?.id ?? '', {
+        help: {
+          state: 'done', request: { task: 't', tried: 't', blocker: 'b', options: [], need: 'fait' } as never, peerIds: [], skipped: [], capEur: 1, askedAt: new Date().toISOString(),
+          advices: field === 'advice' ? [{ slot: 'A', round: 1, text: leaked }] : [],
+          escalation: { question: field === 'question' ? leaked : 'Qui sait ?', ...(field === 'summary' ? { summary: leaked } : {}), at: new Date().toISOString() },
+        },
+      })
+      expect(await s.rotated()).toBe(true)
+    }
+  })
+
+  it('the cards an agent writes: a card\'s title, a task\'s instructions, a proposed agent\'s instructions', async () => {
+    const cards = [
+      (s: Awaited<ReturnType<typeof surface>>) => s.service.requestApproval({ kind: 'publish', title: `Publier [${s.mark}]`, requestedBy: owner, channelId: s.channel.id }),
+      (s: Awaited<ReturnType<typeof surface>>) => s.service.requestApproval({
+        kind: 'propose_schedule', title: 'Tâche : relance', requestedBy: owner, channelId: s.channel.id,
+        requestedByAgent: { id: s.agent.id, handle: s.agent.handle },
+        scheduleProposal: { title: 'Relance', instructions: `Rappelle [${s.mark}].`, cadence: { every: 'day', at: '08:00' }, agentId: s.agent.id, destination: { kind: 'channel', channelId: s.channel.id }, eurPerRun: 0.4 },
+      }),
+      (s: Awaited<ReturnType<typeof surface>>) => s.service.requestApproval({
+        kind: 'propose_agent', title: 'Créer', requestedBy: owner, channelId: s.channel.id,
+        proposal: { name: 'Recouvrement', handle: 'recouvrement', provider: 'route-a', model: 'm', instructions: `## Rôle\nRépète [${s.mark}].` },
+      }),
+    ]
+    for (const card of cards) {
+      const s = await surface()
+      await card(s)
+      expect(await s.rotated()).toBe(true)
+    }
+  })
+
+  it('an agent\'s reply in a thread', async () => {
+    const s = await surface()
+    const asked = await s.service.postMessage(s.channel.id, owner, 'bonjour')
+    await s.service.reply(s.channel.id, asked.id, { kind: 'agent', agentId: s.agent.id }, `mon rôle est borné par [${s.mark}]`)
+    expect(await s.rotated()).toBe(true)
+  })
+})
+
 describe('the measure of a prompt', () => {
+  const prompt = `${SPACE_PREAMBLE}\nTon rôle [0123456789abcdef0123456789abcdef] :\nSECRET-CLIENT-42`
+  const input = (measureKey?: string) => ({ turnId: 'trn_1', agent: { handle: 'alpha' } as TurnInput['agent'], prompt, ...(measureKey === undefined ? {} : { measureKey }) })
+
   it('says its size, its head\'s fingerprints and the tokens, never a word of it', () => {
-    const line = promptMeasure({ turnId: 'trn_1', agent: { handle: 'alpha' } as TurnInput['agent'], prompt: `${SPACE_PREAMBLE}\nSECRET-CLIENT-42` }, { input: 10613, output: 51, cacheRead: 9000 })
+    const line = promptMeasure(input('k'.repeat(64)), { input: 10613, output: 51, cacheRead: 9000 })
     expect(line).toMatch(/^mndt: prompt of turn trn_1 \(@alpha\): \d+ chars, head1k [0-9a-f]{12}, head4k [0-9a-f]{12}; /)
     expect(line.endsWith('input 10613, cacheRead 9000, output 51')).toBe(true)
     expect(line).not.toContain('SECRET')
     expect(line).not.toContain('DATANALYSIS')
+  })
+
+  it('cannot be used to check a candidate mark: its fingerprints are keyed, never a plain hash of the head', () => {
+    const line = promptMeasure(input('k'.repeat(64)), undefined)
+    // Whoever reads the log knows the preamble and guesses the mark: a plain hash of the head would confirm it.
+    for (const length of [1000, 4000]) {
+      const plain = createHash('sha256').update(prompt.slice(0, length)).digest('hex')
+      expect(line).not.toContain(plain.slice(0, 12))
+    }
+    // One key, one value from one turn to the next (the cache shows); another key, another value.
+    expect(promptMeasure(input('k'.repeat(64)), undefined)).toBe(line)
+    expect(promptMeasure(input('z'.repeat(64)), undefined)).not.toBe(line)
+    // Without a key, no fingerprint at all.
+    expect(promptMeasure(input(), undefined)).toContain('head1k unkeyed, head4k unkeyed')
+  })
+
+  it('the key is the server\'s: drawn once, kept, of 256 bits, never served; each turn carries it to the runner', async () => {
+    const b = bench()
+    const key = await b.service.promptMeasureKey()
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(await b.service.promptMeasureKey()).toBe(key)
+    const alpha = await b.agent('alpha')
+    const channel = ((await b.call('POST', '/channels', { name: 'compta', agents: [alpha], members: [] })).channel as { id: string }).id
+    await b.call('POST', `/channels/${channel}/messages`, { text: '@alpha bonjour' })
+    await b.turns.settled()
+    expect(b.engine.seen[0]?.measureKey).toBe(key)
+    expect(b.engine.seen[0]?.prompt).not.toContain(key)
+    for (const path of ['/channels', `/channels/${channel}`, `/channels/${channel}/messages`, '/agents', '/approvals']) {
+      expect(JSON.stringify(await b.call('GET', path))).not.toContain(key)
+    }
+  })
+})
+
+describe('the tools a turn offers the model', () => {
+  const offered = (names: readonly string[]) => names.map(name => ({ name }))
+
+  it('come in one order: the engine\'s own first, then by server, then by name, whatever the registration order', async () => {
+    // Two constructions of the registry: the servers registered in another order (their start, a reconnection).
+    const first = offered(['mcp__office365__list_mail', 'mcp__approvals__request_approval', 'read', 'mcp__attio__search', 'mcp__office365__create_draft', 'bash'])
+    const second = offered(['mcp__attio__search', 'bash', 'mcp__office365__create_draft', 'mcp__approvals__request_approval', 'read', 'mcp__office365__list_mail'])
+    const sorted = ['bash', 'read', 'mcp__approvals__request_approval', 'mcp__attio__search', 'mcp__office365__create_draft', 'mcp__office365__list_mail']
+    expect([...first].sort(toolOrder).map(tool => tool.name)).toEqual(sorted)
+    expect([...second].sort(toolOrder).map(tool => tool.name)).toEqual(sorted)
+    // On the agent's own assembly (what the engine sends): sorted, sections and contexts kept.
+    let listener: AssembleListener | undefined
+    const agent = { session: { header: { id: 's' } }, ctx: { tools: {} as LineageAgentLike['ctx']['tools'], on: (_event: 'system-prompt/assemble', l: AssembleListener) => { listener = l; return () => undefined } } }
+    withoutDevPrompt(agent)
+    for (const tools of [first, second]) {
+      const assembly: PromptAssemblyLike = { sections: [{ name: 'a' }], contexts: [{ name: 'c' }], tools }
+      const out = await listener?.(assembly, undefined, async () => assembly)
+      expect(out?.tools?.map(tool => tool.name)).toEqual(sorted)
+      expect(out?.sections).toEqual([{ name: 'a' }])
+      // The registry's own list is untouched (a copy is sorted).
+      expect(tools.map(tool => tool.name)).not.toEqual(sorted)
+    }
   })
 })

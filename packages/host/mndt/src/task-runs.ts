@@ -296,6 +296,7 @@ export class TaskScheduler {
       const output = await engine.run({
         turnId: runId,
         runId,
+        measureKey: await service.promptMeasureKey(),
         agent,
         channel,
         // As its requester: their connections, their computer; never the owner's.

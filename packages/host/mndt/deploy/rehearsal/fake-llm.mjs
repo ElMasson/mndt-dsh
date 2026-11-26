@@ -170,8 +170,10 @@ createServer((req, res) => {
     const tag = tagOf(messages)
     // The prefix cache (prompt-cache-prefix): the first user message of a call,
     // by agent and channel; its common head with that agent's previous one, the
-    // fingerprint of its first 300 characters (the space's preamble), and
-    // whether it opens with the date line. Never the text.
+    // length of its static block (everything before its first part that changes
+    // from one turn to the next: the channel's history), the fingerprint of its
+    // first 300 characters (the space's preamble), and whether it opens with the
+    // date line. Never the text.
     {
       const first = textOf(messages.find(message => message.role === 'user')?.content ?? '')
       const who = /Tu es @([a-z0-9-]+) \(/.exec(first)?.[1] ?? '-'
@@ -182,7 +184,8 @@ createServer((req, res) => {
       if (before !== undefined) while (common < before.length && common < first.length && before[common] === first[common]) common += 1
       previousFirst.set(key, first)
       const preamble = createHash('sha256').update(first.slice(0, 300)).digest('hex').slice(0, 12)
-      console.log(`fake-llm prompt-prefix @${who} #${where}: length=${first.length} common=${before === undefined ? '-' : common} preamble=${preamble} dateFirst=${first.startsWith('Nous sommes le')}`)
+      const staticEnd = first.indexOf('Messages récents du canal #')
+      console.log(`fake-llm prompt-prefix @${who} #${where}: length=${first.length} common=${before === undefined ? '-' : common} static=${staticEnd < 0 ? '-' : staticEnd} preamble=${preamble} dateFirst=${first.startsWith('Nous sommes le')}`)
     }
     console.log(`fake-llm call ${calls}: ${req.method} ${req.url} model=${request.model} stream=${request.stream}`)
     // The tools this call offered the model, sorted: the rehearsal compares them
