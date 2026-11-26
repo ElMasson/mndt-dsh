@@ -54,6 +54,8 @@ export function createHttpChat(
         body: JSON.stringify(payload),
       }),
     )
+  const remove = async <T>(path: string): Promise<T> =>
+    bodyOf<T>(await fetcher(`${BASE}${path}`, { method: 'DELETE', credentials: 'include' }))
   const id = encodeURIComponent
   return {
     channels: async () =>
@@ -136,6 +138,15 @@ export function createHttpChat(
     },
     createSkill: async markdown => writtenOf(await post<Record<string, unknown>>('/skills', { markdown })),
     updateSkill: async (slug, change) => writtenOf(await post<Record<string, unknown>>(`/skills/${id(slug)}`, change)),
+    schedules: async (query) => {
+      const at = 'channelId' in query ? `channelId=${id(query.channelId)}` : `agentId=${id(query.agentId)}`
+      const body = await get<{ schedules?: unknown }>(`/schedules?${at}`)
+      const rows: unknown = body.schedules
+      return Array.isArray(rows) ? rows.map((row: unknown) => row) : []
+    },
+    pauseSchedule: async (scheduleId) => { await post<Record<string, unknown>>(`/schedules/${id(scheduleId)}/pause`, {}) },
+    resumeSchedule: async (scheduleId) => { await post<Record<string, unknown>>(`/schedules/${id(scheduleId)}/resume`, {}) },
+    deleteSchedule: async (scheduleId) => { await remove<Record<string, unknown>>(`/schedules/${id(scheduleId)}`) },
     deleteSkill: async (slug) => { await post<Record<string, unknown>>(`/skills/${id(slug)}/delete`, {}) },
     mounted: async () => {
       const body = await get<{ connectors?: unknown }>('/connectors')

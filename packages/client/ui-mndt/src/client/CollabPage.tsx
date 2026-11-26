@@ -1417,6 +1417,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   key={current.id}
                   channel={current}
                   agents={chatAgents}
+                  schedules={chat.schedules === undefined ? undefined : chat}
                   t={tc}
                   onToggleAgent={toggleChatAgent}
                   canRemoveAgents={chat.removeAgents !== undefined}
@@ -1876,6 +1877,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                             isOwner={state.role === 'owner'}
                             offered={offered}
                             channel={chatChannels?.find(c => c.id === card.channelId)}
+                            agents={new Map(chatAgents.map(a => [a.id, a]))}
                             t={tc}
                           />
                         </div>
@@ -1957,6 +1959,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   key={viewing.id}
                   agent={chatAgents.find(a => a.id === viewing.id) ?? viewing}
                   agents={chatAgents}
+                  schedules={chat?.schedules === undefined ? undefined : chat}
                   skills={skills}
                   channels={chatChannels ?? []}
                   mounted={mounted === undefined || mounted === 'absent' ? undefined : mounted}
