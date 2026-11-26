@@ -48,6 +48,17 @@ case "$1" in
       prev="$arg"
     done
     printf '%s\\t%s\\n' "$member" "$name" >> "$running"; exit 0 ;;
+  exec)
+    # An agent's action (pc-call.mjs): its JSON echoed back. A command: its last word, stdout and stderr, exit 3.
+    case "$*" in
+      *" node -e "*) exit 0 ;;
+      *pc-call.mjs*) body=$(cat)
+        case "$body" in *'"fail"'*) echo "RAW-DOCKER-TEXT: OCI runtime exec failed" >&2; exit 1 ;; esac
+        printf '{"ok":true,"text":"page lue","host":"10.0.0.9","echo":%s}\\n' "$body"; exit 0 ;;
+      *) for last in "$@"; do :; done
+        [ "$last" = flood ] && { head -c 100000 /dev/zero | tr '\\0' y; exit 0; }
+        printf 'out:%s' "$last"; echo err >&2; exit 3 ;;
+    esac ;;
 esac
 exit 0
 `
@@ -246,6 +257,59 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     expect((await s.call('POST', '/pcs/start', { identity: 'nobody' })).status).toBe(400)
     const anonymous = await fetch(`${s.base}/pcs/start`, { method: 'POST', body: JSON.stringify({ identity: 'duke@datanalysis.re' }) })
     expect(anonymous.status).toBe(403)
+  })
+})
+
+describe('an action on a member\'s computer (/pcs/act)', { timeout: 30_000 }, () => {
+  it('a command runs in its terminal, as the member, in their files, bounded in time; the computer starts first', async () => {
+    const s = await sidecar()
+    const ran = await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'terminal', command: 'ls' })
+    expect(ran).toMatchObject({ status: 200, body: { ok: true, exitCode: 3, timedOut: false, stdout: 'out:ls', stderr: 'err\n', truncated: false } })
+    const calls = s.calls()
+    expect(calls.findIndex(args => args[0] === 'run')).toBeLessThan(calls.findIndex(args => args[0] === 'exec'))
+    // The agents' tokens are taken out of the command's environment (env -u).
+    expect(calls).toContainEqual(['exec', '-u', '1000:1000', '-w', '/home/user', `mndt-pc-${SMARION}`,
+      'env', '-u', 'AGENT_TOKEN', '-u', 'DESKTOP_TOKEN', 'timeout', '-k', '5', '60', 'bash', '-lc', 'ls'])
+    await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'terminal', command: 'pwd', timeoutSeconds: 9999 })
+    expect(s.calls().find(args => args.at(-1) === 'pwd')?.[14]).toBe('300')
+    // Still one computer: the second command found it running.
+    expect(s.calls().filter(args => args[0] === 'run')).toHaveLength(1)
+  })
+
+  it('a browser or desktop operation goes to its agent inside the computer, through docker exec, without the identity', async () => {
+    const s = await sidecar()
+    const read = await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'browser', op: 'goto', url: 'https://example.org' })
+    expect(read.status).toBe(200)
+    expect(read.body).toMatchObject({ ok: true, text: 'page lue', echo: { op: 'goto', url: 'https://example.org' } })
+    expect((read.body.echo as Record<string, unknown>).identity).toBeUndefined()
+    expect(s.calls()).toContainEqual(['exec', '-i', `mndt-pc-${SMARION}`, 'node', '/app/pc-call.mjs', 'browser'])
+  })
+
+  it('a command that floods its output is clipped as it is read, and said so', async () => {
+    const s = await sidecar()
+    const flooded = await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'terminal', command: 'flood' })
+    expect(flooded.status).toBe(200)
+    expect((flooded.body.stdout as string).length).toBe(16000)
+    expect(flooded.body.truncated).toBe(true)
+  })
+
+  it('an action that fails on the computer answers one sentence, never Docker\'s words', async () => {
+    const s = await sidecar()
+    const failed = await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'browser', op: 'fail' })
+    expect(failed).toEqual({ status: 502, body: { error: 'the action failed on the computer' } })
+    expect(JSON.stringify(failed.body)).not.toContain('RAW-DOCKER-TEXT')
+  })
+
+  it('refuses an unknown kind or an empty command; busy when four others run', async () => {
+    const s = await sidecar()
+    expect((await s.call('POST', '/pcs/act', { identity: 'a@datanalysis.re', kind: 'shell', command: 'ls' })).status).toBe(400)
+    expect((await s.call('POST', '/pcs/act', { identity: 'a@datanalysis.re', kind: 'terminal', command: '  ' })).status).toBe(400)
+    // Refused before anything started: an invalid command never takes one of the four places.
+    expect(s.calls().some(args => args[0] === 'run')).toBe(false)
+    for (const who of ['a', 'b', 'c', 'd']) await s.call('POST', '/pcs/start', { identity: `${who}@datanalysis.re` })
+    const fifth = await s.call('POST', '/pcs/act', { identity: 'e@datanalysis.re', kind: 'terminal', command: 'ls' })
+    expect(fifth).toMatchObject({ status: 409, body: { busy: true } })
+    expect(s.calls().some(args => args[0] === 'exec')).toBe(false)
   })
 })
 

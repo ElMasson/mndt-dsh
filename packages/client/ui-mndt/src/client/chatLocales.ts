@@ -475,7 +475,6 @@ export const chatEn = {
   scheduledActivate: 'Activate',
   scheduledRan: 'Started.',
   scheduledSeeInLane: 'See in my lane',
-  scheduledRanElsewhere: 'Its result is in the missions, not in your lane.',
   scheduledRunRefused: 'It could not be started: try again in a moment.',
   scheduledRunFailed: 'The run failed.',
   scheduledToggleRefused: 'It could not be changed: try again in a moment.',
@@ -487,6 +486,7 @@ export const chatEn = {
   scheduledZoneNamed: '{zone} time',
   scheduledHourInvalid: 'This hour cannot be read: write it like 07:30.',
   scheduledHourRefused: 'The hour could not be changed: try again in a moment.',
+  scheduledSchedulerStopped: 'The scheduler has not run since {at}: the tasks do not start by themselves.',
 } as const
 
 /** One copy key. */
@@ -962,7 +962,6 @@ export const chatFr: Record<ChatKey, string> = {
   scheduledActivate: 'Activer',
   scheduledRan: 'Lancée.',
   scheduledSeeInLane: 'Voir dans ma lane',
-  scheduledRanElsewhere: 'Son résultat est dans les missions, pas dans votre lane.',
   scheduledRunRefused: 'Elle n\'a pas pu être lancée : réessayez dans un moment.',
   scheduledRunFailed: 'Le lancement a échoué.',
   scheduledToggleRefused: 'Elle n\'a pas pu être modifiée : réessayez dans un moment.',
@@ -974,6 +973,7 @@ export const chatFr: Record<ChatKey, string> = {
   scheduledZoneNamed: 'heure de {zone}',
   scheduledHourInvalid: 'Cette heure est illisible : écrivez-la comme 07:30.',
   scheduledHourRefused: 'L\'heure n\'a pas pu être changée : réessayez dans un moment.',
+  scheduledSchedulerStopped: 'Le planificateur ne tourne plus depuis {at} : les tâches ne partent pas d\'elles-mêmes.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

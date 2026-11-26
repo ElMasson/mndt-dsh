@@ -10,6 +10,7 @@
  */
 import { turnFailure } from './public-failure.ts'
 import { randomUUID } from 'node:crypto'
+import { takeToolRefusals } from './machine-tools.ts'
 import { reservedFor, reserveSpend, TURN_RESERVE_EUR } from './spend-reservations.ts'
 import { join } from 'node:path'
 import type {
@@ -893,6 +894,11 @@ export class TurnScheduler {
       const tokens = sumTokens(live)
       return { steps: [...live], ...(eur === undefined ? {} : { eur }), ...(tokens === undefined ? {} : { tokens }) }
     }
+    /** @returns the tools refused during the turn (taken once: the turn settles once). */
+    const refusedSoFar = (): Partial<Pick<Turn, 'toolRefusals'>> => {
+      const refused = takeToolRefusals(turn.id)
+      return refused.length === 0 ? {} : { toolRefusals: refused }
+    }
     /** @param reason - the host's sentence. @param kind - its kind: a stop, or a turn gone stale. */
     const cancel = async (reason: string, kind: TurnFailureKind = 'cancelled'): Promise<void> => {
       await service.updateTurn(messageId, turn.id, {
@@ -901,6 +907,7 @@ export class TurnScheduler {
         reasonKind: kind,
         finishedAt: new Date().toISOString(),
         ...spentSoFar(),
+        ...refusedSoFar(),
       })
     }
     const before = await this.#stale(messageId, turn.agentId)
@@ -947,9 +954,11 @@ export class TurnScheduler {
       agentHandle: agent.handle,
       controller,
     })
+    const actor = message.author.kind === 'human' ? message.author.email : ''
     await service.updateTurn(messageId, turn.id, {
       status: 'running',
       startedAt: now,
+      ...(actor === '' ? {} : { actor }),
     })
     // Its estimate is reserved for as long as it runs (spend-reservations.ts).
     const release = reserveSpend(agent.id, Math.min(TURN_RESERVE_EUR, Math.max(0, agent.eurPerMonth - spent)))
@@ -957,7 +966,6 @@ export class TurnScheduler {
       const history = await service.messages(channel.id)
       const agents = await service.listAgents(true)
       const prompt = turnPrompt(agent, channel, history, message, agents, undefined, await this.#skillsFor(agent))
-      const actor = message.author.kind === 'human' ? message.author.email : ''
       /**
        * One call of the engine for one agent, priced with that agent's model. A
        * reading step (the verifier) runs with no server and no tool. Every step
@@ -1138,6 +1146,7 @@ export class TurnScheduler {
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
         ...(first.output.toolsUnavailable === undefined ? {} : { toolsUnavailable: first.output.toolsUnavailable }),
+        ...refusedSoFar(),
       })
     } catch (error) {
       const after = await this.#stale(messageId, turn.agentId)
@@ -1154,6 +1163,7 @@ export class TurnScheduler {
         reasonKind: failed.kind,
         finishedAt: new Date().toISOString(),
         ...spentSoFar(),
+        ...refusedSoFar(),
       })
     } finally {
       release()

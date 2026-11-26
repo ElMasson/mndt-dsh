@@ -21,7 +21,8 @@ RUN chmod +x /app/desktop-entrypoint.sh
 
 ENV HOME=/tmp \
     DISPLAY=:99 \
-    DESKTOP_PORT=9224
+    DESKTOP_PORT=9224 \
+    DESKTOP_HOST=0.0.0.0
 
 EXPOSE 9224
 ENTRYPOINT ["/app/desktop-entrypoint.sh"]

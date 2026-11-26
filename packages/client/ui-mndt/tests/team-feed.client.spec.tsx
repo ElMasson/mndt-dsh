@@ -404,3 +404,20 @@ describe('a card raised from a lane, for its member', () => {
     expect(screen.getByTestId('card-raised').textContent).toBe('Vous ne pouvez pas décider de cette approbation.')
   })
 })
+
+describe('an automation\'s result in the lane (#166)', () => {
+  it('any kind but the briefing reads « Tâche planifiée », the automation\'s name beside it', () => {
+    const m = ({ ...message({ author: { kind: 'system' }, text: 'Fait.' }), mission: { kind: 'custom', title: 'Relance des approbations', status: 'done' } }) as unknown as ChatMessage
+    render(<WebMessage message={m} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Tâche planifiée')
+    expect(screen.getByTestId('mission-title').textContent).toBe('Relance des approbations')
+  })
+})
+
+describe('a result of an unknown kind', () => {
+  it('reads « Tâche planifiée », never « Briefing »', () => {
+    const m = ({ ...message({ author: { kind: 'system' }, text: 'Fait.' }), mission: { kind: 'some-new-kind', title: 'x', status: 'done' } }) as unknown as ChatMessage
+    render(<WebMessage message={m} header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Tâche planifiée')
+  })
+})

@@ -7,13 +7,14 @@
  * computer-use counterpart of the browser agent.
  */
 import { createServer } from 'node:http'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 const PORT = Number(process.env.DESKTOP_PORT ?? 9224)
 const TOKEN = process.env.DESKTOP_TOKEN ?? ''
 const DISPLAY = process.env.DISPLAY ?? ':99'
+const PROXY = process.env.HTTPS_PROXY ?? process.env.https_proxy ?? ''
 
 /** @param args - xdotool arguments. @returns nothing, throws on failure. */
 async function xdo(...args) {
@@ -51,7 +52,9 @@ async function command(body) {
   if (op === 'open') {
     const url = String(body.url ?? '').trim()
     if (!/^https?:\/\//.test(url)) throw new Error('url must start with http:// or https://')
-    await run('sh', ['-c', `DISPLAY=${DISPLAY} chromium --no-sandbox --kiosk --window-size=1280,800 ${JSON.stringify(url)} >/tmp/chrome.log 2>&1 &`])
+    // Spawned directly, never through a shell: the address is one argument, never parsed.
+    const args = ['--no-sandbox', '--kiosk', '--window-size=1280,800', ...(PROXY === '' ? [] : [`--proxy-server=${PROXY}`]), url]
+    spawn('chromium', args, { env: { ...process.env, DISPLAY }, detached: true, stdio: 'ignore' }).unref()
     return { ok: true }
   }
   throw new Error(`unknown op ${op}`)
@@ -90,6 +93,7 @@ const server = createServer((req, res) => {
   })
 })
 
-server.listen(PORT, '0.0.0.0', () => {
+// The loopback unless told: a capture desktop, reached over the front network, says DESKTOP_HOST=0.0.0.0.
+server.listen(PORT, process.env.DESKTOP_HOST ?? '127.0.0.1', () => {
   console.log(`desktop agent: listening on ${PORT}, display ${DISPLAY}`)
 })

@@ -25,6 +25,7 @@ import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
 import { operatorLine } from './operator-log.ts'
 import { isRefusal, publicFailure } from './public-failure.ts'
+import { noteToolRefusal, readActor } from './machine-tools.ts'
 import { identityOf } from './identity.ts'
 import type { Headers, IdentityOptions } from './identity.ts'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
@@ -1445,6 +1446,47 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(201, { memory: note })
       }
 
+      // « Mon ordinateur », for the agents: one action on the computer of the person
+      // the running turn acts for. The machine connector calls it as that person;
+      // the published actor must be that person, so a turn acts on its actor's
+      // computer and never on another's, and no screen acts through it. The
+      // connector holds no machine token: the API alone asks the sidecar.
+      if (request.method === 'POST' && path === '/me/machine/act') {
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service', code: 'no-machines' })
+        const running = await readActor()
+        if (running === undefined || running.actor.trim().toLowerCase() !== identity.trim().toLowerCase()) {
+          return respond(403, { error: 'seul un tour agit sur un ordinateur, celui de la personne pour qui il agit', code: 'machine-not-yours' })
+        }
+        const input = parseBody(request.body)
+        const kind = input.kind
+        if (kind !== 'browser' && kind !== 'desktop' && kind !== 'terminal') {
+          return respond(400, { error: 'kind must be browser, desktop or terminal', code: 'machine-invalid' })
+        }
+        // The operation's own fields only: never an identity, never a kind smuggled twice.
+        const operation: Record<string, unknown> = {}
+        for (const key of MACHINE_OPERATION_FIELDS) if (input[key] !== undefined) operation[key] = input[key]
+        let answer: Response
+        try {
+          answer = await fetch(`${machines.baseUrl.replace(/\/$/, '')}/pcs/act`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+            body: JSON.stringify({ ...operation, identity: running.actor, kind }),
+          })
+        } catch (error) {
+          return respond(502, { error: failure(error, 'the machine service is unreachable', 'the machine service is unreachable') })
+        }
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        if (answer.status === 409 && body.busy === true) {
+          const capacity = servedCapacity(body.capacity)
+          noteToolRefusal(running.missionId, { server: 'machine', reasonKind: 'busy' })
+          return respond(409, { error: `les ${capacity?.max ?? MACHINE_MAX} ordinateurs sont occupés`, code: 'machines-busy', ...(capacity === undefined ? {} : { capacity }) })
+        }
+        // The route's list of fields, servedAction (no internal host, no query, a plain
+        // bounded title), each text clipped; a refusal is the host's sentence.
+        return machineAnswer(answer, boundedComputer(body), MACHINE_FIELDS.COMPUTER)
+      }
+
       // « Mon ordinateur » (option B, 26/11): each member's own computer, started on
       // demand, four at most. The sidecar holds the Docker socket; the API asks it,
       // as the person, and serves the computer's state only (never its host, its
@@ -1964,6 +2006,9 @@ type MachineFields = Readonly<Record<string, 'string' | 'number' | 'boolean' | R
 export const MACHINE_MAX = 4
 /** The longest a call of « Mon ordinateur » to the sidecar may take, a start included (its docker run is bounded at 60 s). */
 const MACHINE_CALL_MS = 90_000
+
+/** The fields of one action a turn sends its actor's computer (browser, desktop or terminal). */
+const MACHINE_OPERATION_FIELDS = ['op', 'url', 'selector', 'text', 'key', 'x', 'y', 'full', 'command', 'timeoutSeconds'] as const
 const MACHINE_STATES = ['stopped', 'starting', 'running', 'stopping'] as const
 
 /**
@@ -1997,7 +2042,34 @@ export const MACHINE_FIELDS = {
   ACTED: { ok: 'boolean', png: 'string', text: 'string', url: 'string', title: 'string' },
   STOPPED: { ok: 'boolean' },
   CAPTURED: { ok: 'boolean', bytes: 'number', seconds: 'number', png: 'string' },
+  /** An action on a member's computer (« Mon ordinateur »): the page, the capture, the command's result. */
+  COMPUTER: {
+    png: 'string', text: 'string', url: 'string', title: 'string',
+    exitCode: 'number', timedOut: 'boolean', stdout: 'string', stderr: 'string', truncated: 'boolean',
+  },
 } as const satisfies Readonly<Record<string, MachineFields>>
+
+/** The longest text of a computer's answer the connector relays (a page, a stream). */
+export const MAX_COMPUTER_TEXT = 16_000
+/** The largest capture it relays, base64 characters (about 6 MB of PNG). */
+export const MAX_COMPUTER_PNG = 8_000_000
+
+/**
+ * @param body - a computer's answer.
+ * @returns it with each text clipped (and said truncated), and a capture too large left out.
+ */
+export function boundedComputer(body: Record<string, unknown>): Record<string, unknown> {
+  const bounded: Record<string, unknown> = { ...body }
+  for (const field of ['text', 'stdout', 'stderr']) {
+    const value = bounded[field]
+    if (typeof value === 'string' && value.length > MAX_COMPUTER_TEXT) {
+      bounded[field] = value.slice(0, MAX_COMPUTER_TEXT)
+      bounded.truncated = true
+    }
+  }
+  if (typeof bounded.png === 'string' && bounded.png.length > MAX_COMPUTER_PNG) delete bounded.png
+  return bounded
+}
 
 /**
  * @param body - a successful answer of the machine service.
