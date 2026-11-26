@@ -288,12 +288,15 @@ export class TaskScheduler {
         createdAt: startedAt,
       }
       const skills = skillsOf(agent, state.skills ?? []).kept
-      const prompt = `${dateLine(started, timeZone)}\n\n${turnPrompt(agent, channel, [], asked, state.agents ?? [], undefined, skills)}`
+      // The space's preamble first, the channel's stable mark, the date at the end (the prefix cache).
+      const mark = await service.promptMarkOf(channel.id)
+      const prompt = `${turnPrompt(agent, channel, [], asked, state.agents ?? [], mark, skills)}\n\n${dateLine(started, timeZone)}`
       // Its bound is reserved for as long as it runs: a conversation's turn of the same agent sees it.
       release = reserveSpend(agent.id, schedule.eurPerRun)
       const output = await engine.run({
         turnId: runId,
         runId,
+        measureKey: await service.promptMeasureKey(),
         agent,
         channel,
         // As its requester: their connections, their computer; never the owner's.

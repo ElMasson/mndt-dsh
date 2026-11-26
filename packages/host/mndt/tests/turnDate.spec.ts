@@ -66,7 +66,7 @@ describe('the date line', () => {
   })
 })
 
-describe('every prompt sent to the model opens with it', () => {
+describe('every prompt sent to the model ends with it (the date at the end: the prefix cache)', () => {
   it('a plain turn', async () => {
     const b = bench()
     const alpha = await b.agent('alpha')
@@ -74,7 +74,8 @@ describe('every prompt sent to the model opens with it', () => {
     await b.call('POST', `/channels/${channel}/messages`, { text: '@alpha bonjour' })
     await b.turns.settled()
     expect(b.engine.seen).toHaveLength(1)
-    expect(b.engine.seen[0]!.prompt.startsWith(`${LINE}\n\n`)).toBe(true)
+    expect(b.engine.seen[0]!.prompt.endsWith(`\n\n${LINE}`)).toBe(true)
+    expect(b.engine.seen[0]!.prompt.startsWith('Nous sommes')).toBe(false)
   })
 
   it('an author and its verifier, then workers and their synthesis', async () => {
@@ -91,7 +92,7 @@ describe('every prompt sent to the model opens with it', () => {
     await b.turns.settled()
     // Author, verifier, two workers and the synthesis: five calls, each one dated.
     expect(b.engine.seen.length).toBeGreaterThanOrEqual(5)
-    expect(b.engine.seen.filter(input => !input.prompt.startsWith(`${LINE}\n\n`)).map(input => input.turnId)).toEqual([])
+    expect(b.engine.seen.filter(input => !input.prompt.endsWith(`\n\n${LINE}`)).map(input => input.turnId)).toEqual([])
   })
 
   it('computed at each call, in the zone given', async () => {
@@ -100,7 +101,7 @@ describe('every prompt sent to the model opens with it', () => {
     const channel = ((await b.call('POST', '/channels', { name: 'compta', agents: [alpha], members: [] })).body.channel as { id: string }).id
     await b.call('POST', `/channels/${channel}/messages`, { text: '@alpha bonjour' })
     await b.turns.settled()
-    expect(b.engine.seen[0]!.prompt.split('\n')[0]).toBe('Nous sommes le mardi 24 novembre 2026, 12:18 (heure normale de Maurice).')
+    expect(b.engine.seen[0]!.prompt.split('\n').at(-1)).toBe('Nous sommes le mardi 24 novembre 2026, 12:18 (heure normale de Maurice).')
   })
 
   it('the scheduler calls the engine in one place only, so no prompt goes out undated', () => {

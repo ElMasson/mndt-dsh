@@ -18,7 +18,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { mountLocalActivations, startPreparedActivation } from '../../../subagent/subagent/tests/local-activation.ts'
-import { channelPolicy, scopeToolPolicy, toolRefusal } from '../src/tool-policy.ts'
+import { channelPolicy, scopeToolPolicy, toolOrder, toolRefusal } from '../src/tool-policy.ts'
 import type { PolicyHostLike, ScopedToolsLike } from '../src/tool-policy.ts'
 
 const FIXTURES = join(import.meta.dirname, 'fixtures')
@@ -33,9 +33,11 @@ afterEach(async () => {
 
 /**
  * @param scope - what to do to the host and the parent before the child starts.
+ * @param when - before the parent is created, or in its setup.
+ * @param tools - the tools the preset registers, in this order.
  * @returns the host, its mock model, and the parent composed by the preset.
  */
-async function host(scope: (ctx: Context, parentCtx: Context | undefined) => void, when: 'before' | 'setup') {
+async function host(scope: (ctx: Context, parentCtx: Context | undefined) => void, when: 'before' | 'setup', tools: readonly string[] = TOOLS) {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.baseUrl = `${pathToFileURL(FIXTURES).href}/`
@@ -46,7 +48,7 @@ async function host(scope: (ctx: Context, parentCtx: Context | undefined) => voi
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(AgentPresets, { default: 'team' })
-  await ctx.agentPresets.register({ id: 'team', plugins: [{ name: pathToFileURL(join(FIXTURES, 'policy-preset-tools.js')).href, config: { tools: TOOLS } }] })
+  await ctx.agentPresets.register({ id: 'team', plugins: [{ name: pathToFileURL(join(FIXTURES, 'policy-preset-tools.js')).href, config: { tools } }] })
   // The child calls the shell, another channel's server, its own server, then answers.
   const adapter = new MockAdapter([
     toolCallResponse('c1', 'bash', {}),
@@ -147,5 +149,29 @@ describe('the tool policy reaches the agent that calls the model', () => {
     expect(offered[0]).toEqual([...TOOLS].sort())
     expect(ran()).toEqual(['bash', 'mcp__dolibarr__get_invoices', 'mcp__qonto__list_transactions'])
     await run.dispose()
+  })
+})
+
+describe('a team run\'s agents are offered their tools in one order, on the real engine', () => {
+  // Where the engine's own order (by name, code unit) and ours (by server, then
+  // by name) differ: « qonto-pro » sorts before « qonto » by name, after it by server.
+  const NAMES = ['mcp__qonto-pro__list_accounts', 'mcp__qonto__list_transactions', 'mcp__approvals__request_approval', 'mcp__qonto__get_balance']
+  const SORTED = ['mcp__approvals__request_approval', 'mcp__qonto__get_balance', 'mcp__qonto__list_transactions', 'mcp__qonto-pro__list_accounts']
+
+  it('the assembly the engine sends carries the tools, sorted by toolOrder, whatever order they were registered in', async () => {
+    expect([...NAMES].sort((a, b) => toolOrder({ name: a }, { name: b }))).toEqual(SORTED)
+    // The engine alone would send them by name: our order is the one that reaches the model.
+    expect([...NAMES].sort()).not.toEqual(SORTED)
+    const sent: string[][] = []
+    for (const registered of [NAMES, [...NAMES].reverse()]) {
+      const { adapter, parent } = await host((ctx) => {
+        scopeToolPolicy(ctx as unknown as PolicyHostLike, 'trn_1', channelPolicy(['qonto', 'qonto-pro']))
+      }, 'before', registered)
+      const run = await child(parent)
+      expect(adapter.requests.length).toBeGreaterThan(0)
+      for (const request of adapter.requests) sent.push((request.tools ?? []).map(tool => tool.name))
+      await run.dispose()
+    }
+    for (const names of sent) expect(names).toEqual(SORTED)
   })
 })

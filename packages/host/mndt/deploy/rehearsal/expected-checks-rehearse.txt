@@ -60,6 +60,7 @@ scaleway-reasoning-none
 scan-witness
 scheduler-first-pass
 scheduler-fires
+prompt-cache-prefix
 searched
 seeded
 shell-ws
