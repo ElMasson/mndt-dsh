@@ -240,3 +240,102 @@ describe('a question never becomes invisible', { timeout: 20_000 }, () => {
     expect((await screen.findByTestId('help-question')).textContent).toContain('HT ?')
   })
 })
+
+describe('a help with no advice that asks the team (Stéphane\'s try, seventh jump)', () => {
+  const failedHelp = (skipped: unknown[], summary = 'Blocage : Le montant diffère du relevé. Avis reçus : 0. Sans avis : avis non obtenu : erreur.') => read({
+    state: 'done', request, advices: [], skipped,
+    escalation: { question: 'Le montant diffère du relevé', summary, at, messageId: 'msg_q' },
+  })
+  it('one line for the question, no summary restating it; who could not answer, named', () => {
+    render(<HelpThread help={failedHelp([{ slot: 'A', agentId: 'agt_3', reason: 'Erreur pendant l’exécution.', reasonKind: 'failed' }])} agents={agents} t={chatFrench} />)
+    const box = screen.getByTestId('help-question')
+    expect(box.textContent?.match(/Le montant diffère du relevé/gu)).toHaveLength(1)
+    expect(box.textContent).not.toContain('Avis reçus')
+    expect(box.textContent).not.toContain('avis non obtenu')
+    expect(within(box).getByTestId('help-could-not-answer').textContent).toBe('@qwen n\'a pas pu répondre (le modèle a renvoyé une erreur).')
+  })
+  it('without a served category, the plain sentence; the raw reason never shows', () => {
+    render(<HelpThread help={failedHelp([{ slot: 'A', agentId: 'agt_3', reason: 'upstream sk-live-1' }])} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-could-not-answer').textContent).toBe('@qwen n\'a pas pu répondre.')
+    expect(screen.getByTestId('help-question').textContent).not.toContain('sk-live')
+  })
+  it('with advices, the summary shows as before and the peers stay anonymous', () => {
+    const h = read({ state: 'done', request, advices, skipped: [], escalation: { question: 'Quel montant ?', summary: 'Désaccord restant : le relevé.', at, messageId: 'msg_q' } })
+    render(<HelpThread help={h} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-question').textContent).toContain('Désaccord restant')
+    expect(screen.queryByTestId('help-could-not-answer')).toBeNull()
+    expect(h.advices.every(a => a.agentId === undefined)).toBe(true)
+  })
+})
+
+describe('an agent\'s answer whose turn then failed', () => {
+  it('is greyed, and what it announces is said void', async () => {
+    const { WebMessage } = await import('../src/client/TeamFeed.tsx')
+    const answer = { id: 'msg_a', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'Ma demande d\'avis est envoyée à Qwen… je serai relancé avec sa réponse.', mentions: [], replyTo: 'msg_h', createdAt: at, updatedAt: at }
+    render(<WebMessage message={answer} staleAfterFailure header agents={agents} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(screen.getByTestId('chat-markdown').getAttribute('data-stale')).toBe('true')
+    expect(screen.getByTestId('stale-after-failure').textContent).toBe('Le tour a échoué après ce message : ce qu\'il annonce n\'aura pas lieu.')
+  })
+  it('the thread marks it from the failed turn of the message it answers, and only then', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: [you], agents: ['agt_2'], connectors: [], createdBy: you, createdAt: at }
+    const asking = { id: 'msg_h', channelId: 'chn_1', author: { kind: 'human' as const, email: you }, text: '@analyste ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'failed' as const, reasonKind: 'failed', reason: 'Erreur pendant l’exécution.' }] }
+    const answer = { id: 'msg_a', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'je serai relancé', mentions: [], replyTo: 'msg_h', createdAt: at, updatedAt: at }
+    const other = { ...answer, id: 'msg_b', author: { kind: 'agent' as const, agentId: 'agt_3' }, text: 'autre agent' }
+    const seed = { you, agents: [...agents.values()], channels: [channel], messages: [asking, answer, other] }
+    const chat = createMockChat(seed, () => Date.parse(at))
+    render(<ChannelThread chat={chat} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" />)
+    await waitFor(() => { expect(screen.getAllByTestId('chat-markdown')).toHaveLength(2) })
+    const [mine, theirs] = screen.getAllByTestId('chat-markdown')
+    expect(mine?.getAttribute('data-stale')).toBe('true')
+    expect(theirs?.getAttribute('data-stale')).toBeNull()
+  })
+})
+
+describe('the question moved under its message, after a help with no advice', () => {
+  it('shows the question once and who could not answer, never the summary restating it', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: [you], agents: ['agt_2', 'agt_3'], connectors: [], createdBy: you, createdAt: at }
+    const help = { state: 'done', request, advices: [], skipped: [{ slot: 'A', agentId: 'agt_3', reason: 'Erreur pendant l’exécution.', reasonKind: 'failed' }],
+      escalation: { question: 'Le montant diffère du relevé', summary: 'Blocage : Le montant diffère du relevé. Avis reçus : 0. Sans avis : avis non obtenu : erreur.', at, messageId: 'msg_q' } }
+    const asking = { id: 'msg_h', channelId: 'chn_1', author: { kind: 'human' as const, email: you }, text: '@analyste ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'done' as const, help }] }
+    const question = { id: 'msg_q', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'Aucun avis n’a abouti.', mentions: [], replyTo: 'msg_h', createdAt: at, updatedAt: at }
+    const seed = { you, agents: [...agents.values()], channels: [channel], messages: [asking, question] }
+    const chat = createMockChat(seed, () => Date.parse(at))
+    render(<ChannelThread chat={chat} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" canAnswer />)
+    const pending = await screen.findByTestId('pending-question')
+    expect(pending.textContent?.match(/Le montant diffère du relevé/gu)).toHaveLength(1)
+    expect(pending.textContent).not.toContain('avis non obtenu')
+    expect(within(pending).getByTestId('pending-unanswered').textContent).toBe('@qwen n\'a pas pu répondre (le modèle a renvoyé une erreur).')
+  })
+})
+
+describe('review of #170', () => {
+  it('only the last answer of the agent to the failed turn is greyed', async () => {
+    const { ChannelThread } = await import('../src/client/ChannelView.tsx')
+    const { createMockChat } = await import('../src/client/mockChat.ts')
+    const channel = { id: 'chn_1', name: 'x', title: 'x', kind: 'team' as const, members: [you], agents: ['agt_2'], connectors: [], createdBy: you, createdAt: at }
+    const asking = { id: 'msg_h', channelId: 'chn_1', author: { kind: 'human' as const, email: you }, text: '@analyste ?', mentions: ['agt_2'], createdAt: at, updatedAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_2', status: 'failed' as const, reasonKind: 'failed', reason: 'Erreur pendant l’exécution.' }] }
+    const earlier = { id: 'msg_a1', channelId: 'chn_1', author: { kind: 'agent' as const, agentId: 'agt_2' }, text: 'premier', mentions: [], replyTo: 'msg_h', createdAt: at, updatedAt: at }
+    const later = { ...earlier, id: 'msg_a2', text: 'je serai relancé', createdAt: '2026-11-23T08:01:00.000Z', updatedAt: '2026-11-23T08:01:00.000Z' }
+    const seed = { you, agents: [...agents.values()], channels: [channel], messages: [asking, earlier, later] }
+    render(<ChannelThread chat={createMockChat(seed, () => Date.parse(at))} channel={channel} agents={[...agents.values()]} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} look="mndt-web" />)
+    await waitFor(() => { expect(screen.getAllByTestId('chat-markdown')).toHaveLength(2) })
+    const [first, second] = screen.getAllByTestId('chat-markdown')
+    expect(first?.getAttribute('data-stale')).toBeNull()
+    expect(second?.getAttribute('data-stale')).toBe('true')
+  })
+
+  it('a peer the page does not know: no line, no error', () => {
+    const h = read({ state: 'done', request, advices: [], skipped: [{ slot: 'A', agentId: 'agt_unknown', reason: 'x', reasonKind: 'failed' }],
+      escalation: { question: 'Le montant diffère du relevé', at, messageId: 'msg_q' } })
+    render(<HelpThread help={h} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('help-question')).toBeTruthy()
+    expect(screen.queryByTestId('help-could-not-answer')).toBeNull()
+  })
+})

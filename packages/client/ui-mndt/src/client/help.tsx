@@ -7,6 +7,7 @@
  * wrote is shown through the safe renderer, headings as plain bold. Anything of another shape
  * shows nothing rather than breaking the page.
  */
+import { endWordOf } from './turnReason.ts'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatAgent, ChatTurn } from './chat.ts'
@@ -55,7 +56,7 @@ export interface TurnHelp {
   readonly reading?: { readonly verdict: HelpVerdict; readonly retained?: string; readonly why?: string }
   readonly escalation?: Escalation
   readonly closedBy?: { readonly by?: string; readonly at?: string }
-  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string }[]
+  readonly skipped: readonly { readonly slot?: 'A' | 'B'; readonly agentId?: string; readonly reason: string; readonly reasonKind?: string }[]
   readonly eur?: number
   readonly capEur?: number
 }
@@ -145,6 +146,8 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
   // Authors only once the help is read and no question waits (#119): the same rule as a council.
   const escalationRaw = escalationFrom(h.escalation)
   const revealed = reading !== undefined && (escalationRaw === undefined || escalationRaw.answeredAt !== undefined)
+  // With no advice at all there is nothing to sway: who could not answer may be named.
+  const noAdvice = !Array.isArray(h.advices) || h.advices.length === 0
   const advices: HelpAdvice[] = []
   for (const item of Array.isArray(h.advices) ? h.advices : []) {
     const a = recordOf(item)
@@ -170,8 +173,12 @@ export function helpOf(turn: ChatTurn): TurnHelp | undefined {
     const reason = textOf(k?.reason)
     if (k === undefined || reason === undefined) return []
     const slot = slotOf(k.slot)
-    const agentId = revealed ? textOf(k.agentId) : undefined
-    return [{ reason, ...(slot === undefined ? {} : { slot }), ...(agentId === undefined ? {} : { agentId }) }]
+    const agentId = revealed || noAdvice ? textOf(k.agentId) : undefined
+    const reasonKind = textOf(k.reasonKind)
+    return [{
+      reason, ...(slot === undefined ? {} : { slot }), ...(agentId === undefined ? {} : { agentId }),
+      ...(reasonKind === undefined ? {} : { reasonKind }),
+    }]
   })
   const c = recordOf(h.closedBy)
   const closedBy = c === undefined ? undefined : {
@@ -289,7 +296,17 @@ export function HelpThread(props: {
       {waiting && props.questionBelow !== true ? (
         <div className="mw-turn-unchecked mw-help-question" role="note" data-testid="help-question">
           <p className="mw-help-question-text">{t('helpQuestionFor', { question: escalation.question })}</p>
-          {escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(escalation.summary, { plainHeadings: true })}</div>}
+          {/* No advice at all: the summary only restates the question; say instead who could not answer. */}
+          {help.advices.length === 0 ? help.skipped.flatMap((k, i) => {
+            const handle = k.agentId === undefined ? undefined : props.agents.get(k.agentId)?.handle
+            if (handle === undefined) return []
+            const why = endWordOf(k.reasonKind, t)
+            return [
+              <p key={`nope-${i}`} className="mw-ctx-small" data-testid="help-could-not-answer">
+                {why === undefined ? t('helpPeerCouldNotAnswer', { handle }) : t('helpPeerCouldNotAnswerWhy', { handle, why })}
+              </p>,
+            ]
+          }) : escalation.summary === undefined ? undefined : <div className="mw-agent-text">{renderBrief(escalation.summary, { plainHeadings: true })}</div>}
           {answerField}
         </div>
       ) : undefined}

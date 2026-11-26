@@ -299,6 +299,11 @@ export interface OpenEscalation {
   readonly questionMessageId: string
   readonly question: string
   readonly summary?: string
+  /**
+   * After a help with no advice: who could not answer, in words (« @qwen n'a pas pu répondre »), shown
+   * instead of a summary that only restates the question.
+   */
+  readonly unanswered?: readonly string[]
   readonly at?: string
   /** Asked after a mutual help or by a council (#119). */
   readonly kind?: 'help' | 'council'

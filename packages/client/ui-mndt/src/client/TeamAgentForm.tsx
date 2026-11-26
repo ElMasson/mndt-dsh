@@ -5,6 +5,7 @@
  * its connectors among pills, a monthly ceiling at 5 € by default, and a handle deduced from the
  * name, written once.
  */
+import { renderBrief } from './markdown.tsx'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AgentInput, ChatAgent, ChatSkill, MountedConnector } from './chat.ts'
@@ -317,7 +318,8 @@ export function AgentSheetView(props: {
       <dt>{t('agentName')}</dt>
       <dd>{p.name} <span className="mw-ctx-muted">· @{p.handle}</span></dd>
       <dt>{t('agentPurpose')}</dt>
-      <dd className="mw-sheet-purpose">{p.instructions ?? '—'}</dd>
+      {/* Written by an agent: its Markdown read (headings plain, lists), as React elements, never as HTML. */}
+      <dd className="mw-sheet-purpose mw-agent-text">{p.instructions === undefined ? '—' : renderBrief(p.instructions, { plainHeadings: true })}</dd>
       <dt>{t('agentModelLabel')}</dt>
       <dd>{modelLabel(choice, t)} <span className="mw-model-tech">{p.provider} · {p.model}</span></dd>
       <dt>{t('ctxConnectors')}</dt>

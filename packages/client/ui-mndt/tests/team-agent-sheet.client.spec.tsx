@@ -88,3 +88,17 @@ describe('who wrote the instructions, and the author\'s name (#67)', () => {
     expect(screen.getByTestId('agent-sheet').textContent).toContain('par constructor,')
   })
 })
+
+describe('a proposed agent\'s purpose, written by an agent', () => {
+  it('its headings and bullets read as elements, never as raw markers nor HTML', async () => {
+    const { AgentSheetView } = await import('../src/client/TeamAgentForm.tsx')
+    const proposal = { name: 'Relances', handle: 'relances', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5,
+      instructions: '## Rôle\nSuivre les impayés.\n## Objectif\n- relancer\n- noter <img src=x onerror=alert(1)>' }
+    render(<AgentSheetView proposal={proposal as never} mounted={[]} t={chatFrench} />)
+    const purpose = document.querySelector('.mw-sheet-purpose') as HTMLElement
+    expect(purpose.textContent).not.toContain('##')
+    expect(purpose.querySelectorAll('li')).toHaveLength(2)
+    expect(purpose.querySelector('img')).toBeNull()
+    expect(purpose.querySelector('h1, h2, h3')).toBeNull()
+  })
+})

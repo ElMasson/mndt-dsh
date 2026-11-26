@@ -7,7 +7,8 @@
  * whether a turn runs or is refused, what it cost. A message never decides anything; a card is
  * decided only through its button. A refusal is shown with the Host's reason, never as emptiness.
  */
-import { turnEndWords } from './turnReason.ts'
+import type { TurnHelp } from './help.tsx'
+import { endWordOf, turnEndWords } from './turnReason.ts'
 import { helpOf } from './help.tsx'
 import { councilOf } from './council.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -453,9 +454,14 @@ export function ChannelThread(props: {
       const council = councilOf(turn)
       const e = help?.escalation ?? council?.escalation
       if (e?.messageId === undefined || e.answeredAt !== undefined || !drawn.has(e.messageId)) continue
+      // A help with no advice: its summary only restates the question; who could not answer instead.
+      const noAdvice = help !== undefined && council === undefined && help.advices.length === 0
+      const unanswered = noAdvice ? unansweredOf(help, props.agents, t) : []
       asked.set(e.messageId, {
         channelId: channel.id, turnId: turn.id, messageId: m.id, questionMessageId: e.messageId, question: e.question,
-        ...(e.summary === undefined ? {} : { summary: e.summary }), kind: council?.escalation === undefined ? 'help' : 'council',
+        ...(e.summary === undefined || noAdvice ? {} : { summary: e.summary }),
+        ...(unanswered.length === 0 ? {} : { unanswered }),
+        kind: council?.escalation === undefined ? 'help' : 'council',
       })
     }
   }
@@ -492,6 +498,7 @@ export function ChannelThread(props: {
               {place.newDay ? <DaySeparator at={m.createdAt} /> : undefined}
               <WebMessage
                 message={m}
+                staleAfterFailure={turnFailedFor(m, thread)}
                 header={place.header}
                 agents={byAgent}
                 cards={cardsOf(m.id)}
@@ -636,6 +643,33 @@ function ChannelWelcome(props: { readonly addable?: LaneArrival['addable']; read
       ) : <p className="mw-welcome-text">{t('channelWelcomeNoAgent')}</p>}
     </div>
   )
+}
+
+/**
+ * @param help - a help with no advice. @param agents - the space's agents. @param t - the copy.
+ * @returns one sentence per peer who could not answer, its category in words when served.
+ */
+function unansweredOf(help: TurnHelp, agents: readonly ChatAgent[], t: ChatTranslate): readonly string[] {
+  return help.skipped.flatMap((k) => {
+    const handle = agents.find(a => a.id === k.agentId)?.handle
+    if (handle === undefined) return []
+    const why = endWordOf(k.reasonKind, t)
+    return [why === undefined ? t('helpPeerCouldNotAnswer', { handle }) : t('helpPeerCouldNotAnswerWhy', { handle, why })]
+  })
+}
+
+/**
+ * @param m - a message. @param thread - its thread.
+ * @returns whether it is the LAST answer of an agent to a message whose turn for that agent then
+ * failed: what it announced will not happen. Its earlier answers to the same message stay as they are.
+ */
+function turnFailedFor(m: ChatMessage, thread: readonly ChatMessage[]): boolean {
+  if (m.author.kind !== 'agent' || m.replyTo === undefined) return false
+  const agentId = m.author.agentId
+  const asking = thread.find(other => other.id === m.replyTo)
+  if (!(asking?.turns ?? []).some(turn => turn.agentId === agentId && turn.status === 'failed')) return false
+  const answers = thread.filter(other => other.replyTo === m.replyTo && other.author.kind === 'agent' && other.author.agentId === agentId)
+  return answers[answers.length - 1]?.id === m.id
 }
 
 /* ------------------------------------------------------------------ the composer */
