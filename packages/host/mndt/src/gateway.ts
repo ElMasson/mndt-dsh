@@ -34,7 +34,7 @@ import { TurnScheduler } from './turns.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
-import { defaultAutomations, dueAutomations, readAutomations, reserveRun, runAutomation, updateAutomations } from './automations.ts'
+import { defaultAutomations, dueAutomations, readAutomations, reserveRun, runReserved, updateAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { errorShape, warnOperator, warnOperatorDaily, warnOperatorOnce } from './operator-log.ts'
 import { publicFailure } from './public-failure.ts'
@@ -347,33 +347,12 @@ export class WorkbenchGateway extends TypertRemoteService {
     const running = new Set<string>()
     const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
     const legacyAt = process.env.DSH_MNDT_BRIEFING_AT
-    // Every write of the registry goes through its line of writers (shared with the API).
-    const persist = async (patch: (item: Automation) => Automation): Promise<void> => {
-      await updateAutomations(this.automationsPath, current => current.map(patch), legacyAt)
-    }
     const fire = (item: Automation, owner: string | undefined): void => {
       running.add(item.id)
-      void (async () => {
-        try {
-          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item, owner)
-          const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
-          const patch: Partial<Automation> = {
-            lastMissionId: outcome.missionId,
-            lastOutcome: outcome.outcome,
-            failures,
-            ...(failures >= 3 ? { enabled: false } : {}),
-          }
-          await persist(candidate => (candidate.id === item.id ? { ...candidate, ...patch } : candidate))
-          // The outcome is the host's sentence (runAutomation), never a runtime's words.
-          warnOperator(ctx, outcome.outcome === 'done'
-            ? `mndt: automation ${item.id} done as ${outcome.missionId}`
-            : `mndt: automation ${item.id} ${outcome.outcome} (${outcome.missionId})`)
-        } catch (error) {
-          warnOperator(ctx, `mndt: automation ${item.id} could not run: ${errorShape(error)}`)
-        } finally {
-          running.delete(item.id)
-        }
-      })()
+      const say = (line: string): void => { warnOperator(ctx, line) }
+      void runReserved(this.service, this.missionRunner(ctx), this.automationsPath, item, owner, legacyAt, say)
+        .catch((error: unknown) => { warnOperator(ctx, `mndt: automation ${item.id} could not be recorded: ${errorShape(error)}`) })
+        .finally(() => { running.delete(item.id) })
     }
     const timeZone = this.timeZoneFor(ctx)
     // One line per start: two in one process would say the plugin was built twice.

@@ -51,11 +51,6 @@ import { SLUG, freeSlug, mentionsOf, slugOf } from './conversation.ts'
 import { isPlainAscii } from './address.ts'
 
 /**
- * @param members - the e-mails a person adds to a channel.
- * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
- * spelling would be lower-cased onto another person's address.
- */
-/**
  * @param channel - a channel.
  * @param email - a person.
  * @returns whether it is that person's lane, the address compared without case:
@@ -65,6 +60,11 @@ export function isLaneOf(channel: Channel, email: string): boolean {
   return channel.kind === 'solo' && channel.members[0]?.toLowerCase() === email.toLowerCase()
 }
 
+/**
+ * @param members - the e-mails a person adds to a channel.
+ * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
+ * spelling would be lower-cased onto another person's address.
+ */
 function plainMembers(members: readonly string[]): readonly string[] {
   const refused = members.filter(email => !isPlainAscii(email))
   if (refused.length > 0) throw new Refusal(`a member is a plain ASCII e-mail address: ${refused.length} refused`)

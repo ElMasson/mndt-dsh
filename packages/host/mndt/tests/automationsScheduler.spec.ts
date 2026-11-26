@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { fileGrants } from '../src/grants.ts'
-import { defaultAutomations, dueAutomations, reserveRun, runAutomation, updateAutomations, writeAutomations } from '../src/automations.ts'
+import { COULD_NOT_RUN, defaultAutomations, dueAutomations, reserveRun, runAutomation, runReserved, updateAutomations, writeAutomations } from '../src/automations.ts'
 import { warnOperatorDaily } from '../src/operator-log.ts'
 import type { Automation } from '../src/automations.ts'
 import { automationRefusal, serveUntilUnloaded } from '../src/gateway.ts'
@@ -265,5 +265,34 @@ describe('switching an automation on through POST /automations, and running it b
     const messages = (await service.snapshot()).messages ?? []
     const published = messages.filter(message => message.channelId === lane.id && message.mission !== undefined)
     expect(published).toHaveLength(1)
+  })
+})
+
+describe('a reserved run that cannot even start', () => {
+  it('is written on the automation (« could not run », one more failure), said once, and three in a row suspend it', async () => {
+    const { automationsPath } = teamApi()
+    await writeAutomations(automationsPath, [{ ...relance, failures: 1 }])
+    // The mission is never created: the store refuses.
+    const broken = { createMission: () => Promise.reject(new Error('EROFS: read-only file system')) } as unknown as WorkbenchService
+    const lines: string[] = []
+    const runner = { run: async () => ({ title: 't', markdown: 'm', sources: [] }) }
+    await runReserved(broken, runner, automationsPath, relance, owner, undefined, (line) => { lines.push(line) })
+    const after = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0]
+    expect(after).toMatchObject({ lastOutcome: COULD_NOT_RUN, failures: 2, enabled: true })
+    expect(lines).toEqual([expect.stringMatching(/^mndt: automation auto_relance could not run: /) as unknown])
+    expect(lines[0]).not.toContain('read-only file system')
+    await runReserved(broken, runner, automationsPath, relance, owner, undefined, () => undefined)
+    const third = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0]
+    expect(third).toMatchObject({ failures: 3, enabled: false })
+  })
+
+  it('a run that ends is written too: done, its mission, the failures reset', async () => {
+    const { automationsPath, service } = teamApi()
+    await writeAutomations(automationsPath, [{ ...relance, failures: 2 }])
+    const runner = { run: async () => ({ title: 't', markdown: 'm', sources: [] }) }
+    await runReserved(service, runner, automationsPath, relance, owner, undefined, () => undefined)
+    const after = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0]
+    expect(after).toMatchObject({ lastOutcome: 'done', failures: 0 })
+    expect(after?.lastMissionId).toMatch(/^mis_/)
   })
 })

@@ -7,8 +7,10 @@
  * the connectors and the approval rules are exactly those of a normal mission.
  */
 import { readFile, rename, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { nextRuns, wallClock } from './core/index.ts'
+import { errorShape } from './operator-log.ts'
 import type { Mission, MissionKind, MissionResult, WorkbenchService } from './core/index.ts'
 
 /**
@@ -104,20 +106,43 @@ function newId(): string {
  * @returns the items, and whether the file had to be written.
  */
 export async function readAutomations(path: string, legacyAt?: string): Promise<readonly Automation[]> {
+  // Seeding writes: it goes through the line of writers, and reads the file again there.
+  return (await readStored(path)) ?? inLine(path, async () => (await readStored(path)) ?? seed(path, legacyAt))
+}
+
+/** @param path - the registry file. @returns its items, or undefined when it is absent or empty. */
+async function readStored(path: string): Promise<readonly Automation[] | undefined> {
   const raw = await readFile(path, 'utf8').catch(() => '')
-  if (raw.trim() !== '') {
-    const parsed = JSON.parse(raw) as { items?: unknown }
-    const items = Array.isArray(parsed.items) ? parsed.items : []
-    const kept: Automation[] = []
-    for (const candidate of items) {
-      const normalised = normalise(candidate)
-      if (normalised !== undefined) kept.push(normalised)
-    }
-    return kept
+  if (raw.trim() === '') return undefined
+  const parsed = JSON.parse(raw) as { items?: unknown }
+  const items = Array.isArray(parsed.items) ? parsed.items : []
+  const kept: Automation[] = []
+  for (const candidate of items) {
+    const normalised = normalise(candidate)
+    if (normalised !== undefined) kept.push(normalised)
   }
+  return kept
+}
+
+/**
+ * Write the shipped automations into an absent registry; called within its line of writers.
+ * @param path - the registry file.
+ * @param legacyAt - the briefing hour from the older file, when present.
+ * @returns what was written.
+ */
+async function seed(path: string, legacyAt?: string): Promise<readonly Automation[]> {
   const seeded = defaultAutomations().map(item => (item.id === 'auto_briefing' && legacyAt !== undefined && isClock(legacyAt) ? { ...item, at: legacyAt } : item))
   await writeAutomations(path, seeded)
   return seeded
+}
+
+/**
+ * @param path - the registry file.
+ * @param legacyAt - the older briefing hour.
+ * @returns its items, seeded when absent; called within the line only.
+ */
+async function readInLine(path: string, legacyAt?: string): Promise<readonly Automation[]> {
+  return (await readStored(path)) ?? seed(path, legacyAt)
 }
 
 /**
@@ -133,7 +158,11 @@ export async function writeAutomations(path: string, items: readonly Automation[
   await rename(temporary, path)
 }
 
-/** One line of writers per registry, in this process: the scheduler and the API share it. */
+/**
+ * One line of writers per registry file, at the level of this module: the
+ * scheduler and the API of this process share it. It assumes a single process
+ * writes the registry: the workbench is one Node process.
+ */
 const writers = new Map<string, Promise<unknown>>()
 
 /**
@@ -142,9 +171,11 @@ const writers = new Map<string, Promise<unknown>>()
  * @returns its result, once every write before it is done.
  */
 function inLine<T>(path: string, work: () => Promise<T>): Promise<T> {
-  const before = writers.get(path) ?? Promise.resolve()
+  // One file, one line, however its path is written.
+  const key = resolve(path)
+  const before = writers.get(key) ?? Promise.resolve()
   const next = before.then(work, work)
-  writers.set(path, next.catch(() => undefined))
+  writers.set(key, next.catch(() => undefined))
   return next
 }
 
@@ -161,7 +192,7 @@ export function updateAutomations(
   legacyAt?: string,
 ): Promise<readonly Automation[]> {
   return inLine(path, async () => {
-    const next = change(await readAutomations(path, legacyAt))
+    const next = change(await readInLine(path, legacyAt))
     await writeAutomations(path, next)
     return next
   })
@@ -181,7 +212,7 @@ export function updateAutomations(
  */
 export function reserveRun(path: string, id: string, now: Date, timeZone: string, legacyAt?: string): Promise<Automation | undefined> {
   return inLine(path, async () => {
-    const items = await readAutomations(path, legacyAt)
+    const items = await readInLine(path, legacyAt)
     const item = items.find(candidate => candidate.id === id)
     if (item === undefined || dueAutomations([item], now, timeZone).length === 0) return undefined
     const stamped = { ...item, ...firedFields(now, timeZone) }
@@ -357,4 +388,60 @@ export async function runAutomation(
     const failed = await service.getMission(started.id)
     return { missionId: started.id, outcome: `failed: ${failed?.error ?? 'Erreur pendant l’exécution.'}` }
   }
+}
+
+/** What a run that could not even start leaves on the automation: the host's sentence. */
+export const COULD_NOT_RUN = 'failed: Erreur pendant l’exécution.'
+
+/**
+ * Run an automation the scheduler reserved, and write what came of it.
+ *
+ * Whatever happens, the registry says it: done, failed with the host's
+ * sentence, or, when the mission could not even be created or started (the
+ * reservation is already written, the day is spent), « could not run ». Three
+ * failures in a row suspend it. The counts are read from the registry, under
+ * its line of writers, never from the copy the pass held.
+ * @param service - the product service.
+ * @param runner - the mission runner.
+ * @param path - the registry file.
+ * @param item - the reserved automation.
+ * @param owner - on a team instance, the owner it runs for.
+ * @param legacyAt - the briefing hour from the older file, when present.
+ * @param say - the operator's line.
+ */
+export async function runReserved(
+  service: WorkbenchService,
+  runner: { run(mission: Mission): Promise<MissionResult> },
+  path: string,
+  item: Automation,
+  owner: string | undefined,
+  legacyAt: string | undefined,
+  say: (line: string) => void,
+): Promise<void> {
+  const record = async (outcome: string, missionId?: string): Promise<void> => {
+    await updateAutomations(path, items => items.map((candidate) => {
+      if (candidate.id !== item.id) return candidate
+      const failures = outcome === 'done' ? 0 : (candidate.failures ?? 0) + 1
+      return {
+        ...candidate,
+        ...(missionId === undefined ? {} : { lastMissionId: missionId }),
+        lastOutcome: outcome,
+        failures,
+        ...(failures >= 3 ? { enabled: false } : {}),
+      }
+    }), legacyAt)
+  }
+  let outcome: { readonly missionId: string; readonly outcome: string }
+  try {
+    outcome = await runAutomation(service, runner, item, owner)
+  } catch (error) {
+    await record(COULD_NOT_RUN)
+    say(`mndt: automation ${item.id} could not run: ${errorShape(error)}`)
+    return
+  }
+  await record(outcome.outcome, outcome.missionId)
+  // The outcome is the host's sentence (runAutomation), never a runtime's words.
+  say(outcome.outcome === 'done'
+    ? `mndt: automation ${item.id} done as ${outcome.missionId}`
+    : `mndt: automation ${item.id} ${outcome.outcome} (${outcome.missionId})`)
 }
