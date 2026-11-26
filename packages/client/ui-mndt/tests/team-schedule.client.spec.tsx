@@ -258,3 +258,34 @@ describe('the month\'s bound on the card', () => {
     expect(screen.getByTestId('schedule-cost').textContent).not.toContain('par mois')
   })
 })
+
+describe('a run under way (#169)', () => {
+  it('« en cours » while running; nothing otherwise, nor for a field of another shape', async () => {
+    const draw = async (running: unknown): Promise<HTMLElement | null> => {
+      cleanup()
+      const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task({ running })] }, () => Date.parse(at))
+      render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+      await screen.findByTestId('schedule-row')
+      return screen.queryByTestId('schedule-running')
+    }
+    expect((await draw(true))?.textContent).toBe('en cours')
+    expect(await draw(false)).toBeNull()
+    expect(await draw('yes')).toBeNull()
+  })
+})
+
+describe('the last run\'s outcome in words (#169)', () => {
+  const line = async (over: Record<string, unknown>): Promise<string> => {
+    cleanup()
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task({ lastRunAt: '2026-11-26T04:00:00.000Z', ...over })] }, () => Date.parse(at))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    return (await screen.findByTestId('schedule-row')).textContent ?? ''
+  }
+  it('done, failed with its category, and a restart said as one, with the month\'s real cost', async () => {
+    expect(await line({ lastStatus: 'done', lastEur: 0.08, eurThisMonth: 0.32 })).toMatch(/dernier :.*0,08.*· abouti.*ce mois : 0,32/u)
+    expect(await line({ lastStatus: 'failed', lastReasonKind: 'refused' })).toContain('échec (refusé par l\'espace)')
+    const restarted = await line({ lastStatus: 'failed', lastReasonKind: 'restart' })
+    expect(restarted).toContain('· interrompu par un redémarrage')
+    expect(restarted).not.toContain('échec')
+  })
+})
