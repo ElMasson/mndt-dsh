@@ -458,6 +458,10 @@ export const chatEn = {
   scheduleNotAllowed: 'You may not do that on this task.',
   scheduleGone: 'This task no longer exists.',
   ctxTasks: 'Scheduled tasks',
+  scheduleResultLabel: 'Scheduled task',
+  schedulePerMonth: '{eur} at most per month',
+  scheduleFailedBecause: 'The task did not complete: {reason}',
+  scheduleLastFailed: 'failed ({reason})',
 } as const
 
 /** One copy key. */
@@ -916,6 +920,10 @@ export const chatFr: Record<ChatKey, string> = {
   scheduleNotAllowed: 'Vous ne pouvez pas faire cela sur cette tâche.',
   scheduleGone: 'Cette tâche n\'existe plus.',
   ctxTasks: 'Tâches planifiées',
+  scheduleResultLabel: 'Tâche planifiée',
+  schedulePerMonth: '{eur} au plus par mois',
+  scheduleFailedBecause: 'La tâche n\'a pas abouti : {reason}',
+  scheduleLastFailed: 'échec ({reason})',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

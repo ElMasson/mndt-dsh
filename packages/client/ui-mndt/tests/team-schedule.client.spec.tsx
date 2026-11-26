@@ -174,3 +174,59 @@ describe('the list of a channel\'s tasks', { timeout: 20_000 }, () => {
     expect(scheduleRowOf({ id: 'a', title: 'x', state: 'active', lastEur: -1 })?.lastEur).toBeUndefined()
   })
 })
+
+describe('a core that serves no tasks route', () => {
+  it('shows no section and no error; another failure is said', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta] }, () => Date.parse(at))
+    vi.spyOn(chat, 'schedules').mockRejectedValue(new ChatRefusal('no route GET /schedules', 404))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    await new Promise(r => setTimeout(r, 50))
+    expect(screen.queryByTestId('schedule-list')).toBeNull()
+    cleanup()
+    vi.spyOn(chat, 'schedules').mockRejectedValue(new ChatRefusal('internal error', 500))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    expect((await screen.findByRole('alert')).textContent).toBe('internal error')
+  })
+})
+
+describe('a scheduled run in its destination (PR 2)', () => {
+  const run = (mission: unknown, text = '## Impayés\n- Orange') => ({
+    id: 'msg_r', channelId: 'chn_1', author: { kind: 'system' }, text, mentions: [], createdAt: at, updatedAt: at, mission,
+  }) as never
+  it('its author is fixed « Tâche planifiée », its title the model\'s, second-tier', async () => {
+    const { WebMessage } = await import('../src/client/TeamFeed.tsx')
+    const done = run({ kind: 'scheduled', title: 'mndt : relance', status: 'done', scheduleId: 'sch_1' })
+    render(<WebMessage message={done} header agents={new Map()} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+    expect(document.querySelector('.mw-message-name')?.textContent).toBe('Tâche planifiée')
+    expect(screen.getByTestId('mission-title').textContent).toBe('mndt : relance')
+  })
+  it('a failed run says why from a turn\'s category; an unknown one, the generic words; never the text', async () => {
+    const { WebMessage } = await import('../src/client/TeamFeed.tsx')
+    const draw = (reasonKind: unknown): string => {
+      cleanup()
+      const failed = run({ kind: 'scheduled', title: 'x', status: 'failed', reasonKind }, 'raw sk-live-1')
+      render(<WebMessage message={failed} header agents={new Map()} cards={[]} canDecide onDecide={vi.fn()} t={chatFrench} />)
+      return screen.getByTestId('mission-failed').textContent ?? ''
+    }
+    expect(draw('budget')).toBe('La tâche n\'a pas abouti : le coût du tour a atteint sa borne')
+    expect(draw('cut')).toBe('La tâche n\'a pas abouti : réponse coupée : limite de longueur atteinte')
+    expect(draw('constructor')).toBe('La tâche n\'a pas abouti : une erreur est survenue pendant l\'exécution')
+    expect(draw(undefined)).not.toContain('sk-live')
+  })
+})
+
+describe('a task\'s last run (PR 2)', () => {
+  it('a failed last run is said with its category', async () => {
+    const chat = createMockChat({ you, agents: [assistant], channels: [compta],
+      schedules: [task({ lastRunAt: '2026-11-24T04:00:00.000Z', lastStatus: 'failed', lastReasonKind: 'cut', lastEur: 0.12 })] }, () => Date.parse(at))
+    render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+    const row = await screen.findByTestId('schedule-row')
+    expect(row.textContent).toContain('échec (réponse coupée : limite de longueur atteinte)')
+    expect(row.textContent).toContain('0,12')
+  })
+  it('the card shows the month\'s bound when the host serves it', () => {
+    const agents = new Map([[assistant.id, assistant]])
+    render(<WebCard card={card({ eurPerMonthMax: 2 })} canDecide onDecide={vi.fn()} channel={compta} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('schedule-cost').textContent).toContain('au plus par mois')
+  })
+})

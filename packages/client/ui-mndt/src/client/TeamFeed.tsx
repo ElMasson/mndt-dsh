@@ -22,7 +22,7 @@ import { CouncilThread, councilOf } from './council.tsx'
 import { coordinatedTurn, turnSteps } from './coordination.tsx'
 import { Icon } from './Icons.tsx'
 import { renderBrief } from './markdown.tsx'
-import { turnEndWords } from './turnReason.ts'
+import { endWordOf, turnEndWords } from './turnReason.ts'
 import { ScheduleSheet, scheduleProposalOf } from './schedule.tsx'
 
 /** How long the same author's next message joins the previous one without its own header. */
@@ -343,19 +343,27 @@ export function originOf(card: ThreadCard): 'lane' | 'channel' | undefined {
   return kind === 'lane' || kind === 'channel' ? kind : undefined
 }
 
-/** The host's categories of a failed mission, said in words; any other value leaves the host's sentence. */
-const REASON_KINDS: readonly string[] = ['no-answer', 'cut', 'cancelled', 'tools', 'failed']
-const REASON_WORDS = {
-  'no-answer': 'missionReasonNoAnswer', cut: 'missionReasonCut', cancelled: 'missionReasonCancelled',
-  tools: 'missionReasonTools', failed: 'missionReasonFailed',
-} as const
+/** A failed mission's own categories, in its words; a turn's categories (a scheduled run) after them. */
+const REASON_WORDS: ReadonlyMap<string, 'missionReasonNoAnswer' | 'missionReasonCut' | 'missionReasonCancelled' | 'missionReasonTools' | 'missionReasonFailed'> = new Map([
+  ['no-answer', 'missionReasonNoAnswer'], ['cut', 'missionReasonCut'], ['cancelled', 'missionReasonCancelled'],
+  ['tools', 'missionReasonTools'], ['failed', 'missionReasonFailed'],
+] as const)
+
+/** @param kind - a served category. @param t - the copy. @returns its words; an unknown one, the generic failure. */
+function missionReasonWords(kind: string | undefined, t: ChatTranslate): string {
+  const own = kind === undefined ? undefined : REASON_WORDS.get(kind)
+  if (own !== undefined) return t(own)
+  return endWordOf(kind, t) ?? t('missionReasonFailed')
+}
 
 /** A mission's report published in a lane, as the page reads it. */
 interface PublishedMission {
   readonly title: string
+  /** A scheduled task's run, or else a briefing (any other kind reads as a briefing). */
+  readonly scheduled: boolean
   readonly failed: boolean
-  /** Why it failed, as the host's category (never the provider's text). */
-  readonly reasonKind?: 'no-answer' | 'cut' | 'cancelled' | 'tools' | 'failed'
+  /** Why it failed, as the host's category (never the provider's text); any string, read by lookup. */
+  readonly reasonKind?: string
   readonly eur?: number
   readonly servers: readonly string[]
 }
@@ -374,8 +382,9 @@ export function publishedMissionOf(m: ChatMessage): PublishedMission | undefined
   const tools = at('toolsUnavailable')
   return {
     title: typeof title === 'string' && title.trim() !== '' && title.length <= 120 ? title.trim() : '',
+    scheduled: at('kind') === 'scheduled',
     failed: at('status') === 'failed',
-    ...(REASON_KINDS.includes(at('reasonKind') as never) ? { reasonKind: at('reasonKind') as NonNullable<PublishedMission['reasonKind']> } : {}),
+    ...(typeof at('reasonKind') === 'string' ? { reasonKind: at('reasonKind') as string } : {}),
     ...(typeof eur === 'number' && Number.isFinite(eur) && eur >= 0 ? { eur } : {}),
     // Server names only (a technical format), as on a turn.
     servers: Array.isArray(tools) ? tools.filter((s): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(s)) : [],
@@ -417,7 +426,7 @@ export function WebMessage(props: {
   const name = m.author.kind === 'human'
     ? shownName(m.author.email, props.names)
     : m.author.kind === 'agent' ? agent?.name ?? `@${m.author.agentId}`
-      : published !== undefined ? t('briefingLabel') : 'mndt'
+      : published !== undefined ? t(published.scheduled ? 'scheduleResultLabel' : 'briefingLabel') : 'mndt'
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const waiting = props.cards.filter(card => (card.state ?? 'pending') === 'pending').length
@@ -463,7 +472,7 @@ export function WebMessage(props: {
         // The host's one line on a failed mission; its reason is the runtime's: plain text, no Markdown.
         <p className="mw-message-body mw-decide-error" data-testid="mission-failed">
           {/* Never m.text: before the core's category is installed it may carry the provider's raw reason. */}
-          {t('missionFailedBecause', { reason: t(REASON_WORDS[published.reasonKind ?? 'failed']) })}
+          {t(published.scheduled ? 'scheduleFailedBecause' : 'missionFailedBecause', { reason: missionReasonWords(published.reasonKind, t) })}
         </p>
       ) : published !== undefined ? (
         // A model wrote it: read as an agent's text, its headings kept plain.

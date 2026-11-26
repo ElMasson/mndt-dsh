@@ -11,6 +11,7 @@ import type { ChatAgent, ChatFace } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { euros, pageLanguage } from './format.ts'
 import { renderBrief } from './markdown.tsx'
+import { endWordOf } from './turnReason.ts'
 
 /** A cadence as the core serves it. */
 export type Cadence =
@@ -32,6 +33,8 @@ export interface ScheduleProposal {
   readonly eurPerRun: number
   readonly nextRuns: readonly string[]
   readonly timeZone?: string
+  /** The month's bound, when the host serves it on the card. */
+  readonly eurPerMonthMax?: number
 }
 
 const AT = /^(?:[01]\d|2[0-3]):[0-5]\d$/u
@@ -97,9 +100,11 @@ export function scheduleProposalOf(card: { readonly kind: string }): SchedulePro
     || typeof f.agentId !== 'string' || f.agentId === '' || destination === undefined
     || typeof eur !== 'number' || !Number.isFinite(eur) || eur <= 0) return undefined
   const timeZone = zoneOf(top.timeZone)
+  const month = top.eurPerMonthMax
   return {
     title: f.title.trim(), instructions: f.instructions, cadence, agentId: f.agentId, destination, eurPerRun: eur,
     nextRuns: runsOf(top.nextRuns), ...(timeZone === undefined ? {} : { timeZone }),
+    ...(typeof month === 'number' && Number.isFinite(month) && month >= 0 ? { eurPerMonthMax: month } : {}),
   }
 }
 
@@ -151,7 +156,10 @@ export function ScheduleSheet(props: {
         <dt>{t('scheduleWhere')}</dt>
         <dd data-testid="schedule-where">{props.where}</dd>
         <dt>{t('scheduleCost')}</dt>
-        <dd data-testid="schedule-cost">{t('schedulePerRun', { eur: euros(p.eurPerRun) })}</dd>
+        <dd data-testid="schedule-cost">
+          {t('schedulePerRun', { eur: euros(p.eurPerRun) })}
+          {p.eurPerMonthMax === undefined ? '' : ` · ${t('schedulePerMonth', { eur: euros(p.eurPerMonthMax) })}`}
+        </dd>
       </dl>
       <details className="mw-turn-steps" data-testid="schedule-instructions">
         <summary>{t('scheduleInstructions')}</summary>
@@ -172,6 +180,8 @@ export interface ScheduleRow {
   readonly nextRuns: readonly string[]
   readonly timeZone?: string
   readonly lastRunAt?: string
+  readonly lastStatus?: 'done' | 'failed'
+  readonly lastReasonKind?: string
   readonly lastEur?: number
   readonly eurThisMonth?: number
   readonly eurPerMonthMax?: number
@@ -210,6 +220,8 @@ export function scheduleRowOf(raw: unknown): ScheduleRow | undefined {
     ...(timeZone === undefined ? {} : { timeZone }),
     ...(typeof r.lastRunAt === 'string' && !Number.isNaN(Date.parse(r.lastRunAt)) ? { lastRunAt: r.lastRunAt } : {}),
     ...(lastEur === undefined ? {} : { lastEur }),
+    ...(r.lastStatus === 'done' || r.lastStatus === 'failed' ? { lastStatus: r.lastStatus } : {}),
+    ...(typeof r.lastReasonKind === 'string' && r.lastReasonKind !== '' ? { lastReasonKind: r.lastReasonKind } : {}),
     ...(eurThisMonth === undefined ? {} : { eurThisMonth }),
     ...(eurPerMonthMax === undefined ? {} : { eurPerMonthMax }),
     missed: Number.isInteger(r.missed) && (r.missed as number) > 0 ? r.missed as number : 0,
@@ -252,6 +264,11 @@ export function ScheduleList(props: {
       setRows(served.map(scheduleRowOf).filter((r): r is ScheduleRow => r !== undefined))
       setError(undefined)
     } catch (failure) {
+      // A core without the route (before #161) serves no list: nothing to show, not an error.
+      if (failure instanceof ChatRefusal && failure.status === 404) {
+        setRows([])
+        return
+      }
       setError(scheduleRefusal(failure, t))
     }
   }, [face, key, t])
@@ -288,6 +305,7 @@ export function ScheduleList(props: {
             <p className="mw-ctx-small mw-ctx-muted">
               {r.nextRuns[0] === undefined || r.state === 'paused' ? '' : t('scheduleNextOne', { at: runTime(r.nextRuns[0], r.timeZone) })}
               {r.lastRunAt === undefined ? '' : ` · ${t('scheduleLast', { at: runTime(r.lastRunAt, r.timeZone) })}${r.lastEur === undefined ? '' : `, ${euros(r.lastEur)}`}`}
+              {r.lastStatus !== 'failed' ? '' : ` · ${t('scheduleLastFailed', { reason: endWordOf(r.lastReasonKind, t) ?? t('endError') })}`}
               {r.eurThisMonth === undefined ? '' : ` · ${t('scheduleMonth', { eur: euros(r.eurThisMonth) })}`}
               {r.eurPerMonthMax === undefined ? '' : ` ${t('scheduleMonthMax', { eur: euros(r.eurPerMonthMax) })}`}
             </p>

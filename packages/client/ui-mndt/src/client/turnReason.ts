@@ -26,6 +26,15 @@ const KINDS: ReadonlyMap<string, EndWord> = new Map<string, EndWord>([
 ])
 
 /**
+ * @param kind - a served category. @param t - the copy.
+ * @returns its word, or undefined when this screen does not know it (looked up in own keys only).
+ */
+export function endWordOf(kind: unknown, t: ChatTranslate): string | undefined {
+  const key = typeof kind === 'string' ? KINDS.get(kind) : undefined
+  return key === undefined ? undefined : t(key)
+}
+
+/**
  * @param turn - a turn as served (its status, its category).
  * @param t - the copy.
  * @returns the words after « n'a pas abouti : » for a failed turn; for a refused or cancelled one,
