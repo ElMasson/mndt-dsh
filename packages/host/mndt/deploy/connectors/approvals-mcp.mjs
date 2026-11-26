@@ -73,6 +73,42 @@ async function runNow() {
 
 const KINDS = ['send-email', 'publish', 'spend', 'delete']
 
+/**
+ * The tools, propose_agent's connectors limited to those mounted in this space: an
+ * agent proposes only those, instead of asking for one that does not exist and
+ * seeing its card refused. Asked to the API at each listing, briefly; without
+ * an answer, the tools as written.
+ * @returns the tools to list.
+ */
+async function listedTools() {
+  const mounted = await call('/connectors', { signal: AbortSignal.timeout(1500) })
+    // An answer without the list says nothing: the tools as written, never « none ».
+    .then(body => (!Array.isArray(body.connectors) ? undefined : body.connectors
+      .filter(row => row !== null && typeof row === 'object' && row.enabled === true && typeof row.server === 'string')
+      .map(row => row.server)))
+    // Sorted, each once: the same connectors make the same schema, byte for byte (one cache prefix).
+    .then(servers => (servers === undefined ? undefined : [...new Set(servers)].sort()))
+    .catch(() => undefined)
+  if (mounted === undefined) return tools
+  return tools.map((tool) => {
+    if (tool.name !== 'propose_agent') return tool
+    // In the schema, as its only values: the shortest way to say it (the schemas
+    // go out with every call); the API's refusal names them too.
+    return {
+      ...tool,
+      inputSchema: {
+        ...tool.inputSchema,
+        properties: {
+          ...tool.inputSchema.properties,
+          connectors: mounted.length === 0
+            ? { type: 'array', items: { type: 'string' }, maxItems: 0 }
+            : { type: 'array', items: { type: 'string', enum: mounted } },
+        },
+      },
+    }
+  })
+}
+
 /** @param path - API path. @param init - fetch options. @returns parsed body. */
 async function call(path, init = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -291,7 +327,7 @@ lines.on('line', (line) => {
     return
   }
   if (message.method === 'tools/list') {
-    reply({ result: { tools } })
+    void listedTools().then(listed => reply({ result: { tools: listed } }))
     return
   }
   if (message.method === 'tools/call') {

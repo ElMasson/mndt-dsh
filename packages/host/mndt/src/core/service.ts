@@ -177,7 +177,8 @@ export interface OpenEscalation {
   /** The asker's message that publishes the question: a reply to it answers. */
   readonly questionMessageId?: string
   readonly question: string
-  readonly summary: string
+  /** What the advices add to the question; absent when nothing (see HelpEscalation.summary). */
+  readonly summary?: string
   readonly at: string
 }
 
@@ -2187,7 +2188,7 @@ export class WorkbenchService {
         return [{
           kind: open.kind, channelId: message.channelId, turnId: turn.id, messageId: message.id,
           ...(escalation.messageId === undefined ? {} : { questionMessageId: escalation.messageId }),
-          question: escalation.question, summary: escalation.summary, at: escalation.at,
+          question: escalation.question, ...(escalation.summary === undefined ? {} : { summary: escalation.summary }), at: escalation.at,
         }]
       }))
   }
@@ -2493,6 +2494,13 @@ export class WorkbenchService {
       const agents = (state.agents ?? []).filter(agent => channel.agents.includes(agent.id) && agent.retiredAt === undefined)
       const mentions = mentionsOf(body, agents)
       const turns: Turn[] = mentions.map(agentId => ({ id: this.#id('trn'), agentId, status: 'queued' }))
+      // An agent named that gets no turn is said, never silently dropped.
+      const ignored = mentionsOf(body, state.agents ?? [])
+        .filter(agentId => !mentions.includes(agentId))
+        .flatMap((agentId) => {
+          const named = (state.agents ?? []).find(agent => agent.id === agentId)
+          return named === undefined ? [] : [{ handle: named.handle, reason: named.retiredAt !== undefined ? 'retired' as const : 'not-in-channel' as const }]
+        })
       const at = this.#at()
       const message: Message = {
         id: this.#id('msg'),
@@ -2500,6 +2508,7 @@ export class WorkbenchService {
         author: { kind: 'human', email: author },
         text: body,
         mentions,
+        ...(ignored.length === 0 ? {} : { mentionsIgnored: ignored }),
         ...(replyTo === undefined ? {} : { replyTo }),
         ...(turns.length === 0 ? {} : { turns }),
         createdAt: at,
@@ -2583,7 +2592,13 @@ export class WorkbenchService {
    * @param text - the answer.
    * @returns the message.
    */
-  reply(channelId: string, replyTo: string, author: Exclude<MessageAuthor, { kind: 'human' }>, text: string): Promise<Message> {
+  reply(
+    channelId: string,
+    replyTo: string,
+    author: Exclude<MessageAuthor, { kind: 'human' }>,
+    text: string,
+    escalationOf?: string,
+  ): Promise<Message> {
     return this.#write((state) => {
       const at = this.#at()
       const message: Message = {
@@ -2596,8 +2611,28 @@ export class WorkbenchService {
         createdAt: at,
         updatedAt: at,
       }
+      // The turn whose escalation this reply publishes names it in the same write:
+      // never a moment where the question is published and not yet linked.
+      const linked = (state.messages ?? []).map((candidate) => {
+        if (escalationOf === undefined || candidate.id !== replyTo) return candidate
+        return {
+          ...candidate,
+          turns: (candidate.turns ?? []).map((turn) => {
+            if (turn.id !== escalationOf) return turn
+            const help = turn.help
+            if (help?.escalation !== undefined) {
+              return { ...turn, help: { ...help, escalation: { ...help.escalation, messageId: message.id } } }
+            }
+            const council = turn.council
+            if (council?.escalation !== undefined) {
+              return { ...turn, council: { ...council, escalation: { ...council.escalation, messageId: message.id } } }
+            }
+            return turn
+          }),
+        }
+      })
       return {
-        state: { ...state, messages: [...(state.messages ?? []), message] },
+        state: { ...state, messages: [...linked, message] },
         event: { at: message.createdAt, actor: author.kind === 'agent' ? author.agentId : 'mndt', action: 'message.reply', subject: message.id, detail: channelId },
         value: message,
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, spentThisMonth, WorkbenchService } from '../src/core/index.ts'
+import { MemoryStore, spentThisMonth, turnPrompt, WorkbenchService } from '../src/core/index.ts'
 import type { Message, PriceGrid, Turn } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
@@ -186,7 +186,8 @@ describe('ask_peers: two peers, alone and without tools, then the asker reads th
       return original(input)
     }
     const { turn } = await ask(b, t.channel, '@alpha le point ?')
-    expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/), reason: 'avis non obtenu : erreur' }])
+    // By kind before the reading: the words a reader may see, and the kind the screen says in its own words.
+    expect(served?.help?.skipped).toEqual([{ slot: expect.stringMatching(/^[AB]$/) as unknown, reason: 'avis non obtenu : erreur', reasonKind: 'failed' }])
     expect(JSON.stringify(served)).not.toMatch(/@beta|@gamma/)
     // After the reading, the peer named and the host's sentence: the engine's words go to the operator's log.
     expect(turn.help?.skipped[0]?.reason).toBe('Erreur pendant l’exécution.')
@@ -249,11 +250,13 @@ describe('ask_peers: escalation, answered by a member', () => {
     b.engine.reading = 'Les avis divergent.\n{"retained": "aucun", "why": "ils se contredisent", "verdict": "escalate", "question": "La facture 42 est-elle HT ?"}'
     const { turn, replies } = await ask(b, t.channel, '@alpha le point ?')
     expect(turn.help?.escalation).toMatchObject({ question: 'La facture 42 est-elle HT ?' })
-    expect(turn.help?.escalation?.summary).toContain('Blocage : HT ou TTC ? Avis reçus : 2.')
+    // Only what the advices add to the question (no « Blocage : » repeating it).
+    expect(turn.help?.escalation?.summary).toBe('Avis reçus : 2.')
     // Each sentence ended once: never « ?. » nor « .. ».
     expect(turn.help?.escalation?.summary).not.toMatch(/\?\.|\.\./)
     const question = replies.at(-1) as Message
-    expect(question.text).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
+    // The question is the escalation's (shown under the message), not repeated in the text.
+    expect(question.text).not.toContain('Question à l’équipe')
     const listed = (await b.call('GET', '/escalations', 'operator')).body.escalations as { turnId: string; question: string }[]
     expect(turn.help?.escalation?.messageId).toBe(question.id)
     expect(listed).toEqual([expect.objectContaining({
@@ -270,6 +273,9 @@ describe('ask_peers: escalation, answered by a member', () => {
     const relaunched = (await b.service.message((reply.body.message as { id: string }).id))?.turns ?? []
     expect(relaunched.map(r => r.agentId)).toEqual([t.alpha])
     expect((await b.call('GET', '/escalations', 'operator')).body.escalations).toEqual([])
+    // The question, out of the text, is given back to the next turns' history.
+    const relaunchedPrompt = b.engine.seen.at(-1)?.prompt ?? ''
+    expect(relaunchedPrompt).toContain('Question à l’équipe : La facture 42 est-elle HT ?')
   })
 
   it('an escalated help keeps its peers withheld until a person answers', async () => {
@@ -387,8 +393,9 @@ describe('ask_peers: bounds', () => {
     expect(turn.help?.skipped.some(skip => /borne \(0\.2 €\)/.test(skip.reason))).toBe(true)
     expect(turn.help?.escalation).toBeDefined()
     // The summary, served by GET /escalations while the question waits, says the reason by kind.
-    expect(turn.help?.escalation?.summary).toContain('Sans avis : avis non obtenu : borne')
-    expect(turn.help?.escalation?.summary).not.toMatch(/@|€|agt_|route-/)
+    // The summary only says what the advices add; the peer without an advice is served by kind.
+    expect(turn.help?.escalation?.summary ?? '').not.toMatch(/Sans avis|Blocage|@|€|agt_|route-/)
+    expect(turn.help?.skipped.some(skip => skip.reasonKind !== undefined)).toBe(true)
   })
 
   it('a reading the bound refuses is said by kind in the published text: no € nor handle', async () => {
@@ -415,5 +422,32 @@ describe('ask_peers: bounds', () => {
     await b.call('POST', `/channels/${t.channel}/messages`, 'owner', { text: '@alpha et maintenant ?', replyTo: question.id })
     await b.turns.settled()
     expect(b.engine.helpAnswer?.body.code).toBe('pair-already-asked')
+  })
+})
+
+describe('a question put to the team', () => {
+  it('is read again in its own channel\'s history only, never in another channel', () => {
+    const agent = { id: 'agt_a', handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', connectors: [], eurPerMonth: 5 } as unknown as Parameters<typeof turnPrompt>[0]
+    const channelOf = (id: string, name: string) => ({ id, name, kind: 'channel', members: [], agents: ['agt_a'], connectors: [] }) as unknown as Parameters<typeof turnPrompt>[1]
+    const at = '2026-11-26T10:00:00.000Z'
+    const asked: Message = { id: 'msg_1', channelId: 'chn_a', author: { kind: 'human', email: 'jdoe@datanalysis.re' }, text: '@alpha HT ou TTC ?', mentions: ['agt_a'], createdAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_a', status: 'done', help: { escalation: { question: 'QUESTION-SECRETE-42 ?', at, messageId: 'msg_2' } } } as unknown as Turn] }
+    const answered: Message = { id: 'msg_2', channelId: 'chn_a', author: { kind: 'agent', agentId: 'agt_a' }, text: 'Je ne peux pas trancher.', mentions: [], replyTo: 'msg_1', createdAt: at }
+    const later = (channelId: string): Message => ({ id: `msg_${channelId}`, channelId, author: { kind: 'human', email: 'jdoe@datanalysis.re' }, text: '@alpha et alors ?', mentions: ['agt_a'], createdAt: '2026-11-26T11:00:00.000Z' })
+    const history = [asked, answered]
+    expect(turnPrompt(agent, channelOf('chn_a', 'compta'), history, later('chn_a'), [agent])).toContain('Question à l’équipe : QUESTION-SECRETE-42 ?')
+    // Another channel: even handed the whole history, never.
+    expect(turnPrompt(agent, channelOf('chn_b', 'ventes'), history, later('chn_b'), [agent])).not.toContain('QUESTION-SECRETE-42')
+  })
+
+  it('names the message that publishes it in the same write as that message', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const alpha = await service.createAgent({ handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', eurPerMonth: 5 }, 'duke@datanalysis.re')
+    const channel = await service.createChannel({ title: 'Compta', members: ['jdoe@datanalysis.re'], agents: [alpha.id] }, 'duke@datanalysis.re')
+    const posted = await service.postMessage(channel.id, 'jdoe@datanalysis.re', '@alpha HT ou TTC ?')
+    const turnId = posted.turns?.[0]?.id ?? ''
+    await service.updateTurn(posted.id, turnId, { help: { escalation: { question: 'HT ?', at: '2026-11-26T10:00:00.000Z' } } as unknown as NonNullable<Turn['help']> })
+    const reply = await service.reply(channel.id, posted.id, { kind: 'agent', agentId: alpha.id }, 'Je demande à l’équipe.', turnId)
+    expect((await service.message(posted.id))?.turns?.[0]?.help?.escalation?.messageId).toBe(reply.id)
   })
 })

@@ -75,7 +75,8 @@ async function start(allowDecide: boolean): Promise<{ received: Received[]; send
   started.stdout?.on('data', (chunk) => { output += String(chunk) })
   started.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } } })}\n`)
   started.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })}\n`)
-  await new Promise(resolve => setTimeout(resolve, 800))
+  // Until the tools are listed (they ask the API for the mounted connectors first), 5 s at most.
+  for (let waited = 0; waited < 5000 && !output.includes('"id":2'); waited += 50) await new Promise(resolve => setTimeout(resolve, 50))
   return {
     received,
     send: (message: unknown): void => { started.stdin?.write(`${JSON.stringify(message)}\n`) },

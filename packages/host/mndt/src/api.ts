@@ -344,7 +344,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     if (options.connectors === undefined || servers.length === 0) return undefined
     const mounted = new Set((await options.connectors()).filter(c => c.enabled).map(c => c.server))
     const missing = servers.filter(server => !mounted.has(server))
-    return missing.length === 0 ? undefined : respond(400, { error: `connector not mounted: ${missing.join(', ')}` })
+    // The refusal names what is mounted: the agent proposes again without asking a person.
+    const available = [...mounted].sort()
+    return missing.length === 0 ? undefined : respond(400, {
+      error: `connector not mounted: ${missing.join(', ')}. Connecteurs disponibles : ${available.length === 0 ? 'aucun' : available.join(', ')}.`,
+      code: 'connector-not-mounted',
+    })
   }
 
   /**
