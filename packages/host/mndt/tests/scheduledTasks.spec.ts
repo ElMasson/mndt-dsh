@@ -14,6 +14,7 @@ const owner = 'duke@datanalysis.re'
 const operator = 'operateur@datanalysis.re'
 const viewer = 'smarion@datanalysis.re'
 const outsider = 'contact@datanalysis.re'
+const admin = 'jadmin@datanalysis.re'
 const ZONE = 'Indian/Reunion'
 
 describe('a cadence and its runs, in the instance\'s zone', () => {
@@ -25,6 +26,33 @@ describe('a cadence and its runs, in the instance\'s zone', () => {
     expect(runs({ every: 'month', monthDay: 1, at: '09:00' })).toEqual(['2026-12-01T05:00:00.000Z', '2027-01-01T05:00:00.000Z', '2027-02-01T05:00:00.000Z'])
     expect(runs({ cron: '30 7 * * 1-5' })).toEqual(['2026-11-26T03:30:00.000Z', '2026-11-27T03:30:00.000Z', '2026-11-30T03:30:00.000Z'])
     expect(runsThisMonth(checkedCadence({ cron: '30 7 * * 1-5' }), from, ZONE)).toBe(21)
+  })
+
+  it('a change of offset never runs one instant twice (02:00 and 03:00 on the day summer time starts)', () => {
+    const start = new Date('2027-03-27T12:00:00Z')
+    const twice = nextRuns(checkedCadence({ cron: '0 2,3 * * *' }), start, 'Europe/Paris', 4).map(run => run.getTime())
+    expect(new Set(twice).size).toBe(twice.length)
+    const hourly = nextRuns(checkedCadence({ cron: '0 * * * *' }), start, 'Europe/Paris', 48).map(run => run.getTime())
+    expect(new Set(hourly).size).toBe(hourly.length)
+    expect(hourly.every((at, index) => index === 0 || at > (hourly[index - 1] ?? 0))).toBe(true)
+  })
+
+  it('a month of an hourly cron builds no formatter once its zone has one (building one is what cost 0.7 s)', () => {
+    const cadence = checkedCadence({ cron: '0 * * * *' })
+    runsThisMonth(cadence, new Date('2026-11-25T10:00:00Z'), ZONE)
+    const Real = Intl.DateTimeFormat
+    let built = 0
+    const counting = function (this: unknown, ...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+      built += 1
+      return new Real(...args)
+    } as unknown as typeof Intl.DateTimeFormat
+    Intl.DateTimeFormat = counting
+    try {
+      expect(runsThisMonth(cadence, new Date('2026-11-25T10:00:00Z'), ZONE)).toBe(720)
+    } finally {
+      Intl.DateTimeFormat = Real
+    }
+    expect(built).toBe(0)
   })
 
   it('a zone with summer time keeps the wall-clock time', () => {
@@ -49,7 +77,13 @@ describe('a cadence and its runs, in the instance\'s zone', () => {
     const destination = { kind: 'channel' as const, channelId: 'chn_1' }
     const checked = checkedScheduleProposal({ title: '  Relance\n des   impayés ', instructions: 'Fais le point.', cadence: { every: 'day', at: '08:00' }, agentId: 'agt_other' }, 'agt_turn', destination)
     expect(checked).toMatchObject({ title: 'Relance des impayés', agentId: 'agt_turn', destination, eurPerRun: 0.5 })
-    expect(() => checkedScheduleProposal({ title: 'x', instructions: 'y', cadence: { every: 'day', at: '08:00' }, eurPerRun: 50 }, 'a', destination)).toThrow(ScheduleRefusal)
+    for (const eurPerRun of [50, 5.01, 0.005, 0, -1, Number.NaN]) {
+      const asked = { title: 'x', instructions: 'y', cadence: { every: 'day', at: '08:00' }, eurPerRun }
+      expect(() => checkedScheduleProposal(asked, 'a', destination)).toThrow(ScheduleRefusal)
+    }
+    for (const eurPerRun of [0.01, 5]) {
+      expect(checkedScheduleProposal({ title: 'x', instructions: 'y', cadence: { every: 'day', at: '08:00' }, eurPerRun }, 'a', destination).eurPerRun).toBe(eurPerRun)
+    }
     expect(() => checkedScheduleProposal({ title: '', instructions: 'y', cadence: { every: 'day', at: '08:00' } }, 'a', destination)).toThrow(ScheduleRefusal)
   })
 })
@@ -64,8 +98,21 @@ async function bench() {
     runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
     turns,
     timeZone: ZONE,
-    identity: { tokens: { owner: { user: owner }, operator: { user: operator }, viewer: { user: viewer }, outsider: { user: outsider } } },
-    grants: { grants: async () => ({ ok: true, grants: [{ subject: owner, role: 'owner' }, { subject: operator, role: 'operator' }, { subject: viewer, role: 'viewer' }, { subject: outsider, role: 'viewer' }] }) },
+    identity: {
+      tokens: {
+        owner: { user: owner }, operator: { user: operator }, viewer: { user: viewer },
+        outsider: { user: outsider }, admin: { user: admin },
+      },
+    },
+    grants: {
+      grants: async () => ({
+        ok: true,
+        grants: [
+          { subject: owner, role: 'owner' }, { subject: operator, role: 'operator' }, { subject: viewer, role: 'viewer' },
+          { subject: outsider, role: 'viewer' }, { subject: admin, role: 'admin' },
+        ],
+      }),
+    },
   })
   type Query = Record<string, string>
   const call = async (method: string, path: string, who: string, body?: unknown, headers?: Record<string, string>, query: Query = {}) => {
@@ -172,6 +219,101 @@ describe('a task, once approved', () => {
     const lines = async (who: string) => ((await b.call('GET', '/events', who)).body.events as { action: string }[]).filter(event => event.action.startsWith('schedule.'))
     expect((await lines('viewer')).map(event => event.action)).toEqual(['schedule.created'])
     expect(await lines('outsider')).toEqual([])
+  })
+})
+
+describe('the readers of a task and of its journal lines are one rule', () => {
+  /** @returns a task approved from a turn in the lane of `who`, and the bench. */
+  async function laneTask(who: string) {
+    const b = await bench()
+    const lane = await b.service.laneOf(who)
+    b.run(lane.id)
+    const card = await b.propose(WEEKLY, who === operator ? 'operator' : who === admin ? 'admin' : 'owner')
+    const id = (card.body.approval as { id: string }).id
+    const approved = await b.call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, { 'x-mndt-shows-proposal': '1' })
+    return { ...b, lane, approved, scheduleId: (approved.body.schedule as { id: string } | undefined)?.id }
+  }
+  const lines = async (b: Awaited<ReturnType<typeof bench>>, who: string) =>
+    ((await b.call('GET', '/events', who)).body.events as { action: string; subject?: string }[]).filter(event => event.action.startsWith('schedule.'))
+  const tasks = async (b: Awaited<ReturnType<typeof bench>>, who: string) => ((await b.call('GET', '/schedules', who)).body.schedules as unknown[]).length
+
+  it('an operator\'s lane (no decider in it): its person, the owner and an admin read it; another member does not', async () => {
+    const b = await laneTask(operator)
+    expect(b.approved.status).toBe(200)
+    for (const who of ['operator', 'owner', 'admin']) {
+      expect(await tasks(b, who)).toBe(1)
+      expect((await lines(b, who)).map(event => event.action)).toEqual(['schedule.created'])
+    }
+    for (const who of ['viewer', 'outsider']) {
+      expect(await tasks(b, who)).toBe(0)
+      expect(await lines(b, who)).toEqual([])
+    }
+  })
+
+  it('a decider\'s own lane: only that decider reads it, never another decider, the owner included', async () => {
+    const b = await bench()
+    const lane = await b.service.laneOf(admin)
+    b.run(lane.id)
+    const card = await b.propose(WEEKLY, 'admin')
+    const id = (card.body.approval as { id: string }).id
+    // Its card does not rise to the owner either (the lane has a decider: its person).
+    expect((await b.call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, { 'x-mndt-shows-proposal': '1' })).status).toBe(404)
+    expect((await b.call('POST', `/approvals/${id}/decide`, 'admin', { decision: 'approved' }, { 'x-mndt-shows-proposal': '1' })).status).toBe(200)
+    expect(await tasks(b, 'admin')).toBe(1)
+    expect(await tasks(b, 'owner')).toBe(0)
+    expect(await lines(b, 'owner')).toEqual([])
+  })
+
+  it('a channel with a decider among its members: an admin outside it reads neither the task nor its lines', async () => {
+    const b = await bench()
+    b.run(b.channel.id)
+    const id = ((await b.propose(WEEKLY)).body.approval as { id: string }).id
+    await b.call('POST', `/approvals/${id}/decide`, 'owner', { decision: 'approved' }, { 'x-mndt-shows-proposal': '1' })
+    expect(await tasks(b, 'admin')).toBe(0)
+    expect(await lines(b, 'admin')).toEqual([])
+    expect(await tasks(b, 'viewer')).toBe(1)
+  })
+
+  it('a deleted task: its readers at the time still read the line that says so; it is served nowhere', async () => {
+    const b = await laneTask(operator)
+    expect((await b.call('DELETE', `/schedules/${b.scheduleId}`, 'operator')).status).toBe(200)
+    expect((await lines(b, 'operator')).map(event => event.action)).toEqual(['schedule.created', 'schedule.deleted'])
+    expect((await lines(b, 'owner')).map(event => event.action)).toEqual(['schedule.created', 'schedule.deleted'])
+    expect(await lines(b, 'viewer')).toEqual([])
+    expect(await tasks(b, 'operator')).toBe(0)
+    expect((await b.call('POST', `/schedules/${b.scheduleId}/pause`, 'operator')).status).toBe(404)
+  })
+
+  it('the card risen from a lane serves its own content, nothing of the lane', async () => {
+    const b = await bench()
+    const lane = await b.service.laneOf(operator)
+    await b.service.postMessage(lane.id, operator, 'Note privée sur les impayés de Martin')
+    b.run(lane.id)
+    await b.propose(WEEKLY)
+    const served = JSON.stringify((await b.call('GET', '/approvals', 'owner', undefined, undefined, { state: 'pending', mine: '1' })).body)
+    expect(served).toContain('Relance des impayés')
+    expect(served).not.toContain(lane.title)
+    expect(served).not.toContain('Note privée')
+    expect(served).not.toContain(lane.name)
+  })
+})
+
+describe('a pause of the host is never covered by a person\'s', () => {
+  it('a task paused after three failures stays so, with its reason, when its requester pauses it', async () => {
+    const store = new MemoryStore()
+    const service = new WorkbenchService({ store })
+    const lane = await service.laneOf(operator)
+    const schedule = {
+      id: 'sch_1', title: 'Relance', instructions: 'Point', cadence: { every: 'day' as const, at: '08:00' }, agentId: 'agt_1',
+      destination: { kind: 'lane' as const, member: operator }, eurPerRun: 0.5, state: 'paused' as const, pausedBecause: 'failures' as const,
+      requestedBy: operator, approvedBy: owner, approvedAt: '2026-11-25T00:00:00.000Z', approvalId: 'apr_1', failures: 3,
+    }
+    await store.save({ ...(await service.snapshot()), schedules: [schedule] })
+    const fresh = new WorkbenchService({ store })
+    expect(lane.id).toBeDefined()
+    const kept = await fresh.changeSchedule('sch_1', 'pause', operator)
+    expect(kept).toMatchObject({ state: 'paused', pausedBecause: 'failures' })
+    expect(((await fresh.snapshot()).events).filter(event => event.action === 'schedule.paused')).toEqual([])
   })
 })
 

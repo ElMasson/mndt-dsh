@@ -46,6 +46,12 @@ export interface Schedule extends ScheduleProposal {
   readonly lastEur?: number
   readonly missed?: number
   readonly failures?: number
+  /**
+   * A deleted task stays in the state, never served, so that its journal lines
+   * keep their readers (its destination, its requester).
+   */
+  readonly deletedAt?: string
+  readonly deletedBy?: string
 }
 
 /** The codes of a refused proposal or gesture, the screen's to translate. */
@@ -159,10 +165,18 @@ function parseField(field: string, range: readonly [number, number]): ReadonlySe
 /** A wall-clock reading in a zone. */
 interface WallClock { year: number; month: number; day: number; hour: number; minute: number; weekday: number }
 
+/** One formatter per zone, built once: building one is what costs, not using it. */
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
 function wallClock(date: Date, timeZone: string): WallClock {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short',
-  }).formatToParts(date).map(part => [part.type, part.value]))
+  let formatter = formatters.get(timeZone)
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short',
+    })
+    formatters.set(timeZone, formatter)
+  }
+  const parts = Object.fromEntries(formatter.formatToParts(date).map(part => [part.type, part.value]))
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   return {
     year: Number(parts.year), month: Number(parts.month), day: Number(parts.day),
@@ -226,7 +240,10 @@ export function nextRuns(cadence: ScheduleCadence, from: Date, timeZone: string,
     }
     for (const [hour, minute] of times) {
       const at = instantAt(day.year, day.month, day.day, hour, minute, timeZone)
-      if (at.getTime() > from.getTime() && runs.length < count) runs.push(at)
+      // A change of offset can map two wall-clock times to one instant (02:00
+      // and 03:00 on the day summer time starts): an instant is run once.
+      const last = runs.at(-1)
+      if (at.getTime() > from.getTime() && (last === undefined || at.getTime() > last.getTime()) && runs.length < count) runs.push(at)
     }
   }
   return runs

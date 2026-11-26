@@ -31,7 +31,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { can, roleChangeRefusal, roleOf } from './policy.ts'
 import { searchState } from './search.ts'
-import { canReadApproval, canReadEvent, canReadMandate, canReadMission, cardOrigin, servedCard, servedEvent } from './visibility.ts'
+import { canReadApproval, canReadEvent, canReadMandate, canReadMission, canReadSchedule, cardOrigin, scheduleChannel, servedCard, servedEvent } from './visibility.ts'
 import type { Reader } from './visibility.ts'
 import type { GrantSource } from './policy.ts'
 import { mandateState, missionRefusal } from './mandates.ts'
@@ -417,29 +417,6 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
     approval.kind === 'propose_schedule' && approval.state === 'pending' && approval.scheduleProposal !== undefined
       ? { nextRuns: nextRuns(approval.scheduleProposal.cadence, new Date(), zone).map(run => run.toISOString()), timeZone: zone }
       : {}
-
-  /**
-   * @param schedule - a task.
-   * @param state - the state.
-   * @returns the id of its destination's channel (a lane: its person's), when it exists.
-   */
-  const destinationChannel = (schedule: Pick<Schedule, 'destination'>, state: WorkbenchState): string | undefined =>
-    schedule.destination.kind === 'channel'
-      ? schedule.destination.channelId
-      : (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === (schedule.destination as { member: string }).member)?.id
-
-  /**
-   * Who reads a task: the members of its destination and the one who asked it;
-   * a decider too when no member of its destination may decide (as its card, #153).
-   * @param schedule - a task. @param reader - who reads. @param state - the state.
-   * @returns whether they may read it.
-   */
-  const canReadSchedule = (schedule: Schedule, reader: Reader, state: WorkbenchState): boolean => {
-    if (schedule.requestedBy === reader.identity) return true
-    const channel = destinationChannel(schedule, state)
-    if (channel === undefined) return false
-    return reader.channels.has(channel) || (reader.decider && (reader.channelsWithoutDecider?.has(channel) ?? false))
-  }
 
   /**
    * A task as served to a reader: its next runs and the zone, what it may cost
@@ -1082,8 +1059,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const channelId = request.query?.channelId
         const agentId = request.query?.agentId
         const schedules = (await service.listSchedules())
-          .filter(schedule => canReadSchedule(schedule, reader, snapshot))
-          .filter(schedule => channelId === undefined || destinationChannel(schedule, snapshot) === channelId)
+          .filter(schedule => canReadSchedule(reader, schedule, snapshot))
+          .filter(schedule => channelId === undefined || scheduleChannel(schedule, snapshot) === channelId)
           .filter(schedule => agentId === undefined || schedule.agentId === agentId)
           .map(schedule => servedSchedule(schedule, reader, snapshot))
         return respond(200, { schedules })
@@ -1093,8 +1070,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = scheduleRoute[1] ?? ''
         const reader = await readerOf(identity)
         const snapshot = await service.snapshot()
-        const schedule = (snapshot.schedules ?? []).find(candidate => candidate.id === id)
-        if (schedule === undefined || !canReadSchedule(schedule, reader, snapshot)) return respond(404, { error: `no task ${id}` })
+        const schedule = (snapshot.schedules ?? []).find(candidate => candidate.id === id && candidate.deletedAt === undefined)
+        if (schedule === undefined || !canReadSchedule(reader, schedule, snapshot)) return respond(404, { error: `no task ${id}` })
         const change = scheduleRoute[2] === 'pause' ? 'pause' : scheduleRoute[2] === 'resume' ? 'resume' : 'delete'
         // The requester or a decider pauses and deletes; only a decider resumes (it spends again).
         const allowed = change === 'resume' ? reader.decider : reader.decider || schedule.requestedBy === identity

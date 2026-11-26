@@ -1047,7 +1047,7 @@ export class WorkbenchService {
 
   /** @returns every scheduled task (the routes keep those the reader may read). */
   async listSchedules(): Promise<readonly Schedule[]> {
-    return (await this.#ready()).schedules ?? []
+    return ((await this.#ready()).schedules ?? []).filter(schedule => schedule.deletedAt === undefined)
   }
 
   /**
@@ -1060,23 +1060,26 @@ export class WorkbenchService {
    */
   changeSchedule(id: string, change: 'pause' | 'resume' | 'delete', actor: string): Promise<Schedule> {
     return this.#write((state) => {
-      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id && candidate.deletedAt === undefined)
       if (schedule === undefined) throw new Refusal(`no task ${id}`)
       const at = this.#at()
       if (change === 'delete') {
+        // Kept, never served: its journal lines keep their readers.
+        const gone: Schedule = { ...schedule, state: 'paused', deletedAt: at, deletedBy: actor.trim() }
         return {
-          state: { ...state, schedules: (state.schedules ?? []).filter(candidate => candidate.id !== id) },
+          state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? gone : candidate)) },
           event: { at, actor: actor.trim(), action: 'schedule.deleted', subject: id, detail: schedule.title },
           value: schedule,
         }
       }
+      // A task already paused stays as it is: a person's pause never covers the
+      // host's reason (three failures, an agent gone), nor repeats itself.
+      if (change === 'pause' && schedule.state === 'paused') return { state, event: [], value: schedule }
+      if (change === 'resume' && schedule.state === 'active') return { state, event: [], value: schedule }
       const { pausedBecause: _was, ...rest } = schedule
       const next: Schedule = change === 'pause'
         ? { ...rest, state: 'paused', pausedBecause: 'owner' }
         : { ...rest, state: 'active', failures: 0 }
-      if (next.state === schedule.state && (change === 'resume' || schedule.pausedBecause === 'owner')) {
-        return { state, event: [], value: schedule }
-      }
       return {
         state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: { at, actor: actor.trim(), action: change === 'pause' ? 'schedule.paused' : 'schedule.resumed', subject: id, detail: schedule.title },
