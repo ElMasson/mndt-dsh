@@ -1143,15 +1143,58 @@ export class WorkbenchService {
    * @param reason - why.
    * @returns the task, paused.
    */
-  pauseScheduleBecause(id: string, reason: 'agent-retired' | 'agent-left'): Promise<Schedule | undefined> {
+  pauseScheduleBecause(id: string, reason: 'agent-retired' | 'agent-left' | 'requester-left'): Promise<Schedule | undefined> {
     return this.#write((state) => {
       const schedule = (state.schedules ?? []).find(candidate => candidate.id === id && candidate.deletedAt === undefined)
       if (schedule === undefined || schedule.state !== 'active') return { state, event: [], value: undefined }
-      const next: Schedule = { ...schedule, state: 'paused', pausedBecause: reason }
+      // A run reserved and not started (it was checked again just before) is not cut: it never began.
+      const { runningSince: _never, ...rest } = schedule
+      const next: Schedule = { ...rest, state: 'paused', pausedBecause: reason }
       const at = this.#at()
       return {
         state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: { at, actor: 'mndt', action: 'schedule.paused', subject: id, detail: reason },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Just before a reserved run starts: the task must still be active and not
+   * deleted (read again in one write). Otherwise its mark of a run is taken off.
+   * @param id - the task.
+   * @returns the task to run, or undefined when it must not run.
+   */
+  confirmScheduleRun(id: string): Promise<Schedule | undefined> {
+    return this.#write((state) => {
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      if (schedule === undefined) return { state, event: [], value: undefined }
+      if (schedule.state === 'active' && schedule.deletedAt === undefined) return { state, event: [], value: schedule }
+      const { runningSince: _never, ...rest } = schedule
+      return {
+        state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? rest : candidate)) },
+        event: [],
+        value: undefined,
+      }
+    })
+  }
+
+  /**
+   * A run refused before any model call (its agent's ceiling reached, its model
+   * without a price): recorded on the task, never a failure, never published.
+   * @param id - the task.
+   * @param at - when it was refused.
+   * @returns the task.
+   */
+  recordScheduleRefusal(id: string, at: string): Promise<Schedule | undefined> {
+    return this.#write((state) => {
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      if (schedule === undefined) return { state, event: [], value: undefined }
+      const { runningSince: _never, ...rest } = schedule
+      const next: Schedule = { ...rest, lastRunAt: at, lastStatus: 'refused', lastReasonKind: 'refused' }
+      return {
+        state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor: 'mndt', action: 'schedule.run.refused', subject: id, detail: 'ceiling or price' },
         value: next,
       }
     })
@@ -1180,6 +1223,16 @@ export class WorkbenchService {
       const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
       if (schedule === undefined) return { state, event: [], value: undefined }
       const at = this.#at()
+      // Deleted while it ran: not published; what came of it goes to the journal only.
+      // (Paused while it ran: published, the run took place.)
+      if (schedule.deletedAt !== undefined) {
+        const { runningSince: _gone, ...rest } = schedule
+        return {
+          state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? rest : candidate)) },
+          event: { at, actor: 'mndt', action: 'schedule.run.dropped', subject: id, detail: `${run.status}, deleted during its run` },
+          value: undefined,
+        }
+      }
       const events: WorkbenchEvent[] = []
       let channels = state.channels ?? []
       let channelId: string | undefined

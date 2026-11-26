@@ -296,6 +296,7 @@ export class WorkbenchGateway extends TypertRemoteService {
       service: this.service,
       engine,
       prices,
+      grants: this.grants,
       dataDir: dirname(this.statePath),
       timeZone: this.timeZoneFor(ctx),
       warn: (line) => { warnOperator(ctx, line) },
