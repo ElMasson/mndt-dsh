@@ -86,6 +86,8 @@ async function listedTools() {
     .then(body => (!Array.isArray(body.connectors) ? undefined : body.connectors
       .filter(row => row !== null && typeof row === 'object' && row.enabled === true && typeof row.server === 'string')
       .map(row => row.server)))
+    // Sorted, each once: the same connectors make the same schema, byte for byte (one cache prefix).
+    .then(servers => (servers === undefined ? undefined : [...new Set(servers)].sort()))
     .catch(() => undefined)
   if (mounted === undefined) return tools
   return tools.map((tool) => {

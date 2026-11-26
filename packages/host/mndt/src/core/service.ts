@@ -2357,7 +2357,13 @@ export class WorkbenchService {
    * @param text - the answer.
    * @returns the message.
    */
-  reply(channelId: string, replyTo: string, author: Exclude<MessageAuthor, { kind: 'human' }>, text: string): Promise<Message> {
+  reply(
+    channelId: string,
+    replyTo: string,
+    author: Exclude<MessageAuthor, { kind: 'human' }>,
+    text: string,
+    escalationOf?: string,
+  ): Promise<Message> {
     return this.#write((state) => {
       const at = this.#at()
       const message: Message = {
@@ -2370,8 +2376,28 @@ export class WorkbenchService {
         createdAt: at,
         updatedAt: at,
       }
+      // The turn whose escalation this reply publishes names it in the same write:
+      // never a moment where the question is published and not yet linked.
+      const linked = (state.messages ?? []).map((candidate) => {
+        if (escalationOf === undefined || candidate.id !== replyTo) return candidate
+        return {
+          ...candidate,
+          turns: (candidate.turns ?? []).map((turn) => {
+            if (turn.id !== escalationOf) return turn
+            const help = turn.help
+            if (help?.escalation !== undefined) {
+              return { ...turn, help: { ...help, escalation: { ...help.escalation, messageId: message.id } } }
+            }
+            const council = turn.council
+            if (council?.escalation !== undefined) {
+              return { ...turn, council: { ...council, escalation: { ...council.escalation, messageId: message.id } } }
+            }
+            return turn
+          }),
+        }
+      })
       return {
-        state: { ...state, messages: [...(state.messages ?? []), message] },
+        state: { ...state, messages: [...linked, message] },
         event: { at: message.createdAt, actor: author.kind === 'agent' ? author.agentId : 'mndt', action: 'message.reply', subject: message.id, detail: channelId },
         value: message,
       }

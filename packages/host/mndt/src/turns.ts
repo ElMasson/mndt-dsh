@@ -1117,25 +1117,10 @@ export class TurnScheduler {
             ? `${output.text}\n\nVérifié, remarques non corrigées (plafond atteint) : ${remarks.join(' ; ')}.`
             : output.text
       // A help a person closed by answering publishes nothing beside them.
-      const answer = helpClosed
-        ? undefined
-        : await service.reply(
-          channel.id,
-          messageId,
-          { kind: 'agent', agentId: agent.id },
-          published,
-        )
-      // An escalated question names the message that publishes it: a person answers it there.
-      const settledTurn = (await service.message(messageId))?.turns?.find(t => t.id === turn.id)
-      const escalated = settledTurn?.help
-      if (answer !== undefined && escalated?.escalation !== undefined) {
-        const escalation = { ...escalated.escalation, messageId: answer.id }
-        await service.updateTurn(messageId, turn.id, { help: { ...escalated, escalation } })
-      }
-      const convened = settledTurn?.council
-      if (answer !== undefined && convened?.escalation !== undefined) {
-        const escalation = { ...convened.escalation, messageId: answer.id }
-        await service.updateTurn(messageId, turn.id, { council: { ...convened, escalation } })
+      // An escalated question names the message that publishes it, in the same
+      // write: a person answers it there.
+      if (!helpClosed) {
+        await service.reply(channel.id, messageId, { kind: 'agent', agentId: agent.id }, published, turn.id)
       }
       await service.updateTurn(messageId, turn.id, {
         status: 'done',

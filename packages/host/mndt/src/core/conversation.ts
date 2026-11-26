@@ -251,6 +251,8 @@ export function turnServers(agent: Agent, channel: Channel): string[] {
  */
 function escalationQuestion(message: Message, history: readonly Message[]): string {
   for (const candidate of history) {
+    // Its own channel only: a question is never read in another channel.
+    if (candidate.channelId !== message.channelId) continue
     for (const turn of candidate.turns ?? []) {
       const escalation = turn.help?.escalation ?? turn.council?.escalation
       if (escalation?.messageId === message.id) return `\nQuestion à l’équipe : ${escalation.question}`

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, spentThisMonth, WorkbenchService } from '../src/core/index.ts'
+import { MemoryStore, spentThisMonth, turnPrompt, WorkbenchService } from '../src/core/index.ts'
 import type { Message, PriceGrid, Turn } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import type { MissionRunner } from '../src/api.ts'
@@ -422,5 +422,32 @@ describe('ask_peers: bounds', () => {
     await b.call('POST', `/channels/${t.channel}/messages`, 'owner', { text: '@alpha et maintenant ?', replyTo: question.id })
     await b.turns.settled()
     expect(b.engine.helpAnswer?.body.code).toBe('pair-already-asked')
+  })
+})
+
+describe('a question put to the team', () => {
+  it('is read again in its own channel\'s history only, never in another channel', () => {
+    const agent = { id: 'agt_a', handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', connectors: [], eurPerMonth: 5 } as unknown as Parameters<typeof turnPrompt>[0]
+    const channelOf = (id: string, name: string) => ({ id, name, kind: 'channel', members: [], agents: ['agt_a'], connectors: [] }) as unknown as Parameters<typeof turnPrompt>[1]
+    const at = '2026-11-26T10:00:00.000Z'
+    const asked: Message = { id: 'msg_1', channelId: 'chn_a', author: { kind: 'human', email: 'jdoe@datanalysis.re' }, text: '@alpha HT ou TTC ?', mentions: ['agt_a'], createdAt: at,
+      turns: [{ id: 'trn_1', agentId: 'agt_a', status: 'done', help: { escalation: { question: 'QUESTION-SECRETE-42 ?', at, messageId: 'msg_2' } } } as unknown as Turn] }
+    const answered: Message = { id: 'msg_2', channelId: 'chn_a', author: { kind: 'agent', agentId: 'agt_a' }, text: 'Je ne peux pas trancher.', mentions: [], replyTo: 'msg_1', createdAt: at }
+    const later = (channelId: string): Message => ({ id: `msg_${channelId}`, channelId, author: { kind: 'human', email: 'jdoe@datanalysis.re' }, text: '@alpha et alors ?', mentions: ['agt_a'], createdAt: '2026-11-26T11:00:00.000Z' })
+    const history = [asked, answered]
+    expect(turnPrompt(agent, channelOf('chn_a', 'compta'), history, later('chn_a'), [agent])).toContain('Question à l’équipe : QUESTION-SECRETE-42 ?')
+    // Another channel: even handed the whole history, never.
+    expect(turnPrompt(agent, channelOf('chn_b', 'ventes'), history, later('chn_b'), [agent])).not.toContain('QUESTION-SECRETE-42')
+  })
+
+  it('names the message that publishes it in the same write as that message', async () => {
+    const service = new WorkbenchService({ store: new MemoryStore() })
+    const alpha = await service.createAgent({ handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', eurPerMonth: 5 }, 'duke@datanalysis.re')
+    const channel = await service.createChannel({ title: 'Compta', members: ['jdoe@datanalysis.re'], agents: [alpha.id] }, 'duke@datanalysis.re')
+    const posted = await service.postMessage(channel.id, 'jdoe@datanalysis.re', '@alpha HT ou TTC ?')
+    const turnId = posted.turns?.[0]?.id ?? ''
+    await service.updateTurn(posted.id, turnId, { help: { escalation: { question: 'HT ?', at: '2026-11-26T10:00:00.000Z' } } as unknown as NonNullable<Turn['help']> })
+    const reply = await service.reply(channel.id, posted.id, { kind: 'agent', agentId: alpha.id }, 'Je demande à l’équipe.', turnId)
+    expect((await service.message(posted.id))?.turns?.[0]?.help?.escalation?.messageId).toBe(reply.id)
   })
 })

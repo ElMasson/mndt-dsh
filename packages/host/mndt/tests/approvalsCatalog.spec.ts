@@ -55,7 +55,38 @@ describe('propose_agent names the connectors mounted in its space', () => {
     await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', () => { resolve() }) })
     const tools = await listed(`http://127.0.0.1:${(server.address() as { port: number }).port}`)
     const propose = tools.find(tool => tool.name === 'propose_agent')
-    expect(propose?.inputSchema.properties.connectors).toEqual({ type: 'array', items: { type: 'string', enum: ['office365', 'attio'] } })
+    expect(propose?.inputSchema.properties.connectors).toEqual({ type: 'array', items: { type: 'string', enum: ['attio', 'office365'] } })
+  })
+
+  it('the same connectors in another order: the same schema, byte for byte (one cache prefix)', async () => {
+    const schemas: string[] = []
+    for (const order of [['office365', 'attio', 'qonto', 'attio'], ['qonto', 'office365', 'attio']]) {
+      const server = createServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(request.url === '/connectors' ? { connectors: order.map(name => ({ module: 'm', server: name, enabled: true })) } : {}))
+      })
+      servers.push(server)
+      await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', () => { resolve() }) })
+      const tools = await listed(`http://127.0.0.1:${(server.address() as { port: number }).port}`)
+      schemas.push(JSON.stringify(tools.find(tool => tool.name === 'propose_agent')))
+    }
+    expect(schemas[0]).toBe(schemas[1])
+    expect(schemas[0]).toContain('"enum":["attio","office365","qonto"]')
+  })
+
+  it('an API that accepts and never answers: within its 1.5 s, the tools as written', async () => {
+    // Accepts the connection, never answers.
+    const silent = createServer(() => undefined)
+    servers.push(silent)
+    await new Promise<void>((resolve) => { silent.listen(0, '127.0.0.1', () => { resolve() }) })
+    const started = Date.now()
+    const tools = await listed(`http://127.0.0.1:${(silent.address() as { port: number }).port}`)
+    const took = Date.now() - started
+    expect(took).toBeGreaterThanOrEqual(1400)
+    expect(took).toBeLessThan(4000)
+    const connectors = tools.find(tool => tool.name === 'propose_agent')?.inputSchema.properties.connectors
+    expect(connectors).toEqual({ type: 'array', items: { type: 'string' } })
+    silent.closeAllConnections()
   })
 
   it('without an answer from the API: the tools as written, listed at once', async () => {
