@@ -866,3 +866,80 @@ describe('a card of a channel absent from the list, without origin', { timeout: 
     expect(within(pending).queryByTestId('queue-from-lane')).toBeNull()
   })
 })
+
+describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-26T08:00:00.000Z'
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const briefing = { id: 'auto_briefing', name: 'Briefing du matin', kind: 'briefing', prompt: 'briefing', at: '07:30', days: [1, 2, 3, 4, 5],
+    enabled: true, createdBy: 'scheduler', lastFiredDate: '2026-11-26', lastOutcome: 'ok: mission mis_1' }
+  const relance = { id: 'auto_x', name: 'Relance', kind: 'custom', prompt: 'x', at: '09:00', enabled: false, createdBy: you }
+  const automationsFace = (over: Record<string, unknown> = {}): MndtFace => {
+    let items = [briefing, relance]
+    const base = face(state())
+    return new Proxy(base, {
+      get: (target, key) => {
+        if (key === 'automations') return async () => ({ items, canAdmin: true })
+        if (key === 'runAutomationNow') return over.runAutomationNow ?? (async () => ({ ok: true, value: { outcome: 'ok' } }))
+        if (key === 'toggleAutomation') return async (id: string, enabled: boolean) => {
+          items = items.map(a => (a.id === id ? { ...a, enabled } : a))
+          return { ok: true }
+        }
+        return (target as unknown as Record<string | symbol, unknown>)[key]
+      },
+    })
+  }
+  const open = async (owner: boolean, api: MndtFace = automationsFace()) => {
+    const chat = createMockChat({ you, agents: [], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={api} chat={chat} tc={chatFrench} team={{ owner }} />)
+    return screen.findByTestId('side-nav')
+  }
+
+  it('the owner has the entry; another member has none', async () => {
+    expect(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' })).toBeTruthy()
+    cleanup()
+    expect(within(await open(false)).queryByRole('button', { name: 'Tâches planifiées' })).toBeNull()
+  })
+
+  it('lists each one with its hour in words, its last run and its state', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    expect(rows[0]?.textContent).toContain('Briefing du matin · du lundi au vendredi à 07:30')
+    expect(within(rows[0] as HTMLElement).getByTestId('scheduled-last').textContent).toBe('dernier passage : 2026-11-26 · abouti')
+    expect(within(rows[1] as HTMLElement).getByTestId('scheduled-state').textContent).toBe('suspendue')
+  })
+
+  it('run now in one click; a briefing links to the lane, which one click opens', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const ran = await screen.findByTestId('scheduled-ran')
+    fireEvent.click(within(ran).getByRole('button', { name: 'Voir dans ma lane' }))
+    expect(await screen.findByTestId('lane-welcome')).toBeTruthy()
+  })
+
+  it('another kind is said to land elsewhere, never linked to the lane', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const ran = await screen.findByTestId('scheduled-ran')
+    expect(within(ran).queryByRole('button')).toBeNull()
+    expect(ran.textContent).toContain('pas dans votre lane')
+  })
+
+  it('suspend and activate in one click', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Activer' }))
+    await waitFor(() => { expect(screen.getAllByTestId('scheduled-state')[1]?.textContent).toBe('active') })
+  })
+
+  it('a refused run is said in a fixed sentence, never the served text', async () => {
+    const api = automationsFace({ runAutomationNow: async () => ({ ok: false, error: 'upstream sk-live-1', status: 500 }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    const alert = await within(first as HTMLElement).findByRole('alert')
+    expect(alert.textContent).toBe('Elle n\'a pas pu être lancée : réessayez dans un moment.')
+  })
+})
