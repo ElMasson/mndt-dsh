@@ -6,6 +6,7 @@
  * team wants carried forward. Everything is serialisable, so one shape travels
  * over HTTP, through a page, and into a file.
  */
+import type { Schedule, ScheduleProposal } from './schedule.ts'
 
 /** The work a mission performs. */
 export type MissionKind =
@@ -103,7 +104,7 @@ export interface MemoryNote {
 }
 
 /** An action that touches the outside world, so a person must decide it. */
-export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent' | 'propose_context'
+export type ApprovalAction = 'send-email' | 'publish' | 'spend' | 'delete' | 'propose_agent' | 'propose_context' | 'propose_schedule'
 
 /** Where an approval stands. */
 export type ApprovalState = 'pending' | 'approved' | 'rejected'
@@ -152,6 +153,14 @@ export interface Approval {
    * that version (another change in between: 409, the card stays pending).
    */
   readonly contextProposal?: ContextProposal
+  /**
+   * A propose_schedule card: the recurring task to create, exactly. Its agent and
+   * its destination are the host's (the turn's agent, its channel or the
+   * requester's lane), never what the request said.
+   */
+  readonly scheduleProposal?: ScheduleProposal
+  /** The task the approval created. */
+  readonly scheduleId?: string
   /** The agent the approval created. */
   readonly agentId?: string
 }
@@ -600,6 +609,8 @@ export interface WorkbenchState {
   /** The space's library of reusable skills (a SKILL.md each), attached to agents by people. */
   readonly skills?: readonly Skill[]
   readonly messages?: readonly Message[]
+  /** The scheduled tasks (core/schedule.ts): approved from a propose_schedule card. */
+  readonly schedules?: readonly Schedule[]
 }
 
 /** A state with nothing in it. */
@@ -630,4 +641,5 @@ export function isMissionStatus(value: unknown): value is MissionStatus {
 /** @param value - the candidate action. @returns true when it leaves the building. */
 export function needsApproval(value: string): value is ApprovalAction {
   return value === 'send-email' || value === 'publish' || value === 'spend' || value === 'delete' || value === 'propose_agent' || value === 'propose_context'
+    || value === 'propose_schedule'
 }

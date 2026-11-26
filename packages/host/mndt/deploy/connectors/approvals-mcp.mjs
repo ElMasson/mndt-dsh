@@ -148,6 +148,20 @@ const tools = [
     },
   },
   {
+    name: 'propose_schedule',
+    description: 'Propose a recurring task you will run, as a card an owner or admin approves. Runs nothing: approval schedules exactly this, here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '≤ 80 chars, one line' },
+        instructions: { type: 'string', description: 'What to do each run, ≤ 4 000 chars' },
+        cadence: { type: 'object', description: '{ every: day|week|month, days: [1-7] (week), monthDay: 1-28 (month), at: HH:MM } or { cron }; at most hourly' },
+        eurPerRun: { type: 'number', description: 'Cost bound per run, € (0.01-5, default 0.5)' },
+      },
+      required: ['title', 'instructions', 'cadence'],
+    },
+  },
+  {
     name: 'ask_peers',
     description: 'Ask one or two agents of this channel for advice when blocked. Then end your turn in one sentence: you are run again with their advices.',
     inputSchema: {
@@ -221,6 +235,17 @@ async function run(name, args) {
       body: JSON.stringify({ kind: 'propose_context', payload: {}, contextProposal: { text: args.text, baseVersion: args.baseVersion } }),
     })
     return `pending approval ${body.approval.id} (propose_context): ${body.approval.title}. An owner or an admin must approve it; the context did not change.`
+  }
+  if (name === 'propose_schedule') {
+    const schedule = {}
+    for (const key of ['title', 'instructions', 'cadence', 'eurPerRun']) {
+      if (args[key] !== undefined) schedule[key] = args[key]
+    }
+    const body = await call('/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'propose_schedule', payload: {}, schedule }),
+    })
+    return `pending approval ${body.approval.id} (propose_schedule): ${body.approval.title}. An owner or an admin must approve it; nothing is scheduled yet.`
   }
   if (name === 'ask_peers') {
     const body = await call('/help', {
