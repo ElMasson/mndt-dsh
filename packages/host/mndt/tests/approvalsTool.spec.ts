@@ -135,12 +135,13 @@ test('asks propose_agent for instructions in three sections, in order: Rôle, Ob
 
 test('the card tools stay short, and each says what it does not do', async () => {
   // Their schemas go out with every call of every turn: 4 225 characters
-  // before 24/11 (45 % of a « bonjour »), 2 782 after. The long explanations
-  // belong in the server's refusals, not in the schema.
+  // before 24/11 (45 % of a « bonjour »), 2 782 after; 3 439 with
+  // propose_schedule (25/11, +656). The long explanations belong in the
+  // server's refusals, not in the schema.
   const harness = await start(false)
   const tools = (harness.messages().find(message => message.id === 2)?.result?.tools ?? []) as { name: string; description?: string }[]
-  expect(tools.length).toBe(6)
-  expect(JSON.stringify(tools).length).toBeLessThan(3000)
+  expect(tools.length).toBe(7)
+  expect(JSON.stringify(tools).length).toBeLessThan(3500)
   const said = (name: string): string => tools.find(tool => tool.name === name)?.description ?? ''
   // The safety rules stay, word for word.
   expect(said('request_approval')).toContain('Executes nothing')
@@ -149,6 +150,8 @@ test('the card tools stay short, and each says what it does not do', async () =>
   expect(said('propose_context')).toContain('Changes nothing')
   expect(said('propose_context')).toContain('unchanged since baseVersion')
   expect(said('ask_peers')).toContain('end your turn in one sentence')
+  expect(said('propose_schedule')).toContain('Runs nothing')
+  expect(said('propose_schedule')).toContain('owner or admin approves')
   // What a proposed agent leaves to a person: the server does not check it, the schema must say it.
   const instructions = JSON.stringify(tools.find(tool => tool.name === 'propose_agent'))
   for (const word of ['## Ne décide pas', 'sending', 'paying', 'deciding for the team']) expect(instructions).toContain(word)

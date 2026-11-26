@@ -20,6 +20,7 @@
  * - An agent: the whole team (agents are declared for the team).
  */
 import type { Approval, WorkbenchEvent, WorkbenchState } from './types.ts'
+import type { Schedule } from './core/schedule.ts'
 
 /** Who reads, with what they may see resolved once. */
 export interface Reader {
@@ -101,6 +102,34 @@ export function servedCard<T extends Approval>(reader: Reader, approval: T, stat
   return origin === undefined ? approval : { ...approval, origin }
 }
 
+/**
+ * @param schedule - a task.
+ * @param state - the state.
+ * @returns the id of its destination's channel (a lane: its person's), when it exists.
+ */
+export function scheduleChannel(schedule: Pick<Schedule, 'destination'>, state: WorkbenchState): string | undefined {
+  const destination = schedule.destination
+  return destination.kind === 'channel'
+    ? destination.channelId
+    : (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === destination.member)?.id
+}
+
+/**
+ * Who reads a task (GET /schedules) and its journal lines: the one who asked
+ * it, the members of where it publishes, and a decider only when no member of
+ * that destination may decide (as its card, #153).
+ * @param reader - who reads.
+ * @param schedule - a task.
+ * @param state - the state.
+ * @returns whether they may read it.
+ */
+export function canReadSchedule(reader: Reader, schedule: Schedule, state: WorkbenchState): boolean {
+  if (schedule.requestedBy === reader.identity) return true
+  const channel = scheduleChannel(schedule, state)
+  if (channel === undefined) return false
+  return reader.channels.has(channel) || (reader.decider && (reader.channelsWithoutDecider?.has(channel) ?? false))
+}
+
 /** What a risen card's journal line says to a reader outside its channel. */
 export const RISEN_CARD_DETAIL = 'carte d’un canal que vous ne lisez pas'
 
@@ -171,6 +200,12 @@ export function canReadEvent(
         candidate => candidate.id === event.subject,
       )
       return mandate !== undefined && canReadMandate(reader.identity, reader.decider, mandate)
+    }
+    case 'schedule': {
+      // A task's lines, deleted ones included (kept for this): exactly the
+      // readers of GET /schedules (canReadSchedule).
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === event.subject)
+      return schedule !== undefined && canReadSchedule(reader, schedule, state)
     }
     case 'agent':
       return true
