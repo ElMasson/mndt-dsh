@@ -98,10 +98,10 @@ describe('install-connectors.sh', { timeout: 30_000 }, () => {
       expect(script.indexOf(`export MCP_PROXY_ALLOW=${allow.includes('*') ? `'${allow}'` : allow};`)).toBeGreaterThan(script.indexOf('set +a'))
       expect(script).toContain(`export MCP_PROXY_DENY=${deny === '' ? "''" : deny};`)
       // Under Landlock (render-connectors.py): the launcher's grants, then the proxy and the server.
-      expect(script).toContain('exec "$@" node /opt/mndt-tools/mcp-proxy.mjs ')
+      expect(script).toContain('exec "$L" "$@" -- /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs ')
     }
     // Each server runs from the tenant's tools folder, nothing fetched at start.
-    expect(mounted.get('qonto')).toContain('exec "$@" node /opt/mndt-tools/mcp-proxy.mjs node /opt/mndt-tools/qonto/node_modules/mcp-remote/dist/proxy.js https://mcp.qonto.com/mcp')
+    expect(mounted.get('qonto')).toContain('exec "$L" "$@" -- /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs /usr/local/bin/node /opt/mndt-tools/qonto/node_modules/mcp-remote/dist/proxy.js https://mcp.qonto.com/mcp')
     expect(mounted.get('qonto')).toContain('export MCP_REMOTE_CONFIG_DIR=/state/mcp-auth;')
     expect(mounted.get('qonto')).not.toContain('npx')
     expect(mounted.get('dolibarr')).toContain('export PYTHONPATH=/opt/mndt-tools/dolibarr-mcp/src:/opt/mndt-tools/dolibarr-mcp/site;')

@@ -182,6 +182,15 @@ describe('the Docker guard refuses everything else, without reaching Docker', { 
     expect(g.reached).toEqual([])
   })
 
+  it('a computer on a network of another space that shares its prefix, or on an unlabelled one: its label, read from Docker, decides', async () => {
+    const g = await guarded()
+    const spec = computer()
+    for (const net of ['mndt-datanalysis-pcnet-pcnet-x', 'mndt-datanalysis-pcnet-unlabelled', 'mndt-datanalysis-pcnet-unknown']) {
+      expect(await g.call('POST', CREATE, { ...spec, HostConfig: { ...spec.HostConfig, NetworkMode: net }, NetworkingConfig: { EndpointsConfig: { [net]: {} } } }), net).toBe(403)
+    }
+    expect(g.reached).toEqual([])
+  })
+
   it('a computer named outside the space\'s prefix; runc unless a rehearsal says so', async () => {
     const g = await guarded()
     expect(await g.call('POST', '/containers/create?name=mndt-other-pc-x', computer())).toBe(403)

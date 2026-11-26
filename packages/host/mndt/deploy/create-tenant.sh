@@ -40,6 +40,9 @@ usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
 [ $# -ge 2 ] || usage
 slug=$1; domain=$2; shift 2
 [[ $slug =~ ^[a-z0-9][a-z0-9-]{1,31}$ ]] || { echo "the slug is lower case, digits and dashes: $slug" >&2; exit 1; }
+# Its computers are named mndt-<slug>-pc-… and their networks mndt-<slug>-pcnet-…:
+# a slug holding « -pc » would make one space's names a prefix of another's.
+[[ $slug != *-pc* ]] || { echo "the slug must not contain « -pc » (its computers' names would read as another space's): $slug" >&2; exit 1; }
 [[ $domain =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "not a domain: $domain" >&2; exit 1; }
 
 owner=''; email_domains=''; entra_tenant='5ed9c3e0-522a-46fa-978a-dd6bc245d710'

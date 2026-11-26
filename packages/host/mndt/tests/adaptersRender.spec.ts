@@ -36,7 +36,8 @@ function home(): { live: string; patch: string } {
   return { live, patch }
 }
 
-const run = (live: string): string => execFileSync('python3', [render], { env: { ...process.env, MNDT_HOME: live }, encoding: 'utf8' })
+const run = (live: string, env: Record<string, string> = {}): string =>
+  execFileSync('python3', [render], { env: { ...process.env, MNDT_HOME: live, ...env }, encoding: 'utf8' })
 
 // Each test starts several python3 processes: on a loaded machine the default
 // 5 s is not a bound on them, so the suite gets the margin of the other
@@ -58,7 +59,9 @@ describe('connector rows', { timeout: 30_000 }, () => {
       expect(sourced).toBeGreaterThanOrEqual(0)
       expect(allow).toBeGreaterThan(sourced)
       // Under Landlock: the launcher, then the proxy and the server after `--`.
-      expect(script).toContain('exec "$@" node /opt/mndt-tools/mcp-proxy.mjs ')
+      expect(script).toContain('exec "$L" "$@" -- /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs ')
+      // Its own command by an absolute path too (the catalog), never resolved through PATH.
+      expect(script).toMatch(/mcp-proxy\.mjs \/usr\/(local\/)?bin\/(node|python3) /)
       // The gateway's secret: to our two connectors that act as a person (the catalog's gatewaySecret), to no other.
       expect(script.includes('/run/secrets/mndt-gateway')).toBe(['approvals', 'machine'].includes(row.config.serverName))
       expect(script).not.toContain('mndt-machines')
@@ -73,40 +76,57 @@ describe('connector rows', { timeout: 30_000 }, () => {
   })
 
   test('each connector starts under Landlock: its grants, none of /run but the gateway\'s secret for approvals and machine; no launcher, no connector', () => {
-    const { live, patch } = home()
-    run(live)
-    const rows = (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
     const dir = mkdtempSync(join(tmpdir(), 'landlock-'))
-    // A fake launcher: prints what it was given, up to `--`, then the command.
+    // A fake launcher, named when the block is rendered: prints what it was given, up to `--`, then the command.
     const fake = join(dir, 'landlock-run')
     writeFileSync(fake, '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', { mode: 0o755 })
-    const started = (server: string, env: Record<string, string>) => {
+    const rendered = (env: Record<string, string>) => {
+      const { live, patch } = home()
+      run(live, env)
+      return (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
+    }
+    const started = (rows: ReturnType<typeof rendered>, server: string, env: Record<string, string> = {}) => {
       const script = rows.find(row => row.config.serverName === server)!.config.args[1]!
       return spawnSync('sh', ['-c', script], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' })
     }
+    const rows = rendered({ MNDT_LANDLOCK_RUN: fake })
     for (const server of servers) {
-      const out = started(server, { MNDT_LANDLOCK_RUN: fake })
+      // The connector's own environment cannot switch Landlock off nor name another launcher.
+      const out = started(rows, server, { MNDT_CONNECTOR_LANDLOCK: 'off', MNDT_LANDLOCK_RUN: '/bin/true' })
       const args = out.stdout.split('\n')
       const until = args.indexOf('--')
       const grants = args.slice(0, until)
       expect(until).toBeGreaterThan(0)
-      // Read: /usr and /etc at least; never /run itself, nor the machine token, nor the launch token.
       expect(grants).toContain('/usr')
       expect(grants.filter(arg => arg.startsWith('/run'))).toEqual(['approvals', 'machine'].includes(server) ? ['/run/secrets/mndt-gateway'].filter(path => existsSync(path)) : [])
       expect(grants.join(' ')).not.toMatch(/mndt-machines|mndt-launch/)
-      // Writable: only /tmp (and /state/mcp-auth when it exists).
       const writable = grants.flatMap((arg, i) => (arg === '--rw' ? [grants[i + 1]] : []))
       expect(writable.every(path => path === '/tmp' || path === '/state/mcp-auth')).toBe(true)
-      // The command after `--`: the read-only proxy, then the server.
-      expect(args.slice(until + 1, until + 3)).toEqual(['node', '/opt/mndt-tools/mcp-proxy.mjs'])
+      expect(args.slice(until + 1, until + 3)).toEqual(['/usr/local/bin/node', '/opt/mndt-tools/mcp-proxy.mjs'])
     }
     // No launcher: refused, said, nothing started.
-    const refused = started('office365', { MNDT_LANDLOCK_RUN: join(dir, 'absent') })
+    const refused = started(rendered({ MNDT_LANDLOCK_RUN: join(dir, 'absent') }), 'office365')
     expect(refused.status).toBe(126)
     expect(refused.stderr).toContain('connector refused: no landlock-run')
-    // Said off (a workstation without the image): the command itself.
-    const plain = started('office365', { MNDT_LANDLOCK_RUN: fake, MNDT_CONNECTOR_LANDLOCK: 'off' })
-    expect(plain.stdout ?? '').not.toContain('--ro')
+    // Off only when the block is rendered so (a workstation without the image): the command itself.
+    const plain = rendered({ MNDT_CONNECTOR_LANDLOCK: 'off' })
+    const script = plain.find(row => row.config.serverName === 'office365')!.config.args[1]!
+    expect(script).not.toContain('landlock')
+    expect(script).toContain('exec /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs ')
+  })
+
+  test('a descriptor\'s env cannot set mndt\'s own variables, a preload, node\'s options nor the PATH, unless it is the catalog\'s own value', () => {
+    for (const [key, value] of [['MNDT_CONNECTOR_LANDLOCK', 'off'], ['MNDT_LANDLOCK_RUN', '/bin/true'], ['LD_PRELOAD', '/tmp/x.so'], ['NODE_OPTIONS', '--require /tmp/x.js'],
+      ['PATH', '/tmp'], ['MNDT_GATEWAY_SECRET_FILE', '/run/secrets/mndt-gateway']] as const) {
+      const { live } = home()
+      writeFileSync(join(live, 'connectors', 'office365.json'), JSON.stringify({ serverName: 'office365', ...catalog.office365, env: { ...(catalog.office365?.env as object), [key]: value } }))
+      const refused = spawnSync('python3', [render], { env: { ...process.env, MNDT_HOME: live }, encoding: 'utf8' })
+      expect(refused.status, key).not.toBe(0)
+      expect(refused.stderr, key).toContain(`env key ${key} is not allowed`)
+    }
+    // The catalog's own values (approvals' gateway secret file, its actor file) render.
+    const { live } = home()
+    expect(() => run(live)).not.toThrow()
   })
 
   test('a descriptor that names itself like one of ours, with another command, gets none of its rights', () => {

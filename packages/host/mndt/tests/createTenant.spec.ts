@@ -274,6 +274,14 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
       expect(privateOne.stderr).toContain('not public')
     }
     expect(existsSync(join(blind, 'opt/mndt/datanalysis/docker-compose.yml'))).toBe(false)
+    // A slug holding « -pc » would make its computers' names a prefix of another space's.
+    for (const slug of ['ab-pc', 'ab-pcnet', 'x-pc-y']) {
+      const named = spawnSync('bash', [join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh'), slug, 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+        env: { ...process.env, MNDT_ROOT: rootWithEntra() }, encoding: 'utf8',
+      })
+      expect(named.status, slug).toBe(1)
+      expect(named.stderr).toContain('must not contain « -pc »')
+    }
     // A value that is not addresses or ranges is refused before anything is written.
     const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
     const args = ['datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--egress-deny', 'x;rm', '--no-docker']

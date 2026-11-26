@@ -163,6 +163,11 @@ def check_create(query, body):
     for endpoint, config in endpoints.items():
         if any(not empty(value) for value in (config or {}).values()):
             raise Refused('a computer\'s network takes no address, link nor alias of its own (' + endpoint + ')')
+    # The prefix alone is not a proof (a space « ab »'s prefix starts another's):
+    # the network a computer joins carries this space's label, read from Docker.
+    for joined in {network, *endpoints.keys()}:
+        if not NAME.match(joined) or network_space(joined) != SPACE:
+            raise Refused('a computer joins a network of this space only, labelled so: ' + joined)
     if host.get('ReadonlyRootfs') is not True:
         raise Refused('a computer has a read-only root')
     if 'ALL' not in [str(cap).upper() for cap in (host.get('CapDrop') or [])]:
