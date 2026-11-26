@@ -37,6 +37,7 @@ restart-closes
 restart-closes-council
 routes-real-scaleway
 scheduler-first-pass
+scheduler-fires
 seed-restart
 seeded
 shell-ws

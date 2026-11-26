@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MemoryStore } from '../src/core/store.ts'
 import { WorkbenchService } from '../src/core/service.ts'
 import {
-  defaultAutomations, dueAutomations, firedFields, normalise, readAutomations, runAutomation, writeAutomations,
+  defaultAutomations, dueAutomations, firedFields, nextRunAt, normalise, readAutomations, runAutomation, writeAutomations,
 } from '../src/automations.ts'
 import type { Automation } from '../src/automations.ts'
 import type { Mission, MissionResult } from '../src/core/index.ts'
@@ -84,27 +84,60 @@ describe('automation registry', () => {
 })
 
 describe('automation clock', () => {
-  it('fires at the exact minute, once, on the allowed days', () => {
-    const sunday = new Date(2026, 10, 1, 9, 0)
+  // La Réunion is UTC+4 all year: 09:00 there is 05:00 UTC.
+  const ZONE = 'Indian/Reunion'
+  const reunion = (day: number, hour: number, minute: number): Date => new Date(Date.UTC(2026, 10, day, hour - 4, minute))
+
+  it('reads its time in the instance\'s zone, not the process\'s', () => {
     const everyDay = automation()
+    expect(dueAutomations([everyDay], reunion(1, 9, 0), ZONE)).toHaveLength(1)
+    // 09:00 UTC is 13:00 at La Réunion: not its time.
+    expect(dueAutomations([everyDay], new Date(Date.UTC(2026, 10, 1, 9, 0)), ZONE)).toHaveLength(0)
+    expect(dueAutomations([everyDay], new Date(Date.UTC(2026, 10, 1, 9, 0)), 'UTC')).toHaveLength(1)
+  })
+
+  it('is due from its minute until 15 minutes later, once a day, on the allowed days of the zone', () => {
+    const everyDay = automation()
+    expect(dueAutomations([everyDay], reunion(1, 8, 59), ZONE)).toHaveLength(0)
+    // A pass that missed the minute itself (a restart, a busy process) still starts it.
+    expect(dueAutomations([everyDay], reunion(1, 9, 14), ZONE)).toHaveLength(1)
+    expect(dueAutomations([everyDay], reunion(1, 9, 15), ZONE)).toHaveLength(0)
+    expect(dueAutomations([{ ...everyDay, lastFiredDate: '2026-11-01' }], reunion(1, 9, 5), ZONE)).toHaveLength(0)
+    // 1 November 2026 is a Sunday at La Réunion: a Monday-only automation waits.
     const mondayOnly = automation({ id: 'auto_monday', days: [1] })
-    const due = dueAutomations([everyDay, mondayOnly], sunday)
-    expect(due.map(item => item.id)).toEqual(['auto_test'])
-    expect(dueAutomations([{ ...everyDay, lastFiredDate: '2026-11-01' }], sunday)).toHaveLength(0)
-    expect(dueAutomations([everyDay], new Date(2026, 10, 1, 9, 1))).toHaveLength(0)
+    expect(dueAutomations([everyDay, mondayOnly], reunion(1, 9, 0), ZONE).map(item => item.id)).toEqual(['auto_test'])
+    expect(dueAutomations([mondayOnly], reunion(2, 9, 0), ZONE)).toHaveLength(1)
+    // Sunday by the zone even when it is still Saturday in UTC: 01:00 at La Réunion.
+    const early = automation({ id: 'auto_early', at: '01:00', days: [0] })
+    expect(dueAutomations([early], reunion(1, 1, 0), ZONE)).toHaveLength(1)
   })
 
   it('ignores a suspended automation and honours an interval', () => {
-    const now = new Date(2026, 10, 1, 9, 0)
-    expect(dueAutomations([automation({ enabled: false })], now)).toHaveLength(0)
-    const interval = automation({ everyMinutes: 5, lastFiredAt: new Date(2026, 10, 1, 8, 57).toISOString() })
-    expect(dueAutomations([interval], now)).toHaveLength(0)
-    expect(dueAutomations([interval], new Date(2026, 10, 1, 9, 2))).toHaveLength(1)
+    const now = reunion(1, 9, 0)
+    expect(dueAutomations([automation({ enabled: false })], now, ZONE)).toHaveLength(0)
+    const interval = automation({ everyMinutes: 5, lastFiredAt: new Date(now.getTime() - (3 * 60_000)).toISOString() })
+    expect(dueAutomations([interval], now, ZONE)).toHaveLength(0)
+    expect(dueAutomations([interval], new Date(now.getTime() + (2 * 60_000)), ZONE)).toHaveLength(1)
   })
 
-  it('stamps the date and the moment of a run', () => {
-    const now = new Date(2026, 10, 1, 9, 0)
-    expect(firedFields(now)).toEqual({ lastFiredDate: '2026-11-01', lastFiredAt: now.toISOString() })
+  it('stamps the day of the zone, the moment of the run and the last run', () => {
+    // 23:30 UTC on 31 October is 03:30 on 1 November at La Réunion.
+    const now = new Date(Date.UTC(2026, 9, 31, 23, 30))
+    expect(firedFields(now, ZONE)).toEqual({ lastFiredDate: '2026-11-01', lastFiredAt: now.toISOString(), lastRunAt: now.toISOString() })
+  })
+
+  it('says when it starts next, in the zone; nothing while suspended', () => {
+    const everyDay = automation()
+    expect(nextRunAt(everyDay, reunion(1, 8, 0), ZONE)).toBe(reunion(1, 9, 0).toISOString())
+    // Within its window and not started yet: now.
+    expect(nextRunAt(everyDay, reunion(1, 9, 3), ZONE)).toBe(reunion(1, 9, 3).toISOString())
+    // Started today: tomorrow.
+    expect(nextRunAt({ ...everyDay, lastFiredDate: '2026-11-01' }, reunion(1, 9, 3), ZONE)).toBe(reunion(2, 9, 0).toISOString())
+    // Past its window today: tomorrow.
+    expect(nextRunAt(everyDay, reunion(1, 10, 0), ZONE)).toBe(reunion(2, 9, 0).toISOString())
+    // On Sundays only (0): from Monday 2 November, the next Sunday is the 8th.
+    expect(nextRunAt(automation({ days: [0] }), reunion(2, 8, 0), ZONE)).toBe(reunion(8, 9, 0).toISOString())
+    expect(nextRunAt(automation({ enabled: false }), reunion(1, 8, 0), ZONE)).toBeUndefined()
   })
 })
 

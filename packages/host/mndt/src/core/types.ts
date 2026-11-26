@@ -66,6 +66,11 @@ export interface Mission {
   readonly mandateId?: string
   /** The automation's name it ran under (« Briefing du matin »), when it ran under one. */
   readonly title?: string
+  /**
+   * The automation that started it, by the scheduler or by hand: its result is
+   * published in the lane of the one it runs for, under the automation's name.
+   */
+  readonly automationId?: string
   /** What it cost, in euros, when the model's price is known. */
   readonly eur?: number
 }

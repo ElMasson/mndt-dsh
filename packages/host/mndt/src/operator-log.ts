@@ -55,6 +55,28 @@ export function warnOperatorOnce(ctx: Pick<Context, 'logger'>, key: string, mess
   warnOperator(ctx, message)
 }
 
+/** The reasons said today per recurring check: `${day}|${message}`; only today's day is kept. */
+const saidToday = new Map<string, Set<string>>()
+
+/**
+ * Say a reason of a check that runs again and again at most once a day: a
+ * reason that comes and goes (a file that alternates) does not print a line a
+ * minute, and a reason that stays is said again the next day.
+ * @param ctx - the plugin context.
+ * @param key - the check.
+ * @param message - its reason.
+ * @param day - today, in the instance's zone (YYYY-MM-DD).
+ */
+export function warnOperatorDaily(ctx: Pick<Context, 'logger'>, key: string, message: string, day: string): void {
+  const said = saidToday.get(key) ?? new Set<string>()
+  for (const entry of said) if (!entry.startsWith(`${day}|`)) said.delete(entry)
+  const entry = `${day}|${message}`
+  if (said.has(entry)) return
+  said.add(entry)
+  saidToday.set(key, said)
+  warnOperator(ctx, message)
+}
+
 /** @param key - a recurring check that passes again: its next failure is said anew. */
 export function clearOperatorWarning(key: string): void {
   said.delete(key)

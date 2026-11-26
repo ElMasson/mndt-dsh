@@ -59,6 +59,7 @@ routes-real-scaleway
 scaleway-reasoning-none
 scan-witness
 scheduler-first-pass
+scheduler-fires
 searched
 seeded
 shell-ws

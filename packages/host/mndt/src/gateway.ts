@@ -10,7 +10,7 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { instanceTimeZone, JsonFileStore, WorkbenchService } from './core/index.ts'
+import { instanceTimeZone, JsonFileStore, wallClock, WorkbenchService } from './core/index.ts'
 import { reconcileInterrupted } from './reconcile.ts'
 import type { ApprovalState, MissionKind } from './core/index.ts'
 import type { Mission, PageState } from './types.ts'
@@ -34,9 +34,9 @@ import { TurnScheduler } from './turns.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
-import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import { defaultAutomations, dueAutomations, readAutomations, reserveRun, runReserved, updateAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
-import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { errorShape, warnOperator, warnOperatorDaily, warnOperatorOnce } from './operator-log.ts'
 import { publicFailure } from './public-failure.ts'
 
 /** How the deployment configures the product. */
@@ -169,6 +169,39 @@ export function teamRemoteRefusal(proxyUserHeader: string | undefined, env: Node
   })
 }
 
+/**
+ * Keep the product API for the life of its plugin, and not one moment longer.
+ *
+ * Its start waits for the reconciliation and the tokens: a plugin unloaded
+ * before the server listens must still close it once it does. Left open, it
+ * would keep serving the state of an unloaded instance, whose scheduler is
+ * gone, and hold the port its successor needs. A start that fails is said.
+ * @param ready - the server, once it listens.
+ * @param warn - the operator's line.
+ * @returns the disposer the plugin's effect runs when it unloads.
+ */
+export function serveUntilUnloaded(
+  ready: Promise<{ close(callback?: (error?: Error) => void): void }>,
+  warn: (message: string) => void,
+): () => void {
+  let server: { close(callback?: (error?: Error) => void): void } | undefined
+  let unloaded = false
+  void ready.then((started) => {
+    if (unloaded) {
+      started.close()
+      warn('mndt: the product API started after its plugin was unloaded: closed at once')
+      return
+    }
+    server = started
+  }).catch((error: unknown) => {
+    warn(`mndt: the API did not start: ${errorShape(error)}`)
+  })
+  return () => {
+    unloaded = true
+    server?.close()
+  }
+}
+
 export class WorkbenchGateway extends TypertRemoteService {
   /** Services read here: the agent runtime and the Loader's connector entries. */
   static inject = ['agents', 'loader']
@@ -192,6 +225,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   /** When this process started: what a previous one left is older. */
   readonly #startedAt = new Date().toISOString()
+
+  /**
+   * When the automations' scheduler last made a pass (every 30 s), served on
+   * GET /automations: a scheduler that stopped is read there, where nothing
+   * else would say it.
+   */
+  #schedulerAt: string | undefined
 
   constructor(ctx: Context, config: MndtConfig = {}) {
     super(ctx, 'mndt')
@@ -227,7 +267,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // and only what predates this start: a mention posted in the first seconds
     // is never cancelled as if it were left over.
     const reconciled = reconcileInterrupted(this.service, this.#startedAt,
-      (message) => { warnOperator(ctx, message) }, (message) => { ctx.logger.error(message) })
+      (message) => { warnOperator(ctx, message) }, (message) => { warnOperator(ctx, message) })
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
@@ -268,6 +308,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         timeZone: this.timeZoneFor(ctx),
         schedulePath: this.schedulePath,
         automationsPath: this.automationsPath,
+        schedulerAt: () => this.#schedulerAt,
         ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
           ? {}
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
@@ -290,13 +331,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         ...(host === undefined || host === '' ? {} : { host }),
       }),
     )
-    ctx.effect(() => {
-      let server: { close(callback?: (error?: Error) => void): void } | undefined
-      void ready.then((started) => { server = started }).catch((error: unknown) => {
-        ctx.logger.error(`mndt: the API did not start: ${error instanceof Error ? error.message : String(error)}`)
-      })
-      return () => { server?.close() }
-    }, 'mndt: product API')
+    ctx.effect(() => serveUntilUnloaded(ready, (message) => { warnOperator(ctx, message) }), 'mndt: product API')
   }
 
   /**
@@ -312,78 +347,76 @@ export class WorkbenchGateway extends TypertRemoteService {
     const running = new Set<string>()
     const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
     const legacyAt = process.env.DSH_MNDT_BRIEFING_AT
-    const persist = async (patch: (item: Automation) => Automation): Promise<void> => {
-      const current = await readAutomations(this.automationsPath, legacyAt)
-      await writeAutomations(this.automationsPath, current.map(patch))
-    }
     const fire = (item: Automation, owner: string | undefined): void => {
       running.add(item.id)
-      void (async () => {
-        try {
-          const outcome = await runAutomation(this.service, this.missionRunner(ctx), item, owner)
-          const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
-          const patch: Partial<Automation> = {
-            lastMissionId: outcome.missionId,
-            lastOutcome: outcome.outcome,
-            failures,
-            ...(failures >= 3 ? { enabled: false } : {}),
-          }
-          await persist(candidate => (candidate.id === item.id ? { ...candidate, ...patch } : candidate))
-          if (outcome.outcome === 'done') ctx.logger.info(`mndt: automation ${item.id} done as ${outcome.missionId}`)
-          else ctx.logger.error(`mndt: automation ${item.id} ${outcome.outcome}`)
-        } catch (error) {
-          ctx.logger.error(`mndt: automation ${item.id} could not run: ${error instanceof Error ? error.message : String(error)}`)
-        } finally {
-          running.delete(item.id)
-        }
-      })()
+      const say = (line: string): void => { warnOperator(ctx, line) }
+      void runReserved(this.service, this.missionRunner(ctx), this.automationsPath, item, owner, legacyAt, say)
+        .catch((error: unknown) => { warnOperator(ctx, `mndt: automation ${item.id} could not be recorded: ${errorShape(error)}`) })
+        .finally(() => { running.delete(item.id) })
     }
+    const timeZone = this.timeZoneFor(ctx)
+    // One line per start: two in one process would say the plugin was built twice.
+    warnOperator(ctx, `mndt: automations scheduler started, zone ${timeZone}`)
+    // One pass at a time: a slow pass (a slow disk, a slow role table) never
+    // overlaps the next, which would start an automation twice.
+    let ticking = false
     const tick = (): void => {
+      const now = new Date()
+      // Its sign of life, first: a pass skipped or failing still says the scheduler runs.
+      this.#schedulerAt = now.toISOString()
+      if (ticking) return
+      ticking = true
+      // A reason that blocks every pass is said once a day at most, in the instance's zone.
+      const wall = wallClock(now, timeZone)
+      const day = `${wall.year}-${String(wall.month).padStart(2, '0')}-${String(wall.day).padStart(2, '0')}`
       void (async () => {
         try {
           let items = await readAutomations(this.automationsPath, legacyAt)
           if (Number.isFinite(every) && every > 0) {
             const minutes = Math.max(1, Math.round(every / 60_000))
             if (!items.some(item => item.id === 'auto_briefing' && item.everyMinutes === minutes)) {
-              await writeAutomations(this.automationsPath, items.map(item => item.id === 'auto_briefing' ? { ...item, everyMinutes: minutes, enabled: true } : item))
-              items = await readAutomations(this.automationsPath, legacyAt)
+              items = await updateAutomations(this.automationsPath,
+                current => current.map(item => (item.id === 'auto_briefing' ? { ...item, everyMinutes: minutes, enabled: true } : item)), legacyAt)
             }
           }
-          const now = new Date()
           const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
           const table = team ? await this.grants.grants() : undefined
           const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            // Said once, not at every pass of the tick (every 30 s).
-            warnOperatorOnce(ctx, 'automations-owner', 'mndt: automations skipped: the role table names no owner, or cannot be read')
+            warnOperatorDaily(ctx, 'automations-owner', `mndt: automations skipped (${day}): the role table names no owner, or cannot be read`, day)
             return
           }
-          clearOperatorWarning('automations-owner')
           if (team) {
             // On a team instance an automation runs once an owner enabled it. One
             // enabled otherwise (the deployment default auto_briefing included) is
             // switched off with its reason, so the page shows what runs and why not.
             const stray = items.filter(item => item.enabled && automationRefusal(item, true, owners) !== undefined)
             if (stray.length > 0) {
-              await persist((candidate) => {
-                const reason = stray.some(item => item.id === candidate.id) ? automationRefusal(candidate, true, owners) : undefined
+              items = await updateAutomations(this.automationsPath, current => current.map((candidate) => {
+                const reason = candidate.enabled ? automationRefusal(candidate, true, owners) : undefined
                 return reason === undefined ? candidate : { ...candidate, enabled: false, lastOutcome: reason }
-              })
+              }), legacyAt)
               for (const item of stray) warnOperator(ctx, `mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
-              items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
-          for (const item of dueAutomations(items, now)) {
-            if (running.has(item.id)) continue
-            await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
+          for (const item of dueAutomations(items, now, timeZone)) {
+            if (running.has(item.id)) {
+              warnOperatorDaily(ctx, `automation-running-${item.id}`, `mndt: automation ${item.id} not started (${day}): its previous run is still going`, day)
+              continue
+            }
+            // The slot is reserved under the registry's line: read again, still due,
+            // stamped, and only then started. Never twice, whatever overlaps.
+            const reserved = await reserveRun(this.automationsPath, item.id, now, timeZone, legacyAt)
+            if (reserved === undefined) continue
             // The run is the owner's who enabled it (team), private.
-            fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
+            fire(reserved, team ? reserved.enabledBy?.toLowerCase() : undefined)
           }
-          clearOperatorWarning('automations-read')
         } catch (error) {
           // Its shape only: a JSON error quotes the start of the file, a prompt.
-          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations: ${errorShape(error)}`)
+          warnOperatorDaily(ctx, 'automations-read', `mndt: could not read the automations (${day}): ${errorShape(error)}`, day)
+        } finally {
+          ticking = false
         }
       })()
     }
