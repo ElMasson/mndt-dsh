@@ -479,6 +479,14 @@ export const chatEn = {
   scheduledRunRefused: 'It could not be started: try again in a moment.',
   scheduledRunFailed: 'The run failed.',
   scheduledToggleRefused: 'It could not be changed: try again in a moment.',
+  scheduledHourLabel: 'New hour for {name}',
+  scheduledHourChange: 'Change the hour of {name} ({at})',
+  scheduledAt: 'at {at}',
+  scheduledZoneReunion: 'Réunion time',
+  scheduledZoneInstance: 'instance time',
+  scheduledZoneNamed: '{zone} time',
+  scheduledHourInvalid: 'This hour cannot be read: write it like 07:30.',
+  scheduledHourRefused: 'The hour could not be changed: try again in a moment.',
 } as const
 
 /** One copy key. */
@@ -958,6 +966,14 @@ export const chatFr: Record<ChatKey, string> = {
   scheduledRunRefused: 'Elle n\'a pas pu être lancée : réessayez dans un moment.',
   scheduledRunFailed: 'Le lancement a échoué.',
   scheduledToggleRefused: 'Elle n\'a pas pu être modifiée : réessayez dans un moment.',
+  scheduledHourLabel: 'Nouvelle heure pour {name}',
+  scheduledHourChange: 'Changer l\'heure de {name} ({at})',
+  scheduledAt: 'à {at}',
+  scheduledZoneReunion: 'heure de La Réunion',
+  scheduledZoneInstance: 'heure de l\'instance',
+  scheduledZoneNamed: 'heure de {zone}',
+  scheduledHourInvalid: 'Cette heure est illisible : écrivez-la comme 07:30.',
+  scheduledHourRefused: 'L\'heure n\'a pas pu être changée : réessayez dans un moment.',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

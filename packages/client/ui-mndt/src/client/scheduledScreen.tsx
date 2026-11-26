@@ -12,9 +12,27 @@ import type { AutomationRow, MndtFace } from './face.ts'
 import { when } from './format.ts'
 import { cadenceWords } from './schedule.tsx'
 
+const CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/u
+
+/** @param row - an automation. @returns its days in words, without the hour (days: 0 is Sunday on an automation). */
+function automationDays(row: AutomationRow, t: ChatTranslate): string {
+  const days = (row.days ?? []).filter(d => Number.isInteger(d) && d >= 0 && d <= 6).map(d => (d === 0 ? 7 : d))
+  const words = days.length === 0 || days.length === 7
+    ? cadenceWords({ every: 'day', at: '00:00' }, t)
+    : cadenceWords({ every: 'week', days: [...new Set(days)].sort(), at: '00:00' }, t)
+  // The cadence's words end with « à 00:00 »: the hour is shown apart, where it is changed.
+  return words.replace(/\s\S+\s00:00$/u, '')
+}
+
+/** @param zone - the scheduler's zone, when served. @param t - the copy. @returns which hour it is. */
+function zoneWords(zone: string | undefined, t: ChatTranslate): string {
+  if (zone === 'Indian/Reunion') return t('scheduledZoneReunion')
+  return zone === undefined ? t('scheduledZoneInstance') : t('scheduledZoneNamed', { zone })
+}
+
 /** @param row - an automation. @returns its hour in words (days: 0 is Sunday on an automation). */
 function automationWhen(row: AutomationRow, t: ChatTranslate): string {
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(row.at)) return row.at
+  if (!CLOCK.test(row.at)) return row.at
   const days = (row.days ?? []).filter(d => Number.isInteger(d) && d >= 0 && d <= 6).map(d => (d === 0 ? 7 : d))
   return days.length === 0 || days.length === 7
     ? cadenceWords({ every: 'day', at: row.at }, t)
@@ -35,13 +53,16 @@ type Said = { readonly id: string; readonly ran: boolean; readonly lane: boolean
 
 /** @param props - the face, the copy and how to open the owner's lane. @returns the screen. */
 export function ScheduledScreen(props: {
-  readonly api: Pick<MndtFace, 'automations' | 'toggleAutomation' | 'runAutomationNow'>
+  readonly api: Pick<MndtFace, 'automations' | 'toggleAutomation' | 'runAutomationNow' | 'saveAutomation'>
   readonly onLane: () => void
   readonly title: string
   readonly t: ChatTranslate
 }): ReactNode {
   const { api, t } = props
   const [rows, setRows] = useState<readonly AutomationRow[] | undefined>(undefined)
+  const [zone, setZone] = useState<string | undefined>(undefined)
+  // The line whose hour is being changed in place, and the hour typed.
+  const [editing, setEditing] = useState<{ readonly id: string; readonly at: string } | undefined>(undefined)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [said, setSaid] = useState<Said | undefined>(undefined)
@@ -49,7 +70,9 @@ export function ScheduledScreen(props: {
   const inFlight = useRef(false)
   const load = useCallback(async (): Promise<void> => {
     try {
-      setRows((await api.automations()).items)
+      const answer = await api.automations()
+      setRows(answer.items)
+      setZone(typeof answer.timeZone === 'string' && answer.timeZone !== '' ? answer.timeZone : undefined)
       setFailed(false)
     } catch {
       // Not the thrown text: a fixed sentence (an owner-only 404 or a network error alike).
@@ -83,6 +106,21 @@ export function ScheduledScreen(props: {
       setSaid({ id: row.id, error: t('scheduledRunRefused') })
     }
   })
+  /** A new hour, sent only as HH:MM: the core turns any other value into 07:30 without a word. */
+  const saveHour = (row: AutomationRow, at: string): Promise<void> => once(row, async () => {
+    setEditing(undefined)
+    if (at === row.at) return
+    if (!CLOCK.test(at)) {
+      setSaid({ id: row.id, error: t('scheduledHourInvalid') })
+      return
+    }
+    try {
+      const outcome = await api.saveAutomation({ id: row.id, at })
+      if (!outcome.ok) setSaid({ id: row.id, error: t('scheduledHourRefused') })
+    } catch {
+      setSaid({ id: row.id, error: t('scheduledHourRefused') })
+    }
+  })
   const toggle = (row: AutomationRow): Promise<void> => once(row, async () => {
     try {
       const outcome = await api.toggleAutomation(row.id, !row.enabled)
@@ -103,7 +141,33 @@ export function ScheduledScreen(props: {
             <div key={row.id} className="mw-ctx-row" data-testid="scheduled-row" data-enabled={row.enabled ? 'true' : 'false'}>
               <p className="mw-ctx-small">
                 <span className="mw-ctx-strong">{row.name}</span>
-                {` · ${automationWhen(row, t)}`}
+                {` · ${automationDays(row, t)} `}
+                {editing?.id === row.id ? (
+                  <input
+                    type="time"
+                    className="mw-input mw-input-time"
+                    aria-label={t('scheduledHourLabel', { name: row.name })}
+                    value={editing.at}
+                    autoFocus
+                    onChange={(event) => { setEditing({ id: row.id, at: event.target.value }) }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') { event.preventDefault(); void saveHour(row, editing.at) }
+                      if (event.key === 'Escape') { event.preventDefault(); setEditing(undefined) }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="mw-text-button"
+                    data-testid="scheduled-hour"
+                    disabled={busy === row.id}
+                    aria-label={t('scheduledHourChange', { name: row.name, at: row.at })}
+                    onClick={() => { setEditing({ id: row.id, at: row.at }) }}
+                  >
+                    {CLOCK.test(row.at) ? t('scheduledAt', { at: row.at }) : automationWhen(row, t)}
+                  </button>
+                )}
+                <span className="mw-ctx-muted" data-testid="scheduled-zone">{` (${zoneWords(zone, t)})`}</span>
                 <span className="mw-chip" data-testid="scheduled-state">{t(row.enabled ? 'scheduleActive' : 'scheduledSuspended')}</span>
               </p>
               {lastRunOf(row) === undefined ? undefined : (

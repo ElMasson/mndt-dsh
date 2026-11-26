@@ -874,12 +874,19 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
   const briefing = { id: 'auto_briefing', name: 'Briefing du matin', kind: 'briefing', prompt: 'briefing', at: '07:30', days: [1, 2, 3, 4, 5],
     enabled: true, createdBy: 'scheduler', lastFiredDate: '2026-11-26', lastOutcome: 'ok: mission mis_1' }
   const relance = { id: 'auto_x', name: 'Relance', kind: 'custom', prompt: 'x', at: '09:00', enabled: false, createdBy: you }
+  const saved: { id: string; at: string }[] = []
   const automationsFace = (over: Record<string, unknown> = {}): MndtFace => {
     let items = [briefing, relance]
     const base = face(state())
     return new Proxy(base, {
       get: (target, key) => {
-        if (key === 'automations') return over.automations ?? (async () => ({ items, canAdmin: true }))
+        if (key === 'automations') return over.automations ?? (async () => ({ items, canAdmin: true, ...(over.timeZone === undefined ? {} : { timeZone: over.timeZone }) }))
+        if (key === 'saveAutomation' && over.saveAutomation !== undefined) return over.saveAutomation
+        if (key === 'saveAutomation') return async (input: { id: string; at: string }) => {
+          saved.push(input)
+          items = items.map(a => (a.id === input.id ? { ...a, at: input.at } : a))
+          return { ok: true }
+        }
         if (key === 'runAutomationNow') return over.runAutomationNow ?? (async () => ({ ok: true, value: { outcome: 'ok' } }))
         if (key === 'toggleAutomation' && over.toggleAutomation !== undefined) return over.toggleAutomation
         if (key === 'toggleAutomation') return async (id: string, enabled: boolean) => {
@@ -997,5 +1004,74 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect(within(rows[0] as HTMLElement).getByTestId('scheduled-last').textContent).not.toContain('2026-11-20')
     expect(within(rows[1] as HTMLElement).getByTestId('scheduled-last').textContent).toContain('2026-11-25')
     expect(within(rows[2] as HTMLElement).queryByTestId('scheduled-last')).toBeNull()
+  })
+
+  it('the hour changes in place: a click, the field, Enter; sent as { id, at } for any automation', async () => {
+    saved.length = 0
+    fireEvent.click(within(await open(true, automationsFace({ timeZone: 'Indian/Reunion' }))).getByRole('button', { name: 'Tâches planifiées' }))
+    const rows = await screen.findAllByTestId('scheduled-row')
+    expect(within(rows[1] as HTMLElement).getByTestId('scheduled-zone').textContent).toBe(' (heure de La Réunion)')
+    fireEvent.click(within(rows[1] as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(rows[1] as HTMLElement).getByLabelText('Nouvelle heure pour Relance')
+    fireEvent.change(field, { target: { value: '08:15' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => { expect(saved).toEqual([{ id: 'auto_x', at: '08:15' }]) })
+    await waitFor(() => { expect(within(screen.getAllByTestId('scheduled-row')[1] as HTMLElement).getByTestId('scheduled-hour').textContent).toBe('à 08:15') })
+  })
+
+  it('Escape leaves the hour as it was, nothing sent', async () => {
+    saved.length = 0
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(field, { target: { value: '09:00' } })
+    fireEvent.keyDown(field, { key: 'Escape' })
+    expect(within(first as HTMLElement).getByTestId('scheduled-hour').textContent).toBe('à 07:30')
+    expect(saved).toEqual([])
+  })
+
+  it('without a served zone, the line says « heure de l\'instance », never a guessed place', async () => {
+    fireEvent.click(within(await open(true)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    expect(within(first as HTMLElement).getByTestId('scheduled-zone').textContent).toBe(' (heure de l\'instance)')
+  })
+
+  it('a refused hour, or one that cannot be read, is said in a fixed sentence; nothing malformed is sent', async () => {
+    saved.length = 0
+    const api = automationsFace({ saveAutomation: async () => ({ ok: false, error: 'a name, a prompt… sk-live', status: 400 }) })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(field, { target: { value: '06:45' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('L\'heure n\'a pas pu être changée : réessayez dans un moment.')
+    // An hour the field cannot hold (emptied) is said, and never sent: the core would make it 07:30.
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const again = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(again, { target: { value: '' } })
+    fireEvent.keyDown(again, { key: 'Enter' })
+    expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Cette heure est illisible : écrivez-la comme 07:30.')
+    expect(saved).toEqual([])
+  })
+
+  it('a double Enter saves once', async () => {
+    let calls = 0
+    let release: () => void = () => undefined
+    const api = automationsFace({
+      saveAutomation: () => { calls += 1; return new Promise((resolve) => { release = () => { resolve({ ok: true }) } }) },
+    })
+    fireEvent.click(within(await open(true, api)).getByRole('button', { name: 'Tâches planifiées' }))
+    const [first] = await screen.findAllByTestId('scheduled-row')
+    fireEvent.click(within(first as HTMLElement).getByTestId('scheduled-hour'))
+    const field = within(first as HTMLElement).getByLabelText('Nouvelle heure pour Briefing du matin')
+    fireEvent.change(field, { target: { value: '06:45' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(calls).toBe(1)
+    release()
+    await waitFor(() => { expect(within(first as HTMLElement).getByTestId('scheduled-hour').hasAttribute('disabled')).toBe(false) })
+    expect(calls).toBe(1)
   })
 })
