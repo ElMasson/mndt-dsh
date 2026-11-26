@@ -169,6 +169,39 @@ export function teamRemoteRefusal(proxyUserHeader: string | undefined, env: Node
   })
 }
 
+/**
+ * Keep the product API for the life of its plugin, and not one moment longer.
+ *
+ * Its start waits for the reconciliation and the tokens: a plugin unloaded
+ * before the server listens must still close it once it does. Left open, it
+ * would keep serving the state of an unloaded instance, whose scheduler is
+ * gone, and hold the port its successor needs. A start that fails is said.
+ * @param ready - the server, once it listens.
+ * @param warn - the operator's line.
+ * @returns the disposer the plugin's effect runs when it unloads.
+ */
+export function serveUntilUnloaded(
+  ready: Promise<{ close(callback?: (error?: Error) => void): void }>,
+  warn: (message: string) => void,
+): () => void {
+  let server: { close(callback?: (error?: Error) => void): void } | undefined
+  let unloaded = false
+  void ready.then((started) => {
+    if (unloaded) {
+      started.close()
+      warn('mndt: the product API started after its plugin was unloaded: closed at once')
+      return
+    }
+    server = started
+  }).catch((error: unknown) => {
+    warn(`mndt: the API did not start: ${errorShape(error)}`)
+  })
+  return () => {
+    unloaded = true
+    server?.close()
+  }
+}
+
 export class WorkbenchGateway extends TypertRemoteService {
   /** Services read here: the agent runtime and the Loader's connector entries. */
   static inject = ['agents', 'loader']
@@ -192,6 +225,13 @@ export class WorkbenchGateway extends TypertRemoteService {
    */
   /** When this process started: what a previous one left is older. */
   readonly #startedAt = new Date().toISOString()
+
+  /**
+   * When the automations' scheduler last made a pass (every 30 s), served on
+   * GET /automations: a scheduler that stopped is read there, where nothing
+   * else would say it.
+   */
+  #schedulerAt: string | undefined
 
   constructor(ctx: Context, config: MndtConfig = {}) {
     super(ctx, 'mndt')
@@ -227,7 +267,7 @@ export class WorkbenchGateway extends TypertRemoteService {
     // and only what predates this start: a mention posted in the first seconds
     // is never cancelled as if it were left over.
     const reconciled = reconcileInterrupted(this.service, this.#startedAt,
-      (message) => { warnOperator(ctx, message) }, (message) => { ctx.logger.error(message) })
+      (message) => { warnOperator(ctx, message) }, (message) => { warnOperator(ctx, message) })
 
     const port = config.port ?? (process.env.DSH_MNDT_PORT === undefined ? undefined : Number(process.env.DSH_MNDT_PORT))
     if (port === undefined || !Number.isFinite(port)) return
@@ -268,6 +308,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         timeZone: this.timeZoneFor(ctx),
         schedulePath: this.schedulePath,
         automationsPath: this.automationsPath,
+        schedulerAt: () => this.#schedulerAt,
         ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
           ? {}
           : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
@@ -290,13 +331,7 @@ export class WorkbenchGateway extends TypertRemoteService {
         ...(host === undefined || host === '' ? {} : { host }),
       }),
     )
-    ctx.effect(() => {
-      let server: { close(callback?: (error?: Error) => void): void } | undefined
-      void ready.then((started) => { server = started }).catch((error: unknown) => {
-        ctx.logger.error(`mndt: the API did not start: ${error instanceof Error ? error.message : String(error)}`)
-      })
-      return () => { server?.close() }
-    }, 'mndt: product API')
+    ctx.effect(() => serveUntilUnloaded(ready, (message) => { warnOperator(ctx, message) }), 'mndt: product API')
   }
 
   /**
@@ -329,16 +364,25 @@ export class WorkbenchGateway extends TypertRemoteService {
             ...(failures >= 3 ? { enabled: false } : {}),
           }
           await persist(candidate => (candidate.id === item.id ? { ...candidate, ...patch } : candidate))
-          if (outcome.outcome === 'done') ctx.logger.info(`mndt: automation ${item.id} done as ${outcome.missionId}`)
-          else ctx.logger.error(`mndt: automation ${item.id} ${outcome.outcome}`)
+          // The outcome is the host's sentence (runAutomation), never a runtime's words.
+          warnOperator(ctx, outcome.outcome === 'done'
+            ? `mndt: automation ${item.id} done as ${outcome.missionId}`
+            : `mndt: automation ${item.id} ${outcome.outcome} (${outcome.missionId})`)
         } catch (error) {
-          ctx.logger.error(`mndt: automation ${item.id} could not run: ${error instanceof Error ? error.message : String(error)}`)
+          warnOperator(ctx, `mndt: automation ${item.id} could not run: ${errorShape(error)}`)
         } finally {
           running.delete(item.id)
         }
       })()
     }
+    const timeZone = this.timeZoneFor(ctx)
+    // One line per start: two in one process would say the plugin was built twice.
+    warnOperator(ctx, `mndt: automations scheduler started, zone ${timeZone}`)
     const tick = (): void => {
+      // Its sign of life, first: a pass that fails later still says the scheduler runs.
+      this.#schedulerAt = new Date().toISOString()
+      // A reason that blocks every pass is said again each day, not only at start.
+      const day = this.#schedulerAt.slice(0, 10)
       void (async () => {
         try {
           let items = await readAutomations(this.automationsPath, legacyAt)
@@ -356,7 +400,7 @@ export class WorkbenchGateway extends TypertRemoteService {
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
             // Said once, not at every pass of the tick (every 30 s).
-            warnOperatorOnce(ctx, 'automations-owner', 'mndt: automations skipped: the role table names no owner, or cannot be read')
+            warnOperatorOnce(ctx, 'automations-owner', `mndt: automations skipped (${day}): the role table names no owner, or cannot be read`)
             return
           }
           clearOperatorWarning('automations-owner')
@@ -374,16 +418,19 @@ export class WorkbenchGateway extends TypertRemoteService {
               items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
-          for (const item of dueAutomations(items, now)) {
-            if (running.has(item.id)) continue
-            await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now) } : candidate))
+          for (const item of dueAutomations(items, now, timeZone)) {
+            if (running.has(item.id)) {
+              warnOperatorOnce(ctx, `automation-running-${item.id}`, `mndt: automation ${item.id} not started (${day}): its previous run is still going`)
+              continue
+            }
+            await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now, timeZone) } : candidate))
             // The run is the owner's who enabled it (team), private.
             fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
           }
           clearOperatorWarning('automations-read')
         } catch (error) {
           // Its shape only: a JSON error quotes the start of the file, a prompt.
-          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations: ${errorShape(error)}`)
+          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations (${day}): ${errorShape(error)}`)
         }
       })()
     }

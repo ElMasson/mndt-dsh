@@ -70,6 +70,8 @@ export interface MissionRequest {
   readonly mandateId?: string
   /** The automation's name, when an automation runs it. */
   readonly title?: string
+  /** The automation that starts it: its result is published in its person's lane. */
+  readonly automationId?: string
 }
 
 /** What a runtime reports when a run finishes. */
@@ -468,9 +470,11 @@ export class WorkbenchService {
   }
 
   /**
-   * A finished briefing, published in the lane of the person who ran it, as a
-   * system message carrying the mission (decision of 24/11; see Message.mission).
-   * Nothing on a solo workstation, for another kind of mission, or for a run
+   * A finished briefing, or the run of an automation (by the scheduler or by
+   * hand, decision of 26/11: fewer clicks), published in the lane of the person
+   * who ran it, as a system message carrying the mission (decision of 24/11; see
+   * Message.mission), under the automation's name. Nothing on a solo
+   * workstation, for another mission (one started in a channel), or for a run
    * recorded under no person (an automation before a team instance names its owner).
    * @param state - the state with the mission already finished.
    * @param mission - the finished mission.
@@ -486,7 +490,8 @@ export class WorkbenchService {
     reasonKind?: MissionFailureKind,
   ): { state: WorkbenchState; events: WorkbenchEvent[] } {
     const owner = mission.createdBy
-    if (this.#options.briefingsInLane !== true || mission.kind !== 'briefing' || !owner.includes('@')) return { state, events: [] }
+    const published = mission.kind === 'briefing' || mission.automationId !== undefined
+    if (this.#options.briefingsInLane !== true || !published || !owner.includes('@')) return { state, events: [] }
     const events: WorkbenchEvent[] = []
     let lane = (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === owner)
     let channels = state.channels ?? []
@@ -514,7 +519,7 @@ export class WorkbenchService {
       mission: {
         id: mission.id,
         kind: mission.kind,
-        title: mission.title ?? 'Briefing',
+        title: mission.title ?? (mission.kind === 'briefing' ? 'Briefing' : 'Automatisation'),
         status: mission.status === 'done' ? 'done' : 'failed',
         ...(mission.eur === undefined ? {} : { eur: mission.eur }),
         ...((mission.toolsUnavailable ?? []).length === 0 ? {} : { toolsUnavailable: [...(mission.toolsUnavailable ?? [])] }),
@@ -618,6 +623,7 @@ export class WorkbenchService {
       createdAt: this.#at(),
       ...(request.mandateId === undefined ? {} : { mandateId: request.mandateId }),
       ...(request.title === undefined || request.title.trim() === '' ? {} : { title: request.title.trim() }),
+      ...(request.automationId === undefined || request.automationId.trim() === '' ? {} : { automationId: request.automationId.trim() }),
     }
     return this.#write(state => ({
       state: { ...state, missions: [mission, ...state.missions] },

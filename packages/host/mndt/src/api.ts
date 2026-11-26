@@ -20,7 +20,7 @@ import type {
   Visibility,
 } from './core/index.ts'
 import type { WorkbenchService, MissionResult, WorkbenchState, Approval } from './core/index.ts'
-import { normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import { isClock, nextRunAt, normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
 import { operatorLine } from './operator-log.ts'
@@ -116,6 +116,8 @@ export interface MndtApiOptions {
   readonly schedulePath?: string
   /** The automation registry, editable from the page. */
   readonly automationsPath?: string
+  /** When the automations' scheduler last made a pass, served on GET /automations (a stopped scheduler shows). */
+  readonly schedulerAt?: () => string | undefined
   /** The machine sidecar: one browser session per person. */
   /**
    * The machine service (the sidecar). timeoutMs bounds each call of « Mon
@@ -1694,7 +1696,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const items = await readAutomations(options.automationsPath)
         const table = await grants.grants()
         const canAdmin = table.ok ? can(table.grants, identity, 'rights.write').allowed : false
-        return respond(200, { items, canAdmin })
+        // When each starts next, in the instance's zone; and the scheduler's last pass.
+        const now = new Date()
+        const served = items.map((item) => {
+          const next = nextRunAt(item, now, zone)
+          return next === undefined ? item : { ...item, nextRunAt: next }
+        })
+        const schedulerAt = options.schedulerAt?.()
+        return respond(200, { items: served, canAdmin, timeZone: zone, ...(schedulerAt === undefined ? {} : { schedulerAt }) })
       }
 
       if (request.method === 'POST' && path === '/automations') {
@@ -1705,20 +1714,30 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
         const items = await readAutomations(options.automationsPath)
         const input = parseBody(request.body)
+        // A time given must be a time: never turned into 07:30 without a word.
+        if (input.at !== undefined && !isClock(input.at)) {
+          return respond(400, { error: 'the time must read HH:MM, like 07:30', code: 'bad-time' })
+        }
         const id = typeof input.id === 'string' ? input.id : undefined
         const existing = id === undefined ? undefined : items.find(item => item.id === id)
+        // Its time or its switch only (the page's « heure » in place): nothing of
+        // what it runs changes, so nobody takes it over. Its author stays (a system
+        // automation stays « as shipped », under that guard), and so does who
+        // enabled it, unless it is switched on now.
+        const scheduleOnly = existing !== undefined && Object.keys(input).every(key => key === 'id' || key === 'at' || key === 'enabled')
         const proposed = normalise({
           ...(existing ?? {}),
           ...input,
           ...(id === undefined ? {} : { id }),
           // On a team instance the owner who saves an automation takes it over,
           // a system one included: they have read its prompt.
-          createdBy: teamInstance ? identity : existing?.createdBy ?? identity,
+          createdBy: scheduleOnly ? existing.createdBy : teamInstance ? identity : existing?.createdBy ?? identity,
         })
         if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
         // Who enabled it is the server's record, never the request's.
         const { enabledBy: _claimed, ...rest } = proposed
-        const recorded: Automation = proposed.enabled ? { ...rest, enabledBy: identity } : rest
+        const keptEnabler = scheduleOnly && existing.enabled && existing.enabledBy !== undefined ? existing.enabledBy : identity
+        const recorded: Automation = proposed.enabled ? { ...rest, enabledBy: keptEnabler } : rest
         const next = existing === undefined ? [...items, recorded] : items.map(item => (item.id === recorded.id ? recorded : item))
         await writeAutomations(options.automationsPath, next)
         return respond(existing === undefined ? 201 : 200, { automation: recorded })
@@ -1754,15 +1773,20 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const items = await readAutomations(options.automationsPath)
         const item = items.find(candidate => candidate.id === id)
         if (item === undefined) return respond(404, { error: `no automation ${id}` })
+        const startedAt = new Date().toISOString()
         const outcome = await runAutomation(service, runner, item, teamInstance ? identity : undefined)
         const failures = outcome.outcome === 'done' ? 0 : (item.failures ?? 0) + 1
+        // A run by hand is written too (lastRunAt); lastFiredDate stays the scheduler's.
         const patch: Partial<Automation> = {
+          lastRunAt: startedAt,
           lastMissionId: outcome.missionId,
           lastOutcome: outcome.outcome,
           failures,
           ...(failures >= 3 ? { enabled: false } : {}),
         }
-        const updated = items.map(candidate => (candidate.id === id ? { ...candidate, ...patch } : candidate))
+        // Read again: the run lasts minutes, and the scheduler may have written meanwhile.
+        const current = await readAutomations(options.automationsPath)
+        const updated = current.map(candidate => (candidate.id === id ? { ...candidate, ...patch } : candidate))
         await writeAutomations(options.automationsPath, updated)
         const mission = await service.getMission(outcome.missionId)
         return respond(200, { mission, outcome: outcome.outcome })

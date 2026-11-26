@@ -609,5 +609,30 @@ check('restart-closes-council', councilBefore === '1' && councilAfter === '0' &&
   && closedCouncil.council.skipped.some(s => s.reason === 'avis non obtenu : redémarrage')
   && closedCouncil.council.positions.every(p => p.agentId === undefined),
 `count before ${councilBefore}, after ${councilAfter}, turn ${closedCouncil?.status}, council ${closedCouncil?.council?.state ?? '-'}, API back ${councilBack}`)
+// The scheduler starts an automation by itself (« dernière : 2026-11-15 », 26/11:
+// no check proved it; scheduler-first-pass only shows the switch-off at start).
+// The owner sets the briefing to the current minute of the instance's zone and
+// enables it; a pass (every 30 s) must start it, and the scheduler's last pass
+// (schedulerAt) must be fresh. Switched off again afterwards.
+{
+  const listed = (await asOwner('GET', '/automations')).body
+  const zone = listed.timeZone ?? 'UTC'
+  const passAge = listed.schedulerAt === undefined ? Infinity : Date.now() - Date.parse(listed.schedulerAt)
+  const before = (listed.items ?? []).find(item => item.id === 'auto_briefing')
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).map(part => [part.type, part.value]))
+  const today = `${parts.year}-${parts.month}-${parts.day}`
+  await asOwner('POST', '/schedule', { at: `${parts.hour}:${parts.minute}` })
+  await asOwner('POST', '/automations/auto_briefing/toggle', { enabled: true })
+  let after
+  for (let waited = 0; waited < 100_000; waited += 5000) {
+    await sleep(5000)
+    after = ((await asOwner('GET', '/automations')).body.items ?? []).find(item => item.id === 'auto_briefing')
+    if (after?.lastFiredDate === today && after.lastMissionId !== before?.lastMissionId) break
+  }
+  await asOwner('POST', '/automations/auto_briefing/toggle', { enabled: false })
+  check('scheduler-fires', after?.lastFiredDate === today && after.lastMissionId !== before?.lastMissionId && passAge < 120_000,
+    `set to ${parts.hour}:${parts.minute} (${zone}): lastFiredDate ${after?.lastFiredDate ?? '-'}, mission ${after?.lastMissionId ?? '-'} (before ${before?.lastMissionId ?? '-'}), next ${after?.nextRunAt ?? '-'}, last pass ${Number.isFinite(passAge) ? `${Math.round(passAge / 1000)} s ago` : 'never served'}`)
+}
 console.log(`\nTOTAL ok=${results.filter(r => r.ok).length} ko=${results.filter(r => !r.ok).length}`)
 process.exit(results.some(r => !r.ok) ? 1 : 0)

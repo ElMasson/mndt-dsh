@@ -161,14 +161,14 @@ function parseField(field: string, range: readonly [number, number]): ReadonlySe
   return values
 }
 
-/** @param date - an instant. @param timeZone - an IANA zone. @returns its wall clock there. */
-/** A wall-clock reading in a zone. */
-interface WallClock { year: number; month: number; day: number; hour: number; minute: number; weekday: number }
+/** A wall-clock reading in a zone; weekday from 1 (Monday) to 7 (Sunday). */
+export interface WallClock { year: number; month: number; day: number; hour: number; minute: number; weekday: number }
 
 /** One formatter per zone, built once: building one is what costs, not using it. */
 const formatters = new Map<string, Intl.DateTimeFormat>()
 
-function wallClock(date: Date, timeZone: string): WallClock {
+/** @param date - an instant. @param timeZone - an IANA zone. @returns its wall clock there. */
+export function wallClock(date: Date, timeZone: string): WallClock {
   let formatter = formatters.get(timeZone)
   if (formatter === undefined) {
     formatter = new Intl.DateTimeFormat('en-US', {
