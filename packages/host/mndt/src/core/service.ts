@@ -1046,16 +1046,36 @@ export class WorkbenchService {
         approvalId: approval.id,
       }
       const next: Approval = { ...approval, state: 'approved', decidedBy: actor.trim(), decidedAt: at, scheduleId: schedule.id }
+      const events: WorkbenchEvent[] = [
+        { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `task ${schedule.id} created` },
+        { at, actor: actor.trim(), action: 'schedule.created', subject: schedule.id, detail: schedule.title },
+      ]
+      // A task in its requester's lane: its agent is added to that lane (created
+      // when absent), as its requester wanted it there, in their private space.
+      let channels = state.channels ?? []
+      if (proposal.destination.kind === 'lane') {
+        const member = proposal.destination.member
+        const lane = channels.find(channel => isLaneOf(channel, member))
+        if (lane === undefined) {
+          const created: Channel = {
+            id: this.#id('chn'), name: `solo-${this.#id('l').slice(-8)}`, title: `Ma lane (${member})`, kind: 'solo',
+            members: [member], agents: [agent.id], connectors: [], createdBy: member, createdAt: at,
+          }
+          channels = [...channels, created]
+          events.push({ at, actor: member, action: 'channel.lane', subject: created.id })
+        } else if (!lane.agents.includes(agent.id)) {
+          channels = channels.map(channel => (channel.id === lane.id ? { ...channel, agents: [...channel.agents, agent.id] } : channel))
+          events.push({ at, actor: actor.trim(), action: 'channel.agent-added', subject: lane.id, detail: `@${agent.handle} for task ${schedule.id}` })
+        }
+      }
       return {
         state: {
           ...state,
+          channels,
           schedules: [...(state.schedules ?? []), schedule],
           approvals: state.approvals.map(candidate => (candidate.id === id ? next : candidate)),
         },
-        event: [
-          { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `task ${schedule.id} created` },
-          { at, actor: actor.trim(), action: 'schedule.created', subject: schedule.id, detail: schedule.title },
-        ],
+        event: events,
         value: { approval: next, schedule },
       }
     })
@@ -1143,15 +1163,59 @@ export class WorkbenchService {
    * @param reason - why.
    * @returns the task, paused.
    */
-  pauseScheduleBecause(id: string, reason: 'agent-retired' | 'agent-left'): Promise<Schedule | undefined> {
+  pauseScheduleBecause(id: string, reason: 'agent-retired' | 'agent-left' | 'requester-left'): Promise<Schedule | undefined> {
     return this.#write((state) => {
       const schedule = (state.schedules ?? []).find(candidate => candidate.id === id && candidate.deletedAt === undefined)
       if (schedule === undefined || schedule.state !== 'active') return { state, event: [], value: undefined }
-      const next: Schedule = { ...schedule, state: 'paused', pausedBecause: reason }
+      // A run reserved and not started (it was checked again just before) is not cut: it never began.
+      const { runningSince: _never, ...rest } = schedule
+      const next: Schedule = { ...rest, state: 'paused', pausedBecause: reason }
       const at = this.#at()
       return {
         state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
         event: { at, actor: 'mndt', action: 'schedule.paused', subject: id, detail: reason },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Just before a reserved run starts: the task must still be active and not
+   * deleted (read again in one write). Otherwise its mark of a run is taken off.
+   * @param id - the task.
+   * @returns the task to run, or undefined when it must not run.
+   */
+  confirmScheduleRun(id: string): Promise<Schedule | undefined> {
+    return this.#write((state) => {
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      if (schedule === undefined) return { state, event: [], value: undefined }
+      if (schedule.state === 'active' && schedule.deletedAt === undefined) return { state, event: [], value: schedule }
+      const { runningSince: _never, ...rest } = schedule
+      const at = this.#at()
+      return {
+        state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? rest : candidate)) },
+        event: { at, actor: 'mndt', action: 'schedule.run.skipped', subject: id, detail: schedule.deletedAt === undefined ? `paused (${schedule.pausedBecause ?? 'owner'})` : 'deleted' },
+        value: undefined,
+      }
+    })
+  }
+
+  /**
+   * A run refused before any model call (its agent's ceiling reached, its model
+   * without a price): recorded on the task, never a failure, never published.
+   * @param id - the task.
+   * @param at - when it was refused.
+   * @returns the task.
+   */
+  recordScheduleRefusal(id: string, at: string): Promise<Schedule | undefined> {
+    return this.#write((state) => {
+      const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
+      if (schedule === undefined) return { state, event: [], value: undefined }
+      const { runningSince: _never, ...rest } = schedule
+      const next: Schedule = { ...rest, lastRunAt: at, lastStatus: 'refused', lastReasonKind: 'refused' }
+      return {
+        state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        event: { at: this.#at(), actor: 'mndt', action: 'schedule.run.refused', subject: id, detail: 'ceiling or price' },
         value: next,
       }
     })
@@ -1180,6 +1244,16 @@ export class WorkbenchService {
       const schedule = (state.schedules ?? []).find(candidate => candidate.id === id)
       if (schedule === undefined) return { state, event: [], value: undefined }
       const at = this.#at()
+      // Deleted while it ran: not published; what came of it goes to the journal only.
+      // (Paused while it ran: published, the run took place.)
+      if (schedule.deletedAt !== undefined) {
+        const { runningSince: _gone, ...rest } = schedule
+        return {
+          state: { ...state, schedules: (state.schedules ?? []).map(candidate => (candidate.id === id ? rest : candidate)) },
+          event: { at, actor: 'mndt', action: 'schedule.run.dropped', subject: id, detail: `${run.status}, deleted during its run` },
+          value: undefined,
+        }
+      }
       const events: WorkbenchEvent[] = []
       let channels = state.channels ?? []
       let channelId: string | undefined
