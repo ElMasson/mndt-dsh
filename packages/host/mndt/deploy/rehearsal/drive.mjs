@@ -642,30 +642,35 @@ check('restart-closes-council', councilBefore === '1' && councilAfter === '0' &&
     `set to ${parts.hour}:${parts.minute} (${zone}): lastFiredDate ${after?.lastFiredDate ?? '-'}, lastFiredAt ${after?.lastFiredAt ?? '-'}, last pass ${Number.isFinite(passAge) ? `${Math.round(passAge / 1000)} s ago` : 'never served'}; put back to ${before?.at ?? '-'}, ${before?.enabled === true ? 'enabled' : 'suspended'}`)
 }
 // The prefix cache (26/11, « @qwen bonjou »: 10 613 input tokens, cacheRead 0):
-// two different turns of one agent in one channel share their whole static
-// block (everything before the history: the preamble, the rules, the agent, its
-// role and skills, the channel's context), measured on each prompt, never a
-// fixed length — a mark drawn at random in that block would break every pair at
-// the mark. Most pairs, not all: a context or a skill changed between two turns
-// (the rehearsal does both) rightly changes the block. Two agents share the
-// space's preamble; no prompt opens with the date line. From the fake model's
-// prompt-prefix lines.
+// two different turns of one agent in one channel whose static block did not
+// change (everything before the history: the preamble, the rules, the agent,
+// its role and skills, the channel's context; compared by a keyed fingerprint
+// the fake model draws) share that whole block — every one of them, and at
+// least three, or the check proves nothing. A mark drawn at random in the block
+// changes it at each turn: no pair qualifies, and the check fails. A pair whose
+// block changed (a context or a skill edited between two turns, which the
+// rehearsal does) is not counted. Every call offers its tools in the host's
+// order (toolOrder). Two agents share the space's preamble; no prompt opens
+// with the date line. From the fake model's prompt-prefix lines.
 {
-  const lines = [...logs('fakellm').matchAll(/fake-llm prompt-prefix @(\S+) #(\S+): length=(\d+) common=(\S+) static=(\S+) preamble=(\w+) dateFirst=(\w+)/g)]
+  const lines = [...logs('fakellm').matchAll(/fake-llm prompt-prefix @(\S+) #(\S+): length=(\d+) common=(\S+) static=(\S+) staticSame=(\S+) tools=(\d+) toolsSorted=(\w+) preamble=(\w+) dateFirst=(\w+)/g)]
     .map(m => ({
       who: m[1], length: Number(m[3]), common: m[4] === '-' ? undefined : Number(m[4]),
-      staticEnd: m[5] === '-' ? undefined : Number(m[5]), preamble: m[6], dateFirst: m[7] === 'true',
+      staticEnd: m[5] === '-' ? undefined : Number(m[5]), staticSame: m[6] === 'true',
+      tools: Number(m[7]), toolsSorted: m[8] === 'true', preamble: m[9], dateFirst: m[10] === 'true',
     }))
-  // A call whose first message differs from that agent's previous one: another turn, not a step of a tool loop.
-  const pairs = lines.filter(line => line.common !== undefined && line.common < line.length && line.staticEnd !== undefined)
-  const whole = pairs.filter(line => (line.common ?? 0) >= (line.staticEnd ?? Infinity))
-  const shortest = Math.min(...pairs.map(line => line.staticEnd ?? 0))
+  // A call whose first message differs from that agent's previous one (another
+  // turn, not a step of a tool loop), with the same static block as before.
+  const pairs = lines.filter(line => line.common !== undefined && line.common < line.length && line.staticEnd !== undefined && line.staticSame)
+  const broken = pairs.filter(line => (line.common ?? 0) < (line.staticEnd ?? Infinity))
+  const unsorted = lines.filter(line => !line.toolsSorted).length
+  const withTools = lines.filter(line => line.tools > 0).length
   const agentsByPreamble = new Map()
   for (const line of lines) agentsByPreamble.set(line.preamble, new Set([...(agentsByPreamble.get(line.preamble) ?? []), line.who]))
   const shared = Math.max(0, ...[...agentsByPreamble.values()].map(agents => agents.size))
   const datedFirst = lines.filter(line => line.dateFirst).length
-  check('prompt-cache-prefix', pairs.length > 0 && whole.length * 2 > pairs.length && shared >= 2 && datedFirst === 0,
-    `${lines.length} calls, ${pairs.length} pairs of turns of one agent: ${whole.length} share their whole static block (more than half; the shortest block ${Number.isFinite(shortest) ? shortest : '-'} chars), agents sharing the preamble ${shared} (≥ 2), prompts opening with the date ${datedFirst} (0)`)
+  check('prompt-cache-prefix', pairs.length >= 3 && broken.length === 0 && withTools > 0 && unsorted === 0 && shared >= 2 && datedFirst === 0,
+    `${lines.length} calls; ${pairs.length} pairs of turns of one agent with an unchanged static block (≥ 3), ${broken.length} not sharing all of it (0); ${withTools} calls with tools, ${unsorted} not in the host's order (0); agents sharing the preamble ${shared} (≥ 2); prompts opening with the date ${datedFirst} (0)`)
 }
 console.log(`\nTOTAL ok=${results.filter(r => r.ok).length} ko=${results.filter(r => !r.ok).length}`)
 process.exit(results.some(r => !r.ok) ? 1 : 0)

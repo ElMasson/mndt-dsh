@@ -11,12 +11,29 @@
 // in the working directory), the facts server (never allowed in a channel), and
 // the approvals server (a card), then answers. Every tool result it reads back
 // is logged as TOOL-RESULT <tag> <tool>: <text>.
-import { createHash } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 
 let calls = 0
 /** The first user message of each agent's last call, by agent and channel (prompt-prefix). */
 const previousFirst = new Map()
+/** The fingerprint of each agent's last static block, by agent and channel: keyed, never a plain hash (prompt-cache-prefix). */
+const previousStatic = new Map()
+// Drawn at start, never logged: a block's fingerprint compares two calls of this run, nothing else.
+const STATIC_KEY = randomBytes(32)
+
+/**
+ * The order the host offers tools in (src/tool-policy.ts, toolOrder): the
+ * engine's own first, then the MCP tools by server, then by name, by code unit.
+ * @param name - a tool's name. @returns its server, or the empty string.
+ */
+function serverOf(name) {
+  if (!name.startsWith('mcp__')) return ''
+  const end = name.indexOf('__', 'mcp__'.length)
+  return end < 0 ? '' : name.slice('mcp__'.length, end)
+}
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+const toolOrder = (a, b) => byCodeUnit(serverOf(a), serverOf(b)) || byCodeUnit(a, b)
 const TEXT = 'Réponse de répétition : le canal est bien reçu.'
 const USAGE = { prompt_tokens: 1200, completion_tokens: 12, total_tokens: 1212 }
 const PROBE = [
@@ -185,7 +202,16 @@ createServer((req, res) => {
       previousFirst.set(key, first)
       const preamble = createHash('sha256').update(first.slice(0, 300)).digest('hex').slice(0, 12)
       const staticEnd = first.indexOf('Messages récents du canal #')
-      console.log(`fake-llm prompt-prefix @${who} #${where}: length=${first.length} common=${before === undefined ? '-' : common} static=${staticEnd < 0 ? '-' : staticEnd} preamble=${preamble} dateFirst=${first.startsWith('Nous sommes le')}`)
+      // Whether the static block is the same as that agent's previous one (a
+      // context or a skill changed between two turns changes it, rightly).
+      const staticPrint = staticEnd < 0 ? undefined : createHmac('sha256', STATIC_KEY).update(first.slice(0, staticEnd)).digest('hex')
+      const staticBefore = previousStatic.get(key)
+      if (staticPrint !== undefined) previousStatic.set(key, staticPrint)
+      const staticSame = staticPrint === undefined || staticBefore === undefined ? '-' : String(staticPrint === staticBefore)
+      // The tools as the engine sent them, in their order: the host's order, or not.
+      const toolNames = (request.tools ?? []).map(tool => tool.function?.name ?? tool.name)
+      const toolsSorted = toolNames.every((name, i) => i === 0 || toolOrder(toolNames[i - 1], name) <= 0)
+      console.log(`fake-llm prompt-prefix @${who} #${where}: length=${first.length} common=${before === undefined ? '-' : common} static=${staticEnd < 0 ? '-' : staticEnd} staticSame=${staticSame} tools=${toolNames.length} toolsSorted=${toolsSorted} preamble=${preamble} dateFirst=${first.startsWith('Nous sommes le')}`)
     }
     console.log(`fake-llm call ${calls}: ${req.method} ${req.url} model=${request.model} stream=${request.stream}`)
     // The tools this call offered the model, sorted: the rehearsal compares them

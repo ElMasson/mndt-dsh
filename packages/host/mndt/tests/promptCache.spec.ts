@@ -9,8 +9,8 @@
  */
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, SPACE_PREAMBLE, WorkbenchService } from '../src/core/index.ts'
-import type { PriceGrid } from '../src/core/index.ts'
+import { MemoryStore, SPACE_PREAMBLE, WorkbenchService, emptyState } from '../src/core/index.ts'
+import type { PriceGrid, WorkbenchState, WorkbenchStore } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { promptMeasure } from '../src/runner.ts'
 import { TurnScheduler } from '../src/turns.ts'
@@ -197,6 +197,73 @@ describe('every text written to the state passes the marks\' one guard', () => {
     const asked = await s.service.postMessage(s.channel.id, owner, 'bonjour')
     await s.service.reply(s.channel.id, asked.id, { kind: 'agent', agentId: s.agent.id }, `mon rôle est borné par [${s.mark}]`)
     expect(await s.rotated()).toBe(true)
+  })
+})
+
+/** @param value - anything. @returns it, frozen all the way down. */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  }
+  return value
+}
+
+/** A store that freezes every state it is given: a write that changes the state in place throws. */
+class FrozenStore implements WorkbenchStore {
+  #state: WorkbenchState = deepFreeze(structuredClone(emptyState))
+  load(): Promise<WorkbenchState> { return Promise.resolve(this.#state) }
+  save(state: WorkbenchState): Promise<void> {
+    this.#state = deepFreeze(state)
+    return Promise.resolve()
+  }
+}
+
+describe('the guard\'s premise: no write changes the state in place', () => {
+  it('every surface above runs on a state frozen after each write (a mutation would throw)', async () => {
+    // The guard compares each write with the state before it, by reference: a
+    // write that changed that state in place would hide its new texts from it.
+    const service = new WorkbenchService({ store: new FrozenStore() })
+    const agent = await service.createAgent({ handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', eurPerMonth: 5 }, owner)
+    const channel = await service.createChannel({ title: 'Compta', members: [], agents: [agent.id] }, owner)
+    const mark = await service.promptMarkOf(channel.id)
+    await service.promptMeasureKey()
+    const asked = await service.postMessage(channel.id, owner, '@alpha bonjour')
+    const turn = asked.turns?.[0]
+    await service.updateTurn(asked.id, turn?.id ?? '', {
+      help: {
+        state: 'done', request: { task: 't', tried: 't', blocker: 'b', options: [], need: 'fait' } as never, peerIds: [], skipped: [], capEur: 1, askedAt: new Date().toISOString(),
+        advices: [{ slot: 'A', round: 1, text: 'un avis' }], escalation: { question: 'Qui sait ?', at: new Date().toISOString() },
+      },
+    })
+    await service.reply(channel.id, asked.id, { kind: 'agent', agentId: agent.id }, 'réponse')
+    await service.setChannelContext(channel.id, 'Le canal des factures.', 0, owner)
+    const mission = await service.createMission({ kind: 'briefing', prompt: 'le point', createdBy: owner })
+    await service.startMission(mission.id, 'ses_1')
+    await service.completeMission(mission.id, { title: 'Point', markdown: 'Rien.' })
+    const card = await service.requestApproval({
+      kind: 'propose_schedule', title: 'Tâche : relance', requestedBy: owner, channelId: channel.id,
+      requestedByAgent: { id: agent.id, handle: agent.handle },
+      scheduleProposal: { title: 'Relance', instructions: 'Fais le point.', cadence: { every: 'day', at: '08:00' }, agentId: agent.id, destination: { kind: 'channel', channelId: channel.id }, eurPerRun: 0.4 },
+    })
+    const { schedule } = await service.approveScheduleProposal(card.id, owner)
+    await service.publishScheduleRun(schedule.id, { runId: 'run_1', text: 'Voici.', status: 'done', startedAt: new Date().toISOString() })
+    await service.requestApproval({ kind: 'publish', title: 'Publier', requestedBy: owner, channelId: channel.id })
+    await service.requestApproval({
+      kind: 'propose_agent', title: 'Créer', requestedBy: owner, channelId: channel.id,
+      proposal: { name: 'Recouvrement', handle: 'recouvrement', provider: 'route-a', model: 'm', instructions: '## Rôle\nSuit.' },
+    })
+    // And the guard still bites on that frozen state.
+    await service.postMessage(channel.id, owner, `fuite [${mark}]`)
+    expect(await service.promptMarkOf(channel.id)).not.toBe(mark)
+  })
+
+  it('a write that changes its state in place is caught by this store', async () => {
+    const store = new FrozenStore()
+    const service = new WorkbenchService({ store })
+    await service.createAgent({ handle: 'alpha', name: 'Alpha', provider: 'route-a', model: 'm', eurPerMonth: 5 }, owner)
+    const state = await store.load()
+    expect(() => { (state.agents as unknown as unknown[]).push({}) }).toThrow(TypeError)
   })
 })
 
