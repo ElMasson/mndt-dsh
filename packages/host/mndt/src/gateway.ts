@@ -10,7 +10,7 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { instanceTimeZone, JsonFileStore, WorkbenchService } from './core/index.ts'
+import { instanceTimeZone, JsonFileStore, wallClock, WorkbenchService } from './core/index.ts'
 import { reconcileInterrupted } from './reconcile.ts'
 import type { ApprovalState, MissionKind } from './core/index.ts'
 import type { Mission, PageState } from './types.ts'
@@ -34,9 +34,9 @@ import { TurnScheduler } from './turns.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
-import { defaultAutomations, dueAutomations, firedFields, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import { defaultAutomations, dueAutomations, readAutomations, reserveRun, runAutomation, updateAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
-import { clearOperatorWarning, errorShape, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { errorShape, warnOperator, warnOperatorDaily, warnOperatorOnce } from './operator-log.ts'
 import { publicFailure } from './public-failure.ts'
 
 /** How the deployment configures the product. */
@@ -347,9 +347,9 @@ export class WorkbenchGateway extends TypertRemoteService {
     const running = new Set<string>()
     const every = Number(process.env.DSH_MNDT_BRIEFING_EVERY_MS ?? Number.NaN)
     const legacyAt = process.env.DSH_MNDT_BRIEFING_AT
+    // Every write of the registry goes through its line of writers (shared with the API).
     const persist = async (patch: (item: Automation) => Automation): Promise<void> => {
-      const current = await readAutomations(this.automationsPath, legacyAt)
-      await writeAutomations(this.automationsPath, current.map(patch))
+      await updateAutomations(this.automationsPath, current => current.map(patch), legacyAt)
     }
     const fire = (item: Automation, owner: string | undefined): void => {
       running.add(item.id)
@@ -378,59 +378,66 @@ export class WorkbenchGateway extends TypertRemoteService {
     const timeZone = this.timeZoneFor(ctx)
     // One line per start: two in one process would say the plugin was built twice.
     warnOperator(ctx, `mndt: automations scheduler started, zone ${timeZone}`)
+    // One pass at a time: a slow pass (a slow disk, a slow role table) never
+    // overlaps the next, which would start an automation twice.
+    let ticking = false
     const tick = (): void => {
-      // Its sign of life, first: a pass that fails later still says the scheduler runs.
-      this.#schedulerAt = new Date().toISOString()
-      // A reason that blocks every pass is said again each day, not only at start.
-      const day = this.#schedulerAt.slice(0, 10)
+      const now = new Date()
+      // Its sign of life, first: a pass skipped or failing still says the scheduler runs.
+      this.#schedulerAt = now.toISOString()
+      if (ticking) return
+      ticking = true
+      // A reason that blocks every pass is said once a day at most, in the instance's zone.
+      const wall = wallClock(now, timeZone)
+      const day = `${wall.year}-${String(wall.month).padStart(2, '0')}-${String(wall.day).padStart(2, '0')}`
       void (async () => {
         try {
           let items = await readAutomations(this.automationsPath, legacyAt)
           if (Number.isFinite(every) && every > 0) {
             const minutes = Math.max(1, Math.round(every / 60_000))
             if (!items.some(item => item.id === 'auto_briefing' && item.everyMinutes === minutes)) {
-              await writeAutomations(this.automationsPath, items.map(item => item.id === 'auto_briefing' ? { ...item, everyMinutes: minutes, enabled: true } : item))
-              items = await readAutomations(this.automationsPath, legacyAt)
+              items = await updateAutomations(this.automationsPath,
+                current => current.map(item => (item.id === 'auto_briefing' ? { ...item, everyMinutes: minutes, enabled: true } : item)), legacyAt)
             }
           }
-          const now = new Date()
           const team = this.proxyUserHeader !== undefined && this.proxyUserHeader !== ''
           const table = team ? await this.grants.grants() : undefined
           const owners = table?.ok === true ? ownersOf(table.grants) : new Set<string>()
           if (team && owners.size === 0) {
             // Without a readable owner nothing runs, and nothing is switched off either.
-            // Said once, not at every pass of the tick (every 30 s).
-            warnOperatorOnce(ctx, 'automations-owner', `mndt: automations skipped (${day}): the role table names no owner, or cannot be read`)
+            warnOperatorDaily(ctx, 'automations-owner', `mndt: automations skipped (${day}): the role table names no owner, or cannot be read`, day)
             return
           }
-          clearOperatorWarning('automations-owner')
           if (team) {
             // On a team instance an automation runs once an owner enabled it. One
             // enabled otherwise (the deployment default auto_briefing included) is
             // switched off with its reason, so the page shows what runs and why not.
             const stray = items.filter(item => item.enabled && automationRefusal(item, true, owners) !== undefined)
             if (stray.length > 0) {
-              await persist((candidate) => {
-                const reason = stray.some(item => item.id === candidate.id) ? automationRefusal(candidate, true, owners) : undefined
+              items = await updateAutomations(this.automationsPath, current => current.map((candidate) => {
+                const reason = candidate.enabled ? automationRefusal(candidate, true, owners) : undefined
                 return reason === undefined ? candidate : { ...candidate, enabled: false, lastOutcome: reason }
-              })
+              }), legacyAt)
               for (const item of stray) warnOperator(ctx, `mndt: automation ${item.id} ${automationRefusal(item, true, owners) ?? 'disabled'}`)
-              items = await readAutomations(this.automationsPath, legacyAt)
             }
           }
           for (const item of dueAutomations(items, now, timeZone)) {
             if (running.has(item.id)) {
-              warnOperatorOnce(ctx, `automation-running-${item.id}`, `mndt: automation ${item.id} not started (${day}): its previous run is still going`)
+              warnOperatorDaily(ctx, `automation-running-${item.id}`, `mndt: automation ${item.id} not started (${day}): its previous run is still going`, day)
               continue
             }
-            await persist(candidate => (candidate.id === item.id ? { ...candidate, ...firedFields(now, timeZone) } : candidate))
+            // The slot is reserved under the registry's line: read again, still due,
+            // stamped, and only then started. Never twice, whatever overlaps.
+            const reserved = await reserveRun(this.automationsPath, item.id, now, timeZone, legacyAt)
+            if (reserved === undefined) continue
             // The run is the owner's who enabled it (team), private.
-            fire(item, team ? item.enabledBy?.toLowerCase() : undefined)
+            fire(reserved, team ? reserved.enabledBy?.toLowerCase() : undefined)
           }
-          clearOperatorWarning('automations-read')
         } catch (error) {
           // Its shape only: a JSON error quotes the start of the file, a prompt.
-          warnOperatorOnce(ctx, 'automations-read', `mndt: could not read the automations (${day}): ${errorShape(error)}`)
+          warnOperatorDaily(ctx, 'automations-read', `mndt: could not read the automations (${day}): ${errorShape(error)}`, day)
+        } finally {
+          ticking = false
         }
       })()
     }

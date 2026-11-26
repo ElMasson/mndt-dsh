@@ -20,7 +20,7 @@ import type {
   Visibility,
 } from './core/index.ts'
 import type { WorkbenchService, MissionResult, WorkbenchState, Approval } from './core/index.ts'
-import { isClock, nextRunAt, normalise, readAutomations, runAutomation, writeAutomations } from './automations.ts'
+import { isClock, nextRunAt, normalise, readAutomations, runAutomation, updateAutomations } from './automations.ts'
 import type { Automation } from './automations.ts'
 import { isPlainAscii } from './core/address.ts'
 import { operatorLine } from './operator-log.ts'
@@ -248,7 +248,8 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
   const missionsClosed = async (identity: string): Promise<MndtApiResponse | undefined> => {
     if (!teamInstance) return undefined
     const table = await grants.grants()
-    const owner = table.ok && table.grants.some(grant => grant.subject === identity && grant.role === 'owner')
+    // Compared without case: an address is one person however it is written.
+    const owner = table.ok && table.grants.some(grant => grant.subject.toLowerCase() === identity.toLowerCase() && grant.role === 'owner')
     return owner ? undefined : respond(404, { error: 'not found' })
   }
 
@@ -1683,8 +1684,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         }
         await writeFile(options.schedulePath, JSON.stringify({ at }), 'utf8')
         if (options.automationsPath !== undefined) {
-          const items = await readAutomations(options.automationsPath).catch(() => [])
-          await writeAutomations(options.automationsPath, items.map(item => (item.id === 'auto_briefing' ? { ...item, at } : item)))
+          await updateAutomations(options.automationsPath, items => items.map(item => (item.id === 'auto_briefing' ? { ...item, at } : item)))
         }
         return respond(200, { at })
       }
@@ -1712,35 +1712,39 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const denied = await authorise(identity, 'rights.write')
         if (denied !== undefined) return denied
         if (options.automationsPath === undefined) return respond(503, { error: 'this deployment has no writable automation registry' })
-        const items = await readAutomations(options.automationsPath)
         const input = parseBody(request.body)
         // A time given must be a time: never turned into 07:30 without a word.
         if (input.at !== undefined && !isClock(input.at)) {
           return respond(400, { error: 'the time must read HH:MM, like 07:30', code: 'bad-time' })
         }
         const id = typeof input.id === 'string' ? input.id : undefined
-        const existing = id === undefined ? undefined : items.find(item => item.id === id)
-        // Its time or its switch only (the page's « heure » in place): nothing of
-        // what it runs changes, so nobody takes it over. Its author stays (a system
-        // automation stays « as shipped », under that guard), and so does who
-        // enabled it, unless it is switched on now.
-        const scheduleOnly = existing !== undefined && Object.keys(input).every(key => key === 'id' || key === 'at' || key === 'enabled')
-        const proposed = normalise({
-          ...(existing ?? {}),
-          ...input,
-          ...(id === undefined ? {} : { id }),
-          // On a team instance the owner who saves an automation takes it over,
-          // a system one included: they have read its prompt.
-          createdBy: scheduleOnly ? existing.createdBy : teamInstance ? identity : existing?.createdBy ?? identity,
+        // Read, decided and written as one step among the registry's writers (the scheduler's too).
+        let saved: { readonly recorded: Automation; readonly created: boolean } | undefined
+        await updateAutomations(options.automationsPath, (items) => {
+          const existing = id === undefined ? undefined : items.find(item => item.id === id)
+          // Its time or its switch only (the page's « heure » in place): nothing of
+          // what it runs changes, so nobody takes it over. Its author stays (a system
+          // automation stays « as shipped », under that guard), and so does who
+          // enabled it, unless it is switched on now.
+          const scheduleOnly = existing !== undefined && Object.keys(input).every(key => key === 'id' || key === 'at' || key === 'enabled')
+          const proposed = normalise({
+            ...(existing ?? {}),
+            ...input,
+            ...(id === undefined ? {} : { id }),
+            // On a team instance the owner who saves an automation takes it over,
+            // a system one included: they have read its prompt.
+            createdBy: scheduleOnly ? existing.createdBy : teamInstance ? identity : existing?.createdBy ?? identity,
+          })
+          if (proposed === undefined) return items
+          // Who enabled it is the server's record, never the request's.
+          const { enabledBy: _claimed, ...rest } = proposed
+          const keptEnabler = scheduleOnly && existing.enabled && existing.enabledBy !== undefined ? existing.enabledBy : identity
+          const recorded: Automation = proposed.enabled ? { ...rest, enabledBy: keptEnabler } : rest
+          saved = { recorded, created: existing === undefined }
+          return existing === undefined ? [...items, recorded] : items.map(item => (item.id === recorded.id ? recorded : item))
         })
-        if (proposed === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
-        // Who enabled it is the server's record, never the request's.
-        const { enabledBy: _claimed, ...rest } = proposed
-        const keptEnabler = scheduleOnly && existing.enabled && existing.enabledBy !== undefined ? existing.enabledBy : identity
-        const recorded: Automation = proposed.enabled ? { ...rest, enabledBy: keptEnabler } : rest
-        const next = existing === undefined ? [...items, recorded] : items.map(item => (item.id === recorded.id ? recorded : item))
-        await writeAutomations(options.automationsPath, next)
-        return respond(existing === undefined ? 201 : 200, { automation: recorded })
+        if (saved === undefined) return respond(400, { error: 'a name, a prompt, a valid kind and a time like 07:30 are required' })
+        return respond(saved.created ? 201 : 200, { automation: saved.recorded })
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/toggle$/.test(path)) {
@@ -1752,15 +1756,14 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const id = path.split('/')[2] ?? ''
         const input = parseBody(request.body)
         if (typeof input.enabled !== 'boolean') return respond(400, { error: 'enabled must be true or false' })
-        const items = await readAutomations(options.automationsPath)
-        if (!items.some(item => item.id === id)) return respond(404, { error: `no automation ${id}` })
-        const next = items.map((item) => {
+        const next = await updateAutomations(options.automationsPath, items => items.map((item) => {
           if (item.id !== id) return item
           const { enabledBy: _previous, ...rest } = item
           return input.enabled === true ? { ...rest, enabled: true, enabledBy: identity } : { ...rest, enabled: false }
-        })
-        await writeAutomations(options.automationsPath, next)
-        return respond(200, { automation: next.find(item => item.id === id) })
+        }))
+        const toggled = next.find(item => item.id === id)
+        if (toggled === undefined) return respond(404, { error: `no automation ${id}` })
+        return respond(200, { automation: toggled })
       }
 
       if (request.method === 'POST' && /^\/automations\/[^/]+\/run$/.test(path)) {
@@ -1784,10 +1787,10 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
           failures,
           ...(failures >= 3 ? { enabled: false } : {}),
         }
-        // Read again: the run lasts minutes, and the scheduler may have written meanwhile.
-        const current = await readAutomations(options.automationsPath)
-        const updated = current.map(candidate => (candidate.id === id ? { ...candidate, ...patch } : candidate))
-        await writeAutomations(options.automationsPath, updated)
+        // Written as one step among the registry's writers: the run lasts minutes,
+        // and the scheduler may have written meanwhile.
+        await updateAutomations(options.automationsPath,
+          current => current.map(candidate => (candidate.id === id ? { ...candidate, ...patch } : candidate)))
         const mission = await service.getMission(outcome.missionId)
         return respond(200, { mission, outcome: outcome.outcome })
       }

@@ -21,6 +21,7 @@
  */
 import type { Approval, WorkbenchEvent, WorkbenchState } from './types.ts'
 import type { Schedule } from './core/schedule.ts'
+import { isLaneOf } from './core/service.ts'
 
 /** Who reads, with what they may see resolved once. */
 export interface Reader {
@@ -111,7 +112,7 @@ export function scheduleChannel(schedule: Pick<Schedule, 'destination'>, state: 
   const destination = schedule.destination
   return destination.kind === 'channel'
     ? destination.channelId
-    : (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === destination.member)?.id
+    : (state.channels ?? []).find(channel => isLaneOf(channel, destination.member))?.id
 }
 
 /**

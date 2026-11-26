@@ -55,6 +55,16 @@ import { isPlainAscii } from './address.ts'
  * @returns them, once each is checked to be plain ASCII (address.ts): a lookalike
  * spelling would be lower-cased onto another person's address.
  */
+/**
+ * @param channel - a channel.
+ * @param email - a person.
+ * @returns whether it is that person's lane, the address compared without case:
+ * a capital letter never makes a second lane.
+ */
+export function isLaneOf(channel: Channel, email: string): boolean {
+  return channel.kind === 'solo' && channel.members[0]?.toLowerCase() === email.toLowerCase()
+}
+
 function plainMembers(members: readonly string[]): readonly string[] {
   const refused = members.filter(email => !isPlainAscii(email))
   if (refused.length > 0) throw new Refusal(`a member is a plain ASCII e-mail address: ${refused.length} refused`)
@@ -493,7 +503,7 @@ export class WorkbenchService {
     const published = mission.kind === 'briefing' || mission.automationId !== undefined
     if (this.#options.briefingsInLane !== true || !published || !owner.includes('@')) return { state, events: [] }
     const events: WorkbenchEvent[] = []
-    let lane = (state.channels ?? []).find(channel => channel.kind === 'solo' && channel.members[0] === owner)
+    let lane = (state.channels ?? []).find(channel => isLaneOf(channel, owner))
     let channels = state.channels ?? []
     if (lane === undefined) {
       lane = {
@@ -1530,10 +1540,10 @@ export class WorkbenchService {
 
   /** @param email - the person. @returns their solo lane, created when absent. */
   async laneOf(email: string): Promise<Channel> {
-    const existing = ((await this.#ready()).channels ?? []).find(c => c.kind === 'solo' && c.members[0] === email)
+    const existing = ((await this.#ready()).channels ?? []).find(c => isLaneOf(c, email))
     if (existing !== undefined) return existing
     return this.#write((state) => {
-      const again = (state.channels ?? []).find(c => c.kind === 'solo' && c.members[0] === email)
+      const again = (state.channels ?? []).find(c => isLaneOf(c, email))
       const at = this.#at()
       const lane: Channel = again ?? {
         id: this.#id('chn'),

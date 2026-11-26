@@ -6,14 +6,15 @@
  * catch-up, and an API that an unloaded plugin could leave open. These tests
  * pin those.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MemoryStore, WorkbenchService } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
 import { fileGrants } from '../src/grants.ts'
-import { defaultAutomations, dueAutomations, runAutomation, writeAutomations } from '../src/automations.ts'
+import { defaultAutomations, dueAutomations, reserveRun, runAutomation, updateAutomations, writeAutomations } from '../src/automations.ts'
+import { warnOperatorDaily } from '../src/operator-log.ts'
 import type { Automation } from '../src/automations.ts'
 import { automationRefusal, serveUntilUnloaded } from '../src/gateway.ts'
 
@@ -173,5 +174,96 @@ describe('changing an automation\'s time (the page\'s « heure », #165)', () =>
     await writeAutomations(automationsPath, [briefing])
     await api({ method: 'POST', path: '/automations', headers: as(owner), body: JSON.stringify({ id: 'auto_briefing', at: '06:45', prompt: 'Briefing court.' }) })
     expect(stored(automationsPath)[0]).toMatchObject({ createdBy: owner, prompt: 'Briefing court.' })
+  })
+})
+
+describe('the registry\'s writers, in one line', () => {
+  const ZONE = 'Indian/Reunion'
+  // 09:03 at La Réunion on 26 November: within relance's window (09:00).
+  const now = new Date(Date.UTC(2026, 10, 26, 5, 3))
+
+  it('two passes that overlap start it once', async () => {
+    const { automationsPath } = teamApi()
+    await writeAutomations(automationsPath, [relance])
+    const [first, second] = await Promise.all([
+      reserveRun(automationsPath, relance.id, now, ZONE),
+      reserveRun(automationsPath, relance.id, now, ZONE),
+    ])
+    expect([first, second].filter(item => item !== undefined)).toHaveLength(1)
+    const stored = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0]
+    expect(stored).toMatchObject({ lastFiredDate: '2026-11-26', lastFiredAt: now.toISOString() })
+  })
+
+  it('a run by hand ending during a pass: both kept, and no temporary file left', async () => {
+    const { automationsPath } = teamApi()
+    await writeAutomations(automationsPath, [relance])
+    await Promise.all([
+      updateAutomations(automationsPath, items => items.map(item => ({ ...item, lastRunAt: '2026-11-26T05:00:00.000Z', lastOutcome: 'done' }))),
+      reserveRun(automationsPath, relance.id, now, ZONE),
+      updateAutomations(automationsPath, items => items.map(item => ({ ...item, failures: 0 }))),
+    ])
+    const stored = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0]
+    expect(stored).toMatchObject({ lastRunAt: now.toISOString(), lastFiredDate: '2026-11-26', lastOutcome: 'done', failures: 0 })
+    expect(readdirSync(join(automationsPath, '..')).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('an operator line of a recurring reason', () => {
+  it('at most once a day per reason, even when the reason comes and goes; again the next day', () => {
+    const lines: string[] = []
+    const ctx = { logger: { warn: (line: string) => { lines.push(line) } } } as unknown as Parameters<typeof warnOperatorDaily>[0]
+    for (let pass = 0; pass < 6; pass += 1) {
+      warnOperatorDaily(ctx, 'automations-read', pass % 2 === 0 ? 'mndt: unreadable (A)' : 'mndt: unreadable (B)', '2026-11-26')
+    }
+    expect(lines).toEqual(['mndt: unreadable (A)', 'mndt: unreadable (B)'])
+    warnOperatorDaily(ctx, 'automations-read', 'mndt: unreadable (A)', '2026-11-27')
+    expect(lines).toHaveLength(3)
+  })
+})
+
+describe('one person, one lane, whatever the case', () => {
+  it('an automation run under a capitalised address lands in the existing lane', async () => {
+    const { service } = teamApi()
+    const lane = await service.laneOf(owner)
+    const runner = { run: async () => ({ title: 't', markdown: 'le rapport', sources: [] }) }
+    await runAutomation(service, runner, relance, 'Duke@DataNalysis.re')
+    const lanes = ((await service.snapshot()).channels ?? []).filter(channel => channel.kind === 'solo')
+    expect(lanes.map(channel => channel.id)).toEqual([lane.id])
+  })
+})
+
+describe('switching an automation on through POST /automations, and running it by hand', () => {
+  const shipped = defaultAutomations().find(item => item.id === 'auto_briefing') as Automation
+
+  it('{ id, enabled: true } keeps its author: the system briefing stays as shipped', async () => {
+    const { api, automationsPath } = teamApi()
+    await writeAutomations(automationsPath, [{ ...shipped, enabled: false }])
+    const answer = await api({ method: 'POST', path: '/automations', headers: as(owner), body: JSON.stringify({ id: 'auto_briefing', enabled: true }) })
+    expect(answer.status).toBe(200)
+    const saved = (JSON.parse(readFileSync(automationsPath, 'utf8')) as { items: Automation[] }).items[0] as Automation
+    expect(saved).toMatchObject({ enabled: true, createdBy: 'scheduler', enabledBy: owner })
+    expect(automationRefusal(saved, true, new Set([owner]))).toBeUndefined()
+  })
+
+  it('a run by hand is the owners\' alone; an admin reads 404', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'automations-admin-'))
+    const grants = [{ subject: owner, role: 'owner' }, { subject: 'admin@datanalysis.re', role: 'admin' }]
+    writeFileSync(join(dir, 'grants.json'), JSON.stringify({ grants }))
+    const service = new WorkbenchService({ store: new MemoryStore(), briefingsInLane: true })
+    const api = createMndtApi({
+      service,
+      runner: { run: async () => ({ title: 't', markdown: 'm', sources: [] }) },
+      identity: { proxyUserHeader: 'x-forwarded-email', gatewaySecret: SECRET },
+      grants: fileGrants(join(dir, 'grants.json')),
+      automationsPath: join(dir, 'automations.json'),
+    })
+    await writeAutomations(join(dir, 'automations.json'), [relance])
+    expect((await api({ method: 'POST', path: '/automations/auto_relance/run', headers: as('admin@datanalysis.re'), body: '{}' })).status).toBe(404)
+    expect((await api({ method: 'POST', path: '/automations/auto_relance/run', headers: as(owner), body: '{}' })).status).toBe(200)
+    // Its output goes to the lane of the owner who ran it.
+    const lane = await service.laneOf(owner)
+    const messages = (await service.snapshot()).messages ?? []
+    const published = messages.filter(message => message.channelId === lane.id && message.mission !== undefined)
+    expect(published).toHaveLength(1)
   })
 })

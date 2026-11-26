@@ -6,7 +6,7 @@
  * a restart keeps it, and the same runner executes it, which means the model,
  * the connectors and the approval rules are exactly those of a normal mission.
  */
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rename, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { nextRuns, wallClock } from './core/index.ts'
 import type { Mission, MissionKind, MissionResult, WorkbenchService } from './core/index.ts'
@@ -120,9 +120,74 @@ export async function readAutomations(path: string, legacyAt?: string): Promise<
   return seeded
 }
 
-/** @param path - the registry file. @param items - what to store. */
+/**
+ * Store the registry whole: written beside it, then renamed over it, so a
+ * reader never sees half a file. A read-modify-write goes through
+ * updateAutomations, never through this alone.
+ * @param path - the registry file.
+ * @param items - what to store.
+ */
 export async function writeAutomations(path: string, items: readonly Automation[]): Promise<void> {
-  await writeFile(path, JSON.stringify({ items }, null, 2), 'utf8')
+  const temporary = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  await writeFile(temporary, JSON.stringify({ items }, null, 2), 'utf8')
+  await rename(temporary, path)
+}
+
+/** One line of writers per registry, in this process: the scheduler and the API share it. */
+const writers = new Map<string, Promise<unknown>>()
+
+/**
+ * @param path - the registry file.
+ * @param work - a read-modify-write of it; it must not itself wait for this line.
+ * @returns its result, once every write before it is done.
+ */
+function inLine<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const before = writers.get(path) ?? Promise.resolve()
+  const next = before.then(work, work)
+  writers.set(path, next.catch(() => undefined))
+  return next
+}
+
+/**
+ * Change the registry: read, change, write, as one step among its writers.
+ * @param path - the registry file.
+ * @param change - from the items read to the items to store.
+ * @param legacyAt - the briefing hour from the older file, when present.
+ * @returns the items stored.
+ */
+export function updateAutomations(
+  path: string,
+  change: (items: readonly Automation[]) => readonly Automation[],
+  legacyAt?: string,
+): Promise<readonly Automation[]> {
+  return inLine(path, async () => {
+    const next = change(await readAutomations(path, legacyAt))
+    await writeAutomations(path, next)
+    return next
+  })
+}
+
+/**
+ * Reserve a run of the scheduler, as one step among the registry's writers:
+ * read it again, check the automation is still due (not started today by
+ * another pass), stamp it, and only then let it start. Two passes that overlap
+ * start it once.
+ * @param path - the registry file.
+ * @param id - the automation.
+ * @param now - the moment of the pass.
+ * @param timeZone - the instance's IANA zone.
+ * @param legacyAt - the briefing hour from the older file, when present.
+ * @returns the automation to start, or undefined when it is no longer due.
+ */
+export function reserveRun(path: string, id: string, now: Date, timeZone: string, legacyAt?: string): Promise<Automation | undefined> {
+  return inLine(path, async () => {
+    const items = await readAutomations(path, legacyAt)
+    const item = items.find(candidate => candidate.id === id)
+    if (item === undefined || dueAutomations([item], now, timeZone).length === 0) return undefined
+    const stamped = { ...item, ...firedFields(now, timeZone) }
+    await writeAutomations(path, items.map(candidate => (candidate.id === id ? stamped : candidate)))
+    return stamped
+  })
 }
 
 /**
