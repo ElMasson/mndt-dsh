@@ -230,14 +230,17 @@ export function scheduleRowOf(raw: unknown): ScheduleRow | undefined {
   }
 }
 
-/** @param failure - a refused gesture. @param t - the copy. @returns its words, by code. */
+/**
+ * @param failure - a refused gesture or a failed read. @param t - the copy.
+ * @returns a fixed sentence by code; anything else (another refusal, a network error) the generic one.
+ * Never the served or thrown message: it may carry a detail the reader has no use for.
+ */
 function scheduleRefusal(failure: unknown, t: ChatTranslate): string {
   if (failure instanceof ChatRefusal) {
     if (failure.code === 'not-allowed') return t('scheduleNotAllowed')
     if (failure.status === 404) return t('scheduleGone')
-    return failure.message
   }
-  return failure instanceof Error ? failure.message : String(failure)
+  return t('scheduleUnavailable')
 }
 
 export type ScheduleFace = Pick<ChatFace, 'schedules' | 'pauseSchedule' | 'resumeSchedule' | 'deleteSchedule'>

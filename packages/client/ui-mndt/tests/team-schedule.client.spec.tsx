@@ -183,9 +183,9 @@ describe('a core that serves no tasks route', () => {
     await new Promise(r => setTimeout(r, 50))
     expect(screen.queryByTestId('schedule-list')).toBeNull()
     cleanup()
-    vi.spyOn(chat, 'schedules').mockRejectedValue(new ChatRefusal('internal error', 500))
+    vi.spyOn(chat, 'schedules').mockRejectedValue(new ChatRefusal('ECONNRESET 10.0.0.4:8443 internal', 500))
     render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
-    expect((await screen.findByRole('alert')).textContent).toBe('internal error')
+    expect((await screen.findByRole('alert')).textContent).toBe('Les tâches ne répondent pas pour l\'instant : réessayez dans un moment.')
   })
 })
 
@@ -228,5 +228,33 @@ describe('a task\'s last run (PR 2)', () => {
     const agents = new Map([[assistant.id, assistant]])
     render(<WebCard card={card({ eurPerMonthMax: 2 })} canDecide onDecide={vi.fn()} channel={compta} agents={agents} t={chatFrench} />)
     expect(screen.getByTestId('schedule-cost').textContent).toContain('au plus par mois')
+  })
+})
+
+describe('a refusal never shows the served or thrown message', { timeout: 20_000 }, () => {
+  it('another refusal or a network error reads the generic sentence', async () => {
+    const failures = [
+      new ChatRefusal('upstream sk-live-9 refused', 400, 'something-else'),
+      new TypeError('Failed to fetch https://10.0.0.4/x'),
+    ]
+    for (const failure of failures) {
+      cleanup()
+      const chat = createMockChat({ you, agents: [assistant], channels: [compta], schedules: [task()] }, () => Date.parse(at))
+      render(<ScheduleList face={chat} query={{ channelId: 'chn_1' }} agents={[assistant]} t={chatFrench} />)
+      vi.spyOn(chat, 'pauseSchedule').mockRejectedValue(failure)
+      fireEvent.click(await screen.findByRole('button', { name: 'Mettre en pause' }))
+      const alert = await screen.findByRole('alert')
+      expect(alert.textContent).toBe('Les tâches ne répondent pas pour l\'instant : réessayez dans un moment.')
+      expect(alert.textContent).not.toMatch(/sk-live|10\.0\.0\.4/u)
+    }
+  })
+})
+
+describe('the month\'s bound on the card', () => {
+  it('absent when the host does not serve it: only the cost per run', () => {
+    const agents = new Map([[assistant.id, assistant]])
+    render(<WebCard card={card()} canDecide onDecide={vi.fn()} channel={compta} agents={agents} t={chatFrench} />)
+    expect(screen.getByTestId('schedule-cost').textContent).toContain('au plus par passage')
+    expect(screen.getByTestId('schedule-cost').textContent).not.toContain('par mois')
   })
 })
