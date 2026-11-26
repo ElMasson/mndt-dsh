@@ -5,10 +5,11 @@
  * and three gestures: run now (1 click), suspend, activate. A run's result reaches the owner's
  * lane only for a briefing (the core publishes no other kind there): only then is it linked.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { AutomationRow, MndtFace } from './face.ts'
+import { when } from './format.ts'
 import { cadenceWords } from './schedule.tsx'
 
 /** @param row - an automation. @returns its hour in words (days: 0 is Sunday on an automation). */
@@ -18,6 +19,15 @@ function automationWhen(row: AutomationRow, t: ChatTranslate): string {
   return days.length === 0 || days.length === 7
     ? cadenceWords({ every: 'day', at: row.at }, t)
     : cadenceWords({ every: 'week', days: [...new Set(days)].sort(), at: row.at }, t)
+}
+
+/**
+ * @param row - an automation. @returns when it last ran: lastRunAt (a manual run included) when served,
+ * else lastFiredDate; undefined when neither is.
+ */
+function lastRunOf(row: AutomationRow): string | undefined {
+  if (row.lastRunAt !== undefined && !Number.isNaN(Date.parse(row.lastRunAt))) return when(row.lastRunAt)
+  return row.lastFiredDate
 }
 
 /** What a row says after a gesture. */
@@ -35,6 +45,8 @@ export function ScheduledScreen(props: {
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [said, setSaid] = useState<Said | undefined>(undefined)
+  // One gesture at a time: a second click before the first answer does nothing (a ref, set at once).
+  const inFlight = useRef(false)
   const load = useCallback(async (): Promise<void> => {
     try {
       setRows((await api.automations()).items)
@@ -45,22 +57,40 @@ export function ScheduledScreen(props: {
     }
   }, [api])
   useEffect(() => { void load() }, [load])
-  const run = async (row: AutomationRow): Promise<void> => {
+  /** @param row - the line. @param gesture - what to do. Runs it alone, and always frees the line. */
+  const once = async (row: AutomationRow, gesture: () => Promise<void>): Promise<void> => {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(row.id)
     setSaid(undefined)
-    const outcome = await api.runAutomationNow(row.id)
-    setSaid(outcome.ok ? { id: row.id, ran: true, lane: row.kind === 'briefing' } : { id: row.id, error: t('scheduledRunRefused') })
-    await load()
-    setBusy(undefined)
+    try {
+      await gesture()
+      await load()
+    } finally {
+      inFlight.current = false
+      setBusy(undefined)
+    }
   }
-  const toggle = async (row: AutomationRow): Promise<void> => {
-    setBusy(row.id)
-    setSaid(undefined)
-    const outcome = await api.toggleAutomation(row.id, !row.enabled)
-    if (!outcome.ok) setSaid({ id: row.id, error: t('scheduledToggleRefused') })
-    await load()
-    setBusy(undefined)
-  }
+  const run = (row: AutomationRow): Promise<void> => once(row, async () => {
+    try {
+      const outcome = await api.runAutomationNow(row.id)
+      // A 200 can still say it failed (« failed: … »): a fixed sentence, never the rest of the text.
+      const failed = !outcome.ok || (outcome.value?.outcome ?? '').startsWith('failed')
+      setSaid(failed
+        ? { id: row.id, error: t(outcome.ok ? 'scheduledRunFailed' : 'scheduledRunRefused') }
+        : { id: row.id, ran: true, lane: row.kind === 'briefing' })
+    } catch {
+      setSaid({ id: row.id, error: t('scheduledRunRefused') })
+    }
+  })
+  const toggle = (row: AutomationRow): Promise<void> => once(row, async () => {
+    try {
+      const outcome = await api.toggleAutomation(row.id, !row.enabled)
+      if (!outcome.ok) setSaid({ id: row.id, error: t('scheduledToggleRefused') })
+    } catch {
+      setSaid({ id: row.id, error: t('scheduledToggleRefused') })
+    }
+  })
   return (
     <section className="mw-screen" data-testid="team-scheduled">
       <h1 className="mw-title">{props.title}</h1>
@@ -76,9 +106,9 @@ export function ScheduledScreen(props: {
                 {` · ${automationWhen(row, t)}`}
                 <span className="mw-chip" data-testid="scheduled-state">{t(row.enabled ? 'scheduleActive' : 'scheduledSuspended')}</span>
               </p>
-              {row.lastFiredDate === undefined ? undefined : (
+              {lastRunOf(row) === undefined ? undefined : (
                 <p className="mw-ctx-small mw-ctx-muted" data-testid="scheduled-last">
-                  {t('scheduledLastRun', { date: row.lastFiredDate })}
+                  {t('scheduledLastRun', { date: lastRunOf(row) ?? '' })}
                   {row.lastOutcome === undefined ? '' : ` · ${row.lastOutcome.startsWith('failed') ? t('scheduledLastFailed') : t('scheduledLastDone')}`}
                 </p>
               )}

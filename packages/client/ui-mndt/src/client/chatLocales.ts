@@ -477,6 +477,7 @@ export const chatEn = {
   scheduledSeeInLane: 'See in my lane',
   scheduledRanElsewhere: 'Its result is in the missions, not in your lane.',
   scheduledRunRefused: 'It could not be started: try again in a moment.',
+  scheduledRunFailed: 'The run failed.',
   scheduledToggleRefused: 'It could not be changed: try again in a moment.',
 } as const
 
@@ -955,6 +956,7 @@ export const chatFr: Record<ChatKey, string> = {
   scheduledSeeInLane: 'Voir dans ma lane',
   scheduledRanElsewhere: 'Son résultat est dans les missions, pas dans votre lane.',
   scheduledRunRefused: 'Elle n\'a pas pu être lancée : réessayez dans un moment.',
+  scheduledRunFailed: 'Le lancement a échoué.',
   scheduledToggleRefused: 'Elle n\'a pas pu être modifiée : réessayez dans un moment.',
 }
 
