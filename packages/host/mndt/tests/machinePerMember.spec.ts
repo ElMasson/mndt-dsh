@@ -38,7 +38,10 @@ running="$FAKE_DIR/running"; touch "$running"
 case "$1" in
   ps) cut -f1 "$running"; exit 0 ;;
   network) [ "$2" = inspect ] && exit 1; exit 0 ;;
-  inspect) exit 1 ;;
+  inspect)
+    # The egress proxy's address on a computer's network, when the test gives one.
+    case "$*" in *NetworkSettings*) [ -n "\${FAKE_EGRESS_IP:-}" ] && { echo "$FAKE_EGRESS_IP"; exit 0; } ;; esac
+    exit 1 ;;
   rm) name="$3"; grep -v "^.*	$name\\$" "$running" > "$running.new"; mv "$running.new" "$running"; exit 0 ;;
   run)
     member=""; name=""; prev=""
@@ -133,6 +136,25 @@ describe('a member\'s computer, started by the sidecar', { timeout: 30_000 }, ()
     expect(token).toMatch(/^[0-9a-f]{32}$/)
     expect(token).not.toBe('tok')
     expect(run).toContain(`DESKTOP_TOKEN=${token}`)
+  })
+
+  it('reaches its egress proxy by address on its own network (gVisor does not resolve Docker\'s names), by name only when Docker does not say', async () => {
+    const byAddress = await sidecar({ FAKE_EGRESS_IP: '172.30.0.3' })
+    await byAddress.call('POST', '/pcs/start', { identity: 'smarion@datanalysis.re' })
+    const run = byAddress.calls().find(args => args[0] === 'run') ?? []
+    expect(run).toContain('HTTPS_PROXY=http://172.30.0.3:3128')
+    expect(run).toContain('http_proxy=http://172.30.0.3:3128')
+    // Asked of Docker for this computer's own network (the fake logs the words apart).
+    const asked = byAddress.calls().find(args => args[0] === 'inspect') ?? []
+    expect(asked.join(' ')).toBe(`inspect -f {{(index .NetworkSettings.Networks "mndt-pc-net-${SMARION}").IPAddress}} mndt-egress`)
+    // Anything but one IPv4 address (an empty answer, a flag) falls back to the name.
+    for (const answer of ['', '172.30.0.3 --privileged', 'mndt-egress']) {
+      const fallback = await sidecar(answer === '' ? {} : { FAKE_EGRESS_IP: answer })
+      await fallback.call('POST', '/pcs/start', { identity: 'smarion@datanalysis.re' })
+      const started = fallback.calls().find(args => args[0] === 'run') ?? []
+      expect(started).toContain('HTTPS_PROXY=http://mndt-egress:3128')
+      expect(started.join(' ')).not.toContain('--privileged')
+    }
   })
 
   it('two addresses folding to one slug get two computers, two networks, two folders', async () => {

@@ -43,6 +43,19 @@ ENV_NAME = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 FILE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+\*?$')
 MODULE = '@deepseek-ai/dsh-mcp-client'
+# Every connector runs under Landlock (the workbench image's landlock-run): it
+# reads the system, the image, its tools and the state, writes its temp and
+# the MCP auth folder, and reads nothing of /run, where the workbench keeps the
+# machine service's token, the gateway's secret and the shell's launch token.
+# Only our own connectors that act as a person through the API (approvals,
+# machine) read the gateway's secret, granted by their server name, never by
+# what a descriptor says. A workbench without the launcher starts no connector.
+LANDLOCK_DEFAULT = '/app/native/system/packages/linux-$(uname -m | sed -e s/x86_64/x64/ -e s/aarch64/arm64/)/bin/landlock-run'
+READ_ROOTS = ('/usr', '/lib', '/lib64', '/bin', '/sbin', '/etc', '/app', '/opt/mndt-tools', '/state', '/proc', '/sys',
+              '/dev/null', '/dev/zero', '/dev/urandom', '/dev/random')
+WRITE_ROOTS = ('/tmp', '/state/mcp-auth')
+GATEWAY_SECRET = '/run/secrets/mndt-gateway'
+GATEWAY_READERS = ('approvals', 'machine')
 
 
 def load_patchfile():
@@ -102,7 +115,26 @@ def script_for(data, server):
         script += f'export MCP_PROXY_ALLOW={shlex.quote(",".join(allow))}; '
         script += f'export MCP_PROXY_DENY={shlex.quote(",".join(deny))}; '
         words = ['node', shlex.quote(PROXY_IN_CONTAINER)] + words
-    return script + 'exec ' + ' '.join(words)
+    return script + confined(server) + ' '.join(words)
+
+
+def confined(server):
+    """@param server - the connector's server name.
+    @returns the shell that ends a connector's script: its Landlock grants (the
+    paths that exist), then `exec` of the launcher, which runs the command after
+    `--`. MNDT_CONNECTOR_LANDLOCK=off (a workstation without the image) runs it
+    as it is; a missing launcher otherwise refuses it, said on stderr."""
+    reads = list(READ_ROOTS) + ([GATEWAY_SECRET] if server in GATEWAY_READERS else [])
+    grants = ' '.join(shlex.quote(path) for path in reads)
+    writes = ' '.join(shlex.quote(path) for path in WRITE_ROOTS)
+    return (
+        'L=${MNDT_LANDLOCK_RUN:-' + LANDLOCK_DEFAULT + '}; '
+        'if [ "${MNDT_CONNECTOR_LANDLOCK:-on}" = off ]; then set --; else '
+        '[ -x "$L" ] || { echo "connector refused: no landlock-run at $L" >&2; exit 126; }; '
+        f'set --; for p in {grants}; do [ -e "$p" ] && set -- "$@" --ro "$p"; done; '
+        f'for p in {writes}; do [ -e "$p" ] && set -- "$@" --rw "$p"; done; '
+        'set -- "$L" "$@" --; fi; exec "$@" '
+    )
 
 
 def load_descriptors():

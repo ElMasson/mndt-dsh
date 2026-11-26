@@ -25,19 +25,22 @@ while [ $# -gt 0 ]; do
 done
 here=$(cd "$(dirname "$0")" && pwd)
 deploy=$(cd "$here/.." && pwd)
-machines_image=${MACHINES_IMAGE:-mndt-machines:eighth-jump}
-pc_image=${PC_IMAGE:-mndt-pc:eighth-jump}
 project=mndt-proof
+# The images, this proof's own space (its names and labels, never an instance's)
+# and its cleanup: the rehearsals' helper, with this proof's runtime.
+REHEARSAL_RUNTIME=$runtime
+. "$here/machines-rehearsal.sh"
 member=proof@datanalysis.re
 ok=0; ko=0
 pass() { echo "OK  $1  $2"; ok=$((ok + 1)); }
 fail() { echo "KO  $1  $2"; ko=$((ko + 1)); }
 root=$(mktemp -d "${TMPDIR:-/tmp}/mndt-machines-proof-XXXX")
 cleanup() {
-  docker rm -f $project-machines $project-docker-proxy mndt-datanalysis-egress >/dev/null 2>&1
-  for pc in $(docker ps -aq --filter label=mndt.tenant=datanalysis --filter name=mndt-pc-datanalysis-); do docker rm -f "$pc" >/dev/null 2>&1; done
-  for net in $(docker network ls -q --filter label=mndt.tenant=datanalysis --filter name=mndt-pc-net-datanalysis-); do docker network rm "$net" >/dev/null 2>&1; done
-  docker network rm ${project}_machines ${project}_docker-proxy-net ${project}_egress-out mndt-proof-edge >/dev/null 2>&1
+  # KEEP=1 leaves the services running for inspection (their logs).
+  if [ "${KEEP:-0}" != 1 ]; then
+    machines_cleanup
+    docker network rm mndt-proof-edge >/dev/null 2>&1
+  fi
   echo "TOTAL ok=$ok ko=$ko"
   echo "proof root: $root"
   [ "$ko" = 0 ]
@@ -57,9 +60,9 @@ MNDT_ROOT=$root bash "$deploy/create-tenant.sh" datanalysis equipe.datanalysis.r
   --traefik-network mndt-proof-edge --machines-image "$machines_image" --pc-image "$pc_image" --no-docker >/dev/null \
   || { fail render "create-tenant.sh failed"; exit 1; }
 sed -e "s#/data/mndt/datanalysis/live#$root/data/mndt/datanalysis/live#g" -e "s#/opt/mndt/datanalysis#$root/opt/mndt/datanalysis#g" \
-    -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" -e "s#MNDT_MACHINE_RUNTIME: runsc#MNDT_MACHINE_RUNTIME: $runtime#" \
+    -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
     "$root/opt/mndt/datanalysis/docker-compose.yml" > "$root/compose.yml"
-[ "$runtime" = runc ] && sed -i 's#^      MNDT_MACHINE_RUNTIME: runc$#&\n      MNDT_MACHINE_ALLOW_RUNC: "1"#' "$root/compose.yml"
+machines_rehearsal_compose "$root/compose.yml"
 chmod a+r "$root/etc/mndt/datanalysis/machines_token"
 # The three services, created from the rendered compose: image, environment,
 # volumes, user, read-only root, fixed name, command, networks and aliases.
@@ -73,7 +76,7 @@ for name, net in (spec.get('networks') or {}).items():
     if (net or {}).get('external'): continue
     if subprocess.run(['docker', 'network', 'inspect', f'{project}_{name}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
         docker('network', 'create', *(['--internal'] if (net or {}).get('internal') else []), f'{project}_{name}')
-for name in ['docker-proxy', 'egress', 'machines']:
+for name in ['docker-guard', 'egress', 'machines']:
     service = spec['services'][name]
     nets = service.get('networks') or []
     nets = [(n, {}) for n in nets] if isinstance(nets, list) else [(n, v or {}) for n, v in nets.items()]
@@ -85,14 +88,18 @@ for name in ['docker-proxy', 'egress', 'machines']:
     for volume in service.get('volumes') or []: args += ['-v', volume]
     if 'user' in service: args += ['--user', str(service['user'])]
     if service.get('read_only'): args += ['--read-only']
-    args += ['--restart', 'no', service['image'], *(service.get('command') or [])]
+    for cap in service.get('cap_drop') or []: args += ['--cap-drop', cap]
+    for option in service.get('security_opt') or []: args += ['--security-opt', option]
+    entrypoint = service.get('entrypoint') or []
+    if entrypoint: args += ['--entrypoint', entrypoint[0]]
+    args += ['--restart', 'no', service['image'], *entrypoint[1:], *(service.get('command') or [])]
     subprocess.run(['docker', 'rm', '-f', container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     docker(*args)
     for other, extra in others:
         docker('network', 'connect', '--alias', name, *[a for alias in extra.get('aliases', []) for a in ('--alias', alias)], f'{project}_{other}', container)
     docker('start', container)
 UP
-pass up "the sidecar, the socket proxy and the egress proxy run, from the tenant's own compose"
+pass up "the sidecar, its Docker guard and the egress proxy run, from the tenant's own compose"
 
 # The sidecar, from a throwaway container on the machines network, with the token.
 sidecar() { # <method> <path> [json]
@@ -106,25 +113,26 @@ fetch('http://machines-api:8796' + path, { method, headers: { 'x-machine-token':
 for _ in $(seq 1 30); do [ "$(sidecar GET /pcs | cut -d' ' -f1)" = 200 ] && break; sleep 2; done
 
 started=$(sidecar POST /pcs/start "{\"identity\":\"$member\"}")
-pc=$(docker ps --filter "label=mndt.member=$member" --filter label=mndt.tenant=datanalysis --format '{{.Names}}' | head -1)
+pc=$(docker ps --filter "label=mndt.member=$member" --filter "label=mndt.tenant=$machines_space" --format '{{.Names}}' | head -1)
 if [[ $started == 200* ]] && [ -n "$pc" ]; then pass pc-start "the member's computer runs: $pc"; else fail pc-start "${started:0:200}"; fi
 
 used=$(docker inspect -f '{{.HostConfig.Runtime}}' "$pc" 2>/dev/null)
 kernel=$(docker exec "$pc" uname -r 2>/dev/null)
 booted=$(docker exec "$pc" sh -c 'dmesg 2>/dev/null | head -3' 2>/dev/null | tr '\n' ' ')
 if [ "$runtime" = runsc ]; then
-  if [ "$used" = runsc ] && echo "$booted" | grep -qi gvisor; then pass gvisor "runtime runsc; the computer's kernel is gVisor's: uname -r $kernel, dmesg « ${booted:0:80} »"
+  # gVisor names its kernel (« 4.19.0-gvisor » on 26/11); dmesg says nothing to uid 1000.
+  if [ "$used" = runsc ] && { echo "$kernel" | grep -qi gvisor || echo "$booted" | grep -qi gvisor; }; then pass gvisor "runtime runsc; the computer's kernel is gVisor's: uname -r $kernel"
   else fail gvisor "runtime « $used », uname -r « $kernel », dmesg « ${booted:0:80} »"; fi
 else
   [ "$used" = runc ] && pass gvisor "runc, said twice: not a gVisor proof (run with --runtime runsc on a machine that has it)" || fail gvisor "runtime « $used »"
 fi
 
-# Through the sidecar (docker exec via the socket proxy): a command as the member, the egress refusals, the public web.
-terminal=$(sidecar POST /pcs/act "{\"identity\":\"$member\",\"kind\":\"terminal\",\"timeoutSeconds\":90,\"command\":\"id -u; pwd; test -e /state && echo STATE; test -S /var/run/docker.sock && echo SOCKET; curl -s -o /dev/null -m 15 -w 'meta=%{http_code} ' http://169.254.169.254/; curl -s -o /dev/null -m 15 -w 'direct=%{http_code} ' --noproxy '*' http://1.1.1.1/; curl -s -o /dev/null -m 30 -w 'web=%{http_code}' https://example.org/\"}")
+# Through the sidecar (docker exec via the Docker guard): a command as the member, the egress refusals, the public web.
+terminal=$(sidecar POST /pcs/act "{\"identity\":\"$member\",\"kind\":\"terminal\",\"timeoutSeconds\":90,\"command\":\"id -u; pwd; test -e /state && echo STATE; test -S /var/run/docker.sock && echo SOCKET; curl -s -o /dev/null -m 15 -w 'meta=%{http_code} ' http://169.254.169.254/; curl -s -o /dev/null -m 15 -w 'scw=%{http_code} ' http://169.254.42.42/conf; curl -s -o /dev/null -m 15 -w 'h100=%{http_code} ' http://51.159.151.86:8000/v1/models; curl -s -o /dev/null -m 15 -w 'guard=%{http_code} ' http://docker-guard:2375/version; curl -s -o /dev/null -m 15 -w 'api=%{http_code} ' http://machines-api:8796/pcs; curl -s -o /dev/null -m 15 -w 'direct=%{http_code} ' --noproxy '*' http://1.1.1.1/; curl -s -o /dev/null -m 30 -w 'web=%{http_code}' https://example.org/\"}")
 echo "    $(echo "$terminal" | grep -o '"stdout": *"[^"]*"')"
 if [[ $terminal == 200* ]] && echo "$terminal" | grep -q '1000\\n/home/user' && ! echo "$terminal" | grep -qE 'STATE|SOCKET' \
-   && echo "$terminal" | grep -q 'meta=403' && echo "$terminal" | grep -q 'direct=000'; then
-  pass pc-isolation "a command runs as 1000 in /home/user; no /state, no socket; the metadata refused by the egress proxy (403), no route out without it"
+   && echo "$terminal" | grep -q 'meta=403 scw=403 h100=403 guard=403 api=403' && echo "$terminal" | grep -q 'direct=000'; then
+  pass pc-isolation "a command runs as 1000 in /home/user; no /state, no socket; refused by the egress proxy (403 each): both metadata services, the H100, the Docker guard, the machine service; no route out without it"
 else fail pc-isolation "${terminal:0:300}"; fi
 if echo "$terminal" | grep -qE 'web=(200|301|302)'; then pass pc-web "the public web answers through the egress proxy (example.org)"
 else echo "NOTE pc-web  the public web did not answer (${terminal:0:120}): this machine may have no way out; not counted"; fi

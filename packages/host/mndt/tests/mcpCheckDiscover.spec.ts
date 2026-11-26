@@ -106,7 +106,7 @@ describe('check-connectors.sh --discover', () => {
     writeFileSync(shim, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${argsLog}\nargs=()\nfor a in "$@"; do [ "$a" = /opt/mndt-tools/mcp-check.mjs ] && a=${CHECK}; args+=("$a"); done\nexec "\${args[@]}"\n`)
     chmodSync(shim, 0o755)
     const run = spawnSync('bash', [join(deploy, 'tenant', 'check-connectors.sh'), 'acme', '--live', '--discover'], {
-      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MNDT_ROOT: root, MNDT_CHECK_EXEC: shim },
+      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MNDT_ROOT: root, MNDT_CHECK_EXEC: shim, MNDT_CONNECTOR_LANDLOCK: 'off' },
     })
     expect(run.status).toBe(0)
     expect(run.stdout).toContain('all checks passed')
@@ -137,7 +137,7 @@ describe('check-connectors.sh --discover', () => {
     writeFileSync(shim, `#!/usr/bin/env bash\nargs=()\nfor a in "$@"; do [ "$a" = /opt/mndt-tools/mcp-check.mjs ] && a=${CHECK}; args+=("$a"); done\nexec "\${args[@]}"\n`)
     chmodSync(shim, 0o755)
     const run = spawnSync('bash', [join(deploy, 'tenant', 'check-connectors.sh'), 'acme', '--discover'], {
-      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MNDT_ROOT: root, MNDT_CHECK_EXEC: shim },
+      encoding: 'utf8', timeout: 30_000, env: { ...process.env, MNDT_ROOT: root, MNDT_CHECK_EXEC: shim, MNDT_CONNECTOR_LANDLOCK: 'off' },
     })
     expect(run.stdout).toContain('== fake')
     expect(run.stdout).toContain('sonde server/discover : ECHEC')

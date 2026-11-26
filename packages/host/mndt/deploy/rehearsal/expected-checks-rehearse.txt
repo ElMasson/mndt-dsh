@@ -9,6 +9,7 @@ briefing-private
 briefing-without-facts
 channel
 complete
+connector-no-secrets
 context-injected
 coord-author-verifier
 coord-bound
@@ -32,6 +33,7 @@ grants-said-once
 grants-skipped-owner
 grants-skipped-viewer
 grants-typo
+guard-refusals
 help-escalated-anonymous
 help-revealed
 image-clean

@@ -8,7 +8,7 @@
  * in sight.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
@@ -57,10 +57,51 @@ describe('connector rows', { timeout: 30_000 }, () => {
       const allow = script.indexOf('export MCP_PROXY_ALLOW=')
       expect(sourced).toBeGreaterThanOrEqual(0)
       expect(allow).toBeGreaterThan(sourced)
-      expect(script).toContain('exec node /opt/mndt-tools/mcp-proxy.mjs ')
+      // Under Landlock: the launcher, then the proxy and the server after `--`.
+      expect(script).toContain('exec "$@" node /opt/mndt-tools/mcp-proxy.mjs ')
+      // The gateway's secret is granted to our two connectors that act as a person, and to no other.
+      expect(script.includes('/run/secrets/mndt-gateway')).toBe(['approvals', 'machine'].includes(row.config.serverName))
+      expect(script).not.toContain('mndt-machines')
     }
     const dolibarr = rows.find(row => row.config.serverName === 'dolibarr')!.config.args[1]!
     expect(dolibarr).toContain('export MCP_PROXY_DENY=dolibarr_raw_api;')
+  })
+
+  test('each connector starts under Landlock: its grants, none of /run but the gateway\'s secret for approvals and machine; no launcher, no connector', () => {
+    const { live, patch } = home()
+    run(live)
+    const rows = (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
+    const dir = mkdtempSync(join(tmpdir(), 'landlock-'))
+    // A fake launcher: prints what it was given, up to `--`, then the command.
+    const fake = join(dir, 'landlock-run')
+    writeFileSync(fake, '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', { mode: 0o755 })
+    const started = (server: string, env: Record<string, string>) => {
+      const script = rows.find(row => row.config.serverName === server)!.config.args[1]!
+      return spawnSync('sh', ['-c', script], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' })
+    }
+    for (const server of servers) {
+      const out = started(server, { MNDT_LANDLOCK_RUN: fake })
+      const args = out.stdout.split('\n')
+      const until = args.indexOf('--')
+      const grants = args.slice(0, until)
+      expect(until).toBeGreaterThan(0)
+      // Read: /usr and /etc at least; never /run itself, nor the machine token, nor the launch token.
+      expect(grants).toContain('/usr')
+      expect(grants.filter(arg => arg.startsWith('/run'))).toEqual(['approvals', 'machine'].includes(server) ? ['/run/secrets/mndt-gateway'].filter(path => existsSync(path)) : [])
+      expect(grants.join(' ')).not.toMatch(/mndt-machines|mndt-launch/)
+      // Writable: only /tmp (and /state/mcp-auth when it exists).
+      const writable = grants.flatMap((arg, i) => (arg === '--rw' ? [grants[i + 1]] : []))
+      expect(writable.every(path => path === '/tmp' || path === '/state/mcp-auth')).toBe(true)
+      // The command after `--`: the read-only proxy, then the server.
+      expect(args.slice(until + 1, until + 3)).toEqual(['node', '/opt/mndt-tools/mcp-proxy.mjs'])
+    }
+    // No launcher: refused, said, nothing started.
+    const refused = started('office365', { MNDT_LANDLOCK_RUN: join(dir, 'absent') })
+    expect(refused.status).toBe(126)
+    expect(refused.stderr).toContain('connector refused: no landlock-run')
+    // Said off (a workstation without the image): the command itself.
+    const plain = started('office365', { MNDT_LANDLOCK_RUN: fake, MNDT_CONNECTOR_LANDLOCK: 'off' })
+    expect(plain.stdout ?? '').not.toContain('--ro')
   })
 
   test('a rerender keeps the own rows and does not pile up markers', () => {

@@ -1,7 +1,8 @@
 // Start a tenant's rendered compose with plain `docker run` (the rehearsal may
 // run where the Compose plugin is missing): same images, environment, env
-// files, volumes, commands, user, read-only root, fixed container name and
-// restart policy, service by service, on one
+// files, volumes, entrypoint, commands, user, read-only root, dropped
+// capabilities, security options, fixed container name and restart policy,
+// service by service, on one
 // network where each service answers to its name. Like `docker compose up -d`,
 // a running container whose configuration did not change is KEPT, with the code
 // it started with: the update rehearsal must see what the instance sees. `proxy` (oauth2-proxy, SSO)
@@ -55,6 +56,9 @@ for (const [name, service] of Object.entries(services)) {
   for (const host of service.extra_hosts ?? []) args.push('--add-host', host)
   if (service.user !== undefined) args.push('--user', String(service.user))
   if (service.read_only === true) args.push('--read-only')
+  for (const cap of service.cap_drop ?? []) args.push('--cap-drop', cap)
+  for (const option of service.security_opt ?? []) args.push('--security-opt', option)
+  if (Array.isArray(service.entrypoint)) args.push('--entrypoint', service.entrypoint[0])
   // The configuration hash: every argument, the env files' content and the image's
   // own id (a rebuilt tag is a new image), as Compose compares them.
   let imageId = service.image
@@ -69,6 +73,8 @@ for (const [name, service] of Object.entries(services)) {
   }
   try { docker('rm', '-f', container) } catch { /* absent */ }
   args.push('--label', `mndt.rehearsal.config=${hash}`, service.image)
+  // An entrypoint of several words: the first is --entrypoint, the rest lead the command.
+  if (Array.isArray(service.entrypoint)) args.push(...service.entrypoint.slice(1))
   if (Array.isArray(service.command)) args.push(...service.command)
   const id = docker(...args).slice(0, 12)
   for (const other of others) {

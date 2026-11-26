@@ -1179,37 +1179,44 @@ export class WorkbenchService {
   }
 
   /**
-   * Mark an agent's model route as unreachable for ROUTE_UNREACHABLE_MS, from
-   * now (kept from its first failure while the mark lasts).
-   * @param agentId - the agent whose last attempt could not reach its route.
+   * Record that an agent's step could not reach its model route. The first
+   * failure marks nothing (a blip: routeFailedAt); a second one with no success
+   * between marks it for ROUTE_UNREACHABLE_MS (routeUnreachable, kept from its
+   * first failure while the mark lasts, pushed at each further one).
+   * @param agentId - the agent whose step could not reach its route.
    * @returns the agent, or undefined when there is none.
    */
-  markRouteUnreachable(agentId: string): Promise<Agent | undefined> {
+  noteRouteFailure(agentId: string): Promise<Agent | undefined> {
     return this.#write((state) => {
       const agent = (state.agents ?? []).find(candidate => candidate.id === agentId)
       if (agent === undefined) return { state, event: [], value: undefined }
       const at = this.#at()
-      const since = agent.routeUnreachable !== undefined && routeUnreachableAt(agent, at) ? agent.routeUnreachable.since : at
-      const next: Agent = { ...agent, routeUnreachable: { since, until: new Date(Date.parse(at) + ROUTE_UNREACHABLE_MS).toISOString() } }
+      const active = agent.routeUnreachable !== undefined && routeUnreachableAt(agent, at)
+      const since = active && agent.routeUnreachable !== undefined ? agent.routeUnreachable.since : (agent.routeFailedAt ?? at)
+      const until = new Date(Date.parse(at) + ROUTE_UNREACHABLE_MS).toISOString()
+      const next: Agent = agent.routeFailedAt === undefined && !active
+        ? { ...agent, routeFailedAt: at }
+        : { ...agent, routeFailedAt: agent.routeFailedAt ?? at, routeUnreachable: { since, until } }
       return {
         state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === agentId ? next : candidate)) },
-        event: { at, actor: 'mndt', action: 'agent.route-unreachable', subject: agentId },
+        event: next.routeUnreachable === undefined || active ? [] : { at, actor: 'mndt', action: 'agent.route-unreachable', subject: agentId },
         value: next,
       }
     })
   }
 
   /**
-   * Lift an agent's unreachable mark: one of its turns reached its route. No write when it has none.
+   * Lift an agent's unreachable mark and its pending failure: one of its turns
+   * reached its route. No write when it has neither.
    * @param agentId - the agent.
    */
   async clearRouteUnreachable(agentId: string): Promise<void> {
     const known = ((await this.#ready()).agents ?? []).find(candidate => candidate.id === agentId)
-    if (known?.routeUnreachable === undefined) return
+    if (known?.routeUnreachable === undefined && known?.routeFailedAt === undefined) return
     await this.#write((state) => {
       const agent = (state.agents ?? []).find(candidate => candidate.id === agentId)
-      if (agent?.routeUnreachable === undefined) return { state, event: [], value: undefined }
-      const { routeUnreachable: _lifted, ...rest } = agent
+      if (agent?.routeUnreachable === undefined && agent?.routeFailedAt === undefined) return { state, event: [], value: undefined }
+      const { routeUnreachable: _lifted, routeFailedAt: _failed, ...rest } = agent
       return {
         state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === agentId ? rest : candidate)) },
         event: { at: this.#at(), actor: 'mndt', action: 'agent.route-reachable', subject: agentId },

@@ -419,6 +419,19 @@ def touch_pc(identity):
             _PCS[identity]['lastUsed'] = time.time()
 
 
+def egress_address(network):
+    """@returns the egress proxy's IPv4 address on a computer's network, or its
+    name when Docker does not say (a test's fake, an older Docker): the name
+    works under runc, the address under both."""
+    result = docker('inspect', '-f', '{{(index .NetworkSettings.Networks "' + network + '").IPAddress}}', EGRESS_PROXY)
+    address = (result.stdout or '').strip() if result.returncode == 0 else ''
+    try:
+        ipaddress.IPv4Address(address)
+        return address
+    except ValueError:
+        return EGRESS_PROXY
+
+
 def start_pc(identity):
     """Start the member's computer if it is not up. Busy when MAX_PCS run already.
 
@@ -451,6 +464,11 @@ def _start_pc(identity):
         docker('network', 'create', '--internal', '--label', PC_LABEL + '=' + identity, *tenant_labels(), network)
     docker('network', 'connect', network, EGRESS_PROXY)
     home = os.path.join(USERS_ROOT, member_key(identity))
+    # The proxy by its address on this computer's network, not by its name:
+    # under gVisor the computer's own network stack does not reach Docker's
+    # embedded DNS (127.0.0.11, served through the host's iptables), so a name
+    # never resolves there (proved on mndt-repetition, 26/11: curl exit 5).
+    proxy_host = egress_address(network)
     os.makedirs(home, exist_ok=True)
     try:
         os.chown(home, PC_UID, PC_UID)
@@ -461,7 +479,7 @@ def _start_pc(identity):
     # the machine service's token never enters a computer.
     agent_token = secrets.token_hex(16)
     docker('rm', '-f', name)
-    proxy = 'http://' + EGRESS_PROXY + ':' + str(EGRESS_PORT)
+    proxy = 'http://' + proxy_host + ':' + str(EGRESS_PORT)
     result = docker(
         'run', '-d', '--name', name,
         '--runtime', PC_RUNTIME,

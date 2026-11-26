@@ -27,3 +27,6 @@ for image in pc machines; do
     --label "mndt.commit=$commit" "$here/sandbox"
 done
 echo "built: mndt-pc:$tag mndt-machines:$tag (also tagged $commit)"
+for image in pc machines; do
+  docker image inspect -f "mndt-$image:$tag {{.Size}}" "mndt-$image:$tag" | awk '{ printf "  %s: %.0f MB\n", $1, $2 / 1000000 }'
+done

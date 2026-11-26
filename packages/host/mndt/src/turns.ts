@@ -1029,7 +1029,7 @@ export class TurnScheduler {
           ...(budgetEur === undefined || price === undefined ? {} : { budget: { eur: budgetEur, price } }),
           signal: controller.signal,
         }).catch(async (error: unknown) => {
-          if (error instanceof RouteUnreachable) await service.markRouteUnreachable(who.id)
+          if (error instanceof RouteUnreachable) await service.noteRouteFailure(who.id)
           throw error
         })
         await service.clearRouteUnreachable(who.id)

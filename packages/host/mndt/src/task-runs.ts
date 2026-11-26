@@ -327,7 +327,7 @@ export class TaskScheduler {
       })
     } catch (error) {
       // Its agent's route could not be reached: marked, as after a turn (Agent.routeUnreachable).
-      if (error instanceof RouteUnreachable && agentId !== undefined) await service.markRouteUnreachable(agentId)
+      if (error instanceof RouteUnreachable && agentId !== undefined) await service.noteRouteFailure(agentId)
       // The engine's or a provider's words go to the operator's log; the destination reads the host's sentence.
       const failed = turnFailure(error, warn, `task ${id} (run ${runId})`)
       await service.publishScheduleRun(id, { runId, text: failed.reason, status: 'failed', startedAt, reasonKind: failed.kind })

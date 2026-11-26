@@ -27,9 +27,10 @@
 #   --image <image>            the workbench image (default: mndt-workbench:local)
 #   --machines-image <image>   the machine service's image (default: mndt-machines:local, build-machines.sh)
 #   --pc-image <image>         a member's computer's image (default: mndt-pc:local, build-machines.sh)
-#   --egress-deny <a,b/n>      more addresses or ranges the computers never reach (the
-#                              instance's public address); added to this host's own
-#                              addresses (hostname -I) and Docker's address pools
+#   --egress-deny <a,b/n>      the instance's public address, and any more addresses or
+#                              ranges the computers never reach (default: the public
+#                              address from the host's Scaleway metadata; without
+#                              either, nothing is rendered)
 #   --no-docker                render and install the files, start nothing
 # Environment: MNDT_ROOT prefixes every absolute path (tests render into a temporary root).
 set -euo pipefail
@@ -81,15 +82,6 @@ fi
 for name in "$image" "$machines_image" "$pc_image"; do
   [[ $name =~ ^[a-z0-9][a-z0-9._/:@-]{0,254}$ ]] || { echo "not an image name: $name" >&2; exit 1; }
 done
-# What the computers never reach, beyond every private, local and metadata
-# address the egress proxy refuses by itself: this host's own addresses, named
-# (its public one may be routed to an interface, or not: --egress-deny names
-# it), and Docker's default address pools, said explicitly (a compose network's
-# subnet is drawn from them at `up`, after this script). Each item an address
-# or a range; the proxy refuses to start on anything else.
-egress_deny=$( { printf '%s\n' "$egress_extra" | tr ',' '\n'; hostname -I 2>/dev/null | tr ' ' '\n'
-  printf '%s\n' 172.16.0.0/12 192.168.0.0/16 10.0.0.0/8; } | sed 's/[[:space:]]//g' | grep -v '^$' | awk '!seen[$0]++' | paste -sd, -)
-if [[ ! $egress_deny =~ ^[0-9a-fA-F.:/,]+$ ]]; then echo "--egress-deny: addresses or ranges only, separated by commas: $egress_extra" >&2; exit 1; fi
 
 root=${MNDT_ROOT:-}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -102,6 +94,36 @@ unset MNDT_EMAILS_UNPRIVILEGED
 if [ -z "$root" ] && [ "$(id -u)" != 0 ]; then
   echo "refused: run create-tenant.sh as root; nothing was written" >&2; exit 1
 fi
+
+# What the computers never reach, beyond every private, local and metadata
+# address the egress proxy refuses by itself, named here all the same: this
+# instance's public address (NATed at Scaleway, so absent from `hostname -I`:
+# read from the host's metadata, or given by --egress-deny; without it nothing
+# is rendered), its interfaces' addresses, the H100 (the agents' model server),
+# the link-local and shared ranges, the IPv6 local ranges, and Docker's default
+# address pools (a compose network's subnet is drawn from them at `up`, after
+# this script). Each item an address or a range; the proxy refuses to start on
+# anything else.
+public_ip=''
+if [ -z "$egress_extra" ]; then
+  # A test root (MNDT_ROOT) reads its metadata from a file it may plant
+  # ($root/run/scaleway-metadata); without one, the documentation address
+  # stands in, said. The instance always asks its metadata, and refuses.
+  test_root=${MNDT_ROOT:-}
+  if [ -n "$test_root" ]; then metadata="file://$test_root/run/scaleway-metadata"; else metadata=http://169.254.42.42/conf; fi
+  public_ip=$( { curl -s -m 3 "$metadata" 2>/dev/null || true; } | sed -n 's/^PUBLIC_IP_ADDRESS=//p' | head -1 | tr -d "'\"[:space:]")
+  if [ -n "$test_root" ] && [ ! -e "$test_root/run/scaleway-metadata" ]; then
+    public_ip=203.0.113.1; echo "  test root: the instance's public address stands as 203.0.113.1 (no $test_root/run/scaleway-metadata)"
+  fi
+  if [[ ! $public_ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    echo "refused: this instance's public address is unknown (no PUBLIC_IP_ADDRESS from $metadata); give it with --egress-deny <address>; nothing was written" >&2
+    exit 1
+  fi
+fi
+egress_deny=$( { printf '%s\n' "$egress_extra" "$public_ip" | tr ',' '\n'; hostname -I 2>/dev/null | tr ' ' '\n'
+  printf '%s\n' 51.159.151.86 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10 ::1 172.16.0.0/12 192.168.0.0/16 10.0.0.0/8; } \
+  | sed 's/[[:space:]]//g' | grep -v '^$' | awk '!seen[$0]++' | paste -sd, -)
+if [[ ! $egress_deny =~ ^[0-9a-fA-F.:/,]+$ ]]; then echo "--egress-deny: addresses or ranges only, separated by commas: $egress_extra" >&2; exit 1; fi
 
 # The options of the previous run, said when they differ, before writing: a rerun
 # without --org-name, --env or --image would otherwise apply the defaults in silence.
@@ -159,6 +181,11 @@ if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$
 fingerprint() { sha256sum "$1" | cut -c1-16; }
 gateway_code=$(fingerprint "$here/gateway/server.mjs")
 egress_code=$(fingerprint "$here/sandbox/egress-proxy.mjs")
+# The Docker socket's group: the guard runs as nobody in that group, never root.
+docker_gid=$(stat -c %g "${MNDT_DOCKER_SOCKET:-/var/run/docker.sock}" 2>/dev/null || true)
+if [[ ! $docker_gid =~ ^[0-9]+$ ]] || [ "$docker_gid" = 0 ]; then
+  if [ -n "$root" ]; then docker_gid=999; else echo "refused: the Docker socket's group is unknown or root ($docker_gid): the guard would run with root's group; the compose is not rendered" >&2; exit 1; fi
+fi
 # Everything this script puts in the tools folder, which the workbench runs from
 # disk: the entrypoint and the connector tools. One aggregated fingerprint.
 # facts-mcp.mjs is among them: it used to reach the folder only through an old
@@ -179,7 +206,7 @@ render() {
       -e "s|__CLIENT_ID__|$client_id|g" \
       -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" \
       -e "s|__MACHINES_IMAGE__|$machines_image|g" -e "s|__PC_IMAGE__|$pc_image|g" \
-      -e "s|__EGRESS_DENY__|$egress_deny|g" -e "s|__EGRESS_CODE__|$egress_code|g" "$1"
+      -e "s|__EGRESS_DENY__|$egress_deny|g" -e "s|__EGRESS_CODE__|$egress_code|g" -e "s|__DOCKER_GID__|$docker_gid|g" "$1"
 }
 # The tenant's role table: the owner first; the team is added by hand. A change
 # applies to the API on the next request; to the sign-in list only once

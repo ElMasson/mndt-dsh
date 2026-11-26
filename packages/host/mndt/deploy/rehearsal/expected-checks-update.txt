@@ -8,6 +8,7 @@ automations-date-header
 briefing-in-lane
 briefing-private
 channel
+connector-no-secrets
 context-injected
 coord-author-verifier
 coord-bound
@@ -19,6 +20,7 @@ council-vote
 deleted-anonymous
 french
 gateway-alive
+guard-refusals
 help-escalated-anonymous
 help-revealed
 landing-text

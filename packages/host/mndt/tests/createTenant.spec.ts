@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
@@ -215,23 +215,56 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const rendered = load(compose) as { services: Record<string, Service>; networks: Record<string, { internal?: boolean } | null> }
     const machines = rendered.services.machines
     expect(machines?.image).toBe('mndt-machines:test')
-    expect(machines?.environment).toMatchObject({ MACHINES_PC_ONLY: '1', MNDT_MACHINE_RUNTIME: 'runsc', PC_IMAGE: 'mndt-pc:test', PC_TENANT: 'datanalysis', DOCKER_HOST: 'tcp://docker-proxy:2375', MACHINES_HOST: 'machines-api' })
+    expect(machines?.environment).toMatchObject({
+      MACHINES_PC_ONLY: '1', MNDT_MACHINE_RUNTIME: 'runsc', PC_IMAGE: 'mndt-pc:test', PC_TENANT: 'datanalysis',
+      PC_PREFIX: 'mndt-datanalysis-pc-', PC_NET_PREFIX: 'mndt-datanalysis-pcnet-', DOCKER_HOST: 'tcp://docker-guard:2375', MACHINES_HOST: 'machines-api',
+    })
     expect(machines?.environment?.MNDT_MACHINE_ALLOW_RUNC).toBeUndefined()
     expect(JSON.stringify(machines?.volumes)).not.toContain('docker.sock')
-    expect(rendered.services['docker-proxy']?.environment).toMatchObject({ CONTAINERS: '1', NETWORKS: '1', EXEC: '1', POST: '1', IMAGES: '0' })
-    expect(rendered.services['docker-proxy']?.volumes).toEqual(['/var/run/docker.sock:/var/run/docker.sock:ro'])
-    expect(rendered.networks['docker-proxy-net']?.internal).toBe(true)
+    // The guard: ours, the machines image's other entrypoint, non-root in the socket's group, read-only, no capability.
+    const guard = rendered.services['docker-guard'] as Service & { entrypoint?: string[]; cap_drop?: string[]; security_opt?: string[] }
+    expect(guard.image).toBe('mndt-machines:test')
+    expect(guard.entrypoint).toEqual(['python3', '/app/docker-guard.py'])
+    expect(guard.user).toMatch(/^65534:[1-9][0-9]*$/)
+    expect(guard.read_only).toBe(true)
+    expect(guard.cap_drop).toEqual(['ALL'])
+    expect(guard.environment).toMatchObject({
+      MNDT_GUARD_SPACE: 'datanalysis', MNDT_GUARD_PC_IMAGE: 'mndt-pc:test', MNDT_GUARD_PC_PREFIX: 'mndt-datanalysis-pc-',
+      MNDT_GUARD_NET_PREFIX: 'mndt-datanalysis-pcnet-', MNDT_GUARD_USERS_ROOT: '/data/mndt/datanalysis/live/users', MNDT_GUARD_EGRESS: 'mndt-datanalysis-egress',
+    })
+    expect(guard.volumes).toEqual(['/var/run/docker.sock:/var/run/docker.sock'])
+    expect(rendered.networks['docker-guard-net']?.internal).toBe(true)
+    expect(Object.keys(rendered.services)).not.toContain('docker-proxy')
     expect(rendered.networks.machines?.internal).toBe(true)
     const egress = rendered.services.egress
     expect(egress?.container_name).toBe('mndt-datanalysis-egress')
     expect(egress?.read_only).toBe(true)
     const deny = (egress?.environment?.EGRESS_DENY ?? '').split(',')
-    expect(deny).toEqual(expect.arrayContaining(['51.159.161.149', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8']))
-    // Only the socket proxy holds the socket.
+    expect(deny).toEqual(expect.arrayContaining([
+      '51.159.161.149', '51.159.151.86', '169.254.0.0/16', '100.64.0.0/10',
+      'fc00::/7', 'fe80::/10', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8',
+    ]))
+    // Only the guard holds the socket.
     for (const [name, service] of Object.entries(rendered.services)) {
-      if (name !== 'docker-proxy') expect(JSON.stringify(service.volumes ?? [])).not.toContain('docker.sock')
+      if (name !== 'docker-guard') expect(JSON.stringify(service.volumes ?? [])).not.toContain('docker.sock')
     }
     expect((statSync(join(root, 'data/mndt/datanalysis/live/users')).mode & 0o777).toString(8)).toBe('711')
+    // Without --egress-deny, the public address comes from the metadata (Scaleway's conf), or nothing is rendered.
+    const metadataRoot = rootWithEntra()
+    mkdirSync(join(metadataRoot, 'run'), { recursive: true })
+    writeFileSync(join(metadataRoot, 'run', 'scaleway-metadata'), "COMMERCIAL_TYPE=PLAY2-NANO\nPUBLIC_IP_ADDRESS='51.159.161.149'\n")
+    create(metadataRoot, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    expect(readFileSync(join(metadataRoot, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8')).toMatch(/EGRESS_DENY: "51\.159\.161\.149,/)
+    const blind = rootWithEntra()
+    mkdirSync(join(blind, 'run'), { recursive: true })
+    writeFileSync(join(blind, 'run', 'scaleway-metadata'), 'COMMERCIAL_TYPE=PLAY2-NANO\n')
+    const tenantScript = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
+    const unknown = spawnSync('bash', [tenantScript, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: blind }, encoding: 'utf8',
+    })
+    expect(unknown.status).toBe(1)
+    expect(unknown.stderr).toContain('public address is unknown')
+    expect(existsSync(join(blind, 'opt/mndt/datanalysis/docker-compose.yml'))).toBe(false)
     // A value that is not addresses or ranges is refused before anything is written.
     const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
     const args = ['datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--egress-deny', 'x;rm', '--no-docker']

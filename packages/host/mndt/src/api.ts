@@ -485,7 +485,7 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const agents = await service.listAgents()
         return respond(200, {
           // The route's mark, only while it lasts (the screen says « route du modèle injoignable »).
-          agents: agents.map(({ routeUnreachable, ...agent }) => ({
+          agents: agents.map(({ routeUnreachable, routeFailedAt: _pending, ...agent }) => ({
             ...agent,
             ...(routeUnreachable !== undefined && routeUnreachable.until > now ? { routeUnreachable } : {}),
             eurThisMonth: spentThisMonth(messages, agent.id, now, true),

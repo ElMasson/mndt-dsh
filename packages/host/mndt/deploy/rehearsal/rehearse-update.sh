@@ -394,7 +394,8 @@ MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$play
 [ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
 step "B6. the members' computers, new with this version (runtime $REHEARSAL_RUNTIME)"
-bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re; machined=$?
+bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re "$machines_space"; machined=$?
+connector_secrets_check "$data" $project-workbench || machined=1
 
 [ "$page" = 0 ] && [ "$machined" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?

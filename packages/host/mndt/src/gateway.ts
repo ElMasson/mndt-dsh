@@ -312,9 +312,13 @@ export class WorkbenchGateway extends TypertRemoteService {
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
     // without it, the API never believes the proxy's identity header.
     const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
-    // The machine service's token: from its file (MACHINES_TOKEN_FILE, outside the
-    // compose), else MACHINES_TOKEN (a test, a solo host).
-    const machinesToken = readGatewaySecret(process.env.MACHINES_TOKEN_FILE) ?? process.env.MACHINES_TOKEN
+    // The machine service's token: from its file only (MACHINES_TOKEN_FILE, outside
+    // /state, under /run, which no connector reads: render-connectors.py), never
+    // from the environment, which every child process inherits.
+    const machinesToken = readGatewaySecret(process.env.MACHINES_TOKEN_FILE)
+    if (process.env.MNDT_MACHINES_URL !== undefined && machinesToken === undefined) {
+      warnOperator(ctx, 'mndt: MNDT_MACHINES_URL is set but MACHINES_TOKEN_FILE gives no token: the members\' computers are off')
+    }
     if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
       warnOperator(ctx, 'mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
     }

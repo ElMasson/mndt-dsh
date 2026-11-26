@@ -140,7 +140,10 @@ services:
   # « Mon ordinateur »: the members' computers, one each, under gVisor. The
   # sidecar builds every `docker run` itself (no request field reaches a flag)
   # and serves only the computers (MACHINES_PC_ONLY): no capture, no session
-  # browser or desktop, no shell. It listens on the machines network only.
+  # browser or desktop, no shell. It listens on the machines network only. It
+  # runs as root in its own container (no socket, no capability needed beyond
+  # handing each member's folder to uid 1000); Docker answers it only through
+  # the guard.
   machines:
     image: __MACHINES_IMAGE__
     environment:
@@ -152,44 +155,53 @@ services:
       PC_IMAGE: __PC_IMAGE__
       # This space's computers, networks and places, never another space's on the host.
       PC_TENANT: __SLUG__
-      PC_PREFIX: mndt-pc-__SLUG__-
-      PC_NET_PREFIX: mndt-pc-net-__SLUG__-
+      PC_PREFIX: mndt-__SLUG__-pc-
+      PC_NET_PREFIX: mndt-__SLUG__-pcnet-
       USERS_ROOT: /users
       # Docker resolves a bind on the host: the same folder, by its host path.
       USERS_ROOT_HOST: __DATA__/users
       EGRESS_PROXY: mndt-__SLUG__-egress
       EGRESS_PORT: "3128"
-      DOCKER_HOST: tcp://docker-proxy:2375
+      DOCKER_HOST: tcp://docker-guard:2375
     volumes:
       - __CONF__/machines_token:/run/secrets/mndt-machines:ro
       - __DATA__/users:/users
     networks:
       machines:
         aliases: [machines-api]
-      docker-proxy-net: {}
+      docker-guard-net: {}
     depends_on:
-      - docker-proxy
+      - docker-guard
       - egress
     restart: unless-stopped
 
-  # The sidecar's only hand on Docker: containers, networks and exec, never
-  # images (no pull, no build), volumes, swarm or the system. The socket stays
-  # here, read-only, on a network nothing else joins.
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+  # The machine service's only way to Docker: our own guard (sandbox/docker-guard.py),
+  # which relays only what this space's computers need, every request checked
+  # (the computer's image under runsc, the space's label, names and network,
+  # one bind under the members' folders; acts only on the space's containers;
+  # the egress proxy the only container that joins a computer's network), and
+  # answers 403 to everything else. Non-root, in the socket's group, read-only,
+  # without capabilities, on a network only the machine service joins.
+  docker-guard:
+    image: __MACHINES_IMAGE__
+    entrypoint: ["python3", "/app/docker-guard.py"]
+    user: "65534:__DOCKER_GID__"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
-      CONTAINERS: "1"
-      NETWORKS: "1"
-      EXEC: "1"
-      POST: "1"
-      IMAGES: "0"
-      EVENTS: "0"
-      PING: "1"
-      VERSION: "1"
+      MNDT_GUARD_SPACE: __SLUG__
+      MNDT_GUARD_PC_IMAGE: __PC_IMAGE__
+      MNDT_GUARD_PC_PREFIX: mndt-__SLUG__-pc-
+      MNDT_GUARD_NET_PREFIX: mndt-__SLUG__-pcnet-
+      MNDT_GUARD_USERS_ROOT: __DATA__/users
+      MNDT_GUARD_EGRESS: mndt-__SLUG__-egress
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # The socket itself: Docker's API is read and written through it (a `:ro`
+      # on a socket protects nothing). The guard is what bounds it.
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - docker-proxy-net
+      - docker-guard-net
     restart: unless-stopped
 
   # The computers' only way out: the public web over HTTP and HTTPS. The sidecar
@@ -226,8 +238,8 @@ networks:
   # The API and the sidecar: nothing else reaches the machine service.
   machines:
     internal: true
-  # The sidecar and the socket proxy only.
-  docker-proxy-net:
+  # The machine service and its Docker guard only.
+  docker-guard-net:
     internal: true
   # The egress proxy's own way to the web; the computers never join it.
   egress-out: {}

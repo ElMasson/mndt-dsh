@@ -425,7 +425,8 @@ step "8. the role file row by row (#75), through the gateway"
 bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
 
 step "9. the members' computers (runtime $REHEARSAL_RUNTIME): the sidecar, its proxies, through the gateway"
-bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re; machined=$?
+bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re "$machines_space"; machined=$?
+connector_secrets_check "$data" $project-workbench || machined=1
 
 [ "$granted" = 0 ] && [ "$machined" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
 verdict=$?
