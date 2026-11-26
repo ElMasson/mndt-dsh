@@ -181,6 +181,8 @@ export interface AutomationRow {
 export interface AutomationsAnswer {
   readonly items: readonly AutomationRow[]
   readonly canAdmin: boolean
+  /** The zone the scheduler counts hours in (IANA), when the host serves it. */
+  readonly timeZone?: string
 }
 
 /** The Host face this page needs. */
