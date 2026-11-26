@@ -31,6 +31,7 @@ import type { ToolsReadiness } from './tools-ready.ts'
 import { TEAM_MISSION_POLICY } from './tool-policy.ts'
 import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
+import { TaskScheduler } from './task-runs.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
@@ -279,14 +280,34 @@ export class WorkbenchGateway extends TypertRemoteService {
     // deploy/llm/prices.json, copied beside the state (or MNDT_PRICES_FILE);
     // a model without a price, or priced null, is refused, never free.
     const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
+    // One engine for the conversations' turns and the scheduled tasks' runs: one
+    // at a time (its actor is published for the connectors).
+    const engine = new DshTurnRunner(ctx, this.readinessFor(ctx), this.requiredConfigured())
     const turns = new TurnScheduler({
       service: this.service,
-      engine: new DshTurnRunner(ctx, this.readinessFor(ctx), this.requiredConfigured()),
+      engine,
       prices,
       dataDir: dirname(this.statePath),
       warn: (message) => { warnOperator(ctx, message) },
       timeZone: this.timeZoneFor(ctx),
     })
+    // The scheduled tasks (tasks PR 2): a pass every 30 s, each run as its requester.
+    const tasks = new TaskScheduler({
+      service: this.service,
+      engine,
+      prices,
+      dataDir: dirname(this.statePath),
+      timeZone: this.timeZoneFor(ctx),
+      warn: (line) => { warnOperator(ctx, line) },
+    })
+    ctx.effect(() => {
+      const pass = (): void => {
+        void tasks.tick().catch((error: unknown) => { warnOperator(ctx, `mndt: the tasks' pass failed: ${errorShape(error)}`) })
+      }
+      const handle = setInterval(pass, 30_000)
+      pass()
+      return () => { clearInterval(handle) }
+    }, 'mndt: scheduled tasks')
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
     // without it, the API never believes the proxy's identity header.
     const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
