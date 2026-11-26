@@ -575,14 +575,18 @@ export interface Message {
 /** The mission a lane's system message reports (see Message.mission). */
 export interface MessageMission {
   readonly id: string
-  readonly kind: MissionKind
+  /** `scheduled`: the run of a scheduled task (Schedule), published in its destination. */
+  readonly kind: MissionKind | 'scheduled'
   /** Where the text comes from: the automation's name, or « Briefing ». Never empty. */
   readonly title: string
   readonly status: 'done' | 'failed'
   readonly eur?: number
   readonly toolsUnavailable?: readonly string[]
   /** On a failure: its kind, the text being the host's sentence for it. The runtime's own words are journaled only. */
-  readonly reasonKind?: MissionFailureKind
+  readonly reasonKind?: TurnFailureKind
+  /** On a task's run: the task, and the agent that ran it (its cost counts on that agent's ceiling). */
+  readonly scheduleId?: string
+  readonly agentId?: string
 }
 
 /**
