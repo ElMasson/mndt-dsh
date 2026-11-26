@@ -7,6 +7,7 @@
  * that a tool call can never read another mission's actor.
  */
 import { readFile, unlink, writeFile } from 'node:fs/promises'
+import type { TurnToolRefusal } from './core/index.ts'
 
 /** Where the record lives; the machine connector is configured from this path. */
 export const actorFilePath = (): string => process.env.MNDT_MISSION_ACTOR_FILE ?? '/state/mission-actor.json'
@@ -29,6 +30,35 @@ export function exclusive<T>(work: () => Promise<T>): Promise<T> {
   const next = exclusiveQueue.then(work, work)
   exclusiveQueue = next.catch(() => undefined)
   return next
+}
+
+/** The tools refused per run (a turn's id), kept until the turn settles and takes them. */
+const refusals = new Map<string, TurnToolRefusal[]>()
+/** A run that never settles (a crash) must not grow the map without end. */
+const MAX_RUNS_NOTED = 200
+
+/**
+ * Note a tool refused during a run, once per server and kind.
+ * @param runId - the run (a turn's id) the published actor names.
+ * @param refusal - the server and the kind.
+ */
+export function noteToolRefusal(runId: string, refusal: TurnToolRefusal): void {
+  if (runId === '') return
+  const noted = refusals.get(runId) ?? []
+  if (noted.some(entry => entry.server === refusal.server && entry.reasonKind === refusal.reasonKind)) return
+  refusals.set(runId, [...noted, refusal])
+  while (refusals.size > MAX_RUNS_NOTED) {
+    const oldest = refusals.keys().next().value
+    if (oldest === undefined) break
+    refusals.delete(oldest)
+  }
+}
+
+/** @param runId - a settling turn. @returns its refused tools, forgotten here. */
+export function takeToolRefusals(runId: string): readonly TurnToolRefusal[] {
+  const noted = refusals.get(runId) ?? []
+  refusals.delete(runId)
+  return noted
 }
 
 /** Remove the record once the mission settled. */

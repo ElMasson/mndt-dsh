@@ -7,6 +7,14 @@
  * morning page uses. The agent drives the machine; the page remains the manual
  * fallback. Nothing here sends mail, buys, or publishes, so the tools are
  * ordinary actions and every call is logged in the session.
+ *
+ * MACHINES_MODE=pc (« Mon ordinateur », for the team's turns): every tool acts
+ * on the computer of the person the running turn acts for (MNDT_ACTOR_FILE),
+ * through the API (`POST /me/machine/act`, as that person), which checks that
+ * the published actor is that very person and alone asks the sidecar. This
+ * server then holds no machine token. One more tool, machine_terminal_run, runs
+ * a command in that computer's terminal. Every computer taken: the tool is
+ * refused with the host's sentence, « les 4 ordinateurs sont occupés ».
  */
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
@@ -30,6 +38,7 @@ const TOKEN = process.env.MACHINES_TOKEN ?? ''
 const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? ''
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
+const PC_MODE = process.env.MACHINES_MODE === 'pc'
 
 const sessions = { browser: undefined, desktop: undefined }
 
@@ -81,6 +90,7 @@ async function session(kind) {
  * @returns the parsed answer.
  */
 async function act(kind, body) {
+  if (PC_MODE) return actOnComputer(kind, body)
   const live = await session(kind)
   const answer = await fetch(`http://${live.host}:${live.port}/`, {
     method: 'POST',
@@ -94,6 +104,37 @@ async function act(kind, body) {
     throw new ToolRefusal(`the ${kind} answered ${answer.status}`)
   }
   return payload
+}
+
+/**
+ * One action on the actor's own computer, through the API.
+ * @param kind - browser, desktop or terminal.
+ * @param body - the operation.
+ * @returns the computer's answer (the page, the capture, the command's result).
+ */
+async function actOnComputer(kind, body) {
+  const actor = await actorNow()
+  if (actor === '') throw new ToolRefusal('no person is behind this turn, so no computer can be used')
+  const answer = await fetch(`${API}/me/machine/act`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-email': actor },
+    body: JSON.stringify({ ...body, kind }),
+  })
+  const payload = await answer.json().catch(() => ({}))
+  if (answer.ok && typeof payload.result === 'object' && payload.result !== null) return payload.result
+  // The API's refusals are the host's own sentences (busy, not yours, invalid): served.
+  if ((answer.status === 409 || answer.status === 403 || answer.status === 400 || answer.status === 503) && typeof payload.error === 'string') {
+    throw new ToolRefusal(payload.error)
+  }
+  throw new Error(`the computer's action answered ${answer.status}`)
+}
+
+/** @param result - a command's result. @returns MCP content: its exit, then its streams. */
+function renderCommand(result) {
+  const parts = [`exit ${String(result.exitCode ?? '?')}${result.timedOut === true ? ' (temps dépassé)' : ''}${result.truncated === true ? ' (sortie tronquée)' : ''}`]
+  if (typeof result.stdout === 'string' && result.stdout !== '') parts.push(`stdout:\n${result.stdout}`)
+  if (typeof result.stderr === 'string' && result.stderr !== '') parts.push(`stderr:\n${result.stderr}`)
+  return { content: [{ type: 'text', text: parts.join('\n') }] }
 }
 
 /** @param payload - machine answer. @returns MCP content blocks. */
@@ -183,6 +224,21 @@ async function awaitApproval(approvalId, timeoutSeconds) {
     if (Date.now() >= deadline) return found
     await new Promise(resolve => setTimeout(resolve, 4000))
   }
+}
+
+/** In « ordinateur » mode only: the terminal of the actor's computer. */
+const terminalTool = {
+  name: 'machine_terminal_run',
+  description: 'Execute une commande dans le terminal de l ordinateur de la personne (bash, dossier /home/user, ses fichiers), et rend la sortie. Le web public seulement, par le proxy de sortie.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: 'commande bash, par exemple python3 analyse.py' },
+      timeout_seconds: { type: 'number', description: 'duree maximale, 60 secondes par defaut, 300 au plus' },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
 }
 
 const tools = [
@@ -349,6 +405,11 @@ const tools = [
 /** @param name - tool name. @param args - tool arguments. @returns MCP result. */
 async function call(name, args) {
   switch (name) {
+    case 'machine_terminal_run': {
+      if (!PC_MODE) throw new ToolRefusal(`unknown tool ${name}`)
+      const timeout = args.timeout_seconds === undefined ? {} : { timeoutSeconds: Number(args.timeout_seconds) }
+      return renderCommand(await act('terminal', { command: String(args.command ?? ''), ...timeout }))
+    }
     case 'machine_browser_open':
       return render(await act('browser', { op: 'goto', url: String(args.url ?? '') }))
     case 'machine_browser_click': {
@@ -403,7 +464,8 @@ async function call(name, args) {
     case 'machine_close': {
       const which = String(args.target ?? 'both')
       if (which !== 'desktop') await act('browser', { op: 'stop' }).catch(() => undefined)
-      if (which !== 'browser') await act('desktop', { op: 'stop' }).catch(() => undefined)
+      // A computer's desktop is not stopped by a tool: the computer stops when idle.
+      if (which !== 'browser' && !PC_MODE) await act('desktop', { op: 'stop' }).catch(() => undefined)
       sessions.browser = undefined
       sessions.desktop = undefined
       return { content: [{ type: 'text', text: 'sessions fermees' }] }
@@ -441,7 +503,7 @@ lines.on('line', (line) => {
     return
   }
   if (message.method === 'tools/list') {
-    send(id, { tools })
+    send(id, { tools: PC_MODE ? [...tools, terminalTool] : tools })
     return
   }
   if (message.method === 'tools/call') {
