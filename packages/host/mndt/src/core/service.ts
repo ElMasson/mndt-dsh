@@ -263,7 +263,7 @@ export const HELP_CAP_EUR = 0.2
 /** Why a help request is refused, by a code the agent and the screen read. */
 export type HelpRefusalCode =
   | 'missing-fields' | 'not-running' | 'already-asked' | 'coordinated-channel'
-  | 'no-peer' | 'too-many-peers' | 'self' | 'thread-limit' | 'pair-already-asked'
+  | 'no-peer' | 'too-many-peers' | 'self' | 'thread-limit' | 'pair-already-asked' | 'peer-unreachable'
 /** A refused help request. */
 export class HelpRefusal extends Refusal {
   readonly code: HelpRefusalCode
@@ -442,6 +442,18 @@ export function turnFailureKind(reason: string): TurnFailureKind {
   if (/ended aborted/.test(reason)) return 'aborted'
   if (/ended interrupted/.test(reason)) return 'interrupted'
   return missionFailureKind(reason)
+}
+
+/** How long an agent whose model route could not be reached is set aside as a peer. */
+export const ROUTE_UNREACHABLE_MS = 10 * 60_000
+
+/**
+ * @param agent - an agent.
+ * @param at - now, ISO.
+ * @returns whether its model route is marked unreachable at that moment.
+ */
+export function routeUnreachableAt(agent: Pick<Agent, 'routeUnreachable'>, at: string): boolean {
+  return agent.routeUnreachable !== undefined && agent.routeUnreachable.until > at
 }
 
 /** The host's sentence for each kind of a turn's failure: all that is served of it. */
@@ -1163,6 +1175,46 @@ export class WorkbenchService {
       if (state.promptMeasureKey !== undefined) return { state, event: [], value: state.promptMeasureKey }
       const key = randomBytes(32).toString('hex')
       return { state: { ...state, promptMeasureKey: key }, event: [], value: key }
+    })
+  }
+
+  /**
+   * Mark an agent's model route as unreachable for ROUTE_UNREACHABLE_MS, from
+   * now (kept from its first failure while the mark lasts).
+   * @param agentId - the agent whose last attempt could not reach its route.
+   * @returns the agent, or undefined when there is none.
+   */
+  markRouteUnreachable(agentId: string): Promise<Agent | undefined> {
+    return this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === agentId)
+      if (agent === undefined) return { state, event: [], value: undefined }
+      const at = this.#at()
+      const since = agent.routeUnreachable !== undefined && routeUnreachableAt(agent, at) ? agent.routeUnreachable.since : at
+      const next: Agent = { ...agent, routeUnreachable: { since, until: new Date(Date.parse(at) + ROUTE_UNREACHABLE_MS).toISOString() } }
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === agentId ? next : candidate)) },
+        event: { at, actor: 'mndt', action: 'agent.route-unreachable', subject: agentId },
+        value: next,
+      }
+    })
+  }
+
+  /**
+   * Lift an agent's unreachable mark: one of its turns reached its route. No write when it has none.
+   * @param agentId - the agent.
+   */
+  async clearRouteUnreachable(agentId: string): Promise<void> {
+    const known = ((await this.#ready()).agents ?? []).find(candidate => candidate.id === agentId)
+    if (known?.routeUnreachable === undefined) return
+    await this.#write((state) => {
+      const agent = (state.agents ?? []).find(candidate => candidate.id === agentId)
+      if (agent?.routeUnreachable === undefined) return { state, event: [], value: undefined }
+      const { routeUnreachable: _lifted, ...rest } = agent
+      return {
+        state: { ...state, agents: (state.agents ?? []).map(candidate => (candidate.id === agentId ? rest : candidate)) },
+        event: { at: this.#at(), actor: 'mndt', action: 'agent.route-reachable', subject: agentId },
+        value: undefined,
+      }
     })
   }
 
@@ -2051,6 +2103,14 @@ export class WorkbenchService {
         (state.agents ?? []).some(agent => agent.id === agentId && agent.retiredAt === undefined && channel.agents.includes(agent.id))
       const unknown = peers.filter(peer => !active(peer))
       if (unknown.length > 0) throw new HelpRefusal('no-peer', `not an active agent of this channel: ${unknown.join(', ')}`)
+      // A peer whose model route could not be reached a moment ago is not asked:
+      // its advice would fail, and spend the help's bound on nothing. Said, so
+      // the agent asks another peer or the channel's people.
+      const now = this.#at()
+      const unreachable = (state.agents ?? []).filter(agent => peers.includes(agent.id) && routeUnreachableAt(agent, now))
+      if (unreachable.length > 0) {
+        throw new HelpRefusal('peer-unreachable', `route du modèle injoignable pour ${unreachable.map(agent => `@${agent.handle}`).join(', ')} : demande à un autre agent du canal, ou aux personnes du canal`)
+      }
       // The thread: the message's root, and every message under it.
       const rootOf = (id: string): string => {
         let current = messages.find(candidate => candidate.id === id)

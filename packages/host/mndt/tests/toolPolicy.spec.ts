@@ -13,7 +13,7 @@ import {
 } from '../src/tool-policy.ts'
 import type { LineageAgentLike, ScopedToolsLike } from '../src/tool-policy.ts'
 import type { Mission } from '../src/core/index.ts'
-import { TurnBudgetReached } from '../src/turns.ts'
+import { RouteUnreachable, TurnBudgetReached } from '../src/turns.ts'
 import type { TurnInput } from '../src/turns.ts'
 
 /** The engine's default composition, as a turn's agent would inherit it, plus MCP servers. */
@@ -223,6 +223,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     readonly outputCap?: number
     /** The workstation's default model, the one a mission runs on. */
     readonly defaultModel?: { readonly provider: string; readonly model: string }
+    /** How the agent's turn ended, when not completed: the engine's reason (an LlmFailure for an error). */
+    readonly turnEnd?: { readonly kind: string; readonly error?: { readonly message: string; readonly code: string } }
   }
 
   function fakeCtx(options: FakeOptions = {}) {
@@ -262,6 +264,9 @@ describe('the runners scope it before the agent exists, and lift it after', () =
           for (const listener of sessionListeners) {
             listener(seen.root!.session, { type: 'assistant/message', data: { usage: { inputTokens: message.input, outputTokens: message.output }, message: { content: Array.from({ length: message.toolCalls ?? 0 }, () => ({ type: 'tool-call' })) } } })
           }
+        }
+        if (options.turnEnd !== undefined) {
+          for (const listener of sessionListeners) listener(seen.root!.session, { type: 'turn/end', data: { reason: options.turnEnd } })
         }
         return {
           id: 'run-1',
@@ -324,6 +329,22 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     new ToolsReadiness(() => ({ schemas: () => names.map(name => ({ name })) }), () => () => undefined, (m) => { warned.push(m) }, 30)
   /** The approvals' six card tools, registered. */
   const APPROVALS = REQUIRED_TOOLS.approvals!.map(tool => `mcp__approvals__${tool}`)
+
+  it('a turn that could not reach its model route (the engine\'s TRANSPORT, TIMEOUT or SERVER) fails as RouteUnreachable; any other failure does not', async () => {
+    for (const code of ['TRANSPORT', 'TIMEOUT', 'SERVER']) {
+      const { ctx } = fakeCtx({ turnEnd: { kind: 'error', error: { message: `connect ECONNREFUSED (${code})`, code } } })
+      await expect(new DshTurnRunner(ctx, readinessOver([...APPROVALS, 'mcp__qonto__list'])).run(turn())).rejects.toBeInstanceOf(RouteUnreachable)
+    }
+    for (const code of ['INVALID_REQUEST', 'AUTH', 'RATE_LIMIT', 'PI_AI_ERROR']) {
+      const { ctx } = fakeCtx({ turnEnd: { kind: 'error', error: { message: 'refused', code } } })
+      const failed = await new DshTurnRunner(ctx, readinessOver([...APPROVALS, 'mcp__qonto__list'])).run(turn()).catch((error: unknown) => error)
+      expect(failed).toBeInstanceOf(Error)
+      expect(failed).not.toBeInstanceOf(RouteUnreachable)
+    }
+    // A turn that ended aborted is not a route failure either.
+    const aborted = fakeCtx({ turnEnd: { kind: 'aborted' } })
+    expect(await new DshTurnRunner(aborted.ctx, readinessOver([...APPROVALS, 'mcp__qonto__list'])).run(turn()).catch((error: unknown) => error)).not.toBeInstanceOf(RouteUnreachable)
+  })
 
   it('the approvals not registered at the bound: the turn does not start, and says why', async () => {
     const { ctx, seen } = fakeCtx()

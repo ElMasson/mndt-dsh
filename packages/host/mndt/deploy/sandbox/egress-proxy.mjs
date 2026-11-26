@@ -7,7 +7,8 @@
  * - The proxy resolves the name itself and refuses when any address is not a
  *   public one (private, loopback, link-local and 169.254.169.254, shared,
  *   reserved, multicast, documentation, IPv4-mapped or NAT64 forms of those),
- *   or is one of EGRESS_DENY (the instance's own addresses).
+ *   or is named or held by EGRESS_DENY (the instance's public and private
+ *   addresses, the compose's Docker networks: addresses or CIDR ranges).
  * - It connects to the address it checked, never resolves twice: a name that
  *   answers a public address then a private one (DNS rebinding) cannot pass.
  * - A refusal answers 403 with one line; it never says more of the network.
@@ -15,8 +16,9 @@
  *   does not answer within 10 s is dropped, a tunnel or a request idle for
  *   EGRESS_IDLE_SECONDS (300) is closed. The computer's own proxy headers
  *   (proxy-authorization, proxy-connection) are never relayed upstream.
- * - It refuses to start without EGRESS_DENY: the instance's own addresses must
- *   be named (the compose names them), never forgotten.
+ * - It refuses to start without EGRESS_DENY, or with an item that is neither an
+ *   address nor a range: the instance's own addresses must be named (the
+ *   compose names them), never forgotten, and a typo never opens one.
  *
  *   EGRESS_PORT=3128 EGRESS_DENY=51.159.161.149 node egress-proxy.mjs
  */
@@ -68,12 +70,46 @@ function v6Groups(ip) {
   return [...left, ...fill, ...right].map(group => parseInt(group, 16))
 }
 
+/** @param ip - an IPv4 or IPv6. @returns it as one number (a bigint), and its width in bits. */
+function asBits(ip) {
+  if (isIP(ip) === 4) return { value: BigInt(v4Number(ip)), width: 32 }
+  return { value: v6Groups(ip).reduce((value, group) => (value << 16n) + BigInt(group), 0n), width: 128 }
+}
+
+/**
+ * @param entry - one item of EGRESS_DENY: an address or a range (CIDR, « 172.18.0.0/16 »).
+ * @returns whether it is well formed: a typo must stop the proxy, never open an address.
+ */
+export function validDenial(entry) {
+  const [base, bits, extra] = entry.split('/')
+  if (extra !== undefined || base === undefined || isIP(base) === 0) return false
+  if (bits === undefined) return true
+  if (!/^\d{1,3}$/.test(bits)) return false
+  return Number(bits) <= (isIP(base) === 4 ? 32 : 128)
+}
+
+/** @param ip - an address. @param denied - EGRESS_DENY's items. @returns whether one of them names it or holds it. */
+function inDenied(ip, denied) {
+  const family = isIP(ip)
+  return denied.some((entry) => {
+    const [base, bits] = entry.split('/')
+    if (base === undefined || isIP(base) !== family) return false
+    const target = asBits(ip)
+    const range = asBits(base)
+    const prefix = BigInt(bits === undefined ? target.width : Number(bits))
+    const shift = BigInt(target.width) - prefix
+    return (target.value >> shift) === (range.value >> shift)
+  })
+}
+
 /**
  * @param ip - an address, as resolved.
+ * @param denied - EGRESS_DENY: the instance's own addresses and the compose's
+ * networks, as addresses or ranges (CIDR).
  * @returns whether the proxy may connect to it: a public address only.
  */
 export function isPublicAddress(ip, denied = []) {
-  if (denied.includes(ip)) return false
+  if (isIP(ip) !== 0 && inDenied(ip, denied)) return false
   if (isIP(ip) === 4) return !v4Denied(ip)
   if (isIP(ip) !== 6) return false
   const groups = v6Groups(ip)
@@ -178,6 +214,11 @@ export function egressProxy(denied = []) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const denied = (process.env.EGRESS_DENY ?? '').split(',').map(item => item.trim()).filter(item => item !== '')
+  const invalid = denied.filter(entry => !validDenial(entry))
+  if (invalid.length > 0) {
+    process.stderr.write(`egress-proxy: EGRESS_DENY holds ${invalid.length} item(s) that are neither an address nor a range (CIDR); refusing to start\n`)
+    process.exit(2)
+  }
   if (denied.length === 0) {
     process.stderr.write('egress-proxy: EGRESS_DENY is empty: name the instance\'s own addresses; refusing to start\n')
     process.exit(2)

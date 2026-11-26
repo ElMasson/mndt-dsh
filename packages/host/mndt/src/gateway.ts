@@ -312,6 +312,9 @@ export class WorkbenchGateway extends TypertRemoteService {
     // The front gateway's secret, from a file outside /state (DSH_MNDT_GATEWAY_SECRET_FILE):
     // without it, the API never believes the proxy's identity header.
     const gatewaySecret = readGatewaySecret(process.env.DSH_MNDT_GATEWAY_SECRET_FILE)
+    // The machine service's token: from its file (MACHINES_TOKEN_FILE, outside the
+    // compose), else MACHINES_TOKEN (a test, a solo host).
+    const machinesToken = readGatewaySecret(process.env.MACHINES_TOKEN_FILE) ?? process.env.MACHINES_TOKEN
     if (this.proxyUserHeader !== undefined && gatewaySecret === undefined) {
       warnOperator(ctx, 'mndt: no gateway secret (DSH_MNDT_GATEWAY_SECRET_FILE): the proxy identity header is refused, every person reads 401')
     }
@@ -331,9 +334,9 @@ export class WorkbenchGateway extends TypertRemoteService {
         schedulePath: this.schedulePath,
         automationsPath: this.automationsPath,
         schedulerAt: () => this.#schedulerAt,
-        ...(process.env.MNDT_MACHINES_URL === undefined || process.env.MACHINES_TOKEN === undefined
+        ...(process.env.MNDT_MACHINES_URL === undefined || machinesToken === undefined
           ? {}
-          : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: process.env.MACHINES_TOKEN } }),
+          : { machines: { baseUrl: process.env.MNDT_MACHINES_URL, token: machinesToken } }),
         ...(this.rolesFrom === 'authority' && baseUrl !== undefined && token !== undefined
           ? { authority: { baseUrl, token } }
           : { rolesFrom: this.rolesFrom === 'file' ? 'file' as const : 'local' as const }),

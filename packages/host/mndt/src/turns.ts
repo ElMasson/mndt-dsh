@@ -98,6 +98,25 @@ export class TurnBudgetReached extends Refusal {
   }
 }
 
+/**
+ * The engine's codes for a model route that could not be reached: the
+ * connection (TRANSPORT), a time-out (TIMEOUT), the server's 5xx (SERVER), each
+ * after the engine's own retries. Routed on the code, never on the message.
+ */
+export const ROUTE_UNREACHABLE_CODES: readonly string[] = ['TRANSPORT', 'TIMEOUT', 'SERVER']
+
+/**
+ * A step whose model route could not be reached: its agent is marked
+ * (Agent.routeUnreachable) and set aside as a peer for a while. Its message is
+ * the engine's, for the operator's log only, as any failure's.
+ */
+export class RouteUnreachable extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RouteUnreachable'
+  }
+}
+
 /** Everything one turn gives the engine. */
 export interface TurnInput {
   readonly turnId: string
@@ -991,6 +1010,8 @@ export class TurnScheduler {
       ): Promise<{ output: TurnOutput; eur: number | undefined }> => {
         if (controller.signal.aborted) throw new Error('turn stopped')
         const price = priceOf(prices, who)
+        // Its model route answered, or could not be reached: the agent's mark
+        // (Agent.routeUnreachable) follows its last attempt, whatever role it played.
         const output = await engine.run({
           turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
           runId: turn.id,
@@ -1007,7 +1028,11 @@ export class TurnScheduler {
           ...(tools === 'all' ? {} : { tools }),
           ...(budgetEur === undefined || price === undefined ? {} : { budget: { eur: budgetEur, price } }),
           signal: controller.signal,
+        }).catch(async (error: unknown) => {
+          if (error instanceof RouteUnreachable) await service.markRouteUnreachable(who.id)
+          throw error
         })
+        await service.clearRouteUnreachable(who.id)
         return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price) }
       }
       // « En parallèle puis synthèse »: a turn of the channel's synthesizer has each

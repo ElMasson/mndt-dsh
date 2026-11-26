@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Seed a tenant rendered by create-tenant.sh, once its stack runs: mount the
-# approvals connector and declare the agents of tenant/agents.json. No
+# approvals and machine connectors and declare the agents of tenant/agents.json. No
 # business data. Idempotent.
 #
 #   seed-team.sh <slug> --owner <email>
@@ -43,28 +43,31 @@ for file in connectors/render-connectors.py connectors/catalog.json patchfile.py
 done
 
 if [ -z "$ceiling" ]; then
-  # The approvals connector, from the versioned catalog, at this tenant's paths:
-  # written again on every run, because a descriptor an earlier version wrote
-  # lacks what the catalog now requires (the gateway secret since #56, without
-  # which every card is refused with 401 after an update). The workbench is
-  # restarted only when the descriptor changed.
-  descriptor="$data/connectors/approvals.json"
-  # The descriptor AND the patch it renders: a first run that rewrote the
+  # The approvals connector and the machine connector (« Mon ordinateur »), from
+  # the versioned catalog, at this tenant's paths: written again on every run,
+  # because a descriptor an earlier version wrote lacks what the catalog now
+  # requires (the gateway secret since #56, without which every card is refused
+  # with 401 after an update). The workbench is restarted only when a
+  # descriptor changed.
+  rendered="$data/home/profiles/web/cordis.patch.yml"
+  # The descriptors AND the patch they render: a first run that rewrote a
   # descriptor but whose render failed (an unreadable patch, as on 13/11) is
   # rerun once the patch is fixed; the render then changes the patch, and the
-  # workbench is restarted even though the descriptor is unchanged.
-  rendered="$data/home/profiles/web/cordis.patch.yml"
-  fingerprint() { for f in "$descriptor" "$rendered"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
+  # workbench is restarted even though the descriptors are unchanged.
+  fingerprint() { for f in "$data/connectors/approvals.json" "$data/connectors/machine.json" "$rendered"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
   before=$(fingerprint)
-  MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
-    CONNECTOR_CATALOG="$app/gateway/catalog.json" \
-    bash "$here/../mount-connector.sh" approvals --preset --no-restart  # its mode is not executable in git
+  for connector in approvals machine; do
+    descriptor_before=$( [ -f "$data/connectors/$connector.json" ] && sha256sum < "$data/connectors/$connector.json" || echo absent)
+    MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
+      CONNECTOR_CATALOG="$app/gateway/catalog.json" \
+      bash "$here/../mount-connector.sh" "$connector" --preset --no-restart  # its mode is not executable in git
+    descriptor_after=$(sha256sum < "$data/connectors/$connector.json")
+    [ "$descriptor_after" = "$descriptor_before" ] && echo "$connector: descriptor up to date"
+  done
   if [ "$(fingerprint)" != "$before" ]; then
     # A restart, not up -d: the container's configuration did not change, so up -d
     # would leave it running without the connector it must now load.
     "${compose[@]}" restart workbench
-  else
-    echo "approvals: descriptor up to date"
   fi
 fi
 

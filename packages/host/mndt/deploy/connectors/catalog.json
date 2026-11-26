@@ -1,5 +1,5 @@
 {
-  "_comment": "Read-only connectors of the agentic Slack lot 1. One entry per connector: mount it with `mount-connector.sh <name> --preset`. approvals: MNDT_API stays in approvals.env as deployed today; deciding is denied twice (env and proxy). Secrets never live here: each entry names an env file under /data/mndt/live/connectors, mode 600. allow/deny are tool-name patterns (trailing * = prefix); deny wins. The proxy refuses every tool outside allow before the call reaches the server. Code and dependencies of qonto (mcp-remote, pinned by runtime/qonto.package-lock.json), dolibarr and swing (Python, pinned by runtime/*.requirements.txt) are installed under the tenant's tools folder by tenant/install-connectors.sh; nothing is fetched when the workbench starts. qonto: every tool that answers with a presigned download URL (attachments, statements) is denied.",
+  "_comment": "Read-only connectors of the agentic Slack lot 1. One entry per connector: mount it with `mount-connector.sh <name> --preset`. approvals: MNDT_API stays in approvals.env as deployed today; deciding is denied twice (env and proxy). Secrets never live here: each entry names an env file under /data/mndt/live/connectors, mode 600. allow/deny are tool-name patterns (trailing * = prefix); deny wins. The proxy refuses every tool outside allow before the call reaches the server. Code and dependencies of qonto (mcp-remote, pinned by runtime/qonto.package-lock.json), dolibarr and swing (Python, pinned by runtime/*.requirements.txt) are installed under the tenant's tools folder by tenant/install-connectors.sh; nothing is fetched when the workbench starts. qonto: every tool that answers with a presigned download URL (attachments, statements) is denied. machine: « Mon ordinateur », in computer mode only (MACHINES_MODE=pc): every tool acts on the computer of the person the running turn acts for, through the API (as that person, with the gateway's secret from its file); the connector holds no machine token. A submit asks a card first.",
   "office365": {
     "command": [
       "node",
@@ -106,5 +106,21 @@
     "deny": [
       "decide_approval"
     ]
+  },
+  "machine": {
+    "command": [
+      "node",
+      "/opt/mndt-tools/machine-mcp.mjs"
+    ],
+    "envFile": "machine.env",
+    "env": {
+      "MACHINES_MODE": "pc",
+      "MNDT_ACTOR_FILE": "/state/mission-actor.json",
+      "MNDT_GATEWAY_SECRET_FILE": "/run/secrets/mndt-gateway"
+    },
+    "allow": [
+      "machine_*"
+    ],
+    "deny": []
   }
 }

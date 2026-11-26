@@ -43,7 +43,7 @@ case "$1" in
   run)
     member=""; name=""; prev=""
     for arg in "$@"; do
-      [ "$prev" = "--label" ] && member="\${arg#mndt.member=}"
+      [ "$prev" = "--label" ] && case "$arg" in mndt.member=*) member="\${arg#mndt.member=}" ;; esac
       [ "$prev" = "--name" ] && name="$arg"
       prev="$arg"
     done
@@ -282,7 +282,8 @@ describe('an action on a member\'s computer (/pcs/act)', { timeout: 30_000 }, ()
     expect(read.status).toBe(200)
     expect(read.body).toMatchObject({ ok: true, text: 'page lue', echo: { op: 'goto', url: 'https://example.org' } })
     expect((read.body.echo as Record<string, unknown>).identity).toBeUndefined()
-    expect(s.calls()).toContainEqual(['exec', '-i', `mndt-pc-${SMARION}`, 'node', '/app/pc-call.mjs', 'browser'])
+    // Bounded inside the computer too: past 80 s the call dies there, not only its docker exec client here.
+    expect(s.calls()).toContainEqual(['exec', '-i', `mndt-pc-${SMARION}`, 'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', 'browser'])
   })
 
   it('a command that floods its output is clipped as it is read, and said so', async () => {
@@ -389,5 +390,70 @@ describe('« Mon ordinateur » through the API', { timeout: 30_000 }, () => {
     })
     const answer = await api({ method: 'GET', path: '/me/machine', authorization: 'Bearer owner' })
     expect(answer).toMatchObject({ status: 503, body: { code: 'no-machines' } })
+  })
+})
+
+describe('the sidecar alone holds Docker: no request reaches a flag (tenant: MACHINES_PC_ONLY, mndt.tenant)', { timeout: 30_000 }, () => {
+  // What `docker run` of a computer may carry, and nothing else: through the
+  // socket proxy the sidecar is a hand on the host, so its commands are its own.
+  const WITH_VALUE = new Set(['--name', '--runtime', '--label', '--network', '--tmpfs', '--mount', '--cap-drop', '--security-opt', '--user', '--pids-limit', '--memory', '--memory-swap', '--cpus', '-e'])
+  const ALONE = new Set(['-d', '--read-only'])
+  const HOSTILE = {
+    privileged: true, network: 'host', volumes: ['/:/host'], image: 'alpine', runtime: 'runc', args: ['--privileged'],
+    '--privileged': true, '-v': '/:/host', '--network': 'host', '--pid': 'host', cap_add: 'SYS_ADMIN',
+  }
+
+  it('a computer\'s run carries only its own flags, its own image and its space\'s labels, whatever the requests said', async () => {
+    const s = await sidecar({ MACHINES_PC_ONLY: '1', PC_TENANT: 'datanalysis' })
+    // The identity is the only request field that reaches a name; a leading dash stays a value.
+    for (const identity of ['smarion@datanalysis.re', '--privileged@datanalysis.re']) {
+      expect((await s.call('POST', '/pcs/start', { identity, ...HOSTILE })).status).toBe(200)
+    }
+    await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'terminal', command: 'echo --privileged -v /:/host --network host', timeoutSeconds: '--privileged', ...HOSTILE })
+    await s.call('POST', '/pcs/act', { identity: 'smarion@datanalysis.re', kind: 'browser', operation: 'open', url: '--privileged', ...HOSTILE })
+    await s.call('POST', '/pcs/touch', { identity: 'smarion@datanalysis.re', ...HOSTILE })
+    await s.call('POST', '/pcs/stop', { identity: '--privileged@datanalysis.re', ...HOSTILE })
+    const calls = s.calls()
+    const runs = calls.filter(args => args[0] === 'run')
+    expect(runs).toHaveLength(2)
+    for (const run of runs) {
+      let at = 1
+      for (; at < run.length && (run[at] ?? '').startsWith('-'); at += WITH_VALUE.has(run[at] ?? '') ? 2 : 1) {
+        expect(WITH_VALUE.has(run[at] ?? '') || ALONE.has(run[at] ?? '')).toBe(true)
+      }
+      // The image, then nothing: no command a request could choose.
+      expect(run.slice(at)).toEqual(['mndt-pc:local'])
+      const values = (name: string) => run.flatMap((arg, i) => (arg === name ? [run[i + 1] ?? ''] : []))
+      expect(values('--runtime')).toEqual(['runsc'])
+      expect(values('--security-opt')).toEqual(['no-new-privileges'])
+      expect(values('--cap-drop')).toEqual(['ALL'])
+      expect(values('--network').every(network => network.startsWith('mndt-pc-net-'))).toBe(true)
+      expect(values('--mount').every(mount => /^type=bind,src=\/data\/mndt\/datanalysis\/users\/[a-z0-9-]+,dst=\/home\/user$/.test(mount))).toBe(true)
+      expect(values('--label')).toContain('mndt.tenant=datanalysis')
+      expect(values('--name').every(name => /^mndt-pc-[a-z0-9-]+$/.test(name))).toBe(true)
+    }
+    // The networks carry the space too; every exec names a computer, with its own flags only.
+    for (const create of calls.filter(args => args[0] === 'network' && args[1] === 'create')) expect(create).toContain('mndt.tenant=datanalysis')
+    for (const exec of calls.filter(args => args[0] === 'exec')) {
+      let at = 1
+      for (; (exec[at] ?? '').startsWith('-'); at += exec[at] === '-i' ? 1 : 2) expect(['-u', '-w', '-i']).toContain(exec[at])
+      expect(exec[at]).toMatch(/^mndt-pc-[a-z0-9-]+$/)
+    }
+    // Nowhere a flag the requests named (the terminal's own words, after the computer's name, aside).
+    const heads = calls.map(args => (args[0] === 'exec' ? args.slice(0, args.findIndex(arg => arg.startsWith('mndt-pc-')) + 1) : args))
+    for (const head of heads) {
+      for (const forbidden of ['--privileged', '-v', '--volume', '--pid', '--ipc', '--device', '--cap-add', '--volumes-from', '--userns']) expect(head).not.toContain(forbidden)
+      expect(head.join(' ')).not.toMatch(/--network\|?host|alpine|SYS_ADMIN/)
+    }
+  })
+
+  it('the older surfaces (capture, session browser and desktop, shells) are refused in a team space: they run other images with other mounts', async () => {
+    const s = await sidecar({ MACHINES_PC_ONLY: '1', PC_TENANT: 'datanalysis' })
+    for (const [method, path] of [['POST', '/capture'], ['POST', '/browsers/start'], ['POST', '/browsers/stop'], ['POST', '/desktops/start'], ['POST', '/desktops/stop'], ['GET', '/sessions'], ['GET', '/shells/ensure?identity=smarion@datanalysis.re']] as const) {
+      expect((await s.call(method, path, method === 'POST' ? { identity: 'smarion@datanalysis.re', url: 'https://example.org' } : undefined)).status).toBe(404)
+    }
+    expect(s.calls().filter(args => args[0] === 'run')).toHaveLength(0)
+    // The computers themselves still answer.
+    expect((await s.call('POST', '/pcs/start', { identity: 'smarion@datanalysis.re' })).status).toBe(200)
   })
 })

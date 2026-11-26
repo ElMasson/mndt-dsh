@@ -17,7 +17,7 @@ import { mkdir } from 'node:fs/promises'
 import { dateLine, instanceTimeZone } from './core/index.ts'
 import type { Mission, MissionResult } from './core/index.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from './turns.ts'
-import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, TurnBudgetReached } from './turns.ts'
+import { RESERVED_OUTPUT_TOKENS, RESERVED_TOOL_RESULT_TOKENS, ROUTE_UNREACHABLE_CODES, RouteUnreachable, TurnBudgetReached } from './turns.ts'
 import { eurOf, priceOf, Refusal } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
 import { clearActor, exclusive, publishActor } from './machine-tools.ts'
@@ -418,6 +418,8 @@ export class DshTurnRunner implements TurnEngine {
     await publishActor(input.actor, input.runId ?? input.turnId)
     const sessionId = created.agent.session.header.id
     const failures: string[] = []
+    // Set by the session listener below: an object, so the check after the run reads its value.
+    const route = { unreachable: false }
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     // A step with a cost bound stops before a next message that would not fit.
     // The next message reads what the last one read, plus what it wrote, plus
@@ -455,6 +457,8 @@ export class DshTurnRunner implements TurnEngine {
       if (event.type === 'turn/end' && event.data.reason.kind !== 'completed') {
         const reason = event.data.reason
         failures.push(reason.kind === 'error' ? `the agent turn failed: ${reason.error.message}` : `the agent turn ended ${reason.kind}`)
+        // Its route could not be reached, by the engine's own code (after its retries).
+        if (reason.kind === 'error' && ROUTE_UNREACHABLE_CODES.includes(reason.error.code)) route.unreachable = true
       }
     })
     // A deleted message or an agent leaving the channel stops the turn at once.
@@ -469,11 +473,13 @@ export class DshTurnRunner implements TurnEngine {
       })
       const settled = await run.result.catch((error: unknown) => {
         if (overBudget) throw new TurnBudgetReached({ ...usage })
+        // The workflow fails with its agent: the route's code, seen above, decides.
+        if (route.unreachable) throw new RouteUnreachable(error instanceof Error ? error.message : String(error))
         throw error
       })
       if (input.signal.aborted) throw new Error('turn stopped')
       if (overBudget) throw new TurnBudgetReached({ ...usage })
-      if (failures.length > 0) throw new Error(failures.join('; '))
+      if (failures.length > 0) throw route.unreachable ? new RouteUnreachable(failures.join('; ')) : new Error(failures.join('; '))
       const text = textOf(settled)
       if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)

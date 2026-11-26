@@ -29,6 +29,8 @@ die() { echo "KO $1  $2"; exit 1; }
 old_image=${1:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
+# The members' computers: their images, their settings, their cleanup.
+. "$here/machines-rehearsal.sh"
 . "$here/checks.sh"
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
@@ -63,6 +65,7 @@ cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
+    machines_cleanup
   fi
   # Stopped before its verdict (a die, a guard, a crash): said as a KO, with
   # the last step it reached, so the total never reads « ko=0 » on a run cut short.
@@ -196,10 +199,13 @@ tenant() { # <deploy dir>
 }
 compose_for() { # <image>
   sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
+      -e "s#image: mndt-machines:local#image: $machines_image#" -e "s#PC_IMAGE: mndt-pc:local#PC_IMAGE: $pc_image#" \
       -e "s#image: mndt-workbench:local#image: $1#" \
       -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
       -e "s#TRUSTED_HOST: equipe.datanalysis.re#TRUSTED_HOST: 127.0.0.1:18080#" \
       "$app/docker-compose.yml" > "$root/compose.yml"
+  # The computers, once the new tenant scripts render them (the old ones did not).
+  machines_rehearsal_compose "$root/compose.yml"
 }
 seed() { # <deploy dir>
   local shim; shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
@@ -306,6 +312,7 @@ MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
 echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile"
 
 step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
+machines_images_present || die machines-images "the computers' images are missing: build them first (build-machines.sh)"
 compose_for "$new_image"
 signed_override
 # Readable by the containers, but never under home/: the workbench refuses a
@@ -386,5 +393,8 @@ MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$play
 # the TOTAL reads ko=0 over a run cut short.
 [ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
+step "B6. the members' computers, new with this version (runtime $REHEARSAL_RUNTIME)"
+bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re; machined=$?
+
+[ "$page" = 0 ] && [ "$machined" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?

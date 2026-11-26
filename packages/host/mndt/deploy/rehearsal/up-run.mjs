@@ -1,6 +1,7 @@
 // Start a tenant's rendered compose with plain `docker run` (the rehearsal may
 // run where the Compose plugin is missing): same images, environment, env
-// files, volumes, commands and restart policy, service by service, on one
+// files, volumes, commands, user, read-only root, fixed container name and
+// restart policy, service by service, on one
 // network where each service answers to its name. Like `docker compose up -d`,
 // a running container whose configuration did not change is KEPT, with the code
 // it started with: the update rehearsal must see what the instance sees. `proxy` (oauth2-proxy, SSO)
@@ -39,7 +40,8 @@ const attachments = (service) => {
 }
 for (const [name, service] of Object.entries(services)) {
   if (name === 'proxy') continue
-  const container = `${project}-${name}`
+  // A fixed name when the compose sets one (the egress proxy: the sidecar attaches it by name).
+  const container = service.container_name ?? `${project}-${name}`
   const [first, ...others] = attachments(service)
   if (first === undefined) throw new Error(`${name}: no network of this rehearsal`)
   // Created, every network connected, then started: a service resolving one of its
@@ -51,6 +53,8 @@ for (const [name, service] of Object.entries(services)) {
   for (const volume of service.volumes ?? []) args.push('-v', volume)
   for (const port of service.ports ?? []) args.push('-p', port)
   for (const host of service.extra_hosts ?? []) args.push('--add-host', host)
+  if (service.user !== undefined) args.push('--user', String(service.user))
+  if (service.read_only === true) args.push('--read-only')
   // The configuration hash: every argument, the env files' content and the image's
   // own id (a rebuilt tag is a new image), as Compose compares them.
   let imageId = service.image

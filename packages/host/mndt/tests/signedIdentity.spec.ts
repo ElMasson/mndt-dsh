@@ -213,7 +213,8 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(rendered.services.proxy?.env_file).toEqual(['/etc/mndt/datanalysis/proxy_signature.env'])
     expect(Object.keys(rendered.services.gateway?.networks as object).sort()).toEqual(['front', 'ingress'])
     expect(rendered.services.gateway?.environment?.LISTEN_ALIAS).toBe('gateway-ingress')
-    expect(rendered.services.workbench?.networks).toEqual(['front'])
+    // The workbench joins the machines network too (the API asks the sidecar), never the ingress.
+    expect(rendered.services.workbench?.networks).toEqual(['front', 'machines'])
     expect(readFileSync(join(root, 'etc/mndt/datanalysis/oauth2.cfg'), 'utf8')).toContain('upstreams = ["http://gateway-ingress:8080/"]')
     create()
     expect(readFileSync(keyPath, 'utf8').trim()).toBe(key)

@@ -117,6 +117,9 @@ services:
       DSH_MNDT_GRANTS_FILE: /state/grants.json
       # A message never decides: the approvals connector never offers decide_approval.
       MNDT_APPROVALS_ALLOW_DECIDE: "0"
+      # The machine service: the members' computers (« Mon ordinateur »).
+      MNDT_MACHINES_URL: http://machines-api:8796
+      MACHINES_TOKEN_FILE: /run/secrets/mndt-machines
       PUBLIC_URL: https://__DOMAIN__/
       TRUSTED_HOST: __DOMAIN__
     command: ["sh", "/opt/mndt-tools/workbench-entrypoint.sh"]
@@ -125,9 +128,89 @@ services:
       - __DATA__/tools:/opt/mndt-tools:ro
       - __DATA__/mcp-auth:/state/mcp-auth
       - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
+      # The machine service's token, outside /state (an agent's sandbox reads
+      # neither /state nor /run): the API alone asks the sidecar for a computer.
+      - __CONF__/machines_token:/run/secrets/mndt-machines:ro
       - launch:/run/mndt-launch
     networks:
       - front
+      - machines
+    restart: unless-stopped
+
+  # « Mon ordinateur »: the members' computers, one each, under gVisor. The
+  # sidecar builds every `docker run` itself (no request field reaches a flag)
+  # and serves only the computers (MACHINES_PC_ONLY): no capture, no session
+  # browser or desktop, no shell. It listens on the machines network only.
+  machines:
+    image: __MACHINES_IMAGE__
+    environment:
+      MACHINES_TOKEN_FILE: /run/secrets/mndt-machines
+      MACHINES_HOST: machines-api
+      MACHINES_PORT: "8796"
+      MACHINES_PC_ONLY: "1"
+      MNDT_MACHINE_RUNTIME: runsc
+      PC_IMAGE: __PC_IMAGE__
+      # This space's computers, networks and places, never another space's on the host.
+      PC_TENANT: __SLUG__
+      PC_PREFIX: mndt-pc-__SLUG__-
+      PC_NET_PREFIX: mndt-pc-net-__SLUG__-
+      USERS_ROOT: /users
+      # Docker resolves a bind on the host: the same folder, by its host path.
+      USERS_ROOT_HOST: __DATA__/users
+      EGRESS_PROXY: mndt-__SLUG__-egress
+      EGRESS_PORT: "3128"
+      DOCKER_HOST: tcp://docker-proxy:2375
+    volumes:
+      - __CONF__/machines_token:/run/secrets/mndt-machines:ro
+      - __DATA__/users:/users
+    networks:
+      machines:
+        aliases: [machines-api]
+      docker-proxy-net: {}
+    depends_on:
+      - docker-proxy
+      - egress
+    restart: unless-stopped
+
+  # The sidecar's only hand on Docker: containers, networks and exec, never
+  # images (no pull, no build), volumes, swarm or the system. The socket stays
+  # here, read-only, on a network nothing else joins.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    environment:
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      EXEC: "1"
+      POST: "1"
+      IMAGES: "0"
+      EVENTS: "0"
+      PING: "1"
+      VERSION: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy-net
+    restart: unless-stopped
+
+  # The computers' only way out: the public web over HTTP and HTTPS. The sidecar
+  # attaches it to each computer's internal network (its fixed name). Refused:
+  # every private, local and metadata address, and EGRESS_DENY (this host's
+  # addresses, Docker's address pools), resolved once and checked.
+  egress:
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    container_name: mndt-__SLUG__-egress
+    command: ["node", "/opt/egress/egress-proxy.mjs"]
+    user: "1000:1000"
+    read_only: true
+    environment:
+      EGRESS_PORT: "3128"
+      EGRESS_DENY: "__EGRESS_DENY__"
+      # The fingerprint of egress-proxy.mjs (create-tenant.sh): `up -d` recreates the proxy when its code changed.
+      MNDT_EGRESS_CODE: "__EGRESS_CODE__"
+    volumes:
+      - __APP__/egress:/opt/egress:ro
+    networks:
+      - egress-out
     restart: unless-stopped
 volumes:
   # The shell's launch token, shared by the workbench (writes) and the gateway (reads).
@@ -140,3 +223,11 @@ networks:
   edge:
     external: true
     name: __TRAEFIK_NETWORK__
+  # The API and the sidecar: nothing else reaches the machine service.
+  machines:
+    internal: true
+  # The sidecar and the socket proxy only.
+  docker-proxy-net:
+    internal: true
+  # The egress proxy's own way to the web; the computers never join it.
+  egress-out: {}

@@ -43,7 +43,7 @@ const run = (live: string): string => execFileSync('python3', [render], { env: {
 // script suites.
 describe('connector rows', { timeout: 30_000 }, () => {
   test('the catalog names the servers the core references', () => {
-    expect(servers.sort()).toEqual(['approvals', 'dolibarr', 'office365', 'qonto', 'swing'])
+    expect(servers.sort()).toEqual(['approvals', 'dolibarr', 'machine', 'office365', 'qonto', 'swing'])
   })
 
   test('every catalog connector runs behind the proxy, lists exported after the env file', () => {
