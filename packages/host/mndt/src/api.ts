@@ -1423,6 +1423,53 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         return respond(201, { memory: note })
       }
 
+      // « Mon ordinateur » (option B, 26/11): each member's own computer, started on
+      // demand, four at most. The sidecar holds the Docker socket; the API asks it,
+      // as the person, and serves the computer's state only (never its host, its
+      // token nor what it does).
+      if (path === '/me/machine' || path === '/me/machine/start' || path === '/me/machine/stop' || (request.method === 'GET' && path === '/machines/members')) {
+        const machines = options.machines
+        if (machines === undefined) return respond(503, { error: 'this deployment has no machine service', code: 'no-machines' })
+        if (path === '/machines/members') {
+          const denied = await authorise(identity, 'rights.write')
+          if (denied !== undefined) return denied
+        }
+        const base = machines.baseUrl.replace(/\/$/, '')
+        const verb = path === '/me/machine/start' ? 'start' : path === '/me/machine/stop' ? 'stop' : undefined
+        if (verb !== undefined && request.method !== 'POST') return respond(404, { error: `no route ${request.method} ${path}` })
+        if (verb === undefined && request.method !== 'GET') return respond(404, { error: `no route ${request.method} ${path}` })
+        let answer: Response
+        try {
+          answer = await fetch(
+            path === '/machines/members' ? `${base}/pcs` : verb === undefined ? `${base}/pcs/state?identity=${encodeURIComponent(identity)}` : `${base}/pcs/${verb}`,
+            {
+              method: verb === undefined ? 'GET' : 'POST',
+              headers: { 'content-type': 'application/json', 'x-machine-token': machines.token },
+              ...(verb === undefined ? {} : { body: JSON.stringify({ identity }) }),
+            },
+          )
+        } catch (error) {
+          return respond(502, { error: failure(error, 'the machine service is unreachable', 'the machine service is unreachable') })
+        }
+        const body = await answer.json().catch(() => ({})) as Record<string, unknown>
+        const capacity = servedCapacity(body.capacity)
+        if (answer.status === 409 && body.busy === true) {
+          return respond(409, { error: `les ${capacity?.max ?? MACHINE_MAX} ordinateurs sont occupés`, code: 'machines-busy', ...(capacity === undefined ? {} : { capacity }) })
+        }
+        if (!answer.ok) {
+          warnInternal(`mndt: the machine service answered ${answer.status} on ${path}: ${JSON.stringify(body).slice(0, 300)}`)
+          return respond(502, { error: 'the machine service refused the request', code: 'machine-refused' })
+        }
+        if (path === '/machines/members') {
+          const rows = Array.isArray(body.machines) ? body.machines : []
+          const served = rows.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null && typeof (row as { member?: unknown }).member === 'string')
+            .map(row => ({ member: row.member as string, ...servedMachine(row) }))
+          return respond(200, { machines: served, ...(capacity === undefined ? {} : { capacity }) })
+        }
+        const machine = { ...servedMachine(body), ...(capacity === undefined ? {} : { capacity }) }
+        return respond(200, verb === undefined ? machine : { machine })
+      }
+
       if (request.method === 'GET' && path === '/machines') {
         const denied = await authorise(identity, 'rights.read')
         if (denied !== undefined) return denied
@@ -1865,6 +1912,35 @@ type MachineFields = Readonly<Record<string, 'string' | 'number' | 'boolean' | R
  * MachineShot, BrowserAnswer), nothing else. A start serves no host and no
  * token: they stay in the host, which acts with them.
  */
+/** The most computers the page announces when the sidecar does not say (MNDT_MACHINE_MAX, default 4). */
+export const MACHINE_MAX = 4
+const MACHINE_STATES = ['stopped', 'starting', 'running', 'stopping'] as const
+
+/**
+ * @param body - the sidecar's answer about one computer.
+ * @returns what is served of it: its state and its times, nothing else.
+ */
+function servedMachine(body: Record<string, unknown>): Record<string, unknown> {
+  const state = MACHINE_STATES.find(candidate => candidate === body.state) ?? 'stopped'
+  const time = (value: unknown): string | undefined => (typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined)
+  const startedAt = time(body.startedAt)
+  const lastUsedAt = time(body.lastUsedAt)
+  const stopsAt = time(body.stopsAt)
+  return {
+    state,
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(lastUsedAt === undefined ? {} : { lastUsedAt }),
+    ...(stopsAt === undefined ? {} : { stopsAt }),
+  }
+}
+
+/** @param value - the sidecar's capacity. @returns it, when well formed. */
+function servedCapacity(value: unknown): { used: number; max: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { used, max } = value as { used?: unknown; max?: unknown }
+  return Number.isInteger(used) && Number.isInteger(max) ? { used: used as number, max: max as number } : undefined
+}
+
 export const MACHINE_FIELDS = {
   SESSIONS: { sessions: { name: 'string', status: 'string' } },
   STARTED: { ok: 'boolean' },

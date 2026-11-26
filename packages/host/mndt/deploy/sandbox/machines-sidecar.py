@@ -268,6 +268,161 @@ def ensure_shell(identity):
     return {'ok': False, 'identity': identity, 'error': 'the shell did not publish a launch token'}
 
 
+# « Mon ordinateur » (option B, 26/11): one computer per member, under gVisor.
+# Its runtime is a setting: runsc by default; a rehearsal without gVisor sets
+# runc, and its checks say the gVisor proof is still to be made.
+PC_RUNTIME = os.environ.get('MNDT_MACHINE_RUNTIME', 'runsc')
+PC_IMAGE = os.environ.get('PC_IMAGE', DESKTOP_IMAGE)
+PC_PORT = int(os.environ.get('PC_PORT', str(DESKTOP_PORT)))
+# Each member's files, and nothing else: Docker resolves the bind on the host.
+USERS_ROOT = os.environ.get('USERS_ROOT', '/state/users')
+USERS_ROOT_HOST = os.environ.get('USERS_ROOT_HOST', USERS_ROOT)
+# The only way out: the egress proxy (public web, HTTP and HTTPS only).
+EGRESS_PROXY = os.environ.get('EGRESS_PROXY', 'mndt-egress')
+EGRESS_PORT = int(os.environ.get('EGRESS_PORT', '3128'))
+MAX_PCS = int(os.environ.get('MNDT_MACHINE_MAX', '4'))
+IDLE_SECONDS = int(os.environ.get('MNDT_MACHINE_IDLE_SECONDS', '900'))
+REAP_SECONDS = float(os.environ.get('MNDT_MACHINE_REAP_SECONDS', '30'))
+PC_LABEL = 'mndt.member'
+
+_PCS_LOCK = threading.Lock()
+# One start at a time: counting the running computers and starting one is one step.
+_START_LOCK = threading.Lock()
+# identity -> {'startedAt': iso, 'lastUsed': epoch seconds}
+_PCS = {}
+
+
+def pc_name(identity):
+    return 'mndt-pc-' + shell_slug(identity)
+
+
+def pc_network(identity):
+    return 'mndt-pc-net-' + shell_slug(identity)
+
+
+def iso(epoch):
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(epoch))
+
+
+def running_pcs():
+    """@returns the members whose computer runs, from Docker itself (it survives a restart of this service)."""
+    result = docker('ps', '--filter', 'label=' + PC_LABEL, '--format', '{{.Label "' + PC_LABEL + '"}}')
+    return [line.strip() for line in (result.stdout or '').splitlines() if line.strip() != '']
+
+
+def pc_state(identity):
+    with _PCS_LOCK:
+        known = _PCS.get(identity)
+    up = identity in running_pcs()
+    if not up:
+        return {'state': 'stopped'}
+    last = known['lastUsed'] if known else time.time()
+    return {
+        'state': 'running',
+        **({'startedAt': known['startedAt']} if known else {}),
+        'lastUsedAt': iso(last),
+        'stopsAt': iso(last + IDLE_SECONDS),
+    }
+
+
+def capacity():
+    return {'used': len(running_pcs()), 'max': MAX_PCS}
+
+
+def touch_pc(identity):
+    with _PCS_LOCK:
+        if identity in _PCS:
+            _PCS[identity]['lastUsed'] = time.time()
+
+
+def start_pc(identity):
+    """Start the member's computer if it is not up. Busy when MAX_PCS run already.
+
+    No /state, no model key, no Docker socket: its own files, its own internal
+    network whose only way out is the egress proxy, its runtime gVisor.
+    """
+    with _START_LOCK:
+        return _start_pc(identity)
+
+
+def _start_pc(identity):
+    name = pc_name(identity)
+    if identity in running_pcs():
+        touch_pc(identity)
+        return {'ok': True}
+    if len(running_pcs()) >= MAX_PCS:
+        return {'ok': False, 'busy': True}
+    network = pc_network(identity)
+    # An internal network: no route out but the proxy, attached to it below.
+    if docker('network', 'inspect', network).returncode != 0:
+        docker('network', 'create', '--internal', '--label', PC_LABEL + '=' + identity, network)
+    docker('network', 'connect', network, EGRESS_PROXY)
+    home = os.path.join(USERS_ROOT, shell_slug(identity))
+    os.makedirs(home, exist_ok=True)
+    docker('rm', '-f', name)
+    proxy = 'http://' + EGRESS_PROXY + ':' + str(EGRESS_PORT)
+    result = docker(
+        'run', '-d', '--name', name,
+        '--runtime', PC_RUNTIME,
+        '--label', PC_LABEL + '=' + identity,
+        '--network', network,
+        '--read-only',
+        '--tmpfs', '/tmp:rw,size=1g',
+        '--tmpfs', '/dev/shm:rw,size=256m',
+        '--mount', 'type=bind,src=' + os.path.join(USERS_ROOT_HOST, shell_slug(identity)) + ',dst=/home/user',
+        '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges',
+        '--user', '1000:1000',
+        '--pids-limit', '256',
+        '--memory', '1g',
+        '--cpus', '1',
+        '-e', 'HOME=/home/user',
+        '-e', 'HTTP_PROXY=' + proxy, '-e', 'HTTPS_PROXY=' + proxy,
+        '-e', 'http_proxy=' + proxy, '-e', 'https_proxy=' + proxy,
+        '-e', 'NO_PROXY=localhost,127.0.0.1',
+        '-e', 'DESKTOP_TOKEN=' + TOKEN,
+        '-e', 'DESKTOP_PORT=' + str(PC_PORT),
+        PC_IMAGE,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        return {'ok': False, 'error': 'the computer did not start'}
+    now = time.time()
+    with _PCS_LOCK:
+        _PCS[identity] = {'startedAt': iso(now), 'lastUsed': now}
+    return {'ok': True}
+
+
+def stop_pc(identity):
+    docker('rm', '-f', pc_name(identity))
+    network = pc_network(identity)
+    docker('network', 'disconnect', '-f', network, EGRESS_PROXY)
+    docker('network', 'rm', network)
+    with _PCS_LOCK:
+        _PCS.pop(identity, None)
+    return {'ok': True}
+
+
+def reap_idle():
+    """Stop every computer idle for IDLE_SECONDS. One found running unknown (this service restarted) starts its clock now."""
+    now = time.time()
+    for identity in running_pcs():
+        with _PCS_LOCK:
+            known = _PCS.setdefault(identity, {'startedAt': iso(now), 'lastUsed': now})
+            idle = now - known['lastUsed'] >= IDLE_SECONDS
+        if idle:
+            stop_pc(identity)
+
+
+def reaper():
+    while True:
+        time.sleep(REAP_SECONDS)
+        try:
+            reap_idle()
+        except Exception:  # noqa: BLE001 - one failed pass must not stop the next ones
+            pass
+
+
 def sessions():
     result = docker('ps', '--filter', 'name=mndt-browser-', '--format', '{{.Names}}\t{{.Status}}')
     rows = []
@@ -310,6 +465,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200 if result.get('ok') is True else 502, result)
         if self.path == '/sessions':
             return self.reply(200, {'sessions': sessions()})
+        if self.path == '/pcs':
+            return self.reply(200, {'machines': [{'member': who, **pc_state(who)} for who in running_pcs()], 'capacity': capacity()})
+        if self.path.startswith('/pcs/state'):
+            query = parse_qs(urlparse(self.path).query)
+            identity = str((query.get('identity') or [''])[0]).strip().lower()
+            if not IDENTITY.match(identity):
+                return self.reply(400, {'error': 'identity must be an email address'})
+            return self.reply(200, {**pc_state(identity), 'capacity': capacity()})
         return self.reply(404, {'error': 'unknown path'})
 
     def do_POST(self):
@@ -343,6 +506,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200 if result.get('ok') is True else 502, result)
         if self.path == '/desktops/stop':
             return self.reply(200, stop_desktop(identity))
+        if self.path == '/pcs/start':
+            try:
+                result = start_pc(identity)
+            except subprocess.TimeoutExpired:
+                return self.reply(504, {'error': 'the computer did not start in time'})
+            if result.get('busy') is True:
+                return self.reply(409, {'busy': True, 'capacity': capacity()})
+            if result.get('ok') is not True:
+                return self.reply(502, {'error': 'the computer did not start'})
+            return self.reply(200, {**pc_state(identity), 'capacity': capacity()})
+        if self.path == '/pcs/stop':
+            stop_pc(identity)
+            return self.reply(200, {**pc_state(identity), 'capacity': capacity()})
+        if self.path == '/pcs/touch':
+            touch_pc(identity)
+            return self.reply(200, {**pc_state(identity), 'capacity': capacity()})
         if self.path != '/capture':
             return self.reply(404, {'error': 'unknown path'})
         url = str(body.get('url', '')).strip()
@@ -365,4 +544,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    ThreadingHTTPServer(('0.0.0.0', 8796), Handler).serve_forever()
+    threading.Thread(target=reaper, daemon=True).start()
+    ThreadingHTTPServer((os.environ.get('MACHINES_HOST', '0.0.0.0'), int(os.environ.get('MACHINES_PORT', '8796'))), Handler).serve_forever()
