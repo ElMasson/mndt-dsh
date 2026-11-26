@@ -314,12 +314,13 @@ export function ScheduleList(props: {
               {r.nextRuns[0] === undefined || r.state === 'paused' ? '' : t('scheduleNextOne', { at: runTime(r.nextRuns[0], r.timeZone) })}
               {r.lastRunAt === undefined ? '' : ` · ${t('scheduleLast', { at: runTime(r.lastRunAt, r.timeZone) })}${r.lastEur === undefined ? '' : `, ${euros(r.lastEur)}`}`}
               {r.lastStatus === 'done' ? ` · ${t('scheduleLastDone')}` : ''}
-              {/* Refused before any call (the agent's month ceiling, or a model with no price): not a
-                  failure, nothing is published, so the task is where it is said; it starts again next month. */}
+              {/* Refused before any call (the agent's month ceiling, or a model with no price: the core
+                  records both alike, task-runs.ts): not a failure, nothing is published, so the task says it. */}
               {r.lastStatus === 'refused' ? ` · ${t('scheduleLastRefused')}` : ''}
               {/* A restart interrupted the run; it is not a failure (#169): said as what it is. */}
               {r.lastStatus !== 'failed' ? '' : r.lastReasonKind === 'restart' ? ` · ${t('endRestart')}`
-                : ` · ${t('scheduleLastFailed', { reason: endWordOf(r.lastReasonKind, t) ?? t('endError') })}`}
+                // A category the page does not know: « échec », never a cause it cannot vouch for.
+                : ` · ${endWordOf(r.lastReasonKind, t) === undefined ? t('scheduleLastFailedPlain') : t('scheduleLastFailed', { reason: endWordOf(r.lastReasonKind, t) ?? '' })}`}
               {r.eurThisMonth === undefined ? '' : ` · ${t('scheduleMonth', { eur: euros(r.eurThisMonth) })}`}
               {r.eurPerMonthMax === undefined ? '' : ` ${t('scheduleMonthMax', { eur: euros(r.eurPerMonthMax) })}`}
             </p>
