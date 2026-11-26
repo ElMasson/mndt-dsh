@@ -9,7 +9,7 @@
  * after 90 days; what each reader reads of it.
  */
 import { describe, expect, it } from 'vitest'
-import { MemoryStore, spentThisMonth, WorkbenchService } from '../src/core/index.ts'
+import { MemoryStore, SPACE_PREAMBLE, spentThisMonth, WorkbenchService } from '../src/core/index.ts'
 import type { Message, PriceGrid, Schedule, ScheduleProposal } from '../src/core/index.ts'
 import { createMndtApi, scheduleSpentThisMonth } from '../src/api.ts'
 import type { GrantSource } from '../src/policy.ts'
@@ -108,7 +108,9 @@ describe('a run', () => {
     expect(run.agent.id).toBe(b.agent.id)
     expect(run.servers).toEqual(['attio'])
     expect(run.budget?.eur).toBe(0.4)
-    expect(run.prompt.startsWith('Nous sommes le jeudi 26 novembre 2026, 08:02')).toBe(true)
+    // The date at the end (the prefix cache); the space's preamble at the head.
+    expect(run.prompt.split('\n').at(-1)?.startsWith('Nous sommes le jeudi 26 novembre 2026, 08:02')).toBe(true)
+    expect(run.prompt.startsWith(SPACE_PREAMBLE)).toBe(true)
     expect(run.prompt).toContain('Fais le point des factures impayées.')
     const published = await b.runsIn(b.channel.id)
     expect(published).toHaveLength(1)

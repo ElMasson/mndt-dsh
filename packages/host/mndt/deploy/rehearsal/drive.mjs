@@ -641,5 +641,22 @@ check('restart-closes-council', councilBefore === '1' && councilAfter === '0' &&
   check('scheduler-fires', startedHere(after) && passAge < 120_000,
     `set to ${parts.hour}:${parts.minute} (${zone}): lastFiredDate ${after?.lastFiredDate ?? '-'}, lastFiredAt ${after?.lastFiredAt ?? '-'}, last pass ${Number.isFinite(passAge) ? `${Math.round(passAge / 1000)} s ago` : 'never served'}; put back to ${before?.at ?? '-'}, ${before?.enabled === true ? 'enabled' : 'suspended'}`)
 }
+// The prefix cache (26/11, « @qwen bonjou »: 10 613 input tokens, cacheRead 0):
+// two different turns of one agent share a long head (the date line is at the
+// end, the channel's mark is stable); two agents share the space's preamble;
+// no prompt opens with the date line. From the fake model's prompt-prefix lines.
+{
+  const lines = [...logs('fakellm').matchAll(/fake-llm prompt-prefix @(\S+) #(\S+): length=(\d+) common=(\S+) preamble=(\w+) dateFirst=(\w+)/g)]
+    .map(m => ({ who: m[1], length: Number(m[3]), common: m[4] === '-' ? undefined : Number(m[4]), preamble: m[5], dateFirst: m[6] === 'true' }))
+  // A call whose first message differs from that agent's previous one: another turn, not a step of a tool loop.
+  const turnsOfOne = lines.filter(line => line.common !== undefined && line.common < line.length)
+  const longest = Math.max(0, ...turnsOfOne.map(line => line.common ?? 0))
+  const agentsByPreamble = new Map()
+  for (const line of lines) agentsByPreamble.set(line.preamble, new Set([...(agentsByPreamble.get(line.preamble) ?? []), line.who]))
+  const shared = Math.max(0, ...[...agentsByPreamble.values()].map(agents => agents.size))
+  const datedFirst = lines.filter(line => line.dateFirst).length
+  check('prompt-cache-prefix', longest >= 600 && shared >= 2 && datedFirst === 0 && lines.length > 0,
+    `${lines.length} calls: longest head shared by two turns of one agent ${longest} chars (≥ 600), agents sharing the preamble ${shared} (≥ 2), prompts opening with the date ${datedFirst} (0)`)
+}
 console.log(`\nTOTAL ok=${results.filter(r => r.ok).length} ko=${results.filter(r => !r.ok).length}`)
 process.exit(results.some(r => !r.ok) ? 1 : 0)

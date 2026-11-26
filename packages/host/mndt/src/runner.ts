@@ -7,7 +7,7 @@
  * produced, and the failure contracts that a settled run does not report by
  * itself. A run that produced nothing is an error here, not an empty brief.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the agents service and the session/workflow event maps.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -297,10 +297,11 @@ export class DshMissionRunner {
     })
     let run: ReturnType<WorkflowEngineLike['start']> | undefined
     try {
-      // As every turn's: a briefing or an automation knows the day it runs.
+      // As every turn's: a briefing or an automation knows the day it runs. At the
+      // end, so that the mission's frame keeps one prefix (the prefix cache).
       const dated = dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)
       const framed = (this.#options.frame ?? defaultFrame)(mission)
-      const prompt = `${dated}\n\n${mission.kind === 'briefing' && !facts ? `${framed}\n\n${NO_FACTS_NOTE}` : framed}`
+      const prompt = `${mission.kind === 'briefing' && !facts ? `${framed}\n\n${NO_FACTS_NOTE}` : framed}\n\n${dated}`
       run = engine.start({
         script: `return await agent(${JSON.stringify(prompt)})`,
         meta: { name: 'mndt-mission', description: `mndt mission ${mission.kind}` },
@@ -476,6 +477,10 @@ export class DshTurnRunner implements TurnEngine {
       const text = textOf(settled)
       if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
+      // The prompt's measure, never its content: its size, the fingerprints of its
+      // head (one value from one turn to the next: the prefix cache can serve it),
+      // and what the model counted (input, read from cache, output).
+      warnOperator(this.#ctx, promptMeasure(input, tokens))
       return {
         text, sessionId, ...(tokens === undefined ? {} : { tokens }), ...(toolsUnavailable.length === 0 ? {} : { toolsUnavailable }),
       }
@@ -487,6 +492,17 @@ export class DshTurnRunner implements TurnEngine {
       await endRun(this.#ctx, [() => ending?.dispose?.(), stopEvents, clearActor, () => created.dispose()], unscope)
     }
   }
+}
+
+/**
+ * @param input - a turn.
+ * @param tokens - what the model counted, when it said.
+ * @returns the operator's line that measures its prompt, without any of its text.
+ */
+export function promptMeasure(input: Pick<TurnInput, 'turnId' | 'agent' | 'prompt'>, tokens: { readonly input: number; readonly output: number; readonly cacheRead?: number } | undefined): string {
+  const head = (length: number): string => createHash('sha256').update(input.prompt.slice(0, length)).digest('hex').slice(0, 12)
+  const counted = tokens === undefined ? 'tokens unknown' : `input ${tokens.input}, cacheRead ${tokens.cacheRead ?? 0}, output ${tokens.output}`
+  return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}; ${counted}`
 }
 
 /**

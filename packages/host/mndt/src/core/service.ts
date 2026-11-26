@@ -298,6 +298,20 @@ export class ContextRefusal extends Refusal {
  * @returns the channel with its new context.
  * @throws ContextRefusal when too long, or when the context moved since baseVersion.
  */
+/**
+ * @param marks - the channels' prompt marks.
+ * @param channelId - the channel a text was written in.
+ * @param text - what was written (a message, a context).
+ * @returns the marks, that channel's dropped when the text shows it (it is drawn again at its next use):
+ * a mark seen is a mark a text could use to close its block early.
+ */
+function unleakedMarks(marks: WorkbenchState['promptMarks'], channelId: string, text: string): Pick<WorkbenchState, 'promptMarks'> {
+  const mark = marks?.[channelId]
+  if (marks === undefined || mark === undefined || !text.includes(mark)) return marks === undefined ? {} : { promptMarks: marks }
+  const { [channelId]: _seen, ...rest } = marks
+  return { promptMarks: rest }
+}
+
 function withContext(channel: Channel, text: string, baseVersion: number, actor: string, at: string): Channel {
   const trimmed = text.trim()
   if (trimmed.length > MAX_CONTEXT_CHARS) {
@@ -981,6 +995,7 @@ export class WorkbenchService {
           ...state,
           channels: (state.channels ?? []).map(candidate => (candidate.id === channel.id ? next : candidate)),
           approvals: state.approvals.map(candidate => (candidate.id === id ? decided : candidate)),
+          ...unleakedMarks(state.promptMarks, channel.id, approval.contextProposal.text),
         },
         event: { at, actor: actor.trim(), action: 'approval.approved', subject: id, detail: `context of #${channel.name} at version ${next.context?.version ?? 0}` },
         value: { approval: decided, channel: next },
@@ -1079,6 +1094,21 @@ export class WorkbenchService {
         event: events,
         value: { approval: next, schedule },
       }
+    })
+  }
+
+  /**
+   * @param channelId - a channel.
+   * @returns its prompt mark (WorkbenchState.promptMarks), drawn and kept at its first use.
+   */
+  async promptMarkOf(channelId: string): Promise<string> {
+    const known = (await this.#ready()).promptMarks?.[channelId]
+    if (known !== undefined) return known
+    return this.#write((state) => {
+      const again = state.promptMarks?.[channelId]
+      if (again !== undefined) return { state, event: [], value: again }
+      const mark = randomUUID().replaceAll('-', '').slice(0, 12)
+      return { state: { ...state, promptMarks: { ...(state.promptMarks ?? {}), [channelId]: mark } }, event: [], value: mark }
     })
   }
 
@@ -2341,7 +2371,11 @@ export class WorkbenchService {
       if (channel === undefined || !channel.members.includes(actor)) throw new Refusal(`no channel ${id}`)
       const next = withContext(channel, text, baseVersion, actor, this.#at())
       return {
-        state: { ...state, channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)) },
+        state: {
+          ...state,
+          channels: (state.channels ?? []).map(candidate => (candidate.id === id ? next : candidate)),
+          ...unleakedMarks(state.promptMarks, id, text),
+        },
         event: { at: this.#at(), actor, action: 'channel.context', subject: id, detail: `version ${next.context?.version ?? 0}` },
         value: next,
       }
@@ -2515,7 +2549,7 @@ export class WorkbenchService {
         updatedAt: at,
       }
       return {
-        state: { ...state, messages: [...(state.messages ?? []), message] },
+        state: { ...state, messages: [...(state.messages ?? []), message], ...unleakedMarks(state.promptMarks, channelId, body) },
         event: { at: message.createdAt, actor: author, action: 'message.posted', subject: message.id, detail: channelId },
         value: message,
       }
@@ -2632,7 +2666,7 @@ export class WorkbenchService {
         }
       })
       return {
-        state: { ...state, messages: [...linked, message] },
+        state: { ...state, messages: [...linked, message], ...unleakedMarks(state.promptMarks, channelId, text) },
         event: { at: message.createdAt, actor: author.kind === 'agent' ? author.agentId : 'mndt', action: 'message.reply', subject: message.id, detail: channelId },
         value: message,
       }

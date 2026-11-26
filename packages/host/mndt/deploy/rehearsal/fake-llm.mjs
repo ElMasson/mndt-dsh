@@ -11,9 +11,12 @@
 // in the working directory), the facts server (never allowed in a channel), and
 // the approvals server (a card), then answers. Every tool result it reads back
 // is logged as TOOL-RESULT <tag> <tool>: <text>.
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 
 let calls = 0
+/** The first user message of each agent's last call, by agent and channel (prompt-prefix). */
+const previousFirst = new Map()
 const TEXT = 'Réponse de répétition : le canal est bien reçu.'
 const USAGE = { prompt_tokens: 1200, completion_tokens: 12, total_tokens: 1212 }
 const PROBE = [
@@ -165,6 +168,22 @@ createServer((req, res) => {
       return
     }
     const tag = tagOf(messages)
+    // The prefix cache (prompt-cache-prefix): the first user message of a call,
+    // by agent and channel; its common head with that agent's previous one, the
+    // fingerprint of its first 300 characters (the space's preamble), and
+    // whether it opens with the date line. Never the text.
+    {
+      const first = textOf(messages.find(message => message.role === 'user')?.content ?? '')
+      const who = /Tu es @([a-z0-9-]+) \(/.exec(first)?.[1] ?? '-'
+      const where = /du canal #([a-z0-9-]+)/.exec(first)?.[1] ?? '-'
+      const key = `${who}#${where}`
+      const before = previousFirst.get(key)
+      let common = 0
+      if (before !== undefined) while (common < before.length && common < first.length && before[common] === first[common]) common += 1
+      previousFirst.set(key, first)
+      const preamble = createHash('sha256').update(first.slice(0, 300)).digest('hex').slice(0, 12)
+      console.log(`fake-llm prompt-prefix @${who} #${where}: length=${first.length} common=${before === undefined ? '-' : common} preamble=${preamble} dateFirst=${first.startsWith('Nous sommes le')}`)
+    }
     console.log(`fake-llm call ${calls}: ${req.method} ${req.url} model=${request.model} stream=${request.stream}`)
     // The tools this call offered the model, sorted: the rehearsal compares them
     // with the allow-list, exactly.

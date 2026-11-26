@@ -329,7 +329,7 @@ export class TurnScheduler {
       const worker = agents.find(candidate =>
         candidate.id === workerId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
       const name = worker === undefined ? workerId : `@${worker.handle}`
-      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, undefined, await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
+      const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, await service.promptMarkOf(channel.id), await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
         : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
@@ -375,7 +375,7 @@ export class TurnScheduler {
       note: `Les parts de ${parts.map(part => `@${part.handle}`).join(', ')} sont dans le détail du tour.`,
     })
     const mark = randomUUID().slice(0, 8)
-    const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark)
+    const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark, await service.promptMarkOf(channel.id))
     const refusal = ceilingRefusal(synthesizer, prices,
       spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
       ?? overBound(synthesizer, prompt)
@@ -482,7 +482,8 @@ export class TurnScheduler {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peerId, reason: 'n’est plus un agent actif de ce canal', reasonKind: 'stale' }] }
           continue
         }
-        const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, undefined, await this.#skillsFor(peer))
+        const channelMark = await service.promptMarkOf(channel.id)
+        const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, channelMark, await this.#skillsFor(peer))
         const why = await askerCeiling() ?? overCap(peer, text)
         if (why !== undefined) {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why, reasonKind: 'refused' }] }
@@ -706,7 +707,7 @@ export class TurnScheduler {
       typeof choice === 'number' && Number.isInteger(choice) && choice >= 1 && choice <= council.options.length ? choice : undefined
     for (const { slot, member } of slots) {
       const skills = await this.#skillsFor(member)
-      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options, undefined, undefined, skills))
+      const positioned = await run(member, `cp${slot.toLowerCase()}`, councilPositionPrompt(member, channel, council.question, council.options, undefined, await service.promptMarkOf(channel.id), skills))
       if ('refused' in positioned) {
         skip(member, positioned, slot)
       } else {
@@ -787,7 +788,8 @@ export class TurnScheduler {
     const synthesizer = agents.find(a => a.id === coordination.synthesizerId && a.retiredAt === undefined && channel.agents.includes(a.id))
     if (synthesizer === undefined) return escalate(council.question, 'le synthétiseur n’est plus un agent actif de ce canal', 'Le conseil n’a pas pu trancher.')
     const decided = await run(synthesizer, 'cs', councilSynthesisPrompt(synthesizer, channel, council.question, council.options,
-      council.positions.map(p => ({ slot: p.slot, text: p.text })), council.critiques.map(c => ({ slot: c.slot, text: c.text }))))
+      council.positions.map(p => ({ slot: p.slot, text: p.text })), council.critiques.map(c => ({ slot: c.slot, text: c.text })),
+      undefined, await service.promptMarkOf(channel.id)))
     if ('refused' in decided) {
       skip(synthesizer, decided)
       return escalate(council.question, `synthèse impossible (${reasonKind(decided.refused)})`, 'Le conseil n’a pas pu trancher.')
@@ -967,7 +969,9 @@ export class TurnScheduler {
     try {
       const history = await service.messages(channel.id)
       const agents = await service.listAgents(true)
-      const prompt = turnPrompt(agent, channel, history, message, agents, undefined, await this.#skillsFor(agent))
+      // The channel's stable mark (never served): the turns keep one prefix, the blocks stay closed.
+      const channelMark = await service.promptMarkOf(channel.id)
+      const prompt = turnPrompt(agent, channel, history, message, agents, channelMark, await this.#skillsFor(agent))
       /**
        * One call of the engine for one agent, priced with that agent's model. A
        * reading step (the verifier) runs with no server and no tool. Every step
@@ -988,8 +992,10 @@ export class TurnScheduler {
           agent: who,
           channel,
           actor,
-          // Every prompt opens with the date and time, computed at this very call.
-          prompt: `${dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)}\n\n${text}`,
+          // Every prompt ends with the date and time, computed at this very call: at
+          // the end, so that what comes before stays the same from one call to the
+          // next (the model servers' prefix cache).
+          prompt: `${text}\n\n${dateLine((this.#options.now ?? (() => new Date()))(), this.#options.timeZone ?? instanceTimeZone(undefined).timeZone)}`,
           cwd: channelFolder(dataDir, channel.id),
           servers: tools === 'none' ? [] : turnServers(who, channel),
           ...(tools === 'all' ? {} : { tools }),
@@ -1060,7 +1066,7 @@ export class TurnScheduler {
           steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
         } else {
           const mark = randomUUID().slice(0, 8)
-          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark), 'none')
+          const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark, await service.promptMarkOf(channel.id)), 'none')
           const verdict = parseVerdict(checked.output.text)
           steps.push({
             role: 'verifier', agentId: verifier.id, verdict: verdict.kind,
