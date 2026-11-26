@@ -12,6 +12,7 @@ import { chromium } from 'playwright-core'
 
 const PORT = Number(process.env.AGENT_PORT ?? 9223)
 const TOKEN = process.env.AGENT_TOKEN ?? ''
+const PROXY = process.env.HTTPS_PROXY ?? process.env.https_proxy ?? ''
 
 let browser = null
 let page = null
@@ -23,6 +24,8 @@ async function currentPage() {
     executablePath: process.env.CHROMIUM_PATH ?? '/usr/bin/chromium',
     headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote'],
+    // A member's computer has no route out but its egress proxy: name it to Chromium.
+    ...(PROXY === '' ? {} : { proxy: { server: PROXY } }),
   })
   page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   return page
@@ -116,6 +119,7 @@ const server = createServer((req, res) => {
   })
 })
 
-server.listen(PORT, '0.0.0.0', () => {
+// The loopback unless told: a capture session, reached over the front network, says AGENT_HOST=0.0.0.0.
+server.listen(PORT, process.env.AGENT_HOST ?? '127.0.0.1', () => {
   console.log(`browser agent: listening on ${PORT}`)
 })

@@ -345,6 +345,13 @@ export function coordinationAgents(coordination: Coordination): readonly string[
 }
 
 /** One step of a coordinated turn: who did what, at what cost. */
+/** A tool refused during a turn: its server, and why in a word the screen says in its own. */
+export interface TurnToolRefusal {
+  readonly server: string
+  /** busy: every computer is taken, none could start for the actor (no queue). */
+  readonly reasonKind: 'busy'
+}
+
 export interface TurnStep {
   readonly role: 'author' | 'verifier' | 'revision' | 'worker' | 'synthesis'
   readonly agentId: string
@@ -397,6 +404,13 @@ export interface Turn {
   readonly reasonKind?: TurnFailureKind
   /** The channel's servers whose tools were not ready when the turn ran: it ran without them, and was told so. */
   readonly toolsUnavailable?: readonly string[]
+  /**
+   * Who the turn acts for: the author of the mention. The connectors that act
+   * as a person (their mailbox, their computer) act as this one, never another.
+   */
+  readonly actor?: string
+  /** The tools refused during the turn, by server and kind (« Mon ordinateur »: the four computers busy). */
+  readonly toolRefusals?: readonly TurnToolRefusal[]
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
   readonly steps?: readonly TurnStep[]
   /**

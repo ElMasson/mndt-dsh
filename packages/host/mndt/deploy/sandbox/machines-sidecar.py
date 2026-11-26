@@ -54,8 +54,8 @@ IDENTITY = re.compile(r'^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$')
 URL = re.compile(r'^https?://[^\s]+$')
 
 
-def docker(*args, timeout=120):
-    return subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout)
+def docker(*args, timeout=120, stdin=None):
+    return subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout, input=stdin)
 
 
 def session_name(identity):
@@ -306,11 +306,15 @@ def ensure_shell(identity):
 PC_RUNTIME = os.environ.get('MNDT_MACHINE_RUNTIME', 'runsc')
 # Without gVisor only when said twice: runc as the runtime, and this flag (a rehearsal).
 PC_ALLOW_RUNC = os.environ.get('MNDT_MACHINE_ALLOW_RUNC', '') == '1'
-PC_IMAGE = os.environ.get('PC_IMAGE', DESKTOP_IMAGE)
-PC_PORT = int(os.environ.get('PC_PORT', str(DESKTOP_PORT)))
+PC_IMAGE = os.environ.get('PC_IMAGE', 'mndt-pc:local')
 # The member's own uid inside the computer: its files are handed to it.
 PC_UID = int(os.environ.get('PC_UID', '1000'))
 TMPFS_FLAGS = 'rw,nosuid,nodev,noexec'
+# A command in the terminal: 60 s unless asked, 300 s at most, 16 000 characters per stream.
+TERMINAL_DEFAULT_SECONDS = 60
+TERMINAL_MAX_SECONDS = 300
+TERMINAL_MAX_COMMAND = 8000
+TERMINAL_MAX_OUTPUT = 16000
 # Each member's files, and nothing else: Docker resolves the bind on the host.
 USERS_ROOT = os.environ.get('USERS_ROOT', '/state/users')
 USERS_ROOT_HOST = os.environ.get('USERS_ROOT_HOST', USERS_ROOT)
@@ -448,7 +452,6 @@ def _start_pc(identity):
         '-e', 'NO_PROXY=localhost,127.0.0.1',
         '-e', 'AGENT_TOKEN=' + agent_token,
         '-e', 'DESKTOP_TOKEN=' + agent_token,
-        '-e', 'DESKTOP_PORT=' + str(PC_PORT),
         PC_IMAGE,
         timeout=60,
     )
@@ -458,6 +461,119 @@ def _start_pc(identity):
     with _PCS_LOCK:
         _PCS[identity] = {'startedAt': iso(now), 'lastUsed': now, 'agentToken': agent_token}
     return {'ok': True}
+
+
+# What an action may bring back: a command's streams are clipped at
+# TERMINAL_MAX_OUTPUT each; an agent's answer (a capture) at PC_MAX_ANSWER.
+PC_MAX_ANSWER = int(os.environ.get('PC_MAX_ANSWER', str(8 * 1024 * 1024)))
+
+
+def run_bounded(args, timeout, limit, stdin=None):
+    """Run a command, reading its streams as they come and keeping at most
+    `limit` characters of each: `yes` for 300 s, or a huge capture, never fills
+    this service's memory. Past `timeout`, the command is killed.
+
+    @returns (exit code, stdout, stderr, whether a stream was clipped).
+    """
+    process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    kept = {'out': [], 'err': []}
+    clipped = {'out': False, 'err': False}
+
+    def drain(stream, name):
+        size = 0
+        # Read to the end (the command must not block on a full pipe); keep the first `limit` bytes.
+        for chunk in iter(lambda: stream.read(65536), b''):
+            room = limit - size
+            if room > 0:
+                kept[name].append(chunk[:room])
+                size += min(len(chunk), room)
+            if len(chunk) > max(room, 0):
+                clipped[name] = True
+        stream.close()
+
+    readers = [threading.Thread(target=drain, args=(process.stdout, 'out'), daemon=True),
+               threading.Thread(target=drain, args=(process.stderr, 'err'), daemon=True)]
+    for reader in readers:
+        reader.start()
+    if stdin is not None:
+        try:
+            process.stdin.write(stdin.encode('utf-8'))
+            process.stdin.close()
+        except OSError:
+            pass
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=5)
+    text = {name: b''.join(parts).decode('utf-8', 'replace')[:limit] for name, parts in kept.items()}
+    return code, text['out'], text['err'], clipped['out'] or clipped['err']
+
+
+def act_pc(identity, kind, body):
+    """One action on the member's own computer, started if it is not up.
+
+    browser and desktop: the operation goes to its agent, inside the computer,
+    through `docker exec` of pc-call.mjs (the agents listen on the loopback).
+    terminal: one command, run as the member in /home/user, bounded in time.
+    Busy when the computer is not up and MAX_PCS run already.
+    """
+    # An invalid command is refused before anything starts: it never takes a place.
+    command = str(body.get('command', ''))
+    if kind == 'terminal' and (command.strip() == '' or len(command) > TERMINAL_MAX_COMMAND):
+        return {'ok': False, 'invalid': True, 'error': 'a command of 1 to ' + str(TERMINAL_MAX_COMMAND) + ' characters is required'}
+    started = start_pc(identity)
+    if started.get('busy') is True:
+        return {'ok': False, 'busy': True}
+    if started.get('ok') is not True:
+        return {'ok': False, 'error': 'the computer did not start'}
+    touch_pc(identity)
+    name = pc_name(identity)
+    try:
+        if kind == 'terminal':
+            try:
+                seconds = int(body.get('timeoutSeconds', TERMINAL_DEFAULT_SECONDS))
+            except (TypeError, ValueError):
+                seconds = TERMINAL_DEFAULT_SECONDS
+            seconds = max(1, min(seconds, TERMINAL_MAX_SECONDS))
+            # The agents' tokens are taken out of the command's environment (env -u):
+            # they guard the agents against a page in the browser, not against the
+            # member's own terminal. GNU timeout, without --foreground, signals the
+            # command's whole process group: its children die with it.
+            code, stdout, stderr, clipped = run_bounded(
+                ['docker', 'exec', '-u', str(PC_UID) + ':' + str(PC_UID), '-w', '/home/user', name,
+                 'env', '-u', 'AGENT_TOKEN', '-u', 'DESKTOP_TOKEN',
+                 'timeout', '-k', '5', str(seconds), 'bash', '-lc', command],
+                timeout=seconds + 20, limit=TERMINAL_MAX_OUTPUT,
+            )
+            return {
+                'ok': True,
+                'exitCode': code,
+                'timedOut': code == 124,
+                'stdout': stdout,
+                'stderr': stderr,
+                'truncated': clipped,
+            }
+        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', name, 'node', '/app/pc-call.mjs', kind],
+                                              timeout=90, limit=PC_MAX_ANSWER, stdin=json.dumps(body))
+        lines = [line for line in out.splitlines() if line.strip() != '']
+        try:
+            payload = json.loads(lines[-1]) if lines and not clipped else {}
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict) or payload.get('ok') is not True:
+            # Docker's and the agent's own words go to this service's log; the caller reads one sentence.
+            sys.stderr.write('machines-sidecar: the ' + kind + ' of ' + name + ' failed (exit ' + str(code)
+                             + (', answer clipped' if clipped else '') + '): ' + err[-300:].replace('\n', ' ') + '\n')
+            return {'ok': False, 'error': 'the action failed on the computer'}
+        return payload
+    finally:
+        touch_pc(identity)
 
 
 def stop_pc(identity):
@@ -604,6 +720,22 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/pcs/stop':
             stop_pc(identity)
             return self.reply(200, {**pc_state(identity), 'capacity': capacity()})
+        if self.path == '/pcs/act':
+            kind = str(body.get('kind', ''))
+            if kind not in ('browser', 'desktop', 'terminal'):
+                return self.reply(400, {'error': 'kind must be browser, desktop or terminal'})
+            operation = {key: value for key, value in body.items() if key not in ('identity', 'kind')}
+            try:
+                result = act_pc(identity, kind, operation)
+            except subprocess.TimeoutExpired:
+                return self.reply(504, {'error': 'the action did not finish in time'})
+            if result.get('busy') is True:
+                return self.reply(409, {'busy': True, 'capacity': capacity()})
+            if result.get('invalid') is True:
+                return self.reply(400, {'error': result.get('error')})
+            if result.get('ok') is not True:
+                return self.reply(502, {'error': result.get('error', 'the action failed')})
+            return self.reply(200, result)
         if self.path == '/pcs/touch':
             touch_pc(identity)
             return self.reply(200, {**pc_state(identity), 'capacity': capacity()})

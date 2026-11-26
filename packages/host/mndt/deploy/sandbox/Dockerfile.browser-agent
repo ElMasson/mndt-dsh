@@ -21,6 +21,7 @@ COPY browser-agent.mjs /app/browser-agent.mjs
 
 ENV HOME=/tmp \
     AGENT_PORT=9223 \
+    AGENT_HOST=0.0.0.0 \
     CHROMIUM_PATH=/usr/bin/chromium
 
 EXPOSE 9223
