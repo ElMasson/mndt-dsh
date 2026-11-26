@@ -159,7 +159,13 @@ export function createHttpFace(): MndtFace {
       return body
     }),
     journal: async format => (await bodyOf<JournalAnswer>(await call(`/journal?format=${format}`))),
-    automations: async () => (await bodyOf<AutomationsAnswer>(await call('/automations'))),
+    automations: async () => {
+      const response = await call('/automations')
+      const body = await bodyOf<AutomationsAnswer>(response)
+      // The server's clock, from the response's Date header (set by Node, passed by the gateway).
+      const date = response.headers.get('date')
+      return date === null || date === '' ? body : { ...body, serverAt: date }
+    },
     saveAutomation: input => outcomeOf(async () => {
       const body = await bodyOf<{ automation: AutomationRow }>(await post('/automations', input))
       return body.automation

@@ -3,14 +3,14 @@
  * missions were only reachable through Réglages → Automatisations, and none could be run by hand).
  * One list of the workspace's automations, each with its hour in words, its last run, its state,
  * and three gestures: run now (1 click), suspend, activate. A run's result reaches the owner's
- * lane only for a briefing (the core publishes no other kind there): only then is it linked.
+ * lane, whatever its kind (#166): it is linked there.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatTranslate } from './chatLocales.ts'
 import type { AutomationRow, MndtFace } from './face.ts'
 import { when } from './format.ts'
-import { cadenceWords } from './schedule.tsx'
+import { cadenceWords, runTime } from './schedule.tsx'
 
 const CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/u
 
@@ -49,7 +49,7 @@ function lastRunOf(row: AutomationRow): string | undefined {
 }
 
 /** What a row says after a gesture. */
-type Said = { readonly id: string; readonly ran: boolean; readonly lane: boolean } | { readonly id: string; readonly error: string }
+type Said = { readonly id: string; readonly ran: true } | { readonly id: string; readonly error: string }
 
 /** @param props - the face, the copy and how to open the owner's lane. @returns the screen. */
 export function ScheduledScreen(props: {
@@ -61,6 +61,9 @@ export function ScheduledScreen(props: {
   const { api, t } = props
   const [rows, setRows] = useState<readonly AutomationRow[] | undefined>(undefined)
   const [zone, setZone] = useState<string | undefined>(undefined)
+  // How long the scheduler has been silent, on the server's clock alone; undefined when unknown.
+  const [silentFor, setSilentFor] = useState<number | undefined>(undefined)
+  const [schedulerAt, setSchedulerAt] = useState<string | undefined>(undefined)
   // The line whose hour is being changed in place, and the hour typed.
   const [editing, setEditing] = useState<{ readonly id: string; readonly at: string } | undefined>(undefined)
   const [failed, setFailed] = useState(false)
@@ -73,6 +76,12 @@ export function ScheduledScreen(props: {
       const answer = await api.automations()
       setRows(answer.items)
       setZone(typeof answer.timeZone === 'string' && answer.timeZone !== '' ? answer.timeZone : undefined)
+      const last = typeof answer.schedulerAt === 'string' ? Date.parse(answer.schedulerAt) : Number.NaN
+      const server = typeof answer.serverAt === 'string' ? Date.parse(answer.serverAt) : Number.NaN
+      // Both instants come from the server: a browser clock off by minutes changes nothing. Either
+      // unreadable or missing, the age is unknown and nothing is said.
+      setSchedulerAt(Number.isNaN(last) ? undefined : answer.schedulerAt)
+      setSilentFor(Number.isNaN(last) || Number.isNaN(server) ? undefined : server - last)
       setFailed(false)
     } catch {
       // Not the thrown text: a fixed sentence (an owner-only 404 or a network error alike).
@@ -101,7 +110,8 @@ export function ScheduledScreen(props: {
       const failed = !outcome.ok || (outcome.value?.outcome ?? '').startsWith('failed')
       setSaid(failed
         ? { id: row.id, error: t(outcome.ok ? 'scheduledRunFailed' : 'scheduledRunRefused') }
-        : { id: row.id, ran: true, lane: row.kind === 'briefing' })
+        // #166: every automation of the owner publishes its result in their lane.
+        : { id: row.id, ran: true })
     } catch {
       setSaid({ id: row.id, error: t('scheduledRunRefused') })
     }
@@ -116,7 +126,7 @@ export function ScheduledScreen(props: {
     }
     try {
       const outcome = await api.saveAutomation({ id: row.id, at })
-      if (!outcome.ok) setSaid({ id: row.id, error: t('scheduledHourRefused') })
+      if (!outcome.ok) setSaid({ id: row.id, error: t(outcome.code === 'bad-time' ? 'scheduledHourInvalid' : 'scheduledHourRefused') })
     } catch {
       setSaid({ id: row.id, error: t('scheduledHourRefused') })
     }
@@ -133,6 +143,12 @@ export function ScheduledScreen(props: {
     <section className="mw-screen" data-testid="team-scheduled">
       <h1 className="mw-title">{props.title}</h1>
       {failed ? <p className="mw-empty" role="alert">{t('scheduledUnreadable')}</p> : undefined}
+      {/* A scheduler silent for over 2 minutes is said, with its last sign of life; no field, no alarm. */}
+      {schedulerAt === undefined || silentFor === undefined || silentFor <= 120_000 ? undefined : (
+        <p className="mw-decide-error" role="alert" data-testid="scheduler-stopped">
+          {t('scheduledSchedulerStopped', { at: runTime(schedulerAt, zone) })}
+        </p>
+      )}
       {rows === undefined && !failed ? <p className="mw-empty">{t('scheduledLoading')}</p> : undefined}
       {rows !== undefined && rows.length === 0 ? <div className="mw-empty-state"><p>{t('scheduledNone')}</p></div> : undefined}
       {rows === undefined || rows.length === 0 ? undefined : (
@@ -170,6 +186,9 @@ export function ScheduledScreen(props: {
                 <span className="mw-ctx-muted" data-testid="scheduled-zone">{` (${zoneWords(zone, t)})`}</span>
                 <span className="mw-chip" data-testid="scheduled-state">{t(row.enabled ? 'scheduleActive' : 'scheduledSuspended')}</span>
               </p>
+              {!row.enabled || row.nextRunAt === undefined || Number.isNaN(Date.parse(row.nextRunAt)) ? undefined : (
+                <p className="mw-ctx-small mw-ctx-muted" data-testid="scheduled-next">{t('scheduleNextOne', { at: runTime(row.nextRunAt, zone) })}</p>
+              )}
               {lastRunOf(row) === undefined ? undefined : (
                 <p className="mw-ctx-small mw-ctx-muted" data-testid="scheduled-last">
                   {t('scheduledLastRun', { date: lastRunOf(row) ?? '' })}
@@ -185,7 +204,7 @@ export function ScheduledScreen(props: {
               {said?.id !== row.id ? undefined : 'error' in said ? <p role="alert" className="mw-ctx-error">{said.error}</p> : (
                 <p className="mw-ctx-small" role="status" data-testid="scheduled-ran">
                   {t('scheduledRan')}
-                  {said.lane ? <>{' '}<button type="button" className="mw-ctx-link" onClick={props.onLane}>{t('scheduledSeeInLane')}</button></> : ` ${t('scheduledRanElsewhere')}`}
+                  {' '}<button type="button" className="mw-ctx-link" onClick={props.onLane}>{t('scheduledSeeInLane')}</button>
                 </p>
               )}
             </div>

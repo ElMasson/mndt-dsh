@@ -170,8 +170,10 @@ export interface AutomationRow {
   readonly enabled: boolean
   readonly createdBy: string
   readonly lastFiredDate?: string
-  /** When it last ran, a manual run included (A1, after #164); preferred to lastFiredDate. */
+  /** When it last ran, a manual run included (#166); preferred to lastFiredDate. */
   readonly lastRunAt?: string
+  /** When it starts next, in the instance's zone (#166); absent on a suspended one. */
+  readonly nextRunAt?: string
   readonly lastMissionId?: string
   readonly lastOutcome?: string
   readonly failures?: number
@@ -183,6 +185,13 @@ export interface AutomationsAnswer {
   readonly canAdmin: boolean
   /** The zone the scheduler counts hours in (IANA), when the host serves it. */
   readonly timeZone?: string
+  /** The scheduler's last pass (#166); absent when no scheduler runs in this process. */
+  readonly schedulerAt?: string
+  /**
+   * The server's clock when it answered (the response's HTTP `Date`), to age schedulerAt on one clock:
+   * the browser's may be off by minutes. Absent when the header did not come through.
+   */
+  readonly serverAt?: string
 }
 
 /** The Host face this page needs. */
