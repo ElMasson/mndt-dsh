@@ -90,7 +90,8 @@ export function zoneOf(raw: unknown): string | undefined {
 export function scheduleProposalOf(card: { readonly kind: string }): ScheduleProposal | undefined {
   if (card.kind !== 'propose_schedule') return undefined
   const top = card as unknown as Record<string, unknown>
-  const s = top.schedule
+  // The core serves it as `scheduleProposal` (#161, api.ts), exactly what approval creates.
+  const s = top.scheduleProposal
   if (typeof s !== 'object' || s === null) return undefined
   const f = s as Record<string, unknown>
   const cadence = cadenceOf(f.cadence)

@@ -26,7 +26,7 @@ const schedule = {
 }
 const card = (over: Record<string, unknown> = {}): ThreadCard => ({
   id: 'apr_s', kind: 'propose_schedule', title: 'Relance des impayés', requestedBy: you, requestedAt: at, state: 'pending',
-  channelId: 'chn_1', schedule, timeZone: 'Indian/Reunion',
+  channelId: 'chn_1', scheduleProposal: schedule, timeZone: 'Indian/Reunion',
   nextRuns: ['2026-11-30T04:00:00.000Z', '2026-12-07T04:00:00.000Z', '2026-12-14T04:00:00.000Z'], ...over,
 }) as unknown as ThreadCard
 
@@ -58,9 +58,9 @@ describe('the proposal a card carries', () => {
     expect(scheduleProposalOf(card())?.title).toBe('Relance des impayés')
     for (const broken of [{ ...schedule, eurPerRun: -1 }, { ...schedule, cadence: { every: 'hour' } }, { ...schedule, agentId: '' },
       { ...schedule, destination: { kind: 'elsewhere' } }, { ...schedule, title: ' ' }]) {
-      expect(scheduleProposalOf(card({ schedule: broken }))).toBeUndefined()
+      expect(scheduleProposalOf(card({ scheduleProposal: broken }))).toBeUndefined()
     }
-    expect(scheduleProposalOf(card({ schedule: 'x' }))).toBeUndefined()
+    expect(scheduleProposalOf(card({ scheduleProposal: 'x' }))).toBeUndefined()
   })
   it('an unknown time zone is dropped, the runs still shown', () => {
     expect(scheduleProposalOf(card({ timeZone: 'Mars/Olympus' }))?.timeZone).toBeUndefined()
@@ -90,15 +90,15 @@ describe('the propose_schedule card', () => {
   })
 
   it('a lane destination names whose; a channel the reader does not read is said, no title', () => {
-    draw(card({ schedule: { ...schedule, destination: { kind: 'lane', member: you } } }))
+    draw(card({ scheduleProposal: { ...schedule, destination: { kind: 'lane', member: you } } }))
     expect(screen.getByTestId('schedule-where').textContent).toBe('la lane de Stéphane')
     cleanup()
-    draw(card({ schedule: { ...schedule, destination: { kind: 'channel', channelId: 'chn_other' } } }))
+    draw(card({ scheduleProposal: { ...schedule, destination: { kind: 'channel', channelId: 'chn_other' } } }))
     expect(screen.getByTestId('schedule-where').textContent).toBe('un canal que vous ne lisez pas')
   })
 
   it('an unreadable proposal can only be refused, and says why', () => {
-    draw(card({ schedule: { ...schedule, cadence: { every: 'hour' } } }))
+    draw(card({ scheduleProposal: { ...schedule, cadence: { every: 'hour' } } }))
     expect(screen.getByTestId('schedule-unreadable')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Valider' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Refuser' })).toBeTruthy()
