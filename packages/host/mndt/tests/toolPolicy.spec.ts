@@ -15,6 +15,7 @@ import type { LineageAgentLike, ScopedToolsLike } from '../src/tool-policy.ts'
 import type { Mission } from '../src/core/index.ts'
 import { RouteUnreachable, TurnBudgetReached } from '../src/turns.ts'
 import type { TurnInput } from '../src/turns.ts'
+import { parseModelRoles } from '../src/model-roles.ts'
 
 /** The engine's default composition, as a turn's agent would inherit it, plus MCP servers. */
 const ENGINE_DEFAULTS = [
@@ -243,6 +244,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       messagesAtAgentDispose?: number
       /** The script the run was started with. */
       script?: string
+      /** The model the agent was created on. */
+      agentOptions?: { provider: string; model: string }
     }
     const seen: Seen = {}
     let runDisposed = false
@@ -298,8 +301,9 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       } as Record<string, unknown>)[name],
       agents: {
         get: host.agents.get,
-        create: async (create: { sessionId: string }) => {
+        create: async (create: { sessionId: string; agentOptions?: { provider: string; model: string } }) => {
           seen.guardsAtCreate = guards.size
+          if (create.agentOptions !== undefined) seen.agentOptions = create.agentOptions
           const root = agentOf(options.createdAs ?? create.sessionId)
           announce(root)
           seen.root = root
@@ -384,6 +388,36 @@ describe('the runners scope it before the agent exists, and lift it after', () =
       .then(() => undefined, (error: unknown) => error)
     expect(String(turnError)).toContain(`the agent returned no text (settled: string, text ${thought.length + 7} chars, <think> 1, </think> 1)`)
     expect(String(turnError)).not.toContain('PENSEE')
+  })
+
+  it('a mission plays on the « mission » role\'s route and a briefing on the « briefing » one (roles.json), each priced for it', async () => {
+    const custom = { id: 'msn_r', kind: 'custom', prompt: 'Fais le point', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const briefing = { id: 'msn_b', kind: 'briefing', prompt: 'Le briefing', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const defaultModel = { provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' }
+    const prices = {
+      'scaleway-genapi/deepseek-v4.1-flash': { input: 0.2, output: 0.8 },
+      'scaleway-genapi/glm-5.3': { input: 1, output: 2 },
+      'vllm-qwen/*': { input: 0, output: 0 },
+    }
+    const policy = '{"routes": {"volume": "vllm-qwen/qwen3.5", "jugement": "scaleway-genapi/glm-5.3"}, "roles": {"mission": "volume", "briefing": "jugement"}}'
+    const modelRoles = async () => parseModelRoles(policy, {}, prices)
+    const options = { tools: TEAM_MISSION_POLICY, readiness: readinessOver([...APPROVALS, 'mcp__workbench_facts__get_facts']), prices, modelRoles }
+    const asMission = fakeCtx({ defaultModel, messages: [{ input: 1_000_000, output: 0 }] })
+    expect((await new DshMissionRunner(asMission.ctx, options).run(custom)).eur).toBe(0)
+    expect(asMission.seen.agentOptions).toEqual({ provider: 'vllm-qwen', model: 'qwen3.5' })
+    const asBriefing = fakeCtx({ defaultModel, messages: [{ input: 1_000_000, output: 0 }] })
+    expect((await new DshMissionRunner(asBriefing.ctx, options).run(briefing)).eur).toBeCloseTo(1, 6)
+    expect(asBriefing.seen.agentOptions).toEqual({ provider: 'scaleway-genapi', model: 'glm-5.3' })
+    // Without a policy: the workstation's default model, as before.
+    const unset = fakeCtx({ defaultModel, messages: [{ input: 1_000_000, output: 0 }] })
+    const noPolicy = async () => parseModelRoles(undefined, {}, prices)
+    expect((await new DshMissionRunner(unset.ctx, { ...options, modelRoles: noPolicy }).run(custom)).eur).toBeCloseTo(0.2, 6)
+    expect(unset.seen.agentOptions).toEqual(defaultModel)
+    // A policy that cannot be read: refused, no agent created.
+    const refused = fakeCtx({ defaultModel })
+    await expect(new DshMissionRunner(refused.ctx, { ...options, modelRoles: async () => ({ ok: false as const, reason: 'roles.json n’est pas un JSON valide' }) }).run(custom))
+      .rejects.toThrow('la politique des modèles de l’espace ne se lit pas : roles.json n’est pas un JSON valide')
+    expect(refused.seen.root).toBeUndefined()
   })
 
   it('a mission reports its cost when its model\'s price is known, and none when it is not', async () => {

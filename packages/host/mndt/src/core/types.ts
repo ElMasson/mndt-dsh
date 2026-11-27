@@ -369,10 +369,14 @@ export interface TurnToolRefusal {
 export interface TurnStep {
   readonly role: 'author' | 'verifier' | 'revision' | 'worker' | 'synthesis'
   readonly agentId: string
+  /** The model that played it (`provider/model`): its agent's, or its role's (roles.json). */
+  readonly model?: string
   readonly tokens?: Mission['tokens']
   readonly eur?: number
   /** The verifier's reading: nothing to fix, things to fix, or no usable verdict. */
   readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
+  /** A verifier skipped because it would play on the author's very model, once the roles resolved (« non vérifiée : même modèle »). */
+  readonly reasonKind?: 'same-model'
   /** What the verifier asked to fix, or why the check did not happen. */
   readonly notes?: readonly string[]
   /**
@@ -403,6 +407,8 @@ export interface Turn {
   readonly id: string
   readonly agentId: string
   readonly status: TurnStatus
+  /** The model that answered (`provider/model`), for a turn of one call: its agent's, or its role's (roles.json). */
+  readonly model?: string
   /** The DSH session of the turn: its trace. */
   readonly sessionId?: string
   readonly tokens?: Mission['tokens']

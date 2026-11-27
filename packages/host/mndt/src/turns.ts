@@ -13,6 +13,8 @@ import { randomUUID } from 'node:crypto'
 import { takeToolRefusals } from './machine-tools.ts'
 import { reservedFor, reserveSpend, TURN_RESERVE_EUR } from './spend-reservations.ts'
 import { join } from 'node:path'
+import { NO_MODEL_ROLES, resolveModel, stepRole } from './model-roles.ts'
+import type { ModelRolesRead } from './model-roles.ts'
 import type {
   Agent,
   Channel,
@@ -83,6 +85,17 @@ export function estimatedTokens(text: string): number {
 
 /** What a step of a turn may use: everything, nothing, or its connectors without the cards. */
 type StepTools = 'all' | 'none' | 'no-cards'
+
+/**
+ * One step's call to a model, played on its role's model (roles.json), with
+ * the agent it plays as: its cost estimates must price that same model.
+ */
+type StepCall = ((
+  who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
+) => Promise<{ output: TurnOutput; eur: number | undefined; model: string }>) & {
+  /** @returns the agent as the step with this suffix plays it: its role's model. */
+  readonly played: (who: Agent, suffix: string) => Agent
+}
 
 /** What a worker of « en parallèle puis synthèse » is told of its role. */
 const WORKER_FRAME = 'Dans ce tour, tu rassembles ce qui répond à la demande, pour une synthèse faite ensuite par un autre agent. '
@@ -187,6 +200,11 @@ export interface TurnSchedulerOptions {
   readonly timeZone?: string
   /** The clock (tests). */
   readonly now?: () => Date
+  /**
+   * The space's policy of models by role (model-roles.ts, roles.json), read at
+   * each turn. Absent: every step keeps its agent's model.
+   */
+  readonly modelRoles?: () => Promise<ModelRolesRead>
 }
 
 /** @param dataDir - the data root. @param channelId - the channel. @returns its folder. */
@@ -332,9 +350,7 @@ export class TurnScheduler {
     readonly agents: readonly Agent[]
     readonly steps: TurnStep[]
     readonly signal: AbortSignal
-    readonly call: (
-      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
-    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+    readonly call: StepCall
   }): Promise<{ output: TurnOutput; note?: string }> {
     const { coordination, synthesizer, channel, message, history, agents, steps, signal, call } = input
     const { service, prices } = this.#options
@@ -343,8 +359,8 @@ export class TurnScheduler {
     const missing: string[] = []
     const spent = (): number => steps.reduce((total, step) => total + (step.eur ?? 0), 0)
     /** @returns why a call of `who` with `prompt` would not fit under the bound, or undefined. */
-    const overBound = (who: Agent, prompt: string): string | undefined => {
-      const price = priceOf(prices, who)
+    const overBound = (who: Agent, suffix: string, prompt: string): string | undefined => {
+      const price = priceOf(prices, call.played(who, suffix))
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(prompt), output: RESERVED_OUTPUT_TOKENS }, price)
       return spent() + reserved > bound ? `le coût du tour atteindrait sa borne (${bound} €)` : undefined
     }
@@ -356,8 +372,8 @@ export class TurnScheduler {
       const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, await service.promptMarkOf(channel.id), await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
-        : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
-          ?? overBound(worker, prompt)
+        : ceilingRefusal(call.played(worker, `w${index + 1}`), prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
+          ?? overBound(worker, `w${index + 1}`, prompt)
       if (worker === undefined || why !== undefined) {
         steps.push({ role: 'worker', agentId: workerId, verdict: 'skipped', notes: [why ?? 'indisponible'] })
         missing.push(`${name} (${why ?? 'indisponible'})`)
@@ -367,7 +383,7 @@ export class TurnScheduler {
         const answered = await call(worker, `w${index + 1}`, prompt, 'no-cards', bound - spent())
         const text = answered.output.text.trim()
         steps.push({
-          role: 'worker', agentId: worker.id,
+          role: 'worker', agentId: worker.id, model: answered.model,
           ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
           ...(answered.eur === undefined ? {} : { eur: answered.eur }),
           ...(text === '' ? { verdict: 'skipped' as const, notes: ['aucun texte'] } : { text: answered.output.text }),
@@ -382,7 +398,7 @@ export class TurnScheduler {
         }
         // The bound's sentence is the host's; anything else is said by its kind, its words to the log.
         const reason = turnFailure(error, this.#log, 'a worker step failed').reason
-        const price = priceOf(prices, worker)
+        const price = priceOf(prices, call.played(worker, `w${index + 1}`))
         steps.push({
           role: 'worker', agentId: worker.id, verdict: 'skipped', notes: [reason],
           // A call stopped at the bound still cost what it used.
@@ -400,9 +416,9 @@ export class TurnScheduler {
     })
     const mark = randomUUID().slice(0, 8)
     const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark, await service.promptMarkOf(channel.id))
-    const refusal = ceilingRefusal(synthesizer, prices,
+    const refusal = ceilingRefusal(call.played(synthesizer, 's'), prices,
       spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
-      ?? overBound(synthesizer, prompt)
+      ?? overBound(synthesizer, 's', prompt)
     if (refusal !== undefined) {
       steps.push({ role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [refusal] })
       return asIs(refusal)
@@ -410,7 +426,7 @@ export class TurnScheduler {
     try {
       const synthesis = await call(synthesizer, 's', prompt, 'none', bound - spent())
       steps.push({
-        role: 'synthesis', agentId: synthesizer.id,
+        role: 'synthesis', agentId: synthesizer.id, model: synthesis.model,
         ...(synthesis.output.tokens === undefined ? {} : { tokens: synthesis.output.tokens }),
         ...(synthesis.eur === undefined ? {} : { eur: synthesis.eur }),
       })
@@ -422,7 +438,7 @@ export class TurnScheduler {
         throw error
       }
       if (!(error instanceof TurnBudgetReached)) throw error
-      const price = priceOf(prices, synthesizer)
+      const price = priceOf(prices, call.played(synthesizer, 's'))
       steps.push({
         role: 'synthesis', agentId: synthesizer.id, verdict: 'skipped', notes: [error.message],
         tokens: error.tokens, ...(price === undefined ? {} : { eur: eurOf(error.tokens, price) }),
@@ -453,9 +469,7 @@ export class TurnScheduler {
     readonly agents: readonly Agent[]
     readonly asked: TurnHelp
     readonly signal: AbortSignal
-    readonly call: (
-      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
-    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+    readonly call: StepCall
   }): Promise<{ text?: string; eur: number }> {
     const { messageId, turnId, asker, channel, prompt, first, agents, asked, signal, call } = input
     const { service, prices } = this.#options
@@ -463,14 +477,14 @@ export class TurnScheduler {
     let other = 0
     const save = async (): Promise<void> => { await service.updateTurn(messageId, turnId, { help }) }
     const spent = (): number => help.advices.reduce((total, advice) => total + (advice.eur ?? 0), 0) + other
-    const overCap = (who: Agent, text: string): string | undefined => {
-      const price = priceOf(prices, who)
+    const overCap = (who: Agent, suffix: string, text: string): string | undefined => {
+      const price = priceOf(prices, call.played(who, suffix))
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
       return spent() + reserved > help.capEur ? `le coût de l’entraide atteindrait sa borne (${help.capEur} €)` : undefined
     }
     // Every call of the help is the asker's: its own ceiling, with what the help already spent.
     const askerCeiling = async (): Promise<string | undefined> =>
-      ceilingRefusal(asker, prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
+      ceilingRefusal(call.played(asker, 'hr1'), prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
     const closedBy = async (): Promise<{ by: string; at: string } | undefined> => {
       const reply = ((await service.snapshot()).messages ?? []).find(candidate =>
         candidate.channelId === channel.id && candidate.replyTo === messageId && candidate.author.kind === 'human'
@@ -508,7 +522,7 @@ export class TurnScheduler {
         }
         const channelMark = await service.promptMarkOf(channel.id)
         const text = helpPeerPrompt(peer, channel, help.request, disputed, undefined, channelMark, await this.#skillsFor(peer))
-        const why = await askerCeiling() ?? overCap(peer, text)
+        const why = await askerCeiling() ?? overCap(peer, `h${index}${slot.toLowerCase()}`, text)
         if (why !== undefined) {
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: why, reasonKind: 'refused' }] }
           continue
@@ -523,7 +537,7 @@ export class TurnScheduler {
             help = {
               ...help,
               advices: [...help.advices, {
-                slot, round: index, text: said, agentId: peer.id, model: `${peer.provider}/${peer.model}`,
+                slot, round: index, text: said, agentId: peer.id, model: answered.model,
                 ...(answered.eur === undefined ? {} : { eur: answered.eur }),
                 ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
               }],
@@ -535,7 +549,7 @@ export class TurnScheduler {
             await save()
             throw error
           }
-          const price = priceOf(prices, peer)
+          const price = priceOf(prices, call.played(peer, `h${index}${slot.toLowerCase()}`))
           if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
           const failed = turnFailure(error, this.#log, 'a peer\'s advice failed')
           help = { ...help, skipped: [...help.skipped, { slot, agentId: peer.id, reason: failed.reason, reasonKind: failed.kind }] }
@@ -572,7 +586,7 @@ export class TurnScheduler {
       await save()
       const text = helpReadingPrompt(prompt, help.request, help.advices,
         index === 1 && help.request.need === 'fact' && help.advices.length === 2)
-      const why = await askerCeiling() ?? overCap(asker, text)
+      const why = await askerCeiling() ?? overCap(asker, `hr${index}`, text)
       if (why !== undefined) return { refused: why }
       try {
         const read = await call(asker, `hr${index}`, text, 'all', help.capEur - spent())
@@ -580,7 +594,7 @@ export class TurnScheduler {
         return parseHelpReading(read.output.text)
       } catch (error) {
         if (stopped(error)) throw error
-        const price = priceOf(prices, asker)
+        const price = priceOf(prices, call.played(asker, `hr${index}`))
         if (error instanceof TurnBudgetReached && price !== undefined) other += eurOf(error.tokens, price)
         return { refused: turnFailure(error, this.#log, 'a help reading failed').reason }
       }
@@ -635,9 +649,7 @@ export class TurnScheduler {
     readonly message: Message
     readonly agents: readonly Agent[]
     readonly signal: AbortSignal
-    readonly call: (
-      who: Agent, suffix: string, text: string, tools?: StepTools, budgetEur?: number,
-    ) => Promise<{ output: TurnOutput; eur: number | undefined }>
+    readonly call: StepCall
   }): Promise<{ text: string; eur: number }> {
     const { messageId, turnId, coordination, chair, channel, message, agents, signal, call } = input
     const { service, prices } = this.#options
@@ -655,18 +667,18 @@ export class TurnScheduler {
     /** What a call that could not give its part consumed, for its agent: recorded on its skipped entry. */
     type Refused = { refused: string; eur?: number }
     const run = async (who: Agent, suffix: string, text: string): Promise<{ text: string; cost: CouncilCost } | Refused> => {
-      const price = priceOf(prices, who)
+      const price = priceOf(prices, call.played(who, suffix))
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
       if (spent() + reserved > council.capEur) return { refused: `le coût du tour atteindrait sa borne (${council.capEur} €)` }
       const monthly = spentThisMonth((await service.snapshot()).messages ?? [], who.id, new Date().toISOString())
-      const ceiling = ceilingRefusal(who, prices, monthly)
+      const ceiling = ceilingRefusal(call.played(who, suffix), prices, monthly)
       if (ceiling !== undefined) return { refused: ceiling }
       try {
         const answered = await call(who, suffix, text, 'none', council.capEur - spent())
         return {
           text: answered.output.text.trim(),
           cost: {
-            agentId: who.id, model: `${who.provider}/${who.model}`,
+            agentId: who.id, model: answered.model,
             ...(answered.eur === undefined ? {} : { eur: answered.eur }),
             ...(answered.output.tokens === undefined ? {} : { tokens: answered.output.tokens }),
           },
@@ -996,27 +1008,45 @@ export class TurnScheduler {
       // The channel's stable mark (never served): the turns keep one prefix, the blocks stay closed.
       const channelMark = await service.promptMarkOf(channel.id)
       const prompt = turnPrompt(agent, channel, history, message, agents, channelMark, await this.#skillsFor(agent))
+      // The space's models by role, read now: a policy that does not read refuses the turn, said.
+      const roles = this.#options.modelRoles === undefined ? undefined : await this.#options.modelRoles()
+      if (roles !== undefined && !roles.ok) throw new Refusal(`la politique des modèles de l’espace ne se lit pas : ${roles.reason}`)
+      const policy = roles?.policy ?? NO_MODEL_ROLES
       /**
-       * One call of the engine for one agent, priced with that agent's model. A
-       * reading step (the verifier) runs with no server and no tool. Every step
-       * files its cards in the thread of this turn. The turn stops between steps.
+       * One call of the engine for one agent, with the model its role takes
+       * (roles.json; its agent's own when the role says « agent » or the policy
+       * is absent), priced at that model. A verifier never takes its author's
+       * model (same-model): it keeps its own agent's then. A reading step (the
+       * verifier) runs with no server and no tool. Every step files its cards in
+       * the thread of this turn. The turn stops between steps.
        */
-      const call = async (
+      // The model a step plays on: its role's (roles.json), the agent keeping its
+      // identity. same-model holds after resolution: a verifier that would play on
+      // the author's model keeps its own agent's (refused at its setting if that one
+      // is the same too).
+      const played = (who: Agent, suffix: string): Agent => {
+        const role = stepRole(suffix)
+        let chosen = resolveModel(policy, role, who)
+        if (role === 'verifier' && chosen.provider === agent.provider && chosen.model === agent.model) chosen = { provider: who.provider, model: who.model }
+        return { ...who, provider: chosen.provider, model: chosen.model }
+      }
+      const call: StepCall = Object.assign(async (
         who: Agent,
         suffix: string,
         text: string,
         tools: StepTools = 'all',
         budgetEur?: number,
-      ): Promise<{ output: TurnOutput; eur: number | undefined }> => {
+      ): Promise<{ output: TurnOutput; eur: number | undefined; model: string }> => {
         if (controller.signal.aborted) throw new Error('turn stopped')
-        const price = priceOf(prices, who)
+        const player = played(who, suffix)
+        const price = priceOf(prices, player)
         // Its model route answered, or could not be reached: the agent's mark
         // (Agent.routeUnreachable) follows its last attempt, whatever role it played.
         const output = await engine.run({
           turnId: suffix === '' ? turn.id : `${turn.id}-${suffix}`,
           runId: turn.id,
           measureKey: await service.promptMeasureKey(),
-          agent: who,
+          agent: player,
           channel,
           actor,
           // Every prompt ends with the date and time, computed at this very call: at
@@ -1033,8 +1063,8 @@ export class TurnScheduler {
           throw error
         })
         await service.clearRouteUnreachable(who.id)
-        return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price) }
-      }
+        return { output, eur: output.tokens === undefined || price === undefined ? undefined : eurOf(output.tokens, price), model: `${player.provider}/${player.model}` }
+      }, { played })
       // « En parallèle puis synthèse »: a turn of the channel's synthesizer has each
       // worker answer on its own (its own connectors, its own ceiling), then the
       // synthesizer assembles their parts with NO tool. Bounded: 2 to 4 workers,
@@ -1055,7 +1085,9 @@ export class TurnScheduler {
         coordination: parallelMode, synthesizer: agent, channel, message, history, agents,
         steps: parallelSteps, signal: controller.signal, call,
       })
-      const first = councilled !== undefined
+      // The council's and the parallel synthesis' steps carry their own models; the
+      // single call carries the one it was played on.
+      const first: { output: TurnOutput; eur: number | undefined; model?: string } = councilled !== undefined
         ? { output: { text: councilled.text }, eur: councilled.eur }
         : parallel === undefined ? await call(agent, '', prompt) : { output: parallel.output, eur: undefined }
       if (first.output.text.trim() === '')
@@ -1083,16 +1115,25 @@ export class TurnScheduler {
       let steps: TurnStep[] | undefined = parallel === undefined ? undefined : parallelSteps
       const coordination = channel.coordination
       if (coordination?.mode === 'author-verifier' && coordination.authorId === agent.id) {
-        steps = [{ role: 'author', agentId: agent.id, ...(first.output.tokens === undefined ? {} : { tokens: first.output.tokens }), ...(first.eur === undefined ? {} : { eur: first.eur }) }]
+        steps = [{ role: 'author', agentId: agent.id, ...(first.model === undefined ? {} : { model: first.model }), ...(first.output.tokens === undefined ? {} : { tokens: first.output.tokens }), ...(first.eur === undefined ? {} : { eur: first.eur }) }]
         live = steps
         const verifier = agents.find(candidate =>
           candidate.id === coordination.verifierId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
         const spent = verifier === undefined
           ? undefined
-          : ceilingRefusal(verifier, prices,
+          : ceilingRefusal(call.played(verifier, 'v'), prices,
             spentThisMonth((await service.snapshot()).messages ?? [], verifier.id, new Date().toISOString()))
+        // same-model, once the roles resolved: a verifier on the author's very model
+        // checks nothing. It is not run; the draft goes out said « non vérifiée :
+        // même modèle » (C on #178), and the operator is told.
+        const checker = verifier === undefined ? undefined : call.played(verifier, 'v')
+        const author = call.played(agent, '')
+        const sameModel = checker !== undefined && checker.provider === author.provider && checker.model === author.model
         if (verifier === undefined) {
           steps.push({ role: 'verifier', agentId: coordination.verifierId, verdict: 'skipped', notes: ['le vérificateur n’est plus un agent actif de ce canal'] })
+        } else if (sameModel) {
+          steps.push({ role: 'verifier', agentId: verifier.id, model: `${checker.provider}/${checker.model}`, verdict: 'skipped', reasonKind: 'same-model', notes: ['même modèle'] })
+          this.#log(`mndt: turn ${turn.id}: its verifier @${verifier.handle} would play on the author's model (${author.provider}/${author.model}): not run, the draft published unverified`)
         } else if (spent !== undefined) {
           steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
         } else {
@@ -1100,7 +1141,7 @@ export class TurnScheduler {
           const checked = await call(verifier, 'v', verifierPrompt(verifier, agent, channel, message, first.output.text, mark, await service.promptMarkOf(channel.id)), 'none')
           const verdict = parseVerdict(checked.output.text)
           steps.push({
-            role: 'verifier', agentId: verifier.id, verdict: verdict.kind,
+            role: 'verifier', agentId: verifier.id, model: checked.model, verdict: verdict.kind,
             ...(verdict.kind === 'issues' ? { notes: verdict.issues } : {}),
             ...(checked.output.tokens === undefined ? {} : { tokens: checked.output.tokens }),
             ...(checked.eur === undefined ? {} : { eur: checked.eur }),
@@ -1124,7 +1165,7 @@ export class TurnScheduler {
             const unchanged = revisedText === first.output.text.trim()
             const replaced = revisedText !== '' && !unchanged
             steps.push({
-              role: 'revision', agentId: agent.id, replaced,
+              role: 'revision', agentId: agent.id, model: revised.model, replaced,
               ...(replaced ? {} : { notes: [revisedText === '' ? 'correction vide, brouillon publié' : 'correction identique au brouillon'] }),
               ...(revised.output.tokens === undefined ? {} : { tokens: revised.output.tokens }),
               ...(revised.eur === undefined ? {} : { eur: revised.eur }),
@@ -1169,6 +1210,8 @@ export class TurnScheduler {
         ...(tokens === undefined ? {} : { tokens }),
         ...(eur === undefined ? {} : { eur }),
         ...(steps === undefined ? {} : { steps }),
+        // The model that answered a turn of one call (its agent's, or its role's).
+        ...(first.model === undefined ? {} : { model: first.model }),
         ...(first.output.toolsUnavailable === undefined ? {} : { toolsUnavailable: first.output.toolsUnavailable }),
         ...refusedSoFar(),
       })

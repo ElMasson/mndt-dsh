@@ -115,6 +115,8 @@ services:
       DSH_MNDT_PROXY_USER_HEADER: x-forwarded-email
       # The tenant's role table, read on every request (create-tenant.sh writes it with the owner).
       DSH_MNDT_GRANTS_FILE: /state/grants.json
+      # The space's models by role (create-tenant.sh writes the default policy), read at each turn.
+      DSH_MNDT_MODEL_ROLES_FILE: /state/roles.json
       # A message never decides: the approvals connector never offers decide_approval.
       MNDT_APPROVALS_ALLOW_DECIDE: "0"
       # The shell's address: its name on the front network only.
