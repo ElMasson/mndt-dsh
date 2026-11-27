@@ -373,6 +373,27 @@ else
   echo "KO  scaleway-reasoning-none  $scw Scaleway call(s); not « none »: ${other:-none}; kinds never seen:${absent:- none}; seen: ${kinds% }"
 fi
 
+# Qwen's chat template reasons by default: every call on the vLLM model asks it
+# not to (chat_template_kwargs enable_thinking false), and the host serves no
+# thought anyway. The fake leaks one in each of its answers, after an orphan
+# « </think> » (the instance, 27/11: « @qwen bonjour » answered twice, the tag
+# in the thread): no message kept in the space may carry the tag.
+templates=$(docker logs $project-fakellm 2>&1 | grep -a '^fake-llm template ')
+qwen_calls=$(printf '%s\n' "$templates" | grep -c . || true)
+not_off=$(printf '%s\n' "$templates" | awk 'NF && $5 != "enable_thinking=false"' | head -3 | tr '\n' ';')
+if [ "$qwen_calls" -gt 0 ] && [ -z "$not_off" ]; then
+  echo "OK  qwen-template-off  $qwen_calls call(s) on the vLLM model, every one with chat_template_kwargs enable_thinking false"
+else
+  echo "KO  qwen-template-off  $qwen_calls call(s) on the vLLM model; not off: ${not_off:-none}"
+fi
+leaked=$(docker logs $project-fakellm 2>&1 | grep -ac '^fake-llm leaked-thought ' || true)
+tagged=$(docker exec $project-workbench grep -o '</\{0,1\}think>' /state/state.json 2>/dev/null | grep -c . || true)
+if [ "$leaked" -gt 0 ] && [ "$tagged" = 0 ]; then
+  echo "OK  no-thought-served  the fake leaked a thought in $leaked answer(s); no <think> nor </think> in any message kept (/state/state.json)"
+else
+  echo "KO  no-thought-served  $leaked answer(s) leaked a thought; $tagged tag(s) in the space's messages"
+fi
+
 step "6. the sandbox of the running workbench, canaries where its secrets live"
 # The model.env canary is in the workbench's environment (env_file): the probe
 # must not reach it. The others where the instance keeps its secrets (the tools

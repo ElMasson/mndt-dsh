@@ -26,6 +26,7 @@ import { ToolsReadiness } from './tools-ready.ts'
 import type { ToolsRegistryLike } from './tools-ready.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 import { clearOperatorWarning, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { withoutThought } from './thought-text.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -347,6 +348,13 @@ export class DshTurnRunner implements TurnEngine {
   readonly #configured: (server: string) => boolean
 
   /**
+   * The last prompt of each agent in each channel, in memory only, for the
+   * measure's common prefix: never logged, never written, the oldest dropped
+   * past {@link PREVIOUS_PROMPTS}.
+   */
+  readonly #previousPrompts = new Map<string, string>()
+
+  /**
    * @param ctx - the host context.
    * @param readiness - the servers' readiness (shared with the missions; for tests, a fake).
    * @param configured - whether a server is configured for this space (see DshRunnerOptions.configured).
@@ -371,6 +379,24 @@ export class DshTurnRunner implements TurnEngine {
    */
   async ready(servers: readonly string[], signal: AbortSignal): Promise<void> {
     await this.#readiness.waitFor([...new Set([...servers, ...this.#always()])], signal)
+  }
+
+  /**
+   * @param input - the turn.
+   * @returns the length of the prefix its prompt shares with the same agent's
+   * previous prompt in that channel, or undefined on the first; this prompt
+   * becomes the next one's previous.
+   */
+  #commonWithPrevious(input: Pick<TurnInput, 'channel' | 'agent' | 'prompt'>): number | undefined {
+    const key = `${input.channel.id}\u0000${input.agent.id}`
+    const previous = this.#previousPrompts.get(key)
+    this.#previousPrompts.delete(key)
+    this.#previousPrompts.set(key, input.prompt)
+    if (this.#previousPrompts.size > PREVIOUS_PROMPTS) {
+      const oldest = this.#previousPrompts.keys().next().value
+      if (oldest !== undefined) this.#previousPrompts.delete(oldest)
+    }
+    return previous === undefined ? undefined : commonPrefixLength(previous, input.prompt)
   }
 
   /**
@@ -421,6 +447,8 @@ export class DshTurnRunner implements TurnEngine {
     // Set by the session listener below: an object, so the check after the run reads its value.
     const route = { unreachable: false }
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    // The model calls of the turn (one assistant message each), for the measure.
+    let calls = 0
     // A step with a cost bound stops before a next message that would not fit.
     // The next message reads what the last one read, plus what it wrote, plus
     // one tool result per tool it called (each kept inline up to
@@ -436,6 +464,7 @@ export class DshTurnRunner implements TurnEngine {
         const data = (event as unknown as { data?: StepData }).data
         const step = data?.usage
         const toolCalls = (data?.message?.content ?? []).filter(block => block.type === 'tool-call').length
+        calls += 1
         if (step !== undefined) {
           usage.input += step.inputTokens ?? 0
           usage.output += step.outputTokens ?? 0
@@ -486,7 +515,7 @@ export class DshTurnRunner implements TurnEngine {
       // The prompt's measure, never its content: its size, the fingerprints of its
       // head (one value from one turn to the next: the prefix cache can serve it),
       // and what the model counted (input, read from cache, output).
-      warnOperator(this.#ctx, promptMeasure(input, tokens))
+      warnOperator(this.#ctx, promptMeasure(input, tokens, { common: this.#commonWithPrevious(input), calls }))
       return {
         text, sessionId, ...(tokens === undefined ? {} : { tokens }), ...(toolsUnavailable.length === 0 ? {} : { toolsUnavailable }),
       }
@@ -512,19 +541,44 @@ export class DshTurnRunner implements TurnEngine {
 export function promptMeasure(
   input: Pick<TurnInput, 'turnId' | 'agent' | 'prompt' | 'measureKey'>,
   tokens: { readonly input: number; readonly output: number; readonly cacheRead?: number } | undefined,
+  run: { readonly common?: number | undefined; readonly calls?: number | undefined } = {},
 ): string {
   const key = input.measureKey ?? ''
   const head = (length: number): string => (key === '' ? 'unkeyed' : createHmac('sha256', key).update(input.prompt.slice(0, length)).digest('hex').slice(0, 12))
   const counted = tokens === undefined ? 'tokens unknown' : `input ${tokens.input}, cacheRead ${tokens.cacheRead ?? 0}, output ${tokens.output}`
-  return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}; ${counted}`
+  // The characters this prompt shares, from its start, with the same agent's
+  // previous prompt in the same channel: the direct measure of what a prefix
+  // cache can serve (« - » on the agent's first turn there since the start).
+  const common = `common ${run.common ?? '-'}`
+  // The model calls of the turn: its tokens are their sum, each call sending
+  // the whole context again (the tools' schemas, then each tool's result).
+  const calls = `calls ${run.calls ?? '-'}`
+  return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}, ${common}; ${counted}; ${calls}`
 }
 
+/** @param a - a prompt. @param b - another. @returns the length of the prefix they share. */
+export function commonPrefixLength(a: string, b: string): number {
+  const end = Math.min(a.length, b.length)
+  let i = 0
+  while (i < end && a.charCodeAt(i) === b.charCodeAt(i)) i += 1
+  return i
+}
+
+/** How many (channel, agent) previous prompts the runner keeps, for the measure only. */
+const PREVIOUS_PROMPTS = 256
+
 /**
- * Find the text a settled run carries.
+ * Find the text a settled run carries, without the model's reasoning
+ * ({@link withoutThought}): a mission's markdown and an agent's answer alike.
  * @param settled - whatever the engine resolved.
  * @returns the text, or an empty string when there is none.
  */
 export function textOf(settled: unknown): string {
+  return withoutThought(rawTextOf(settled))
+}
+
+/** @param settled - whatever the engine resolved. @returns its text as the model wrote it, reasoning included. */
+function rawTextOf(settled: unknown): string {
   if (typeof settled === 'string') return settled
   const record = settled as Record<string, unknown> | null
   if (record === null || typeof record !== 'object') return ''

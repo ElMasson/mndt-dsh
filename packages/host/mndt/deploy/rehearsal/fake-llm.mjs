@@ -236,10 +236,19 @@ createServer((req, res) => {
                 : prompted.includes('Tu travailles pour Duke Analytics.') ? 'mission'
                   : 'turn'
     console.log(`fake-llm effort ${calls} ${request.model} ${kind} ${request.reasoning_effort ?? '-'}`)
+    // Qwen's chat template reasons by default (rehearse.sh qwen-template-off):
+    // each call on the vLLM model logs what it asked of the template.
+    const qwen = request.model === 'fake-qwen'
+    if (qwen) console.log(`fake-llm template ${calls} ${kind} enable_thinking=${JSON.stringify(request.chat_template_kwargs?.enable_thinking ?? null)}`)
     // Only the last call of a probe carries every result: log them there once.
     const call = nextCall(messages, tag) ?? helpCall(messages)
     if (call === undefined && tag !== '-') logResults(messages, tag)
-    const answer = answerOf(messages)
+    // A template that leaks its thought, as the instance's did (27/11): every
+    // answer of the vLLM model comes after an orphan « </think> », whatever the
+    // request asked. The host must serve the answer alone (rehearse.sh
+    // no-thought-served).
+    const answer = qwen ? `je réfléchis à la réponse\n</think>\n\n${answerOf(messages)}` : answerOf(messages)
+    if (qwen) console.log(`fake-llm leaked-thought ${calls}`)
     const userText = messages.filter(message => message.role === 'user').map(message => textOf(message.content)).join('\n')
     console.log(`fake-llm context ${calls}: ${contextOf(userText)}`)
     // A briefing on a space without facts server: its prompt must say so (rehearse.sh briefing-without-facts).
