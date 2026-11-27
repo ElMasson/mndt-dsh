@@ -360,6 +360,23 @@ export function coordinationAgents(coordination: Coordination): readonly string[
 
 /** One step of a coordinated turn: who did what, at what cost. */
 /** A tool refused during a turn: its server, and why in a word the screen says in its own. */
+/** One action of a turn on its actor's computer. */
+export interface MachineActivityEntry {
+  readonly at: string
+  /** A page visited, a command run, a click, a text or a key typed (never the text itself). */
+  readonly kind: 'page' | 'command' | 'click' | 'type'
+  /** The page's address, without its query nor its fragment (servedAction): the actor's only. */
+  readonly url?: string
+  /** The page's host: served to every reader. */
+  readonly host?: string
+  /** The page's title, one plain line: the actor's only. */
+  readonly title?: string
+  /** The command run, clipped: the actor's only. */
+  readonly command?: string
+  /** The turn's capture (one at most, the last) was taken here: served to the actor as imageUrl. */
+  readonly capture?: true
+}
+
 export interface TurnToolRefusal {
   readonly server: string
   /** busy: every computer is taken, none could start for the actor (no queue). */
@@ -425,6 +442,12 @@ export interface Turn {
   readonly actor?: string
   /** The tools refused during the turn, by server and kind (« Mon ordinateur »: the four computers busy). */
   readonly toolRefusals?: readonly TurnToolRefusal[]
+  /**
+   * What the turn did on its actor's computer (« Mon ordinateur »), MAX_MACHINE_ACTIVITY
+   * entries at most, the last ones. Served by reader (servedMessage): the actor
+   * reads each entry whole and the last capture; anyone else the kind and the host only.
+   */
+  readonly machineActivity?: readonly MachineActivityEntry[]
   /** A coordinated turn's steps, in order; each step's cost counts for its own agent. */
   readonly steps?: readonly TurnStep[]
   /**
