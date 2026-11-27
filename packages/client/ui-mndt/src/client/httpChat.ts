@@ -138,6 +138,10 @@ export function createHttpChat(
     },
     createSkill: async markdown => writtenOf(await post<Record<string, unknown>>('/skills', { markdown })),
     updateSkill: async (slug, change) => writtenOf(await post<Record<string, unknown>>(`/skills/${id(slug)}`, change)),
+    machine: async () => get<unknown>('/me/machine'),
+    startMachine: async () => (await post<{ machine?: unknown }>('/me/machine/start', {})).machine,
+    stopMachine: async () => (await post<{ machine?: unknown }>('/me/machine/stop', {})).machine,
+    machineMembers: async () => get<unknown>('/machines/members'),
     schedules: async (query) => {
       const at = 'channelId' in query ? `channelId=${id(query.channelId)}` : `agentId=${id(query.agentId)}`
       const body = await get<{ schedules?: unknown }>(`/schedules?${at}`)

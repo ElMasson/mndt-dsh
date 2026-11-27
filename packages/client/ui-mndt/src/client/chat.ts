@@ -247,6 +247,15 @@ export interface ChatFace {
   pauseSchedule?(id: string): Promise<void>
   resumeSchedule?(id: string): Promise<void>
   deleteSchedule?(id: string): Promise<void>
+  /**
+   * The person's own computer (« Mon ordinateur », #163): its state as served (`GET /me/machine`),
+   * read row by row by the page; start and stop it; the owner's list of who has one on
+   * (`GET /machines/members`, rights.write), never what another's shows. Optional: the team page only.
+   */
+  machine?(): Promise<unknown>
+  startMachine?(): Promise<unknown>
+  stopMachine?(): Promise<unknown>
+  machineMembers?(): Promise<unknown>
   /** The space's skills (`GET /skills`). Optional: the team page only. */
   skills?(): Promise<readonly ChatSkill[]>
   /** Add a skill from a pasted SKILL.md (owners and admins). */

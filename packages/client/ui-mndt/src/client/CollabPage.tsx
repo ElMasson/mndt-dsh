@@ -6,6 +6,7 @@
  * A channel is a perimeter of responsibility (the team, one mandate, the system),
  * every post is typed, and the approval card is the only place a decision is made.
  */
+import { MachineScreen, machinesServed } from './machine.tsx'
 import { ScheduledScreen } from './scheduledScreen.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -182,7 +183,7 @@ export interface TeamFrame {
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
-type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'settings'
+type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'machine' | 'settings'
 
 export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team, documents }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
@@ -536,6 +537,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   }, [api, load, loadCards, chat, tc, loadOffered, loadMounted, loadChat])
 
   const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
+  // Whether the instance serves computers (« Mon ordinateur »): asked once; a 503 no-machines is « no ».
+  const [machinesOn, setMachinesOn] = useState(false)
+  useEffect(() => {
+    if (chat?.machine === undefined || team === undefined) return
+    let live = true
+    void machinesServed(chat).then((served) => { if (live) setMachinesOn(served) })
+    return () => { live = false }
+  }, [chat, team])
   const [automationError, setAutomationError] = useState<string | undefined>(undefined)
   const [automationBusy, setAutomationBusy] = useState<string | undefined>(undefined)
   const [automationNotice, setAutomationNotice] = useState<string | undefined>(undefined)
@@ -890,7 +899,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const current = chatChannels?.find(c => c.id === chatId)
     const place: TeamPlace | undefined = view === 'chat'
       ? (current === undefined || current.kind === 'solo' ? 'lane' : 'channels')
-      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'scheduled' || view === 'settings'
+      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'scheduled' || view === 'machine' || view === 'settings'
         ? view
         : 'settings'
     return (
@@ -918,6 +927,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
         name={team.name}
         live={error === undefined}
         scheduled={team.owner === true}
+        machine={machinesOn}
       >
         {page}
       </TeamShell>
@@ -2060,6 +2070,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 </ul>
               )}
             </section>
+          )}
+          {view !== 'machine' || !machinesOn || chat === undefined ? undefined : (
+            <MachineScreen face={chat} canSeeMembers={state.canAdmin === true} names={team.names} title={t('shell.machine')} t={tc} />
           )}
           {view !== 'scheduled' || team.owner !== true ? undefined : (
             <ScheduledScreen

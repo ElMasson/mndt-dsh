@@ -1136,3 +1136,25 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Cette heure est illisible : écrivez-la comme 07:30.')
   })
 })
+
+describe('the lane panel\'s agents: one truth (eighth jump)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-27T08:00:00.000Z'
+  const one = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }
+  const two = { ...one, id: 'agt_2', handle: 'analyste', name: 'Analyste' }
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  it('an empty lane, for whoever may add: « Ajouter un agent à ma lane : » and the pills, no « Aucun agent » beside them', async () => {
+    const chat = createMockChat({ you, agents: [one, two], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const card = await screen.findByTestId('context-panel', {}, { timeout: 5000 })
+    expect(within(card).getByTestId('agent-pills-label').textContent).toBe('Ajouter un agent à ma lane :')
+    expect(within(card).queryByText('Aucun agent dans ce canal.')).toBeNull()
+  })
+  it('a reader reads the pills as the space\'s agents, inert, and who is in the channel apart', async () => {
+    const chat = createMockChat({ you, agents: [one, two], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite: false, canAdmin: false, role: 'viewer' }))} chat={chat} tc={chatFrench} team={{}} />)
+    const card = await screen.findByTestId('context-panel', {}, { timeout: 5000 })
+    expect(within(card).getByTestId('agent-pills-label').textContent).toBe('Les agents de l\'espace :')
+    expect(within(card).getByText('Aucun agent dans ce canal.')).toBeTruthy()
+  })
+})

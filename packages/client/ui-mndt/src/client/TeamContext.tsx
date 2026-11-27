@@ -121,7 +121,16 @@ export function TeamContext(props: TeamContextProps): ReactNode {
         <p>{channel.kind === 'solo' ? t('ctxKindLane') : t('ctxKindTeam')}</p>
       </Section>
       <Section title={t('agents')}>
+        {/* One truth (seen on the eighth jump): the pills are the SPACE's agents, a toggle each, and
+            are said to be; the list below is who IS in the channel. A reader keeps the pills inert,
+            with why (an earlier rule), under the same label. */}
         {declared.length === 0 ? <p className="mw-ctx-muted">{t('agentsNoneDeclared')}</p> : (
+          <p className="mw-ctx-small mw-ctx-muted" data-testid="agent-pills-label">
+            {!canManage ? t('ctxAgentsOfSpace')
+              : here.length > 0 ? t('ctxAgentsToggle') : t(channel.kind === 'solo' ? 'ctxAddAgentLane' : 'ctxAddAgentChannel')}
+          </p>
+        )}
+        {declared.length === 0 ? undefined : (
           <div className="mw-pills" role="group" aria-label={t('agentsOfChannel')} data-testid="agent-pills">
             {declared.map((a) => {
               const on = channel.agents.includes(a.id)
@@ -144,7 +153,8 @@ export function TeamContext(props: TeamContextProps): ReactNode {
           </div>
         )}
         {canManage || declared.length === 0 ? undefined : <p className="mw-ctx-small mw-ctx-muted">{t('chipsReadOnly')}</p>}
-        {here.length === 0 ? <p className="mw-ctx-muted">{t('agentNone')}</p> : (
+        {/* No agent here: said once, and only to whom no pill offers to add one. */}
+        {here.length === 0 ? (canManage && declared.length > 0 ? undefined : <p className="mw-ctx-muted">{t('agentNone')}</p>) : (
           <ul className="mw-ctx-list">
             {here.map(a => (
               <li key={a.id} className="mw-ctx-item" data-testid="chat-agent">
