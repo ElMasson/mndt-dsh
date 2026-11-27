@@ -27,6 +27,8 @@ import type { ToolsRegistryLike } from './tools-ready.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 import { clearOperatorWarning, warnOperator, warnOperatorOnce } from './operator-log.ts'
 import { withoutThought } from './thought-text.ts'
+import { NO_MODEL_ROLES } from './model-roles.ts'
+import type { ModelRolesRead } from './model-roles.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -59,6 +61,12 @@ export interface DshRunnerOptions {
    * mission records it (toolsUnavailable) for the screen.
    */
   readonly factsConfigured?: () => boolean
+  /**
+   * The space's models by role (model-roles.ts): a briefing takes the
+   * « briefing » role's route, any other mission the « mission » role's. A role
+   * that says « agent », or no policy: the workstation's default model.
+   */
+  readonly modelRoles?: () => Promise<ModelRolesRead>
   /** The instance's IANA time zone, for the date line the mission's prompt opens with (default: the process's). */
   readonly timeZone?: string
   /** The clock (tests). */
@@ -244,7 +252,12 @@ export class DshMissionRunner {
       throw new Error('mndt: this host does not mount the workflow engine, so a mission cannot run')
     }
     const model = this.#ctx.get('agentDefaultModel') as { currentSelection(): { provider: string; model: string } | undefined } | undefined
-    const selection = model === undefined ? undefined : model.currentSelection()
+    const roles = this.#options.modelRoles === undefined ? undefined : await this.#options.modelRoles()
+    if (roles !== undefined && !roles.ok) throw new Refusal(`la politique des modèles de l’espace ne se lit pas : ${roles.reason}`)
+    const policy = roles?.policy ?? NO_MODEL_ROLES
+    const routeName = policy.roles[mission.kind === 'briefing' ? 'briefing' : 'mission']
+    const route = routeName === undefined || routeName === 'agent' ? undefined : policy.routes[routeName]
+    const selection = route ?? (model === undefined ? undefined : model.currentSelection())
     if (this.#options.tools !== undefined) assertInProcessChildren(this.#ctx, engine)
     // As a turn: the servers' tools before the agent (its policy copies the
     // visible names once). The first automation tick runs at start-up, while

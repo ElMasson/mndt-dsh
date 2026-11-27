@@ -1,0 +1,20 @@
+{
+  "_comment": "The space's models by role (A1 note, validated 27/11). Each route is a provider/model of the space's routes, priced in prices.json; ${VAR} comes from model.env, and an empty one leaves its roles on their agent's model. « agent » keeps the agent's own model. Read at each turn: a change applies from the next one.",
+  "routes": {
+    "volume": "vllm-qwen/${VLLM_QWEN_MODEL}",
+    "jugement": "scaleway-genapi/glm-5.3"
+  },
+  "roles": {
+    "author": "agent",
+    "helpReading": "agent",
+    "councilMember": "agent",
+    "worker": "volume",
+    "peer": "volume",
+    "scheduled": "volume",
+    "mission": "volume",
+    "verifier": "jugement",
+    "synthesis": "jugement",
+    "council": "jugement",
+    "briefing": "jugement"
+  }
+}

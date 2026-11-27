@@ -21,11 +21,13 @@
  * that reason, checked at each pass and just before its run. Deleted tasks are forgotten after TOMBSTONE_DAYS.
  */
 import { randomUUID } from 'node:crypto'
-import { ceilingRefusal, dateLine, eurOf, isLaneOf, nextRuns, priceOf, skillsOf, spentThisMonth, turnPrompt, turnServers } from './core/index.ts'
+import { ceilingRefusal, dateLine, eurOf, isLaneOf, nextRuns, priceOf, Refusal, skillsOf, spentThisMonth, turnPrompt, turnServers } from './core/index.ts'
 import type { Agent, Channel, Message, PriceGrid, Schedule, WorkbenchService, WorkbenchState } from './core/index.ts'
 import type { GrantSource, GrantTable } from './policy.ts'
 import { turnFailure } from './public-failure.ts'
 import { reservedFor, reserveSpend } from './spend-reservations.ts'
+import { NO_MODEL_ROLES, resolveModel } from './model-roles.ts'
+import type { ModelRolesRead } from './model-roles.ts'
 import { channelFolder, RouteUnreachable } from './turns.ts'
 import type { TurnEngine } from './turns.ts'
 
@@ -81,6 +83,8 @@ export interface TaskSchedulerOptions {
   readonly warn: (line: string) => void
   /** The clock (tests). */
   readonly now?: () => Date
+  /** The space's models by role (model-roles.ts): a run takes the « scheduled » role's. Absent: its agent's model. */
+  readonly modelRoles?: () => Promise<ModelRolesRead>
 }
 
 /**
@@ -274,7 +278,12 @@ export class TaskScheduler {
       // runs. A refusal is not a failure: the task runs again by itself next month.
       const spent = spentThisMonth(state.messages ?? [], agent.id, startedAt) + reservedFor(agent.id)
       const refused = ceilingRefusal(agent, prices, spent) ?? (spent + schedule.eurPerRun > agent.eurPerMonth ? 'over the ceiling with this run' : undefined)
-      const price = priceOf(prices, agent)
+      // The model the « scheduled » role takes (roles.json), priced as it: a policy that does not read refuses the run, said.
+      const roles = this.#options.modelRoles === undefined ? undefined : await this.#options.modelRoles()
+      if (roles !== undefined && !roles.ok) throw new Refusal(`la politique des modèles de l’espace ne se lit pas : ${roles.reason}`)
+      const chosen = resolveModel(roles?.policy ?? NO_MODEL_ROLES, 'scheduled', agent)
+      const player: Agent = { ...agent, provider: chosen.provider, model: chosen.model }
+      const price = priceOf(prices, player)
       if (refused !== undefined || price === undefined) {
         await service.recordScheduleRefusal(id, startedAt)
         this.#sayDaily(started, `refused-${id}`, `mndt: task ${id} not run: its agent's ceiling is reached, or its model has no price`)
@@ -299,7 +308,7 @@ export class TaskScheduler {
         turnId: runId,
         runId,
         measureKey: await service.promptMeasureKey(),
-        agent,
+        agent: player,
         channel,
         // As its requester: their connections, their computer; never the owner's.
         actor: schedule.requestedBy,

@@ -233,8 +233,10 @@ createServer((req, res) => {
           : prompted.includes('est bloqué et te demande ton avis') ? 'help-peer'
             : prompted.includes("Tu as demandé de l'aide sur :") ? 'help-reading'
               : prompted.includes(', chargé de la synthèse dans le canal #') ? 'synthesis'
-                : prompted.includes('Tu travailles pour Duke Analytics.') ? 'mission'
-                  : 'turn'
+                : prompted.includes('Prépare le briefing quotidien') ? 'briefing'
+                  : prompted.includes('Tu travailles pour Duke Analytics.') ? 'mission'
+                    : prompted.includes('pour une synthèse faite ensuite par un autre agent') ? 'worker'
+                      : 'turn'
     console.log(`fake-llm effort ${calls} ${request.model} ${kind} ${request.reasoning_effort ?? '-'}`)
     // Qwen's chat template reasons by default (rehearse.sh qwen-template-off):
     // each call on the vLLM model logs what it asked of the template.

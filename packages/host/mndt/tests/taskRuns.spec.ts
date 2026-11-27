@@ -17,6 +17,8 @@ import { CUT_BY_RESTART_TEXT, MAX_PARALLEL_RUNS, NO_RUN_TEXT, slotsOf, TaskSched
 import { TurnScheduler } from '../src/turns.ts'
 import type { TurnEngine, TurnInput, TurnOutput } from '../src/turns.ts'
 import { reservedFor } from '../src/spend-reservations.ts'
+import { parseModelRoles } from '../src/model-roles.ts'
+import type { ModelRolesRead } from '../src/model-roles.ts'
 
 const ZONE = 'Indian/Reunion'
 const owner = 'duke@datanalysis.re'
@@ -59,8 +61,11 @@ async function bench(options: { eurPerMonth?: number } = {}) {
     { subject: owner, role: 'owner' }, { subject: operator, role: 'operator' }, { subject: viewer, role: 'viewer' }, { subject: other, role: 'operator' },
   ]
   const grants: GrantSource = { grants: async () => ({ ok: true, grants: table }) }
-  const scheduler = (source: GrantSource = grants, now: () => Date = () => clock) => new TaskScheduler({
+  const scheduler = (
+    source: GrantSource = grants, now: () => Date = () => clock, modelRoles?: () => Promise<ModelRolesRead>,
+  ) => new TaskScheduler({
     service, engine, prices: PRICES, grants: source, dataDir: '/tmp/mndt-task-runs', timeZone: ZONE, warn: (line) => { lines.push(line) }, now,
+    ...(modelRoles === undefined ? {} : { modelRoles }),
   })
   const tasks = scheduler()
   const approve = async (overrides: Partial<ScheduleProposal> = {}, by = agent): Promise<Schedule> => {
@@ -225,6 +230,32 @@ describe('a route declared free', () => {
     expect(b.engine.runs.map(run => run.agent.id)).toEqual([qwen.id])
     expect((await b.runsIn(b.channel.id))[0]?.mission).toMatchObject({ status: 'done', eur: 0, scheduleId: task.id })
     expect(await b.schedule(task.id)).toMatchObject({ lastStatus: 'done', lastEur: 0 })
+  })
+})
+
+describe('the space\'s models by role (roles.json)', () => {
+  it('a run plays on the « scheduled » role\'s route, as its agent, priced for that route', async () => {
+    const b = await bench()
+    const policy = '{"routes": {"volume": "vllm-qwen/qwen3.5"}, "roles": {"scheduled": "volume"}}'
+    const tasks = b.scheduler(b.grants, undefined, async () => parseModelRoles(policy, {}, PRICES))
+    const task = await b.approve()
+    b.set(reunion(26, 8, 2))
+    await tasks.tick()
+    await tasks.settled()
+    expect(b.engine.runs.map(run => [run.agent.id, `${run.agent.provider}/${run.agent.model}`])).toEqual([[b.agent.id, 'vllm-qwen/qwen3.5']])
+    // Priced 0 on Qwen: its agent's own route-a would have cost 0.0012 €.
+    expect((await b.runsIn(b.channel.id))[0]?.mission).toMatchObject({ status: 'done', eur: 0, scheduleId: task.id })
+  })
+
+  it('a policy that cannot be read: no model is called, and the run says why', async () => {
+    const b = await bench()
+    const tasks = b.scheduler(b.grants, undefined, async () => ({ ok: false, reason: 'roles.json n’est pas un JSON valide' }))
+    const task = await b.approve()
+    b.set(reunion(26, 8, 2))
+    await tasks.tick()
+    await tasks.settled()
+    expect(b.engine.runs).toHaveLength(0)
+    expect(JSON.stringify(await b.schedule(task.id))).not.toContain('"lastStatus":"done"')
   })
 })
 

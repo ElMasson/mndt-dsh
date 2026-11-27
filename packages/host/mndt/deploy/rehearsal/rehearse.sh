@@ -364,7 +364,9 @@ scw=$(printf '%s\n' "$efforts" | grep -c . || true)
 other=$(printf '%s\n' "$efforts" | awk 'NF && $6 != "none"' | head -3 | tr '\n' ';')
 kinds=$(printf '%s\n' "$efforts" | awk 'NF { print $5 }' | sort | uniq -c | awk '{ printf "%s=%s ", $2, $1 }')
 absent=""
-for kind in turn verifier council-position council-critique help-peer synthesis mission; do
+# The help's advice and the missions play on the « volume » route (Qwen) by the
+# space's default roles.json: they are role-routes' to check, not this one's.
+for kind in turn verifier council-position council-critique synthesis briefing; do
   printf '%s\n' "$efforts" | awk -v k="$kind" '$5 == k { found = 1 } END { exit !found }' || absent="$absent $kind"
 done
 if [ "$scw" -gt 0 ] && [ -z "$other" ] && [ -z "$absent" ]; then
@@ -397,6 +399,26 @@ if [ "$leaked" -gt 0 ] && [ "$tagged" = 0 ]; then
   echo "OK  no-thought-served  the fake leaked a thought in $leaked answer(s); no <think> nor </think> in any message kept (/state/state.json); $transcripts engine transcript(s) under /state/home/sessions carry one (never resumed, never served)"
 else
   echo "KO  no-thought-served  $leaked answer(s) leaked a thought; $tagged tag(s) in the space's messages"
+fi
+# The space's default roles.json (deploy/llm/roles.json): each kind of call is
+# played on its role's route, whatever agent plays it — the « jugement » route
+# (GLM) for the verifier, the synthesis, the council's framing and synthesis and
+# the briefing; the « volume » route (Qwen) for the workers, the peers' advice
+# and the missions. Each kind is seen at least once: a kind no call reached
+# proves nothing. The author, a council member and the reading of advice keep
+# their agent's model: listed, not checked.
+role_bad=""; role_absent=""; role_seen=""
+for pair in verifier:glm-5.3 synthesis:glm-5.3 council-framing:glm-5.3 council-synthesis:glm-5.3 briefing:glm-5.3 worker:fake-qwen help-peer:fake-qwen mission:fake-qwen; do
+  kind=${pair%%:*}; want=${pair#*:}
+  models=$(printf '%s\n' "$all_efforts" | awk -v k="$kind" 'NF && $5 == k { print $4 }' | sort | uniq -c | awk '{ printf "%s×%s ", $2, $1 }')
+  if [ -z "$models" ]; then role_absent="$role_absent $kind"; continue; fi
+  role_seen="$role_seen $kind=${models% }"
+  printf '%s\n' "$all_efforts" | awk -v k="$kind" -v w="$want" 'NF && $5 == k && $4 != w { bad = 1 } END { exit !bad }' && role_bad="$role_bad $kind(${models% })"
+done
+if [ -z "$role_bad" ] && [ -z "$role_absent" ]; then
+  echo "OK  role-routes  each kind on its role's route:$role_seen"
+else
+  echo "KO  role-routes  off its route:${role_bad:- none}; never seen:${role_absent:- none}; seen:$role_seen"
 fi
 
 step "6. the sandbox of the running workbench, canaries where its secrets live"

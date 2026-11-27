@@ -307,6 +307,11 @@ if [ ! -f "$root$data/prices.json" ] && [ -f "$here/llm/prices.json" ]; then
   cp "$here/llm/prices.json" "$root$data/prices.json"
 fi
 [ -f "$root$data/prices.json" ] || echo "  no price grid yet: copy deploy/llm/prices.json to $data/prices.json, or every agent turn is refused"
+# The space's models by role, one default: deploy/llm/roles.json. Kept once
+# written: a policy the operator changed is never overwritten.
+if [ ! -f "$root$data/roles.json" ] && [ -f "$here/llm/roles.json" ]; then
+  cp "$here/llm/roles.json" "$root$data/roles.json"
+fi
 [ -f "$root$data/state.json" ] || printf '{\n  "version": 1,\n  "missions": [],\n  "briefs": [],\n  "memories": [],\n  "approvals": [],\n  "events": [],\n  "mandates": []\n}\n' > "$root$data/state.json"
 
 # The proxy's side, LAST, right before `up -d`: who may sign in, its

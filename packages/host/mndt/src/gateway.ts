@@ -32,6 +32,8 @@ import { TEAM_MISSION_POLICY } from './tool-policy.ts'
 import { canReadMission } from './visibility.ts'
 import { TurnScheduler } from './turns.ts'
 import { TaskScheduler } from './task-runs.ts'
+import { readModelRoles } from './model-roles.ts'
+import type { ModelRolesRead } from './model-roles.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { parsePrices } from './core/index.ts'
 import type { PriceGrid } from './core/index.ts'
@@ -283,6 +285,8 @@ export class WorkbenchGateway extends TypertRemoteService {
     // One engine for the conversations' turns and the scheduled tasks' runs: one
     // at a time (its actor is published for the connectors).
     const engine = new DshTurnRunner(ctx, this.readinessFor(ctx), this.requiredConfigured())
+    // The space's models by role (roles.json beside grants.json), read at each turn.
+    const modelRoles = modelRolesReader(ctx, prices)
     const turns = new TurnScheduler({
       service: this.service,
       engine,
@@ -290,12 +294,14 @@ export class WorkbenchGateway extends TypertRemoteService {
       dataDir: dirname(this.statePath),
       warn: (message) => { warnOperator(ctx, message) },
       timeZone: this.timeZoneFor(ctx),
+      modelRoles,
     })
     // The scheduled tasks (tasks PR 2): a pass every 30 s, each run as its requester.
     const tasks = new TaskScheduler({
       service: this.service,
       engine,
       prices,
+      modelRoles,
       grants: this.grants,
       dataDir: dirname(this.statePath),
       timeZone: this.timeZoneFor(ctx),
@@ -524,9 +530,10 @@ export class WorkbenchGateway extends TypertRemoteService {
     const factsConfigured = (): boolean => configuredInSpace(dirname(this.statePath))('workbench_facts')
     // What a mission cost, from the same grid as the turns' (read at each runner).
     const prices = readPrices(process.env.MNDT_PRICES_FILE ?? join(dirname(this.statePath), 'prices.json'))
+    const modelRoles = modelRolesReader(ctx, prices)
     return new DshMissionRunner(ctx, soloWorkstation(this.proxyUserHeader)
-      ? { readiness, configured, timeZone, factsConfigured, prices }
-      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone, factsConfigured, prices })
+      ? { readiness, configured, timeZone, factsConfigured, prices, modelRoles }
+      : { tools: TEAM_MISSION_POLICY, readiness, configured, timeZone, factsConfigured, prices, modelRoles })
   }
 
   /**
@@ -812,4 +819,14 @@ function readPrices(path: string): PriceGrid {
     throw error
   }
   return parsePrices(text)
+}
+
+/**
+ * @param ctx - the host context (the operator's log).
+ * @param prices - the space's price grid.
+ * @returns the reader of the space's models by role (DSH_MNDT_MODEL_ROLES_FILE, roles.json):
+ * read at each call, so a change applies from the next turn.
+ */
+export function modelRolesReader(ctx: Context, prices: PriceGrid): () => Promise<ModelRolesRead> {
+  return () => readModelRoles(process.env.DSH_MNDT_MODEL_ROLES_FILE, process.env, prices, (line) => { warnOperator(ctx, line) })
 }

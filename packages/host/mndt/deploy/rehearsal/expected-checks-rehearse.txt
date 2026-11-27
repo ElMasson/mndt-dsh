@@ -71,6 +71,7 @@ routes-real-scaleway
 scaleway-reasoning-none
 qwen-template-off
 no-thought-served
+role-routes
 scan-witness
 scheduler-fires
 scheduler-first-pass
