@@ -40,10 +40,11 @@ const IDENTITY = process.env.MNDT_IDENTITY ?? process.env.DSH_MNDT_IDENTITY ?? '
 const API = process.env.MNDT_API ?? 'http://127.0.0.1:8795'
 const ACTOR_FILE = process.env.MNDT_ACTOR_FILE ?? ''
 const PC_MODE = process.env.MACHINES_MODE === 'pc'
-// The API believes the identity header only with the gateway's secret (a file outside /state).
+// The API believes the identity header only with the gateway's secret: from its
+// file only (outside /state), never from the environment, where a process could read it.
 const GATEWAY_SECRET = (() => {
   const path = process.env.MNDT_GATEWAY_SECRET_FILE ?? ''
-  if (path === '') return process.env.MNDT_GATEWAY_SECRET ?? ''
+  if (path === '') return ''
   try { return readFileSync(path, 'utf8').trim() } catch { return '' }
 })()
 

@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { load } from 'js-yaml'
@@ -134,9 +134,13 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     const composePath = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
     const compose = readFileSync(composePath, 'utf8')
     expect(compose).toContain(`MNDT_GATEWAY_CODE: "${sha(join(deploy, 'gateway', 'server.mjs'))}"`)
-    // One fingerprint of everything the workbench runs from the tools folder: the four connector tools, then the entrypoint.
+    // One fingerprint of everything the workbench runs from the tools folder:
+    // the four connector tools, the machine connector, then the entrypoint.
     const toolsCode = (dir: string): string => createHash('sha256')
-      .update(Buffer.concat([...['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs', 'facts-mcp.mjs'].map(tool => readFileSync(join(dir, 'connectors', tool))), readFileSync(join(dir, 'workbench-entrypoint.sh'))]))
+      .update(Buffer.concat([
+        ...['approvals-mcp.mjs', 'mcp-proxy.mjs', 'office365-mcp.mjs', 'facts-mcp.mjs'].map(tool => readFileSync(join(dir, 'connectors', tool))),
+        readFileSync(join(dir, 'machine-mcp.mjs')), readFileSync(join(dir, 'workbench-entrypoint.sh')),
+      ]))
       .digest('hex').slice(0, 16)
     expect(compose).toContain(`MNDT_TOOLS_CODE: "${toolsCode(deploy)}"`)
     // The 13/11 update: only server.mjs changed on disk; the rendered compose must change with it.
@@ -163,6 +167,126 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     writeFileSync(join(copy, 'connectors', 'mcp-check.mjs'), `${readFileSync(join(deploy, 'connectors', 'mcp-check.mjs'), 'utf8')}\n// changed\n`)
     execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
     expect(readFileSync(composePath, 'utf8')).toBe(fourth)
+  })
+
+  it('fingerprints the machine connector and the egress proxy too: up -d recreates the workbench, or the proxy alone', () => {
+    const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16)
+    const deploy = join(import.meta.dirname, '..', 'deploy')
+    const root = rootWithEntra()
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    const composePath = join(root, 'opt/mndt/datanalysis/docker-compose.yml')
+    const toolsLine = (compose: string): string => compose.split('\n').find(line => line.includes('MNDT_TOOLS_CODE')) ?? ''
+    const before = readFileSync(composePath, 'utf8')
+    expect(before).toContain(`MNDT_EGRESS_CODE: "${sha(join(deploy, 'sandbox', 'egress-proxy.mjs'))}"`)
+    const copy = mkdtempSync(join(tmpdir(), 'deploy-'))
+    cpSync(deploy, copy, { recursive: true })
+    // The machine connector: an update refreshes it, and recreates the workbench when it changed.
+    writeFileSync(join(copy, 'machine-mcp.mjs'), `${readFileSync(join(deploy, 'machine-mcp.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    const machined = readFileSync(composePath, 'utf8')
+    expect(toolsLine(machined)).not.toBe(toolsLine(before))
+    expect(readFileSync(join(root, 'data/mndt/datanalysis/live/tools/machine-mcp.mjs'), 'utf8')).toContain('// changed')
+    // The egress proxy's code has its own fingerprint: up -d recreates the proxy alone.
+    writeFileSync(join(copy, 'sandbox', 'egress-proxy.mjs'), `${readFileSync(join(deploy, 'sandbox', 'egress-proxy.mjs'), 'utf8')}\n// changed\n`)
+    execFileSync('bash', [join(copy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], { env: { ...process.env, MNDT_ROOT: root } })
+    const egressed = readFileSync(composePath, 'utf8')
+    expect(egressed).toContain(`MNDT_EGRESS_CODE: "${sha(join(copy, 'sandbox', 'egress-proxy.mjs'))}"`)
+    expect(toolsLine(egressed)).toBe(toolsLine(machined))
+    expect(readFileSync(join(root, 'opt/mndt/datanalysis/egress/egress-proxy.mjs'), 'utf8')).toContain('// changed')
+  })
+
+  it('renders the computers: a token outside /state, the members\' folders, EGRESS_DENY with this host\'s addresses and Docker\'s pools, the images named', () => {
+    const root = rootWithEntra()
+    create(root, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--egress-deny', '51.159.161.149', '--pc-image', 'mndt-pc:test', '--machines-image', 'mndt-machines:test')
+    const token = join(root, 'etc/mndt/datanalysis/machines_token')
+    expect(readFileSync(token, 'utf8').trim()).toMatch(/^[0-9a-f]{64}$/)
+    expect((statSync(token).mode & 0o777).toString(8)).toBe('400')
+    const compose = readFileSync(join(root, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8')
+    expect(compose).not.toContain(readFileSync(token, 'utf8').trim())
+    interface Service {
+      image?: string
+      networks?: unknown
+      environment?: Record<string, string>
+      volumes?: string[]
+      container_name?: string
+      user?: string
+      read_only?: boolean
+    }
+    const rendered = load(compose) as { services: Record<string, Service>; networks: Record<string, { internal?: boolean } | null> }
+    const machines = rendered.services.machines
+    expect(machines?.image).toBe('mndt-machines:test')
+    expect(machines?.environment).toMatchObject({
+      MACHINES_PC_ONLY: '1', MNDT_MACHINE_RUNTIME: 'runsc', PC_IMAGE: 'mndt-pc:test', PC_TENANT: 'datanalysis',
+      PC_PREFIX: 'mndt-datanalysis-pc-', PC_NET_PREFIX: 'mndt-datanalysis-pcnet-', DOCKER_HOST: 'tcp://docker-guard:2375', MACHINES_HOST: 'machines-api',
+    })
+    expect(machines?.environment?.MNDT_MACHINE_ALLOW_RUNC).toBeUndefined()
+    expect(JSON.stringify(machines?.volumes)).not.toContain('docker.sock')
+    // The guard: ours, the machines image's other entrypoint, non-root in the socket's group, read-only, no capability.
+    const guard = rendered.services['docker-guard'] as Service & { entrypoint?: string[]; cap_drop?: string[]; security_opt?: string[] }
+    expect(guard.image).toBe('mndt-machines:test')
+    expect(guard.entrypoint).toEqual(['python3', '/app/docker-guard.py'])
+    expect(guard.user).toMatch(/^65534:[1-9][0-9]*$/)
+    expect(guard.read_only).toBe(true)
+    expect(guard.cap_drop).toEqual(['ALL'])
+    expect(guard.environment).toMatchObject({
+      MNDT_GUARD_SPACE: 'datanalysis', MNDT_GUARD_PC_IMAGE: 'mndt-pc:test', MNDT_GUARD_PC_PREFIX: 'mndt-datanalysis-pc-',
+      MNDT_GUARD_NET_PREFIX: 'mndt-datanalysis-pcnet-', MNDT_GUARD_USERS_ROOT: '/data/mndt/datanalysis/live/users', MNDT_GUARD_EGRESS: 'mndt-datanalysis-egress',
+    })
+    expect(guard.volumes).toEqual(['/var/run/docker.sock:/var/run/docker.sock'])
+    expect(rendered.networks['docker-guard-net']?.internal).toBe(true)
+    expect(Object.keys(rendered.services)).not.toContain('docker-proxy')
+    expect(rendered.networks.machines?.internal).toBe(true)
+    const egress = rendered.services.egress
+    expect(egress?.container_name).toBe('mndt-datanalysis-egress')
+    expect(egress?.read_only).toBe(true)
+    const deny = (egress?.environment?.EGRESS_DENY ?? '').split(',')
+    expect(deny).toEqual(expect.arrayContaining([
+      '51.159.161.149', '51.159.151.86', '169.254.0.0/16', '100.64.0.0/10',
+      'fc00::/7', 'fe80::/10', '::1', '172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8',
+    ]))
+    // Only the guard holds the socket.
+    for (const [name, service] of Object.entries(rendered.services)) {
+      if (name !== 'docker-guard') expect(JSON.stringify(service.volumes ?? [])).not.toContain('docker.sock')
+    }
+    expect((statSync(join(root, 'data/mndt/datanalysis/live/users')).mode & 0o777).toString(8)).toBe('711')
+    // Without --egress-deny, the public address comes from the metadata (Scaleway's conf), or nothing is rendered.
+    const metadataRoot = rootWithEntra()
+    mkdirSync(join(metadataRoot, 'run'), { recursive: true })
+    writeFileSync(join(metadataRoot, 'run', 'scaleway-metadata'), "COMMERCIAL_TYPE=PLAY2-NANO\nPUBLIC_IP_ADDRESS='51.159.161.149'\n")
+    create(metadataRoot, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re')
+    expect(readFileSync(join(metadataRoot, 'opt/mndt/datanalysis/docker-compose.yml'), 'utf8')).toMatch(/EGRESS_DENY: "51\.159\.161\.149,/)
+    const blind = rootWithEntra()
+    mkdirSync(join(blind, 'run'), { recursive: true })
+    writeFileSync(join(blind, 'run', 'scaleway-metadata'), 'COMMERCIAL_TYPE=PLAY2-NANO\n')
+    const tenantScript = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
+    const unknown = spawnSync('bash', [tenantScript, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: blind }, encoding: 'utf8',
+    })
+    expect(unknown.status).toBe(1)
+    expect(unknown.stderr).toContain('public address is unknown')
+    // An address that is not public (private, loopback, CGNAT, link-local) is refused too.
+    for (const address of ['10.1.2.3', '127.0.0.1', '100.64.1.1', '169.254.42.42', '192.168.1.1']) {
+      writeFileSync(join(blind, 'run', 'scaleway-metadata'), `PUBLIC_IP_ADDRESS='${address}'\n`)
+      const privateOne = spawnSync('bash', [tenantScript, 'datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+        env: { ...process.env, MNDT_ROOT: blind }, encoding: 'utf8',
+      })
+      expect(privateOne.status, address).toBe(1)
+      expect(privateOne.stderr).toContain('not public')
+    }
+    expect(existsSync(join(blind, 'opt/mndt/datanalysis/docker-compose.yml'))).toBe(false)
+    // A slug holding « -pc » would make its computers' names a prefix of another space's.
+    for (const slug of ['ab-pc', 'ab-pcnet', 'x-pc-y']) {
+      const named = spawnSync('bash', [join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh'), slug, 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--no-docker'], {
+        env: { ...process.env, MNDT_ROOT: rootWithEntra() }, encoding: 'utf8',
+      })
+      expect(named.status, slug).toBe(1)
+      expect(named.stderr).toContain('must not contain « -pc »')
+    }
+    // A value that is not addresses or ranges is refused before anything is written.
+    const script = join(import.meta.dirname, '..', 'deploy', 'create-tenant.sh')
+    const args = ['datanalysis', 'equipe.datanalysis.re', '--owner', 'duke@datanalysis.re', '--egress-deny', 'x;rm', '--no-docker']
+    const refused = spawnSync('bash', [script, ...args], { env: { ...process.env, MNDT_ROOT: root }, encoding: 'utf8' })
+    expect(refused.status).not.toBe(0)
   })
 
   it('replaces each tool atomically: a new file renamed over the old one, mode 0644, no .tmp left', () => {

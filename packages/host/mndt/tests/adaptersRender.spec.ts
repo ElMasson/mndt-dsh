@@ -8,7 +8,7 @@
  * in sight.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
@@ -36,14 +36,15 @@ function home(): { live: string; patch: string } {
   return { live, patch }
 }
 
-const run = (live: string): string => execFileSync('python3', [render], { env: { ...process.env, MNDT_HOME: live }, encoding: 'utf8' })
+const run = (live: string, env: Record<string, string> = {}): string =>
+  execFileSync('python3', [render], { env: { ...process.env, MNDT_HOME: live, ...env }, encoding: 'utf8' })
 
 // Each test starts several python3 processes: on a loaded machine the default
 // 5 s is not a bound on them, so the suite gets the margin of the other
 // script suites.
 describe('connector rows', { timeout: 30_000 }, () => {
   test('the catalog names the servers the core references', () => {
-    expect(servers.sort()).toEqual(['approvals', 'dolibarr', 'office365', 'qonto', 'swing'])
+    expect(servers.sort()).toEqual(['approvals', 'dolibarr', 'machine', 'office365', 'qonto', 'swing'])
   })
 
   test('every catalog connector runs behind the proxy, lists exported after the env file', () => {
@@ -57,10 +58,87 @@ describe('connector rows', { timeout: 30_000 }, () => {
       const allow = script.indexOf('export MCP_PROXY_ALLOW=')
       expect(sourced).toBeGreaterThanOrEqual(0)
       expect(allow).toBeGreaterThan(sourced)
-      expect(script).toContain('exec node /opt/mndt-tools/mcp-proxy.mjs ')
+      // Under Landlock: the launcher, then the proxy and the server after `--`.
+      expect(script).toContain('exec "$L" "$@" -- /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs ')
+      // Its own command by an absolute path too (the catalog), never resolved through PATH.
+      expect(script).toMatch(/mcp-proxy\.mjs \/usr\/(local\/)?bin\/(node|python3) /)
+      // The gateway's secret: to our two connectors that act as a person (the catalog's gatewaySecret), to no other.
+      expect(script.includes('/run/secrets/mndt-gateway')).toBe(['approvals', 'machine'].includes(row.config.serverName))
+      expect(script).not.toContain('mndt-machines')
+      // Of /state, only the catalog's readPaths (the actor's folder) and the MCP auth folder; never /state itself, nor /proc.
+      const reads = /for p in ([^;]*); do \[ -e "\$p" \] && set -- "\$@" --ro/.exec(script)?.[1]?.split(' ') ?? []
+      expect(reads.filter(path => path.startsWith('/state'))).toEqual(['approvals', 'machine', 'office365'].includes(row.config.serverName) ? ['/state/actor'] : [])
+      expect(reads).not.toContain('/proc')
+      expect(reads).not.toContain('/sys')
     }
     const dolibarr = rows.find(row => row.config.serverName === 'dolibarr')!.config.args[1]!
     expect(dolibarr).toContain('export MCP_PROXY_DENY=dolibarr_raw_api;')
+  })
+
+  test('each connector starts under Landlock: its grants, none of /run but the gateway\'s secret for approvals and machine; no launcher, no connector', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'landlock-'))
+    // A fake launcher, named when the block is rendered: prints what it was given, up to `--`, then the command.
+    const fake = join(dir, 'landlock-run')
+    writeFileSync(fake, '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', { mode: 0o755 })
+    const rendered = (env: Record<string, string>) => {
+      const { live, patch } = home()
+      run(live, env)
+      return (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
+    }
+    const started = (rows: ReturnType<typeof rendered>, server: string, env: Record<string, string> = {}) => {
+      const script = rows.find(row => row.config.serverName === server)!.config.args[1]!
+      return spawnSync('sh', ['-c', script], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' })
+    }
+    const rows = rendered({ MNDT_LANDLOCK_RUN: fake })
+    for (const server of servers) {
+      // The connector's own environment cannot switch Landlock off nor name another launcher.
+      const out = started(rows, server, { MNDT_CONNECTOR_LANDLOCK: 'off', MNDT_LANDLOCK_RUN: '/bin/true' })
+      const args = out.stdout.split('\n')
+      const until = args.indexOf('--')
+      const grants = args.slice(0, until)
+      expect(until).toBeGreaterThan(0)
+      expect(grants).toContain('/usr')
+      expect(grants.filter(arg => arg.startsWith('/run'))).toEqual(['approvals', 'machine'].includes(server) ? ['/run/secrets/mndt-gateway'].filter(path => existsSync(path)) : [])
+      expect(grants.join(' ')).not.toMatch(/mndt-machines|mndt-launch/)
+      const writable = grants.flatMap((arg, i) => (arg === '--rw' ? [grants[i + 1]] : []))
+      expect(writable.every(path => path === '/tmp' || path === '/state/mcp-auth' || path === '/dev/null')).toBe(true)
+      expect(writable).toContain('/dev/null')
+      expect(args.slice(until + 1, until + 3)).toEqual(['/usr/local/bin/node', '/opt/mndt-tools/mcp-proxy.mjs'])
+    }
+    // No launcher: refused, said, nothing started.
+    const refused = started(rendered({ MNDT_LANDLOCK_RUN: join(dir, 'absent') }), 'office365')
+    expect(refused.status).toBe(126)
+    expect(refused.stderr).toContain('connector refused: no landlock-run')
+    // Off only when the block is rendered so (a workstation without the image): the command itself.
+    const plain = rendered({ MNDT_CONNECTOR_LANDLOCK: 'off' })
+    const script = plain.find(row => row.config.serverName === 'office365')!.config.args[1]!
+    expect(script).not.toContain('landlock')
+    expect(script).toContain('exec /usr/local/bin/node /opt/mndt-tools/mcp-proxy.mjs ')
+  })
+
+  test('a descriptor\'s env cannot set mndt\'s own variables, a preload, node\'s options nor the PATH, unless it is the catalog\'s own value', () => {
+    for (const [key, value] of [['MNDT_CONNECTOR_LANDLOCK', 'off'], ['MNDT_LANDLOCK_RUN', '/bin/true'], ['LD_PRELOAD', '/tmp/x.so'], ['NODE_OPTIONS', '--require /tmp/x.js'],
+      ['PATH', '/tmp'], ['MNDT_GATEWAY_SECRET_FILE', '/run/secrets/mndt-gateway']] as const) {
+      const { live } = home()
+      writeFileSync(join(live, 'connectors', 'office365.json'), JSON.stringify({ serverName: 'office365', ...catalog.office365, env: { ...(catalog.office365?.env as object), [key]: value } }))
+      const refused = spawnSync('python3', [render], { env: { ...process.env, MNDT_HOME: live }, encoding: 'utf8' })
+      expect(refused.status, key).not.toBe(0)
+      expect(refused.stderr, key).toContain(`env key ${key} is not allowed`)
+    }
+    // The catalog's own values (approvals' gateway secret file, its actor file) render.
+    const { live } = home()
+    expect(() => run(live)).not.toThrow()
+  })
+
+  test('a descriptor that names itself like one of ours, with another command, gets none of its rights', () => {
+    const { live, patch } = home()
+    writeFileSync(join(live, 'connectors', 'machine.json'), JSON.stringify({ serverName: 'machine', command: ['node', '/tmp/not-ours.mjs'], allow: ['machine_*'] }))
+    run(live)
+    const rows = (yaml.load(readFileSync(patch, 'utf8')) as Row[]).flatMap(row => row.insert ?? [])
+    const script = rows.find(row => row.config.serverName === 'machine')!.config.args[1]!
+    expect(script).toContain('/tmp/not-ours.mjs')
+    expect(script).not.toContain('/run/secrets/mndt-gateway')
+    expect(script).not.toContain('/state/actor')
   })
 
   test('a rerender keeps the own rows and does not pile up markers', () => {

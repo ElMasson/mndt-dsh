@@ -28,7 +28,20 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-TOKEN = os.environ.get('MACHINES_TOKEN', '')
+def _token():
+    """@returns the machine service's token: from its file (MACHINES_TOKEN_FILE, outside
+    the compose and /state), else from MACHINES_TOKEN (tests), else empty (refused at start)."""
+    path = os.environ.get('MACHINES_TOKEN_FILE', '')
+    if path != '':
+        try:
+            with open(path, 'r', encoding='utf-8') as handle:
+                return handle.read().strip()
+        except OSError:
+            return ''
+    return os.environ.get('MACHINES_TOKEN', '')
+
+
+TOKEN = _token()
 SHELLS_ROOT = os.environ.get('SHELLS_ROOT', '/state/shells')
 # As for captures, Docker resolves a bind source on the host, not in this container.
 SHELLS_ROOT_HOST = os.environ.get('SHELLS_ROOT_HOST', SHELLS_ROOT)
@@ -325,6 +338,24 @@ MAX_PCS = int(os.environ.get('MNDT_MACHINE_MAX', '4'))
 IDLE_SECONDS = int(os.environ.get('MNDT_MACHINE_IDLE_SECONDS', '900'))
 REAP_SECONDS = float(os.environ.get('MNDT_MACHINE_REAP_SECONDS', '30'))
 PC_LABEL = 'mndt.member'
+# The space these computers belong to: its computers, its networks and its four
+# places, never another space's on the same host (mndt.tenant=<space>).
+PC_TENANT = os.environ.get('PC_TENANT', '')
+PC_TENANT_LABEL = 'mndt.tenant'
+PC_PREFIX = os.environ.get('PC_PREFIX', 'mndt-pc-')
+PC_NET_PREFIX = os.environ.get('PC_NET_PREFIX', 'mndt-pc-net-')
+# A team space's sidecar (tenant compose): the members' computers only. The
+# older surfaces (a capture, a session browser or desktop, a member's shell)
+# run other images with other mounts; refused there, they never reach the host
+# through this service's hand on Docker.
+PC_ONLY = os.environ.get('MACHINES_PC_ONLY', '') == '1'
+LEGACY_GET = ('/shells/ensure', '/sessions')
+LEGACY_POST = ('/browsers/start', '/browsers/stop', '/desktops/start', '/desktops/stop', '/capture')
+
+
+def tenant_labels():
+    """@returns the labels every computer and network of this space carries."""
+    return ['--label', PC_TENANT_LABEL + '=' + PC_TENANT] if PC_TENANT != '' else []
 
 _PCS_LOCK = threading.Lock()
 # One start at a time: counting the running computers and starting one is one step.
@@ -345,11 +376,11 @@ def member_key(identity):
 
 
 def pc_name(identity):
-    return 'mndt-pc-' + member_key(identity)
+    return PC_PREFIX + member_key(identity)
 
 
 def pc_network(identity):
-    return 'mndt-pc-net-' + member_key(identity)
+    return PC_NET_PREFIX + member_key(identity)
 
 
 def iso(epoch):
@@ -358,7 +389,8 @@ def iso(epoch):
 
 def running_pcs():
     """@returns the members whose computer runs, from Docker itself (it survives a restart of this service)."""
-    result = docker('ps', '--filter', 'label=' + PC_LABEL, '--format', '{{.Label "' + PC_LABEL + '"}}')
+    space = ['--filter', 'label=' + PC_TENANT_LABEL + '=' + PC_TENANT] if PC_TENANT != '' else []
+    result = docker('ps', '--filter', 'label=' + PC_LABEL, *space, '--format', '{{.Label "' + PC_LABEL + '"}}')
     return [line.strip() for line in (result.stdout or '').splitlines() if line.strip() != '']
 
 
@@ -385,6 +417,19 @@ def touch_pc(identity):
     with _PCS_LOCK:
         if identity in _PCS:
             _PCS[identity]['lastUsed'] = time.time()
+
+
+def egress_address(network):
+    """@returns the egress proxy's IPv4 address on a computer's network, or its
+    name when Docker does not say (a test's fake, an older Docker): the name
+    works under runc, the address under both."""
+    result = docker('inspect', '-f', '{{(index .NetworkSettings.Networks "' + network + '").IPAddress}}', EGRESS_PROXY)
+    address = (result.stdout or '').strip() if result.returncode == 0 else ''
+    try:
+        ipaddress.IPv4Address(address)
+        return address
+    except ValueError:
+        return EGRESS_PROXY
 
 
 def start_pc(identity):
@@ -416,9 +461,14 @@ def _start_pc(identity):
     network = pc_network(identity)
     # An internal network: no route out but the proxy, attached to it below.
     if docker('network', 'inspect', network).returncode != 0:
-        docker('network', 'create', '--internal', '--label', PC_LABEL + '=' + identity, network)
+        docker('network', 'create', '--internal', '--label', PC_LABEL + '=' + identity, *tenant_labels(), network)
     docker('network', 'connect', network, EGRESS_PROXY)
     home = os.path.join(USERS_ROOT, member_key(identity))
+    # The proxy by its address on this computer's network, not by its name:
+    # under gVisor the computer's own network stack does not reach Docker's
+    # embedded DNS (127.0.0.11, served through the host's iptables), so a name
+    # never resolves there (proved on mndt-repetition, 26/11: curl exit 5).
+    proxy_host = egress_address(network)
     os.makedirs(home, exist_ok=True)
     try:
         os.chown(home, PC_UID, PC_UID)
@@ -429,11 +479,12 @@ def _start_pc(identity):
     # the machine service's token never enters a computer.
     agent_token = secrets.token_hex(16)
     docker('rm', '-f', name)
-    proxy = 'http://' + EGRESS_PROXY + ':' + str(EGRESS_PORT)
+    proxy = 'http://' + proxy_host + ':' + str(EGRESS_PORT)
     result = docker(
         'run', '-d', '--name', name,
         '--runtime', PC_RUNTIME,
         '--label', PC_LABEL + '=' + identity,
+        *tenant_labels(),
         '--network', network,
         '--read-only',
         '--tmpfs', '/tmp:' + TMPFS_FLAGS + ',size=1g',
@@ -559,7 +610,11 @@ def act_pc(identity, kind, body):
                 'stderr': stderr,
                 'truncated': clipped,
             }
-        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', name, 'node', '/app/pc-call.mjs', kind],
+        # Bounded inside the computer too (80 s, under this service's 90 s): past
+        # it, the call dies there, not only its docker exec client here.
+        # As the member, said (the Docker guard refuses an exec whose user is not 1000).
+        code, out, err, clipped = run_bounded(['docker', 'exec', '-i', '-u', str(PC_UID) + ':' + str(PC_UID), name,
+                                               'timeout', '-k', '2', '80', 'node', '/app/pc-call.mjs', kind],
                                               timeout=90, limit=PC_MAX_ANSWER, stdin=json.dumps(body))
         lines = [line for line in out.splitlines() if line.strip() != '']
         try:
@@ -652,6 +707,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authorised():
             return self.reply(403, {'error': 'a machine token is required'})
+        if PC_ONLY and urlparse(self.path).path in LEGACY_GET:
+            return self.reply(404, {'error': 'unknown path'})
         if self.path == '/health':
             return self.reply(200, {'ok': True, 'image': IMAGE})
         if self.path.startswith('/shells/ensure'):
@@ -684,6 +741,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b'{}')
         except (ValueError, TypeError):
             return self.reply(400, {'error': 'a JSON body is required'})
+        if PC_ONLY and urlparse(self.path).path in LEGACY_POST:
+            return self.reply(404, {'error': 'unknown path'})
         identity = str(body.get('identity', '')).strip().lower()
         if not IDENTITY.match(identity):
             return self.reply(400, {'error': 'identity must be an email address'})

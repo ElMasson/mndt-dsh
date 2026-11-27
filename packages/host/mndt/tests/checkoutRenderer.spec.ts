@@ -43,7 +43,7 @@ describe('the checkout renderer, never a stale installed copy', { timeout: 60_00
     expect(existsSync(join(live, 'STALE-RENDERER-RAN'))).toBe(false)
     expect(readFileSync(installed, 'utf8')).toBe(readFileSync(join(deploy, 'connectors', 'render-connectors.py'), 'utf8'))
     const rows = load(readFileSync(patch, 'utf8')) as { insert?: { id: string }[] }[]
-    expect(rows.flatMap(row => row.insert ?? []).map(row => row.id)).toEqual(['mcp-approvals'])
+    expect(rows.flatMap(row => row.insert ?? []).map(row => row.id)).toEqual(['mcp-approvals', 'mcp-machine'])
   })
 
   it('mount-connector.sh, without RENDER_SCRIPT, renders with the checkout it belongs to', () => {

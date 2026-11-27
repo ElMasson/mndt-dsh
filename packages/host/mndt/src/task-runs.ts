@@ -26,7 +26,7 @@ import type { Agent, Channel, Message, PriceGrid, Schedule, WorkbenchService, Wo
 import type { GrantSource, GrantTable } from './policy.ts'
 import { turnFailure } from './public-failure.ts'
 import { reservedFor, reserveSpend } from './spend-reservations.ts'
-import { channelFolder } from './turns.ts'
+import { channelFolder, RouteUnreachable } from './turns.ts'
 import type { TurnEngine } from './turns.ts'
 
 /** How late a slot may still run; an older one is missed. */
@@ -250,6 +250,7 @@ export class TaskScheduler {
     const started = this.#now()
     const startedAt = started.toISOString()
     let release = (): void => undefined
+    let agentId: string | undefined
     try {
       // Read again under a write: still active, not deleted. Otherwise nothing runs.
       const schedule = await service.confirmScheduleRun(id)
@@ -265,6 +266,7 @@ export class TaskScheduler {
         return
       }
       const agent = gone.agent
+      agentId = agent.id
       const channel = destinationOf(schedule, state)
       if (channel === undefined) throw new Error('its destination is gone')
       // Its agent's monthly ceiling: what was spent, plus what its turns and runs
@@ -310,6 +312,8 @@ export class TaskScheduler {
         budget: { eur: schedule.eurPerRun, price },
         signal: new AbortController().signal,
       })
+      // Its agent's route answered: its unreachable mark, if any, is lifted (turns.ts).
+      await service.clearRouteUnreachable(agent.id)
       const eur = output.tokens === undefined ? undefined : eurOf(output.tokens, price)
       const text = output.text.trim()
       await service.publishScheduleRun(id, {
@@ -322,6 +326,8 @@ export class TaskScheduler {
         ...(output.toolsUnavailable === undefined ? {} : { toolsUnavailable: output.toolsUnavailable }),
       })
     } catch (error) {
+      // Its agent's route could not be reached: marked, as after a turn (Agent.routeUnreachable).
+      if (error instanceof RouteUnreachable && agentId !== undefined) await service.noteRouteFailure(agentId)
       // The engine's or a provider's words go to the operator's log; the destination reads the host's sentence.
       const failed = turnFailure(error, warn, `task ${id} (run ${runId})`)
       await service.publishScheduleRun(id, { runId, text: failed.reason, status: 'failed', startedAt, reasonKind: failed.kind })

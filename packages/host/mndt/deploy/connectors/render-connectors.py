@@ -43,6 +43,57 @@ ENV_NAME = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 FILE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+\*?$')
 MODULE = '@deepseek-ai/dsh-mcp-client'
+# Every connector runs under Landlock (the workbench image's landlock-run): it
+# reads the system, the image and its tools, writes its temp and the MCP auth
+# folder, and reads nothing else: not /state (state.json, the role table, the
+# other connectors' secrets), not /proc (the workbench's environment), not
+# /run (the machine service's token, the gateway's secret, the shell's launch
+# token). What else a connector reads comes from the versioned catalog only
+# (its readPaths; gatewaySecret: the gateway's secret, for approvals and
+# machine), and only for a descriptor whose command is the catalog's: a
+# descriptor that names itself `machine` with another command gets nothing.
+# A workbench without the launcher starts no connector.
+LANDLOCK_DEFAULT = '/app/native/system/packages/linux-$(uname -m | sed -e s/x86_64/x64/ -e s/aarch64/arm64/)/bin/landlock-run'
+# The workbench image's node, by its path: the proxy that wraps each connector
+# never depends on what PATH says when the connector starts.
+NODE = '/usr/local/bin/node'
+# What a descriptor's `env` may never set (a library to preload, node's or the
+# loader's options, the PATH, or anything of mndt's own, Landlock's switch
+# included), unless it is the very value the catalog sets for its own command.
+FORBIDDEN_ENV = re.compile(r'^(MNDT_|LD_|DYLD_)|^(NODE_OPTIONS|NODE_PATH|PATH|BASH_ENV|ENV)$')
+READ_ROOTS = ('/usr', '/lib', '/lib64', '/bin', '/sbin', '/etc', '/app', '/opt/mndt-tools',
+              '/dev/zero', '/dev/urandom', '/dev/random')
+# /dev/null written too: a connector, or a child it starts, discards output there
+# (proved by the eighth jump's rehearsal: read-only, a redirection failed).
+WRITE_ROOTS = ('/tmp', '/state/mcp-auth', '/dev/null')
+GATEWAY_SECRET = '/run/secrets/mndt-gateway'
+STATE_PATH = re.compile(r'^/state/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$')
+
+
+def load_catalog():
+    """@returns the versioned catalog beside this renderer (CONNECTOR_CATALOG), or {} when there is none."""
+    path = os.environ.get('CONNECTOR_CATALOG') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'catalog.json')
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def catalog_entry(server, command):
+    """@returns the catalog's entry for a server, only when the descriptor runs the catalog's own command; else {}."""
+    entry = load_catalog().get(server)
+    return entry if isinstance(entry, dict) and entry.get('command') == command else {}
+
+
+def catalog_grants(server, command):
+    """@returns (paths a connector may read beyond the roots, whether it reads the gateway's secret):
+    the catalog's, only when the descriptor runs the catalog's own command."""
+    entry = catalog_entry(server, command)
+    if not entry:
+        return [], False
+    paths = [path for path in (entry.get('readPaths') or []) if isinstance(path, str) and STATE_PATH.match(path)]
+    return paths, entry.get('gatewaySecret') is True
 
 
 def load_patchfile():
@@ -91,9 +142,12 @@ def script_for(data, server):
         script += f'if [ -f {path} ]; then set -a; . {path}; set +a; fi; '
     if not isinstance(env, dict):
         raise ValueError(f'{server}: env must be an object')
+    catalog_env = catalog_entry(server, command).get('env') or {}
     for key, value in env.items():
         if not ENV_NAME.match(key) or key.startswith('MCP_PROXY_'):
             raise ValueError(f'{server}: env key {key} is not allowed')
+        if FORBIDDEN_ENV.match(key) and (key in ('MNDT_CONNECTOR_LANDLOCK', 'MNDT_LANDLOCK_RUN') or catalog_env.get(key) != value):
+            raise ValueError(f'{server}: env key {key} is not allowed in a descriptor (only the catalog sets it, for its own command)')
         script += f'export {key}={shlex.quote(str(value))}; '
     if cwd:
         script += f'cd {shlex.quote(cwd)}; '
@@ -101,8 +155,33 @@ def script_for(data, server):
     if allow:
         script += f'export MCP_PROXY_ALLOW={shlex.quote(",".join(allow))}; '
         script += f'export MCP_PROXY_DENY={shlex.quote(",".join(deny))}; '
-        words = ['node', shlex.quote(PROXY_IN_CONTAINER)] + words
-    return script + 'exec ' + ' '.join(words)
+        words = [shlex.quote(NODE), shlex.quote(PROXY_IN_CONTAINER)] + words
+    return script + confined(*catalog_grants(server, command)) + ' '.join(words)
+
+
+def confined(paths, gateway):
+    """@param paths - what the connector reads beyond the roots (its catalog readPaths).
+    @param gateway - whether it reads the gateway's secret (its catalog says so).
+    @returns the shell that ends a connector's script: its Landlock grants (the
+    paths that exist), then `exec` of the launcher, which runs the command after
+    `--`. Decided here, when the block is rendered, never by the connector's own
+    environment (its env file is sourced before, and could say anything):
+    MNDT_CONNECTOR_LANDLOCK=off at render time (a workstation without the image)
+    renders the command as it is; MNDT_LANDLOCK_RUN at render time names another
+    launcher (tests). A missing launcher refuses the connector, said on stderr."""
+    if os.environ.get('MNDT_CONNECTOR_LANDLOCK') == 'off':
+        return 'exec '
+    launcher = os.environ.get('MNDT_LANDLOCK_RUN')
+    reads = list(READ_ROOTS) + list(paths) + ([GATEWAY_SECRET] if gateway else [])
+    grants = ' '.join(shlex.quote(path) for path in reads)
+    writes = ' '.join(shlex.quote(path) for path in WRITE_ROOTS)
+    return (
+        'L=' + (shlex.quote(launcher) if launcher else LANDLOCK_DEFAULT) + '; '
+        '[ -x "$L" ] || { echo "connector refused: no landlock-run at $L" >&2; exit 126; }; '
+        f'set --; for p in {grants}; do [ -e "$p" ] && set -- "$@" --ro "$p"; done; '
+        f'for p in {writes}; do [ -e "$p" ] && set -- "$@" --rw "$p"; done; '
+        'exec "$L" "$@" -- '
+    )
 
 
 def load_descriptors():

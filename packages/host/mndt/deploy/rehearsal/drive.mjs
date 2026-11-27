@@ -104,7 +104,18 @@ const unknownCardTools = deployedAllow.filter(tool => !KNOWN_CARD_TOOLS.includes
 check('turn-tools-catalog', deployedAllow.length > 0, `${catalogPath ?? 'no MNDT_REHEARSAL_CATALOG'}: approvals allow ${JSON.stringify(deployedAllow)}`)
 if (unknownCardTools.length > 0) check('turn-tools-unknown', false, `the deployed catalog opens card tools this harness does not know: ${JSON.stringify(unknownCardTools)}`)
 const APPROVALS = deployedAllow.filter(tool => KNOWN_CARD_TOOLS.includes(tool)).map(tool => `mcp__approvals__${tool}`).sort()
-const EXPECTED = { '-': APPROVALS, tour: APPROVALS, mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts'].sort() }
+// The machine connector (« Mon ordinateur », eighth jump), in computer mode: its
+// 16 tools, exactly, offered to the owner's mission when the deployed catalog
+// mounts it; never to a channel turn without that connector.
+const MACHINE_TOOLS = ['await_approval', 'browser_click', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_submit', 'browser_type', 'close',
+  'desktop_click', 'desktop_key', 'desktop_open', 'desktop_screenshot', 'desktop_submit', 'desktop_type', 'request_approval', 'terminal_run']
+  .map(tool => `mcp__machine__machine_${tool}`)
+let deployedMachine = false
+try { deployedMachine = JSON.parse(readFileSync(catalogPath ?? '', 'utf8')).machine !== undefined } catch { deployedMachine = false }
+const EXPECTED = {
+  '-': APPROVALS, tour: APPROVALS,
+  mission: [...APPROVALS, 'mcp__workbench_facts__workbench_facts', ...(deployedMachine ? MACHINE_TOOLS : [])].sort(),
+}
 const witness = () => docker('exec', `${project}-workbench`, 'sh', '-c', 'find /state /tmp -name policy-witness.txt 2>/dev/null | head -3')
 
 /** @param text - a message asking for the probe. @returns the turn of that message, once settled. */

@@ -10,11 +10,32 @@ STATE=${DSH_HOME:-/state/home}
 # Inside a bridge network the shell must bind the interface address: a wildcard is
 # rejected and the loopback is unreachable from the front.
 WEB_BIND=${WEB_HOST:-}
+# A container on several networks (a team tenant: front and machines): the
+# address of the name it carries on the gateway's network only.
+# No fallback when it does not resolve: `hostname -i` could name the other
+# network, and every page would answer 502 with no word of why.
+if [ -z "$WEB_BIND" ] && [ -n "${WEB_HOST_ALIAS:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    WEB_BIND=$(getent hosts "$WEB_HOST_ALIAS" 2>/dev/null | awk "{print \$1}" | head -1)
+    [ -n "$WEB_BIND" ] && break
+    sleep 1
+  done
+  if [ -z "$WEB_BIND" ]; then
+    echo "workbench: WEB_HOST_ALIAS « $WEB_HOST_ALIAS » does not resolve (getent hosts): the shell would not know its network; stopping" >&2
+    exit 1
+  fi
+fi
 if [ -z "$WEB_BIND" ]; then
   WEB_BIND=$(hostname -i 2>/dev/null | awk "{print \$1}")
 fi
 [ -n "$WEB_BIND" ] || WEB_BIND=127.0.0.1
 mkdir -p "$STATE"
+# The folder of the running turn's actor, there before any connector starts:
+# each connector runs under Landlock and reads this folder only if it exists
+# then (render-connectors.py).
+# On a tenant it succeeds (root, /state mounted); where /state cannot be written
+# (a test of this script) it is skipped, and the API creates it at the first run.
+mkdir -p "$(dirname "${MNDT_MISSION_ACTOR_FILE:-/state/actor/mission-actor.json}")" 2>/dev/null || true
 # The shell prints its launch token in this log: on a team tenant it lives with
 # the published token, outside /state (DSH_MNDT_WEB_LOG).
 LOG="${DSH_MNDT_WEB_LOG:-$STATE/web.log}"

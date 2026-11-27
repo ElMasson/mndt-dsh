@@ -117,6 +117,11 @@ services:
       DSH_MNDT_GRANTS_FILE: /state/grants.json
       # A message never decides: the approvals connector never offers decide_approval.
       MNDT_APPROVALS_ALLOW_DECIDE: "0"
+      # The shell's address: its name on the front network only.
+      WEB_HOST_ALIAS: workbench-front
+      # The machine service: the members' computers (« Mon ordinateur »).
+      MNDT_MACHINES_URL: http://machines-api:8796
+      MACHINES_TOKEN_FILE: /run/secrets/mndt-machines
       PUBLIC_URL: https://__DOMAIN__/
       TRUSTED_HOST: __DOMAIN__
     command: ["sh", "/opt/mndt-tools/workbench-entrypoint.sh"]
@@ -125,9 +130,105 @@ services:
       - __DATA__/tools:/opt/mndt-tools:ro
       - __DATA__/mcp-auth:/state/mcp-auth
       - __CONF__/gateway_secret:/run/secrets/mndt-gateway:ro
+      # The machine service's token, outside /state (an agent's sandbox reads
+      # neither /state nor /run): the API alone asks the sidecar for a computer.
+      - __CONF__/machines_token:/run/secrets/mndt-machines:ro
       - launch:/run/mndt-launch
     networks:
-      - front
+      # The shell binds its address on this network (WEB_HOST_ALIAS, resolved by
+      # the entrypoint): with two networks, `hostname -i` may name the other one,
+      # which the gateway cannot reach.
+      front:
+        aliases: [workbench-front]
+      machines: {}
+    restart: unless-stopped
+
+  # « Mon ordinateur »: the members' computers, one each, under gVisor. The
+  # sidecar builds every `docker run` itself (no request field reaches a flag)
+  # and serves only the computers (MACHINES_PC_ONLY): no capture, no session
+  # browser or desktop, no shell. It listens on the machines network only. It
+  # runs as root in its own container (no socket, no capability needed beyond
+  # handing each member's folder to uid 1000); Docker answers it only through
+  # the guard.
+  machines:
+    image: __MACHINES_IMAGE__
+    environment:
+      MACHINES_TOKEN_FILE: /run/secrets/mndt-machines
+      MACHINES_HOST: machines-api
+      MACHINES_PORT: "8796"
+      MACHINES_PC_ONLY: "1"
+      MNDT_MACHINE_RUNTIME: runsc
+      PC_IMAGE: __PC_IMAGE__
+      # This space's computers, networks and places, never another space's on the host.
+      PC_TENANT: __SLUG__
+      PC_PREFIX: mndt-__SLUG__-pc-
+      PC_NET_PREFIX: mndt-__SLUG__-pcnet-
+      USERS_ROOT: /users
+      # Docker resolves a bind on the host: the same folder, by its host path.
+      USERS_ROOT_HOST: __DATA__/users
+      EGRESS_PROXY: mndt-__SLUG__-egress
+      EGRESS_PORT: "3128"
+      DOCKER_HOST: tcp://docker-guard:2375
+    volumes:
+      - __CONF__/machines_token:/run/secrets/mndt-machines:ro
+      - __DATA__/users:/users
+    networks:
+      machines:
+        aliases: [machines-api]
+      docker-guard-net: {}
+    depends_on:
+      - docker-guard
+      - egress
+    restart: unless-stopped
+
+  # The machine service's only way to Docker: our own guard (sandbox/docker-guard.py),
+  # which relays only what this space's computers need, every request checked
+  # (the computer's image under runsc, the space's label, names and network,
+  # one bind under the members' folders; acts only on the space's containers;
+  # the egress proxy the only container that joins a computer's network), and
+  # answers 403 to everything else. Non-root, in the socket's group, read-only,
+  # without capabilities, on a network only the machine service joins.
+  docker-guard:
+    image: __MACHINES_IMAGE__
+    entrypoint: ["python3", "/app/docker-guard.py"]
+    user: "65534:__DOCKER_GID__"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      MNDT_GUARD_SPACE: __SLUG__
+      MNDT_GUARD_PC_IMAGE: __PC_IMAGE__
+      MNDT_GUARD_PC_PREFIX: mndt-__SLUG__-pc-
+      MNDT_GUARD_NET_PREFIX: mndt-__SLUG__-pcnet-
+      MNDT_GUARD_USERS_ROOT: __DATA__/users
+      MNDT_GUARD_EGRESS: mndt-__SLUG__-egress
+    volumes:
+      # The socket itself: Docker's API is read and written through it (a `:ro`
+      # on a socket protects nothing). The guard is what bounds it.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - docker-guard-net
+    restart: unless-stopped
+
+  # The computers' only way out: the public web over HTTP and HTTPS. The sidecar
+  # attaches it to each computer's internal network (its fixed name). Refused:
+  # every private, local and metadata address, and EGRESS_DENY (this host's
+  # addresses, Docker's address pools), resolved once and checked.
+  egress:
+    image: node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    container_name: mndt-__SLUG__-egress
+    command: ["node", "/opt/egress/egress-proxy.mjs"]
+    user: "1000:1000"
+    read_only: true
+    environment:
+      EGRESS_PORT: "3128"
+      EGRESS_DENY: "__EGRESS_DENY__"
+      # The fingerprint of egress-proxy.mjs (create-tenant.sh): `up -d` recreates the proxy when its code changed.
+      MNDT_EGRESS_CODE: "__EGRESS_CODE__"
+    volumes:
+      - __APP__/egress:/opt/egress:ro
+    networks:
+      - egress-out
     restart: unless-stopped
 volumes:
   # The shell's launch token, shared by the workbench (writes) and the gateway (reads).
@@ -140,3 +241,11 @@ networks:
   edge:
     external: true
     name: __TRAEFIK_NETWORK__
+  # The API and the sidecar: nothing else reaches the machine service.
+  machines:
+    internal: true
+  # The machine service and its Docker guard only.
+  docker-guard-net:
+    internal: true
+  # The egress proxy's own way to the web; the computers never join it.
+  egress-out: {}

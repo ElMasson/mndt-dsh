@@ -6,14 +6,21 @@
  * duration of a run and removes it afterwards, and missions run one at a time so
  * that a tool call can never read another mission's actor.
  */
-import { readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { TurnToolRefusal } from './core/index.ts'
 
-/** Where the record lives; the machine connector is configured from this path. */
-export const actorFilePath = (): string => process.env.MNDT_MISSION_ACTOR_FILE ?? '/state/mission-actor.json'
+/**
+ * Where the record lives; the connectors are configured from this path. In a
+ * folder of its own: each connector runs under Landlock and may read that
+ * folder, never the rest of /state (a grant on the file itself would not
+ * survive the file's removal after each run).
+ */
+export const actorFilePath = (): string => process.env.MNDT_MISSION_ACTOR_FILE ?? '/state/actor/mission-actor.json'
 
 /** @param actor - who the running mission acts for. @param missionId - the mission id. */
 export async function publishActor(actor: string, missionId: string): Promise<void> {
+  await mkdir(dirname(actorFilePath()), { recursive: true })
   await writeFile(actorFilePath(), JSON.stringify({ actor, missionId }), 'utf8')
 }
 

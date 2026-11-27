@@ -25,21 +25,31 @@
 #   --org-name <name>          the organisation the team screen names (default: the slug in capitals)
 #   --env <prod|preprod>       the environment the team screen shows, when declared
 #   --image <image>            the workbench image (default: mndt-workbench:local)
+#   --machines-image <image>   the machine service's image (default: mndt-machines:local, build-machines.sh)
+#   --pc-image <image>         a member's computer's image (default: mndt-pc:local, build-machines.sh)
+#   --egress-deny <a,b/n>      the instance's public address, and any more addresses or
+#                              ranges the computers never reach (default: the public
+#                              address from the host's Scaleway metadata; without
+#                              either, nothing is rendered)
 #   --no-docker                render and install the files, start nothing
 # Environment: MNDT_ROOT prefixes every absolute path (tests render into a temporary root).
 set -euo pipefail
 
-usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
 
 [ $# -ge 2 ] || usage
 slug=$1; domain=$2; shift 2
 [[ $slug =~ ^[a-z0-9][a-z0-9-]{1,31}$ ]] || { echo "the slug is lower case, digits and dashes: $slug" >&2; exit 1; }
+# Its computers are named mndt-<slug>-pc-… and their networks mndt-<slug>-pcnet-…:
+# a slug holding « -pc » would make one space's names a prefix of another's.
+[[ $slug != *-pc* ]] || { echo "the slug must not contain « -pc » (its computers' names would read as another space's): $slug" >&2; exit 1; }
 [[ $domain =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "not a domain: $domain" >&2; exit 1; }
 
 owner=''; email_domains=''; entra_tenant='5ed9c3e0-522a-46fa-978a-dd6bc245d710'
 client_id=''; client_secret_file=/etc/oauth2-proxy/client_secret; client_conf=/etc/oauth2-proxy/governance.cfg
 traefik_network=traefik; trusted_proxy=172.16.0.0/12; image=mndt-workbench:local; docker=1
 org_name=''; env_name=''
+machines_image=mndt-machines:local; pc_image=mndt-pc:local; egress_extra=''
 while [ $# -gt 0 ]; do
   case $1 in
     --owner) owner=$2; shift 2 ;;
@@ -51,6 +61,9 @@ while [ $# -gt 0 ]; do
     --traefik-network) traefik_network=$2; shift 2 ;;
     --trusted-proxy) trusted_proxy=$2; shift 2 ;;
     --image) image=$2; shift 2 ;;
+    --machines-image) machines_image=$2; shift 2 ;;
+    --pc-image) pc_image=$2; shift 2 ;;
+    --egress-deny) egress_extra=$2; shift 2 ;;
     --org-name) org_name=$2; shift 2 ;;
     --env) env_name=$2; shift 2 ;;
     --no-docker) docker=0; shift ;;
@@ -69,6 +82,9 @@ if [ ${#org_name} -gt 60 ] || [[ $org_name == *[\|\"\\\&\$\`]* ]] || [[ $org_nam
   echo "--org-name: 60 characters at most, without | \" \\ & \$ \` or control characters" >&2; exit 1
 fi
 [ -z "$env_name" ] || [[ $env_name =~ ^(prod|preprod)$ ]] || { echo "--env is prod or preprod: $env_name" >&2; exit 1; }
+for name in "$image" "$machines_image" "$pc_image"; do
+  [[ $name =~ ^[a-z0-9][a-z0-9._/:@-]{0,254}$ ]] || { echo "not an image name: $name" >&2; exit 1; }
+done
 
 root=${MNDT_ROOT:-}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -82,11 +98,47 @@ if [ -z "$root" ] && [ "$(id -u)" != 0 ]; then
   echo "refused: run create-tenant.sh as root; nothing was written" >&2; exit 1
 fi
 
+# What the computers never reach, beyond every private, local and metadata
+# address the egress proxy refuses by itself, named here all the same: this
+# instance's public address (NATed at Scaleway, so absent from `hostname -I`:
+# read from the host's metadata, or given by --egress-deny; without it nothing
+# is rendered), its interfaces' addresses, the H100 (the agents' model server),
+# the link-local and shared ranges, the IPv6 local ranges, and Docker's default
+# address pools (a compose network's subnet is drawn from them at `up`, after
+# this script). Each item an address or a range; the proxy refuses to start on
+# anything else.
+public_ip=''
+if [ -z "$egress_extra" ]; then
+  # A test root (MNDT_ROOT) reads its metadata from a file it may plant
+  # ($root/run/scaleway-metadata); without one, the documentation address
+  # stands in, said. The instance always asks its metadata, and refuses.
+  test_root=${MNDT_ROOT:-}
+  if [ -n "$test_root" ]; then metadata="file://$test_root/run/scaleway-metadata"; else metadata=http://169.254.42.42/conf; fi
+  public_ip=$( { curl -s -m 3 "$metadata" 2>/dev/null || true; } | sed -n 's/^PUBLIC_IP_ADDRESS=//p' | head -1 | tr -d "'\"[:space:]")
+  stand_in=0
+  if [ -n "$test_root" ] && [ ! -e "$test_root/run/scaleway-metadata" ]; then
+    public_ip=203.0.113.1; stand_in=1; echo "  test root: the instance's public address stands as 203.0.113.1 (no $test_root/run/scaleway-metadata)"
+  fi
+  # A public address only: a private, loopback, shared (CGNAT) or link-local
+  # one would read as the instance's and leave its real address reachable.
+  if [ "$stand_in" = 0 ] && ! python3 -c 'import ipaddress, sys
+a = ipaddress.ip_address(sys.argv[1])
+sys.exit(0 if a.version == 4 and a.is_global and not a.is_private and a not in ipaddress.ip_network("100.64.0.0/10") else 1)' "$public_ip" 2>/dev/null; then
+    echo "refused: this instance's public address is unknown or not public (« $public_ip » from $metadata); give it with --egress-deny <address>; nothing was written" >&2
+    exit 1
+  fi
+fi
+egress_deny=$( { printf '%s\n' "$egress_extra" "$public_ip" | tr ',' '\n'; hostname -I 2>/dev/null | tr ' ' '\n'
+  printf '%s\n' 51.159.151.86 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10 ::1 172.16.0.0/12 192.168.0.0/16 10.0.0.0/8; } \
+  | sed 's/[[:space:]]//g' | grep -v '^$' | awk '!seen[$0]++' | paste -sd, -)
+if [[ ! $egress_deny =~ ^[0-9a-fA-F.:/,]+$ ]]; then echo "--egress-deny: addresses or ranges only, separated by commas: $egress_extra" >&2; exit 1; fi
+
 # The options of the previous run, said when they differ, before writing: a rerun
 # without --org-name, --env or --image would otherwise apply the defaults in silence.
 options_file="$root$app/.create-tenant.options"
-options_now=$(printf 'owner=%s\nemail-domains=%s\nentra-tenant=%s\nclient-id=%s\ntraefik-network=%s\ntrusted-proxy=%s\nimage=%s\norg-name=%s\nenv=%s\n' \
-  "$owner" "$email_domains" "$entra_tenant" "${client_id:-(from $client_conf)}" "$traefik_network" "$trusted_proxy" "$image" "$org_name" "$env_name")
+options_now=$(printf 'owner=%s\nemail-domains=%s\nentra-tenant=%s\nclient-id=%s\ntraefik-network=%s\ntrusted-proxy=%s\nimage=%s\norg-name=%s\nenv=%s\nmachines-image=%s\npc-image=%s\negress-deny=%s\n' \
+  "$owner" "$email_domains" "$entra_tenant" "${client_id:-(from $client_conf)}" "$traefik_network" "$trusted_proxy" "$image" "$org_name" "$env_name" \
+  "$machines_image" "$pc_image" "$egress_extra")
 if [ -f "$options_file" ]; then
   while IFS='=' read -r name before; do
     now=$(printf '%s\n' "$options_now" | sed -n "s/^$name=//p")
@@ -100,7 +152,7 @@ if [ -z "$client_id" ]; then
   client_id=$(grep -E '^client_id' "$root$client_conf" | head -1 | cut -d'"' -f2)
 fi
 [ -n "$client_id" ] || { echo "no client_id found" >&2; exit 1; }
-mkdir -p "$root$conf" "$root$app" "$root$data"/{home,tools,mcp-auth,connectors}
+mkdir -p "$root$conf" "$root$app" "$root$data"/{home,tools,mcp-auth,connectors,users,actor}
 chmod 755 "$root$conf"
 if [ ! -f "$root$conf/client_secret" ]; then
   [ -f "$root$client_secret_file" ] || { echo "missing the Entra client secret $client_secret_file" >&2; exit 1; }
@@ -112,6 +164,10 @@ fi
 # read-only in the gateway and the workbench only; kept across reruns.
 [ -f "$root$conf/gateway_secret" ] || openssl rand -hex 32 > "$root$conf/gateway_secret"
 chmod 400 "$root$conf/gateway_secret"
+# The machine service's token: the API and the sidecar only, read-only, outside
+# /state; never in a computer (each draws its agents' own), kept across reruns.
+[ -f "$root$conf/machines_token" ] || ( umask 077 && openssl rand -hex 32 > "$root$conf/machines_token" )
+chmod 400 "$root$conf/machines_token"
 # The sign-on proxy's signing key: oauth2-proxy signs each request it relays
 # (GAP-Signature), and the gateway serves nothing else. One value, two files:
 # the gateway reads the key, the proxy its env file; neither is in the compose.
@@ -132,6 +188,12 @@ if [ "$(id -u)" = 0 ]; then chown 65532:65532 "$root$conf/client_secret" "$root$
 # container whose code changed, even when its image and settings did not.
 fingerprint() { sha256sum "$1" | cut -c1-16; }
 gateway_code=$(fingerprint "$here/gateway/server.mjs")
+egress_code=$(fingerprint "$here/sandbox/egress-proxy.mjs")
+# The Docker socket's group: the guard runs as nobody in that group, never root.
+docker_gid=$(stat -c %g "${MNDT_DOCKER_SOCKET:-/var/run/docker.sock}" 2>/dev/null || true)
+if [[ ! $docker_gid =~ ^[0-9]+$ ]] || [ "$docker_gid" = 0 ]; then
+  if [ -n "$root" ]; then docker_gid=999; else echo "refused: the Docker socket's group is unknown or root ($docker_gid): the guard would run with root's group; the compose is not rendered" >&2; exit 1; fi
+fi
 # Everything this script puts in the tools folder, which the workbench runs from
 # disk: the entrypoint and the connector tools. One aggregated fingerprint.
 # facts-mcp.mjs is among them: it used to reach the folder only through an old
@@ -142,7 +204,7 @@ tools=(approvals-mcp.mjs mcp-proxy.mjs office365-mcp.mjs facts-mcp.mjs)
 # runs itself. A change to it must not recreate the workbench; left stale, it
 # would ignore an option it does not know (« --discover ») and print a success.
 checks=(mcp-check.mjs)
-tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
+tools_code=$( { for tool in "${tools[@]}"; do cat "$here/connectors/$tool"; done; cat "$here/machine-mcp.mjs" "$here/workbench-entrypoint.sh"; } | sha256sum | cut -c1-16)
 render_with_proxy() { render "$1" | sed -e "s|__PROXY_CONF__|$proxy_conf|g"; }
 render() {
   sed -e "s|__SLUG__|$slug|g" -e "s|__DOMAIN__|$domain|g" -e "s|__OWNER__|$owner|g" \
@@ -150,7 +212,9 @@ render() {
       -e "s|__TRAEFIK_NETWORK__|$traefik_network|g" -e "s|__TRUSTED_PROXY__|$trusted_proxy|g" \
       -e "s|__IMAGE__|$image|g" -e "s|__ENTRA_TENANT__|$entra_tenant|g" \
       -e "s|__CLIENT_ID__|$client_id|g" \
-      -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" "$1"
+      -e "s|__ORG_NAME__|$org_name|g" -e "s|__ENV__|$env_name|g" -e "s|__GATEWAY_CODE__|$gateway_code|g" -e "s|__TOOLS_CODE__|$tools_code|g" \
+      -e "s|__MACHINES_IMAGE__|$machines_image|g" -e "s|__PC_IMAGE__|$pc_image|g" \
+      -e "s|__EGRESS_DENY__|$egress_deny|g" -e "s|__EGRESS_CODE__|$egress_code|g" -e "s|__DOCKER_GID__|$docker_gid|g" "$1"
 }
 # The tenant's role table: the owner first; the team is added by hand. A change
 # applies to the API on the next request; to the sign-in list only once
@@ -183,6 +247,14 @@ done
 # The compose runs the workbench through /opt/mndt-tools/workbench-entrypoint.sh,
 # and /opt/mndt-tools is this tools folder: without it the workbench never starts.
 install_file "$here/workbench-entrypoint.sh" "$root$data/tools/workbench-entrypoint.sh" || exit 1
+# The machine connector (« Mon ordinateur », the catalog's `machine`): in the
+# tools folder with the others, in the tools' fingerprint.
+install_file "$here/machine-mcp.mjs" "$root$data/tools/machine-mcp.mjs" || exit 1
+# The egress proxy's code, mounted read-only by its container (fingerprinted above).
+mkdir -p "$root$app/egress"
+install_file "$here/sandbox/egress-proxy.mjs" "$root$app/egress/egress-proxy.mjs" || exit 1
+# The members' folders: each handed to its computer's uid by the sidecar.
+chmod 711 "$root$data/users"
 mkdir -p "$root$data/home/profiles/web"
 
 # The team tenant's defaults, in the home patch (DSH_HOME=/state/home), between
@@ -264,6 +336,7 @@ render_with_proxy "$here/tenant/docker-compose.yml.template" > "$root$app/.docke
 printf '%s\n' "$options_now" > "$options_file"
 
 echo "tenant $slug rendered: https://$domain (owner $owner, sign-in for the addresses of grants.json within $email_domains)"
+echo "  the members' computers: $machines_image starts $pc_image under gVisor (build-machines.sh); never reached: $egress_deny"
 echo "  register the redirect URI https://$domain/oauth2/callback on the Entra application"
 echo "  fill in $data/model.env before the first agent turn"
 echo "  then, once the stack runs: tenant/seed-team.sh $slug --owner $owner"

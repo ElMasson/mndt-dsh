@@ -239,6 +239,20 @@ export interface Agent {
   readonly retiredAt?: string
   /** Who retired it. */
   readonly retiredBy?: string
+  /**
+   * Its model's route could not be reached (connection refused, name not
+   * found, a time-out, a 5xx), at two consecutive attempts: set by the host for
+   * ROUTE_UNREACHABLE_MS, lifted by its next turn that succeeds. Meanwhile it is
+   * not proposed as a peer (ask_peers refuses it, saying why); a mention still
+   * goes. Served only while it lasts.
+   */
+  readonly routeUnreachable?: { readonly since: string; readonly until: string }
+  /**
+   * When its model route last failed with no success since: one failure marks
+   * nothing (a blip), the next consecutive one marks it (routeUnreachable).
+   * Internal: never served.
+   */
+  readonly routeFailedAt?: string
 }
 
 /** A team channel, or one person's own lane. */

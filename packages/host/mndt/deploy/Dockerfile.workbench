@@ -64,6 +64,10 @@ FROM node:22-bookworm
 COPY --from=build /src /app
 COPY --from=build /src/packages/host/mndt/deploy/workbench-entrypoint.sh /app/workbench-entrypoint.sh
 WORKDIR /app
+# The connectors' catalog names each command by its absolute path: each one is
+# here, executable, or the image is not built (render-connectors.py runs them
+# by these paths, never through PATH).
+RUN node -e "const c = require('/app/packages/host/mndt/deploy/connectors/catalog.json'); const fs = require('node:fs'); for (const [name, entry] of Object.entries(c)) { if (name.startsWith('_')) continue; const bin = entry.command[0]; if (!bin.startsWith('/')) throw new Error(name + ': command ' + bin + ' is not an absolute path'); fs.accessSync(bin, fs.constants.X_OK); } fs.accessSync('/usr/local/bin/node', fs.constants.X_OK); console.log('catalog commands: every one present')"
 ENV NODE_OPTIONS=--max-old-space-size=3072
 EXPOSE 3111
 CMD ["sh", "/app/workbench-entrypoint.sh"]

@@ -484,7 +484,12 @@ export function createMndtApi(options: MndtApiOptions): MndtApi {
         const messages = (await service.snapshot()).messages ?? []
         const agents = await service.listAgents()
         return respond(200, {
-          agents: agents.map(agent => ({ ...agent, eurThisMonth: spentThisMonth(messages, agent.id, now, true) })),
+          // The route's mark, only while it lasts (the screen says « route du modèle injoignable »).
+          agents: agents.map(({ routeUnreachable, routeFailedAt: _pending, ...agent }) => ({
+            ...agent,
+            ...(routeUnreachable !== undefined && routeUnreachable.until > now ? { routeUnreachable } : {}),
+            eurThisMonth: spentThisMonth(messages, agent.id, now, true),
+          })),
           // Councils closed without naming their members: one sum for the space, never per agent.
           eurUnattributedThisMonth: unattributedCouncilEur(messages, now),
         })

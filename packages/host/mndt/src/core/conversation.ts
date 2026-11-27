@@ -339,10 +339,15 @@ function contextLines(channel: Channel, mark: string, scope: string): string[] {
  * @param agent - the agent of the turn.
  * @param channel - its channel.
  * @param agents - every agent.
- * @returns the line naming the channel's other active agents (its possible peers), or none.
+ * @returns the line naming the channel's other active agents (its possible peers),
+ * those whose route is marked unreachable left out, or none.
  */
 function peersLine(agent: Agent, channel: Channel, agents: readonly Agent[]): string[] {
-  const others = agents.filter(other => other.id !== agent.id && other.retiredAt === undefined && channel.agents.includes(other.id))
+  // An agent whose model route could not be reached a moment ago is not proposed
+  // (Agent.routeUnreachable): its advice would fail. Its turns still answer a mention.
+  const now = new Date().toISOString()
+  const others = agents.filter(other => other.id !== agent.id && other.retiredAt === undefined && channel.agents.includes(other.id)
+    && !(other.routeUnreachable !== undefined && other.routeUnreachable.until > now))
   if (others.length === 0) return []
   return ['', `Autres agents de ce canal : ${others.map(other => `@${other.handle} (${other.name}, ${other.provider}/${other.model}, id ${other.id})`).join(' ; ')}.`]
 }

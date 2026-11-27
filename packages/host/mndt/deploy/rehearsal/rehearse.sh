@@ -28,6 +28,8 @@ EXPECTED_CHECKS=$here/expected-checks-rehearse.txt
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 project=mndt-rehearsal
+# The members' computers: their images, their settings, their cleanup.
+. "$here/machines-rehearsal.sh"
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
 tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
@@ -68,6 +70,7 @@ cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
+    machines_cleanup
   fi
   # Stopped before its verdict (a die, a guard, a crash): said as a KO, with
   # the last step it reached, so the total never reads « ko=0 » on a run cut short.
@@ -216,10 +219,13 @@ fake_scaleway
 # An admin who is not the owner: missions and automations stay closed to them.
 printf '{ "grants": [ { "subject": "%s", "role": "owner" }, { "subject": "%s", "role": "viewer" }, { "subject": "%s", "role": "admin" }, { "subject": "%s", "role": "operator" } ] }\n' $owner $viewer $admin operateur@datanalysis.re > "$data/grants.json"
 sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
+    -e "s#image: mndt-machines:local#image: $machines_image#" -e "s#PC_IMAGE: mndt-pc:local#PC_IMAGE: $pc_image#" \
     -e "s#image: mndt-workbench:local#image: $image#" \
     -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
     -e "s#TRUSTED_HOST: equipe.datanalysis.re#TRUSTED_HOST: 127.0.0.1:18080#" \
     "$app/docker-compose.yml" > "$root/compose.yml"
+machines_rehearsal_compose "$root/compose.yml"
+machines_images_present || die machines-images "the computers' images are missing: build them first (build-machines.sh)"
 signed_override
 # Readable by the containers, but never under home/: the workbench refuses a
 # credentials file readable beyond its owner (credentials-local, mode 600).
@@ -418,5 +424,9 @@ fi
 step "8. the role file row by row (#75), through the gateway"
 bash "$here/grants-checks.sh" "$data" $project $owner $viewer; granted=$?
 
-[ "$granted" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
+step "9. the members' computers (runtime $REHEARSAL_RUNTIME): the sidecar, its proxies, through the gateway"
+bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re "$machines_space"; machined=$?
+connector_secrets_check "$data" $project-workbench || machined=1
+
+[ "$granted" = 0 ] && [ "$machined" = 0 ] && [ "$proved" = 0 ] && [ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$seeded" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$imaged" = 0 ] && [ "$live" = 0 ]
 verdict=$?

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Server } from 'node:http'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { egressProxy, forwardedHeaders, isPublicAddress, publicTarget } from '../deploy/sandbox/egress-proxy.mjs'
+import { egressProxy, forwardedHeaders, isPublicAddress, publicTarget, validDenial } from '../deploy/sandbox/egress-proxy.mjs'
 
 const servers: Server[] = []
 afterEach(() => { for (const server of servers.splice(0)) server.close() })
@@ -51,6 +51,21 @@ describe('which addresses are public', () => {
     expect(isPublicAddress('51.159.161.149', ['51.159.161.149'])).toBe(false)
   })
 
+  it('refuses what a range of EGRESS_DENY holds (the instance\'s block, the compose\'s networks), in both families and the mapped form', () => {
+    const denied = ['51.159.160.0/22', '2001:bc8:1200::/40', '203.0.113.7']
+    for (const ip of ['51.159.160.1', '51.159.163.254', '2001:bc8:12ff::1', '::ffff:51.159.161.149']) expect(isPublicAddress(ip, denied), ip).toBe(false)
+    for (const ip of ['51.159.164.1', '51.159.159.255', '2001:bc8:1300::1', '1.1.1.1']) expect(isPublicAddress(ip, denied), ip).toBe(true)
+    // A /0 refuses its whole family; a /32 one address.
+    expect(isPublicAddress('8.8.8.8', ['0.0.0.0/0'])).toBe(false)
+    expect(isPublicAddress('2606:4700:4700::1111', ['0.0.0.0/0'])).toBe(true)
+    expect(isPublicAddress('51.159.161.150', ['51.159.161.149/32'])).toBe(true)
+  })
+
+  it('an item that is neither an address nor a range is invalid', () => {
+    for (const ok of ['51.159.161.149', '172.18.0.0/16', '::1', 'fd00::/8', '0.0.0.0/0']) expect(validDenial(ok), ok).toBe(true)
+    for (const bad of ['51.159.161', '172.18.0.0/33', 'fd00::/129', '10.0.0.0/8/1', 'equipe.datanalysis.re', '10.0.0.0/x', '']) expect(validDenial(bad), bad).toBe(false)
+  })
+
   it('a name resolving to a private address is refused', async () => {
     expect(await publicTarget('localhost')).toBeUndefined()
     expect(await publicTarget('127.0.0.1')).toBeUndefined()
@@ -64,6 +79,10 @@ describe('the proxy', () => {
     const started = spawnSync(process.execPath, [script], { env: { ...process.env, EGRESS_DENY: ' , ', EGRESS_PORT: '0' }, encoding: 'utf8', timeout: 10_000 })
     expect(started.status).toBe(2)
     expect(started.stderr).toContain('EGRESS_DENY is empty')
+    // A typo stops it too: it never opens the address it meant to close.
+    const typo = spawnSync(process.execPath, [script], { env: { ...process.env, EGRESS_DENY: '51.159.161.149,172.18.0.0/33', EGRESS_PORT: '0' }, encoding: 'utf8', timeout: 10_000 })
+    expect(typo.status).toBe(2)
+    expect(typo.stderr).toContain('neither an address nor a range')
   })
 
   it('is bounded in connections, and never relays the computer\'s proxy headers upstream', () => {

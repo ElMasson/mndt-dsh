@@ -138,7 +138,7 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     // The descriptor 47169065bf wrote: no gateway secret, so every card is a 401.
     writeFileSync(join(data, 'connectors', 'approvals.json'), JSON.stringify({
       serverName: 'approvals', command: ['node', '/opt/mndt-tools/approvals-mcp.mjs'], envFile: 'approvals.env',
-      env: { MNDT_ACTOR_FILE: '/state/mission-actor.json', MNDT_APPROVALS_ALLOW_DECIDE: '0' }, deny: ['decide_approval'],
+      env: { MNDT_ACTOR_FILE: '/state/actor/mission-actor.json', MNDT_APPROVALS_ALLOW_DECIDE: '0' }, deny: ['decide_approval'],
     }))
     const bin = join(root, 'bin')
     mkdirSync(bin)
@@ -155,6 +155,72 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     // A second run with the same catalog changes nothing and restarts nothing.
     expect(run()).toContain('approvals: descriptor up to date')
     expect(restarts()).toBe(1)
+  })
+
+  it('rewrites every catalog connector an earlier version mounted before rendering once: none of its old descriptors makes the block refused', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    // What the seventh jump left: node by name, the actor's record beside state.json.
+    for (const [name, script, extra] of [['approvals', 'approvals-mcp.mjs', { MNDT_APPROVALS_ALLOW_DECIDE: '0', MNDT_GATEWAY_SECRET_FILE: '/run/secrets/mndt-gateway' }],
+      ['office365', 'office365-mcp.mjs', { OFFICE365_MODE: 'application' }]] as const) {
+      writeFileSync(join(data, 'connectors', `${name}.json`), JSON.stringify({
+        serverName: name, command: ['node', `/opt/mndt-tools/${script}`], envFile: `${name}.env`,
+        env: { MNDT_ACTOR_FILE: '/state/mission-actor.json', ...extra }, allow: ['x'],
+      }))
+    }
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'docker'), '#!/bin/sh\ncat > /dev/null\nexit 0\n', { mode: 0o755 })
+    execFileSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8',
+    })
+    for (const name of ['approvals', 'office365', 'machine']) {
+      const descriptor = JSON.parse(readFileSync(join(data, 'connectors', `${name}.json`), 'utf8')) as { command: string[]; env?: Record<string, string> }
+      expect(descriptor.command[0], name).toBe('/usr/local/bin/node')
+      expect(descriptor.env?.MNDT_ACTOR_FILE, name).toBe('/state/actor/mission-actor.json')
+    }
+    const patch = readFileSync(join(data, 'home/profiles/web/cordis.patch.yml'), 'utf8')
+    for (const id of ['mcp-approvals', 'mcp-office365', 'mcp-machine']) expect(patch).toContain(`id: ${id}`)
+  })
+
+  it('refuses to drop a setting added by hand (an env key, an env file the catalog does not name), unless --replace-operator-settings says so', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    const handmade = JSON.stringify({
+      serverName: 'office365', command: ['/usr/local/bin/node', '/opt/mndt-tools/office365-mcp.mjs'], envFile: 'office365-tenant-b.env',
+      env: { OFFICE365_MODE: 'application', OFFICE365_TENANT_HINT: 'b' }, allow: ['mail_recent'],
+    })
+    writeFileSync(join(data, 'connectors', 'office365.json'), handmade)
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'docker'), '#!/bin/sh\ncat > /dev/null\nexit 0\n', { mode: 0o755 })
+    const seed = (...args: string[]) => spawnSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner, ...args], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8',
+    })
+    const refused = seed()
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain('would drop what was set by hand')
+    expect(refused.stderr).toContain('office365: OFFICE365_TENANT_HINT, envFile office365-tenant-b.env')
+    // Nothing rewritten: the hand-made descriptor is as it was.
+    expect(readFileSync(join(data, 'connectors', 'office365.json'), 'utf8')).toBe(handmade)
+    expect(seed('--replace-operator-settings').status).toBe(0)
+    const rewritten = JSON.parse(readFileSync(join(data, 'connectors', 'office365.json'), 'utf8')) as { envFile?: string; env?: Record<string, string> }
+    expect(rewritten.envFile).toBe('office365.env')
+    expect(rewritten.env?.OFFICE365_TENANT_HINT).toBeUndefined()
   })
 
   it('restarts once the render succeeds, after a first run whose render failed on an unreadable patch', () => {

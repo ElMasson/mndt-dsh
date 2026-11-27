@@ -40,6 +40,8 @@ old_ref=$OLD_REF
 # trap compares): change the list with the checks.
 EXPECTED_CHECKS=$here/expected-checks-update.txt
 project=mndt-rehearsal
+# The members' computers: their images, their settings, their cleanup.
+. "$here/machines-rehearsal.sh"
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
 tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
@@ -63,6 +65,7 @@ cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
     docker rm -f $project-gateway $project-workbench $project-fakellm $project-signer >/dev/null 2>&1
     docker network rm ${project}_front ${project}_ingress ${project}_outside >/dev/null 2>&1
+    machines_cleanup
   fi
   # Stopped before its verdict (a die, a guard, a crash): said as a KO, with
   # the last step it reached, so the total never reads « ko=0 » on a run cut short.
@@ -196,10 +199,13 @@ tenant() { # <deploy dir>
 }
 compose_for() { # <image>
   sed -e "s#/data/mndt/datanalysis/live#$data#g" -e "s#/opt/mndt/datanalysis#$app#g" -e "s#/etc/mndt/datanalysis#$root/etc/mndt/datanalysis#g" \
+      -e "s#image: mndt-machines:local#image: $machines_image#" -e "s#PC_IMAGE: mndt-pc:local#PC_IMAGE: $pc_image#" \
       -e "s#image: mndt-workbench:local#image: $1#" \
       -e "s#PUBLIC_URL: https://equipe.datanalysis.re/#PUBLIC_URL: http://127.0.0.1:18080/#" \
       -e "s#TRUSTED_HOST: equipe.datanalysis.re#TRUSTED_HOST: 127.0.0.1:18080#" \
       "$app/docker-compose.yml" > "$root/compose.yml"
+  # The computers, once the new tenant scripts render them (the old ones did not).
+  machines_rehearsal_compose "$root/compose.yml"
 }
 seed() { # <deploy dir>
   local shim; shim=$(mktemp -d "$root/shim-XXXX"); cp "$here/compose-shim.sh" "$shim/docker"; chmod +x "$shim/docker"
@@ -289,6 +295,12 @@ if [ "$old_seen" -ge 1 ]; then broke=1; echo "OK old-brief-shared  the viewer re
 elif [ "$old_own" -ge 1 ]; then broke=1; echo "OK old-brief-private  already private on the old version: the owner reads $old_own, the viewer none"
 else broke=0; echo "KO old-brief-missing  nobody reads the old brief: no starting point"; exit 1; fi
 
+# The guide's backups (§13.9 c.), before anything of the new version is written:
+# the rollback rehearsal (reverse-rollback-8.sh) puts them back, as the guide does.
+mkdir -p "$root/backup"
+cp -a "$app" "$root/backup/compose" && cp -a "$root/etc/mndt/datanalysis" "$root/backup/etc" \
+  && cp -a "$data/state.json" "$data/grants.json" "$data/connectors/approvals.json" "$root/backup/compose/" \
+  || die backup "the guide's backups could not be made"
 step "B1. step 13: create-tenant.sh with the same arguments, the LLM routes"
 own
 tenant "$deploy" || die tenant "create-tenant.sh of this version failed"
@@ -299,13 +311,10 @@ fake_scaleway
 for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
 done
-# facts-mcp.mjs itself: this version's create-tenant.sh installed it (tools-current).
-printf 'Faits de repetition.\n' > "$data/tools/facts.md"
-MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
-  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile"
 
 step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
+machines_images_present || die machines-images "the computers' images are missing: build them first (build-machines.sh)"
 compose_for "$new_image"
 signed_override
 # Readable by the containers, but never under home/: the workbench refuses a
@@ -332,6 +341,13 @@ approvals_after=$(approvals_print)
 restarted=0
 seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
 own
+# The second MCP server no channel allows (the drive's tool probe), mounted now
+# that seed-team.sh has rewritten the descriptors from this version's catalog:
+# the instance renders nothing before it either. facts-mcp.mjs itself: this
+# version's create-tenant.sh installed it (tools-current).
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$app/gateway/render-connectors.py" CONNECTOR_CATALOG="$app/gateway/catalog.json" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 patch_before=$(sha256sum < "$web_patch" 2>/dev/null)
 MNDT_HOME=$data python3 "$app/gateway/render-connectors.py"; rendered=$?; echo "installed renderer exit $rendered"
 # As install-connectors.sh: a restart only when the renderer changed the patch.
@@ -386,5 +402,9 @@ MNDT_REHEARSAL_CATALOG="$app/gateway/catalog.json" node "$here/drive.mjs" "$play
 # the TOTAL reads ko=0 over a run cut short.
 [ "$driven" = 0 ] || echo "KO  drive-exit  drive.mjs exited $driven: the checks after its last line were not run"
 
-[ "$page" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
+step "B6. the members' computers, new with this version (runtime $REHEARSAL_RUNTIME)"
+bash "$here/machines-checks.sh" $project $owner operateur@datanalysis.re "$machines_space"; machined=$?
+connector_secrets_check "$data" $project-workbench || machined=1
+
+[ "$page" = 0 ] && [ "$machined" = 0 ] && [ "$attacked" = 0 ] && [ "$deposited" = 0 ] && [ "$broke" = 1 ] && [ "$seeded" = 0 ] && [ "$rendered" = 0 ] && [ "$checked" = 0 ] && [ "$connectors" = 0 ] && [ "$driven" = 0 ] && [ "$gone" = 0 ] && [ "$restarted" = 0 ]
 verdict=$?
