@@ -11,6 +11,7 @@ import { ChatRefusal } from './chat.ts'
 import type { ChatFace } from './chat.ts'
 import type { ChatTranslate } from './chatLocales.ts'
 import { when } from './format.ts'
+import { shownName } from './TeamFeed.tsx'
 
 /** A computer's state as the page reads it. */
 export interface MachineRow {
@@ -185,7 +186,7 @@ export function MachineScreen(props: {
           {members.rows.filter(r => r.state !== 'stopped').length === 0 ? <p className="mw-ctx-small mw-ctx-muted">{t('machineNoneOn')}</p> : (
             members.rows.filter(r => r.state !== 'stopped').map(r => (
               <p key={r.member} className="mw-ctx-small" data-testid="machine-member">
-                <span className="mw-ctx-strong">{props.names?.[r.member.toLowerCase()] ?? r.member}</span>
+                <span className="mw-ctx-strong">{shownName(r.member, props.names)}</span>
                 {` · ${t(`machineState_${r.state}`)}`}
                 {r.startedAt === undefined ? '' : ` · ${t('machineSince', { at: when(r.startedAt) })}`}
               </p>

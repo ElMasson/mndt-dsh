@@ -94,4 +94,23 @@ describe('« Mon ordinateur »', () => {
     expect(await machinesServed({ machine: async () => ({ state: 'stopped' }) })).toBe(true)
     expect(await machinesServed({})).toBe(false)
   })
+
+  it('a member without a served name reads as a name, never the raw address', async () => {
+    const f = face('stopped', { machineMembers: async () => ({ machines: [{ member: 'paul.grondin@datanalysis.re', state: 'running' }], capacity: { used: 1, max: 4 } }) })
+    render(<MachineScreen face={f} canSeeMembers names={{}} title="Mon ordinateur" t={chatFrench} />)
+    const row = await screen.findByTestId('machine-member')
+    expect(row.textContent).not.toContain('@datanalysis.re')
+    expect(row.textContent).toContain('paul.grondin')
+  })
+
+  it('two clicks on Arrêter make one call', async () => {
+    let release: () => void = () => undefined
+    const calls: string[] = []
+    draw(face('running', { stopMachine: () => { calls.push('stop'); return new Promise((resolve) => { release = () => { resolve({ state: 'stopped' }) } }) } }))
+    const button = await screen.findByRole('button', { name: 'Arrêter' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(calls).toEqual(['stop'])
+    release()
+  })
 })
