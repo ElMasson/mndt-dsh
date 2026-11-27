@@ -388,8 +388,13 @@ else
 fi
 leaked=$(docker logs $project-fakellm 2>&1 | grep -ac '^fake-llm leaked-thought ' || true)
 tagged=$(docker exec $project-workbench grep -o '</\{0,1\}think>' /state/state.json 2>/dev/null | grep -c . || true)
+# The engine's transcripts keep the model's raw text, thought included: each
+# turn and each mission has a session of its own (its id), never resumed, and
+# the next turn's prompt is built from the messages served. They are listed,
+# not checked: they stay on the disk, readable by the owner's shell alone.
+transcripts=$(docker exec $project-workbench sh -c 'grep -rlE "</?think>" /state/home/sessions 2>/dev/null | wc -l' 2>/dev/null || echo '?')
 if [ "$leaked" -gt 0 ] && [ "$tagged" = 0 ]; then
-  echo "OK  no-thought-served  the fake leaked a thought in $leaked answer(s); no <think> nor </think> in any message kept (/state/state.json)"
+  echo "OK  no-thought-served  the fake leaked a thought in $leaked answer(s); no <think> nor </think> in any message kept (/state/state.json); $transcripts engine transcript(s) under /state/home/sessions carry one (never resumed, never served)"
 else
   echo "KO  no-thought-served  $leaked answer(s) leaked a thought; $tagged tag(s) in the space's messages"
 fi

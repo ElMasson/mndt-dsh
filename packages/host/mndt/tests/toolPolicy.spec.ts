@@ -223,6 +223,8 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     readonly outputCap?: number
     /** The workstation's default model, the one a mission runs on. */
     readonly defaultModel?: { readonly provider: string; readonly model: string }
+    /** What the run settles with (« Réponse. » when absent). */
+    readonly result?: unknown
     /** How the agent's turn ended, when not completed: the engine's reason (an LlmFailure for an error). */
     readonly turnEnd?: { readonly kind: string; readonly error?: { readonly message: string; readonly code: string } }
   }
@@ -270,7 +272,7 @@ describe('the runners scope it before the agent exists, and lift it after', () =
         }
         return {
           id: 'run-1',
-          result: Promise.resolve('Réponse.'),
+          result: Promise.resolve(options.result ?? 'Réponse.'),
           dispose: async () => { runDisposed = true; seen.guardsAtRunDispose = guards.size },
         }
       },
@@ -366,6 +368,22 @@ describe('the runners scope it before the agent exists, and lift it after', () =
     await expect(new DshTurnRunner(ctx, readinessOver([...APPROVALS.slice(1), 'mcp__qonto__list'])).run(turn()))
       .rejects.toThrow('outils indisponibles : approvals')
     expect(seen.root).toBeUndefined()
+  })
+
+  it('a mission or a turn made of thought alone is refused, and its error carries the form of the run, never a word of it', async () => {
+    const thought = 'PENSEE-SECRETE du modèle sur le client\n</think>\n'
+    const custom = { id: 'msn_t', kind: 'custom', prompt: 'Fais le point', createdBy: 'stephane@datanalysis.re' } as unknown as Mission
+    const options = { tools: TEAM_MISSION_POLICY, readiness: readinessOver(APPROVALS) }
+    const mission = fakeCtx({ defaultModel: { provider: 'scaleway-genapi', model: 'deepseek-v4.1-flash' }, result: { value: thought } })
+    const missionError = await new DshMissionRunner(mission.ctx, options).run(custom)
+      .then(() => undefined, (error: unknown) => error)
+    expect(String(missionError)).toContain(`the agent returned no text (settled: object{value}, text ${thought.length} chars, <think> 0, </think> 1)`)
+    expect(String(missionError)).not.toContain('PENSEE')
+    const turned = fakeCtx({ result: `<think>${thought}` })
+    const turnError = await new DshTurnRunner(turned.ctx, readinessOver(APPROVALS)).run(turn())
+      .then(() => undefined, (error: unknown) => error)
+    expect(String(turnError)).toContain(`the agent returned no text (settled: string, text ${thought.length + 7} chars, <think> 1, </think> 1)`)
+    expect(String(turnError)).not.toContain('PENSEE')
   })
 
   it('a mission reports its cost when its model\'s price is known, and none when it is not', async () => {

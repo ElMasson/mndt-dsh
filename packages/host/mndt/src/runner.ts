@@ -7,7 +7,7 @@
  * produced, and the failure contracts that a settled run does not report by
  * itself. A run that produced nothing is an error here, not an empty brief.
  */
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the agents service and the session/workflow event maps.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -312,8 +312,7 @@ export class DshMissionRunner {
       if (failures.length > 0) throw new Error(failures.join('; '))
       const text = textOf(settled)
       if (text.trim() === '') {
-        const shape = JSON.stringify(settled).slice(0, 300)
-        throw new Error(`the agent returned no text (settled: ${shape})`)
+        throw new Error(`the agent returned no text (settled: ${settledShape(settled)})`)
       }
       const reported = usageTotals.input + usageTotals.output > 0
       const tokens = reported
@@ -348,11 +347,11 @@ export class DshTurnRunner implements TurnEngine {
   readonly #configured: (server: string) => boolean
 
   /**
-   * The last prompt of each agent in each channel, in memory only, for the
-   * measure's common prefix: never logged, never written, the oldest dropped
-   * past {@link PREVIOUS_PROMPTS}.
+   * The fingerprints of the last prompt of each agent in each channel
+   * ({@link prefixPrints}), for the measure's common prefix: never a word of
+   * the prompt, in memory only, the oldest dropped past {@link PREVIOUS_PROMPTS}.
    */
-  readonly #previousPrompts = new Map<string, string>()
+  readonly #previousPrints = new Map<string, readonly string[]>()
 
   /**
    * @param ctx - the host context.
@@ -389,14 +388,15 @@ export class DshTurnRunner implements TurnEngine {
    */
   #commonWithPrevious(input: Pick<TurnInput, 'channel' | 'agent' | 'prompt'>): number | undefined {
     const key = `${input.channel.id}\u0000${input.agent.id}`
-    const previous = this.#previousPrompts.get(key)
-    this.#previousPrompts.delete(key)
-    this.#previousPrompts.set(key, input.prompt)
-    if (this.#previousPrompts.size > PREVIOUS_PROMPTS) {
-      const oldest = this.#previousPrompts.keys().next().value
-      if (oldest !== undefined) this.#previousPrompts.delete(oldest)
+    const previous = this.#previousPrints.get(key)
+    const prints = prefixPrints(input.prompt)
+    this.#previousPrints.delete(key)
+    this.#previousPrints.set(key, prints)
+    if (this.#previousPrints.size > PREVIOUS_PROMPTS) {
+      const oldest = this.#previousPrints.keys().next().value
+      if (oldest !== undefined) this.#previousPrints.delete(oldest)
     }
-    return previous === undefined ? undefined : commonPrefixLength(previous, input.prompt)
+    return previous === undefined ? undefined : commonPrefixOfPrints(previous, prints)
   }
 
   /**
@@ -510,7 +510,7 @@ export class DshTurnRunner implements TurnEngine {
       if (overBudget) throw new TurnBudgetReached({ ...usage })
       if (failures.length > 0) throw route.unreachable ? new RouteUnreachable(failures.join('; ')) : new Error(failures.join('; '))
       const text = textOf(settled)
-      if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
+      if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${settledShape(settled)})`)
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
       // The prompt's measure, never its content: its size, the fingerprints of its
       // head (one value from one turn to the next: the prefix cache can serve it),
@@ -547,8 +547,9 @@ export function promptMeasure(
   const head = (length: number): string => (key === '' ? 'unkeyed' : createHmac('sha256', key).update(input.prompt.slice(0, length)).digest('hex').slice(0, 12))
   const counted = tokens === undefined ? 'tokens unknown' : `input ${tokens.input}, cacheRead ${tokens.cacheRead ?? 0}, output ${tokens.output}`
   // The characters this prompt shares, from its start, with the same agent's
-  // previous prompt in the same channel: the direct measure of what a prefix
-  // cache can serve (« - » on the agent's first turn there since the start).
+  // previous prompt in the same channel, by whole blocks of PREFIX_BLOCK: the
+  // direct measure of what a prefix cache can serve (« - » on the agent's
+  // first turn there since the start).
   const common = `common ${run.common ?? '-'}`
   // The model calls of the turn: its tokens are their sum, each call sending
   // the whole context again (the tools' schemas, then each tool's result).
@@ -556,12 +557,30 @@ export function promptMeasure(
   return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}, ${common}; ${counted}; ${calls}`
 }
 
-/** @param a - a prompt. @param b - another. @returns the length of the prefix they share. */
-export function commonPrefixLength(a: string, b: string): number {
-  const end = Math.min(a.length, b.length)
-  let i = 0
-  while (i < end && a.charCodeAt(i) === b.charCodeAt(i)) i += 1
-  return i
+/** The block of a prompt's prefix fingerprints, in characters: the measure's resolution. */
+export const PREFIX_BLOCK = 256
+
+/**
+ * @param prompt - a prompt.
+ * @returns a chain of fingerprints, one per whole block of {@link PREFIX_BLOCK}
+ * characters, each covering the whole prefix up to its block's end: two prompts
+ * share their first n blocks exactly when their first n fingerprints match.
+ */
+export function prefixPrints(prompt: string): string[] {
+  const prints: string[] = []
+  let chained = ''
+  for (let end = PREFIX_BLOCK; end <= prompt.length; end += PREFIX_BLOCK) {
+    chained = createHash('sha256').update(chained).update(prompt.slice(end - PREFIX_BLOCK, end)).digest('hex').slice(0, 16)
+    prints.push(chained)
+  }
+  return prints
+}
+
+/** @param a - one prompt's prints. @param b - another's. @returns the characters of the whole blocks their prefixes share. */
+export function commonPrefixOfPrints(a: readonly string[], b: readonly string[]): number {
+  let blocks = 0
+  while (blocks < a.length && blocks < b.length && a[blocks] === b[blocks]) blocks += 1
+  return blocks * PREFIX_BLOCK
 }
 
 /** How many (channel, agent) previous prompts the runner keeps, for the measure only. */
@@ -575,6 +594,19 @@ const PREVIOUS_PROMPTS = 256
  */
 export function textOf(settled: unknown): string {
   return withoutThought(rawTextOf(settled))
+}
+
+/**
+ * The form of a settled run, never a word of it: an empty answer is most often
+ * one made of thought alone, which the log must not carry (C on #176).
+ * @param settled - whatever the engine resolved.
+ * @returns its type, its keys, its raw text's length and its tags counted.
+ */
+export function settledShape(settled: unknown): string {
+  const raw = rawTextOf(settled)
+  const keys = settled !== null && typeof settled === 'object' ? `{${Object.keys(settled).sort().join(',')}}` : ''
+  const count = (tag: string): number => raw.split(tag).length - 1
+  return `${settled === null ? 'null' : typeof settled}${keys}, text ${raw.length} chars, <think> ${count('<think>')}, </think> ${count('</think>')}`
 }
 
 /** @param settled - whatever the engine resolved. @returns its text as the model wrote it, reasoning included. */
