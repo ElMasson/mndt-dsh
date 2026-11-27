@@ -190,6 +190,39 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     for (const id of ['mcp-approvals', 'mcp-office365', 'mcp-machine']) expect(patch).toContain(`id: ${id}`)
   })
 
+  it('refuses to drop a setting added by hand (an env key, an env file the catalog does not name), unless --replace-operator-settings says so', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    const handmade = JSON.stringify({
+      serverName: 'office365', command: ['/usr/local/bin/node', '/opt/mndt-tools/office365-mcp.mjs'], envFile: 'office365-tenant-b.env',
+      env: { OFFICE365_MODE: 'application', OFFICE365_TENANT_HINT: 'b' }, allow: ['mail_recent'],
+    })
+    writeFileSync(join(data, 'connectors', 'office365.json'), handmade)
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'docker'), '#!/bin/sh\ncat > /dev/null\nexit 0\n', { mode: 0o755 })
+    const seed = (...args: string[]) => spawnSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner, ...args], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8',
+    })
+    const refused = seed()
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain('would drop what was set by hand')
+    expect(refused.stderr).toContain('office365: OFFICE365_TENANT_HINT, envFile office365-tenant-b.env')
+    // Nothing rewritten: the hand-made descriptor is as it was.
+    expect(readFileSync(join(data, 'connectors', 'office365.json'), 'utf8')).toBe(handmade)
+    expect(seed('--replace-operator-settings').status).toBe(0)
+    const rewritten = JSON.parse(readFileSync(join(data, 'connectors', 'office365.json'), 'utf8')) as { envFile?: string; env?: Record<string, string> }
+    expect(rewritten.envFile).toBe('office365.env')
+    expect(rewritten.env?.OFFICE365_TENANT_HINT).toBeUndefined()
+  })
+
   it('restarts once the render succeeds, after a first run whose render failed on an unreadable patch', () => {
     const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
     mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })

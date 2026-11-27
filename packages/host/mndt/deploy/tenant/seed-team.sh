@@ -5,6 +5,11 @@
 #
 #   seed-team.sh <slug> --owner <email>
 #   seed-team.sh <slug> --owner <email> --ceiling <handle> <euros>
+#   seed-team.sh <slug> --owner <email> --replace-operator-settings
+#
+# The connectors' descriptors are rewritten from this version's catalog; one
+# that carries a setting the catalog does not (an env key, an env file, added
+# by hand) is refused, unless --replace-operator-settings says to drop it.
 #
 # --ceiling sets one agent's monthly ceiling, as the owner (acceptance step
 # R-12: a tiny ceiling after one turn makes the next mention refused; set it
@@ -13,10 +18,11 @@ set -euo pipefail
 
 [ $# -ge 3 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 slug=$1; shift
-owner=''; ceiling=''
+owner=''; ceiling=''; replace_operator=0
 while [ $# -gt 0 ]; do
   case $1 in
     --owner) owner=$2; shift 2 ;;
+    --replace-operator-settings) replace_operator=1; shift ;;
     --ceiling) ceiling="$2=$3"; shift 3 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -65,6 +71,29 @@ if [ -z "$ceiling" ]; then
     case " ${connectors[*]} " in *" $name "*) continue ;; esac
     [ -f "$data/connectors/$name.json" ] && connectors+=("$name")
   done
+  # A setting added by hand (an env key, an env file the catalog does not name)
+  # would vanish in the rewrite, in silence: refused, unless said.
+  if [ "$replace_operator" = 0 ]; then
+    lost=$(python3 - "$app/gateway/catalog.json" "$data/connectors" "${connectors[@]}" <<'PY'
+import json, os, sys
+catalog = json.load(open(sys.argv[1]))
+for name in sys.argv[3:]:
+    path = os.path.join(sys.argv[2], name + '.json')
+    if not os.path.isfile(path): continue
+    old, preset = json.load(open(path)), catalog.get(name) or {}
+    extra = sorted(set((old.get('env') or {})) - set((preset.get('env') or {})))
+    env_file = old.get('envFile')
+    if env_file and env_file != preset.get('envFile'): extra.append('envFile ' + env_file)
+    if extra: print(name + ': ' + ', '.join(extra))
+PY
+)
+    if [ -n "$lost" ]; then
+      echo "refused: rewriting these descriptors from the catalog would drop what was set by hand:" >&2
+      printf '  %s\n' "$lost" >&2
+      echo "nothing was rewritten; keep them in the catalog, or rerun with --replace-operator-settings" >&2
+      exit 1
+    fi
+  fi
   fingerprint() {
     local file
     for file in "$rendered" "${connectors[@]}"; do

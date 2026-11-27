@@ -12,12 +12,18 @@ STATE=${DSH_HOME:-/state/home}
 WEB_BIND=${WEB_HOST:-}
 # A container on several networks (a team tenant: front and machines): the
 # address of the name it carries on the gateway's network only.
+# No fallback when it does not resolve: `hostname -i` could name the other
+# network, and every page would answer 502 with no word of why.
 if [ -z "$WEB_BIND" ] && [ -n "${WEB_HOST_ALIAS:-}" ]; then
   for _ in 1 2 3 4 5; do
     WEB_BIND=$(getent hosts "$WEB_HOST_ALIAS" 2>/dev/null | awk "{print \$1}" | head -1)
     [ -n "$WEB_BIND" ] && break
     sleep 1
   done
+  if [ -z "$WEB_BIND" ]; then
+    echo "workbench: WEB_HOST_ALIAS « $WEB_HOST_ALIAS » does not resolve (getent hosts): the shell would not know its network; stopping" >&2
+    exit 1
+  fi
 fi
 if [ -z "$WEB_BIND" ]; then
   WEB_BIND=$(hostname -i 2>/dev/null | awk "{print \$1}")

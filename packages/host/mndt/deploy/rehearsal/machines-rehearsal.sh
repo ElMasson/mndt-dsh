@@ -53,7 +53,8 @@ machines_cleanup() {
 
 # A connector reads neither the machine service's token, nor state.json, nor
 # the workbench's environment (/proc/1/environ), nor, unless it is approvals or
-# machine (the catalog's gatewaySecret), the gateway's secret: each connector's script as the
+# machine (the catalog's gatewaySecret), the gateway's secret; and each reads
+# from and writes to /dev/null (`< /dev/null`, `> /dev/null`): each connector's script as the
 # workbench renders it (its Landlock grants), its command replaced by reading
 # both files, run inside the running workbench. The workbench itself reads both
 # (the witness: otherwise a refusal would prove nothing).
@@ -65,12 +66,12 @@ connector_secrets_check() { # <data dir> <workbench container>
     line=$(docker exec "$container" sh -c "$script" 2>&1 | tr '\n' ' ')
     verdict="$verdict $server: ${line% };"
     case $server in
-      approvals|machine) [[ $line == *"refused /run/secrets/mndt-machines"*"read /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"* ]] || ok=0 ;;
-      *) others=$((others + 1)); [[ $line == *"refused /run/secrets/mndt-machines"*"refused /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"* ]] || ok=0 ;;
+      approvals|machine) [[ $line == *"refused /run/secrets/mndt-machines"*"read /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"*"devnull-read-write"* ]] || ok=0 ;;
+      *) others=$((others + 1)); [[ $line == *"refused /run/secrets/mndt-machines"*"refused /run/secrets/mndt-gateway"*"refused /state/state.json"*"refused /proc/1/environ"*"devnull-read-write"* ]] || ok=0 ;;
     esac
   done < <(python3 - "$data/home/profiles/web/cordis.patch.yml" <<'PY'
 import sys, yaml
-probe = "sh -c 'for f in /run/secrets/mndt-machines /run/secrets/mndt-gateway /state/state.json /proc/1/environ; do if cat \"$f\" >/dev/null 2>&1; then echo \"read $f\"; else echo \"refused $f\"; fi; done'"
+probe = "sh -c 'for f in /run/secrets/mndt-machines /run/secrets/mndt-gateway /state/state.json /proc/1/environ; do if cat \"$f\" >/dev/null 2>&1; then echo \"read $f\"; else echo \"refused $f\"; fi; done; cat < /dev/null && echo devnull-ok >/dev/null && echo devnull-read-write'"
 for block in yaml.safe_load(open(sys.argv[1])) or []:
     for row in block.get('insert') or []:
         config = row.get('config') or {}

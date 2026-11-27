@@ -63,6 +63,13 @@ describe('workbench-entrypoint.sh', { timeout: 30_000 }, () => {
     expect(web).toMatch(/arg:(127\.0\.0\.1|::1)\b/)
   })
 
+  it('stops, said, when WEB_HOST_ALIAS does not resolve: no fallback to another network\'s address', async () => {
+    const { code, output } = await run('echo "dsh web: http://x/?token=never"; sleep 1', 60, { WEB_HOST_ALIAS: 'no-such-name.invalid' })
+    expect(code).toBe(1)
+    expect(output).toContain('WEB_HOST_ALIAS « no-such-name.invalid » does not resolve')
+    expect(output).not.toContain('launch token published')
+  })
+
   it('stops with the web process when it exits before printing a token, with its log', async () => {
     const { code, output, tokenFile } = await run('echo "boot failed: plugin X"; exit 3', 60)
     expect(code).toBe(3)
