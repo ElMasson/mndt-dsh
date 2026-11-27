@@ -69,6 +69,8 @@ restart-closes
 restart-closes-council
 routes-real-scaleway
 scaleway-reasoning-none
+qwen-template-off
+no-thought-served
 scan-witness
 scheduler-fires
 scheduler-first-pass

@@ -7,7 +7,7 @@
  * produced, and the failure contracts that a settled run does not report by
  * itself. A run that produced nothing is an error here, not an empty brief.
  */
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the agents service and the session/workflow event maps.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -26,6 +26,7 @@ import { ToolsReadiness } from './tools-ready.ts'
 import type { ToolsRegistryLike } from './tools-ready.ts'
 import type { PolicyHostLike, ToolPolicy } from './tool-policy.ts'
 import { clearOperatorWarning, warnOperator, warnOperatorOnce } from './operator-log.ts'
+import { withoutThought } from './thought-text.ts'
 
 /** What the runner needs from the host. */
 export interface DshRunnerOptions {
@@ -311,8 +312,7 @@ export class DshMissionRunner {
       if (failures.length > 0) throw new Error(failures.join('; '))
       const text = textOf(settled)
       if (text.trim() === '') {
-        const shape = JSON.stringify(settled).slice(0, 300)
-        throw new Error(`the agent returned no text (settled: ${shape})`)
+        throw new Error(`the agent returned no text (settled: ${settledShape(settled)})`)
       }
       const reported = usageTotals.input + usageTotals.output > 0
       const tokens = reported
@@ -347,6 +347,13 @@ export class DshTurnRunner implements TurnEngine {
   readonly #configured: (server: string) => boolean
 
   /**
+   * The fingerprints of the last prompt of each agent in each channel
+   * ({@link prefixPrints}), for the measure's common prefix: never a word of
+   * the prompt, in memory only, the oldest dropped past {@link PREVIOUS_PROMPTS}.
+   */
+  readonly #previousPrints = new Map<string, readonly string[]>()
+
+  /**
    * @param ctx - the host context.
    * @param readiness - the servers' readiness (shared with the missions; for tests, a fake).
    * @param configured - whether a server is configured for this space (see DshRunnerOptions.configured).
@@ -371,6 +378,25 @@ export class DshTurnRunner implements TurnEngine {
    */
   async ready(servers: readonly string[], signal: AbortSignal): Promise<void> {
     await this.#readiness.waitFor([...new Set([...servers, ...this.#always()])], signal)
+  }
+
+  /**
+   * @param input - the turn.
+   * @returns the length of the prefix its prompt shares with the same agent's
+   * previous prompt in that channel, or undefined on the first; this prompt
+   * becomes the next one's previous.
+   */
+  #commonWithPrevious(input: Pick<TurnInput, 'channel' | 'agent' | 'prompt'>): number | undefined {
+    const key = `${input.channel.id}\u0000${input.agent.id}`
+    const previous = this.#previousPrints.get(key)
+    const prints = prefixPrints(input.prompt)
+    this.#previousPrints.delete(key)
+    this.#previousPrints.set(key, prints)
+    if (this.#previousPrints.size > PREVIOUS_PROMPTS) {
+      const oldest = this.#previousPrints.keys().next().value
+      if (oldest !== undefined) this.#previousPrints.delete(oldest)
+    }
+    return previous === undefined ? undefined : commonPrefixOfPrints(previous, prints)
   }
 
   /**
@@ -421,6 +447,8 @@ export class DshTurnRunner implements TurnEngine {
     // Set by the session listener below: an object, so the check after the run reads its value.
     const route = { unreachable: false }
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    // The model calls of the turn (one assistant message each), for the measure.
+    let calls = 0
     // A step with a cost bound stops before a next message that would not fit.
     // The next message reads what the last one read, plus what it wrote, plus
     // one tool result per tool it called (each kept inline up to
@@ -436,6 +464,7 @@ export class DshTurnRunner implements TurnEngine {
         const data = (event as unknown as { data?: StepData }).data
         const step = data?.usage
         const toolCalls = (data?.message?.content ?? []).filter(block => block.type === 'tool-call').length
+        calls += 1
         if (step !== undefined) {
           usage.input += step.inputTokens ?? 0
           usage.output += step.outputTokens ?? 0
@@ -481,12 +510,12 @@ export class DshTurnRunner implements TurnEngine {
       if (overBudget) throw new TurnBudgetReached({ ...usage })
       if (failures.length > 0) throw route.unreachable ? new RouteUnreachable(failures.join('; ')) : new Error(failures.join('; '))
       const text = textOf(settled)
-      if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${JSON.stringify(settled).slice(0, 300)})`)
+      if (text.trim() === '') throw new Error(`the agent returned no text (settled: ${settledShape(settled)})`)
       const tokens = usage.input + usage.output > 0 ? usage : settledTokensOf(settled)
       // The prompt's measure, never its content: its size, the fingerprints of its
       // head (one value from one turn to the next: the prefix cache can serve it),
       // and what the model counted (input, read from cache, output).
-      warnOperator(this.#ctx, promptMeasure(input, tokens))
+      warnOperator(this.#ctx, promptMeasure(input, tokens, { common: this.#commonWithPrevious(input), calls }))
       return {
         text, sessionId, ...(tokens === undefined ? {} : { tokens }), ...(toolsUnavailable.length === 0 ? {} : { toolsUnavailable }),
       }
@@ -512,19 +541,76 @@ export class DshTurnRunner implements TurnEngine {
 export function promptMeasure(
   input: Pick<TurnInput, 'turnId' | 'agent' | 'prompt' | 'measureKey'>,
   tokens: { readonly input: number; readonly output: number; readonly cacheRead?: number } | undefined,
+  run: { readonly common?: number | undefined; readonly calls?: number | undefined } = {},
 ): string {
   const key = input.measureKey ?? ''
   const head = (length: number): string => (key === '' ? 'unkeyed' : createHmac('sha256', key).update(input.prompt.slice(0, length)).digest('hex').slice(0, 12))
   const counted = tokens === undefined ? 'tokens unknown' : `input ${tokens.input}, cacheRead ${tokens.cacheRead ?? 0}, output ${tokens.output}`
-  return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}; ${counted}`
+  // The characters this prompt shares, from its start, with the same agent's
+  // previous prompt in the same channel, by whole blocks of PREFIX_BLOCK: the
+  // direct measure of what a prefix cache can serve (« - » on the agent's
+  // first turn there since the start).
+  const common = `common ${run.common ?? '-'}`
+  // The model calls of the turn: its tokens are their sum, each call sending
+  // the whole context again (the tools' schemas, then each tool's result).
+  const calls = `calls ${run.calls ?? '-'}`
+  return `mndt: prompt of turn ${input.turnId} (@${input.agent.handle}): ${input.prompt.length} chars, head1k ${head(1000)}, head4k ${head(4000)}, ${common}; ${counted}; ${calls}`
 }
 
+/** The block of a prompt's prefix fingerprints, in characters: the measure's resolution. */
+export const PREFIX_BLOCK = 256
+
 /**
- * Find the text a settled run carries.
+ * @param prompt - a prompt.
+ * @returns a chain of fingerprints, one per whole block of {@link PREFIX_BLOCK}
+ * characters, each covering the whole prefix up to its block's end: two prompts
+ * share their first n blocks exactly when their first n fingerprints match.
+ */
+export function prefixPrints(prompt: string): string[] {
+  const prints: string[] = []
+  let chained = ''
+  for (let end = PREFIX_BLOCK; end <= prompt.length; end += PREFIX_BLOCK) {
+    chained = createHash('sha256').update(chained).update(prompt.slice(end - PREFIX_BLOCK, end)).digest('hex').slice(0, 16)
+    prints.push(chained)
+  }
+  return prints
+}
+
+/** @param a - one prompt's prints. @param b - another's. @returns the characters of the whole blocks their prefixes share. */
+export function commonPrefixOfPrints(a: readonly string[], b: readonly string[]): number {
+  let blocks = 0
+  while (blocks < a.length && blocks < b.length && a[blocks] === b[blocks]) blocks += 1
+  return blocks * PREFIX_BLOCK
+}
+
+/** How many (channel, agent) previous prompts the runner keeps, for the measure only. */
+const PREVIOUS_PROMPTS = 256
+
+/**
+ * Find the text a settled run carries, without the model's reasoning
+ * ({@link withoutThought}): a mission's markdown and an agent's answer alike.
  * @param settled - whatever the engine resolved.
  * @returns the text, or an empty string when there is none.
  */
 export function textOf(settled: unknown): string {
+  return withoutThought(rawTextOf(settled))
+}
+
+/**
+ * The form of a settled run, never a word of it: an empty answer is most often
+ * one made of thought alone, which the log must not carry (C on #176).
+ * @param settled - whatever the engine resolved.
+ * @returns its type, its keys, its raw text's length and its tags counted.
+ */
+export function settledShape(settled: unknown): string {
+  const raw = rawTextOf(settled)
+  const keys = settled !== null && typeof settled === 'object' ? `{${Object.keys(settled).sort().join(',')}}` : ''
+  const count = (tag: string): number => raw.split(tag).length - 1
+  return `${settled === null ? 'null' : typeof settled}${keys}, text ${raw.length} chars, <think> ${count('<think>')}, </think> ${count('</think>')}`
+}
+
+/** @param settled - whatever the engine resolved. @returns its text as the model wrote it, reasoning included. */
+function rawTextOf(settled: unknown): string {
   if (typeof settled === 'string') return settled
   const record = settled as Record<string, unknown> | null
   if (record === null || typeof record !== 'object') return ''
