@@ -372,7 +372,7 @@ export class TurnScheduler {
       const prompt = worker === undefined ? '' : `${turnPrompt(worker, channel, history, message, agents, await service.promptMarkOf(channel.id), await this.#skillsFor(worker))}\n\n${WORKER_FRAME}`
       const why = worker === undefined
         ? 'n’est plus un agent actif de ce canal'
-        : ceilingRefusal(worker, prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
+        : ceilingRefusal(call.played(worker, `w${index + 1}`), prices, spentThisMonth((await service.snapshot()).messages ?? [], worker.id, new Date().toISOString()))
           ?? overBound(worker, `w${index + 1}`, prompt)
       if (worker === undefined || why !== undefined) {
         steps.push({ role: 'worker', agentId: workerId, verdict: 'skipped', notes: [why ?? 'indisponible'] })
@@ -416,7 +416,7 @@ export class TurnScheduler {
     })
     const mark = randomUUID().slice(0, 8)
     const prompt = synthesisPrompt(synthesizer, channel, message, parts, missing, mark, await service.promptMarkOf(channel.id))
-    const refusal = ceilingRefusal(synthesizer, prices,
+    const refusal = ceilingRefusal(call.played(synthesizer, 's'), prices,
       spentThisMonth((await service.snapshot()).messages ?? [], synthesizer.id, new Date().toISOString()))
       ?? overBound(synthesizer, 's', prompt)
     if (refusal !== undefined) {
@@ -484,7 +484,7 @@ export class TurnScheduler {
     }
     // Every call of the help is the asker's: its own ceiling, with what the help already spent.
     const askerCeiling = async (): Promise<string | undefined> =>
-      ceilingRefusal(asker, prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
+      ceilingRefusal(call.played(asker, 'hr1'), prices, spentThisMonth((await service.snapshot()).messages ?? [], asker.id, new Date().toISOString()) + spent())
     const closedBy = async (): Promise<{ by: string; at: string } | undefined> => {
       const reply = ((await service.snapshot()).messages ?? []).find(candidate =>
         candidate.channelId === channel.id && candidate.replyTo === messageId && candidate.author.kind === 'human'
@@ -671,7 +671,7 @@ export class TurnScheduler {
       const reserved = price === undefined ? 0 : eurOf({ input: estimatedTokens(text), output: RESERVED_OUTPUT_TOKENS }, price)
       if (spent() + reserved > council.capEur) return { refused: `le coût du tour atteindrait sa borne (${council.capEur} €)` }
       const monthly = spentThisMonth((await service.snapshot()).messages ?? [], who.id, new Date().toISOString())
-      const ceiling = ceilingRefusal(who, prices, monthly)
+      const ceiling = ceilingRefusal(call.played(who, suffix), prices, monthly)
       if (ceiling !== undefined) return { refused: ceiling }
       try {
         const answered = await call(who, suffix, text, 'none', council.capEur - spent())
@@ -1121,10 +1121,19 @@ export class TurnScheduler {
           candidate.id === coordination.verifierId && candidate.retiredAt === undefined && channel.agents.includes(candidate.id))
         const spent = verifier === undefined
           ? undefined
-          : ceilingRefusal(verifier, prices,
+          : ceilingRefusal(call.played(verifier, 'v'), prices,
             spentThisMonth((await service.snapshot()).messages ?? [], verifier.id, new Date().toISOString()))
+        // same-model, once the roles resolved: a verifier on the author's very model
+        // checks nothing. It is not run; the draft goes out said « non vérifiée :
+        // même modèle » (C on #178), and the operator is told.
+        const checker = verifier === undefined ? undefined : call.played(verifier, 'v')
+        const author = call.played(agent, '')
+        const sameModel = checker !== undefined && checker.provider === author.provider && checker.model === author.model
         if (verifier === undefined) {
           steps.push({ role: 'verifier', agentId: coordination.verifierId, verdict: 'skipped', notes: ['le vérificateur n’est plus un agent actif de ce canal'] })
+        } else if (sameModel) {
+          steps.push({ role: 'verifier', agentId: verifier.id, model: `${checker.provider}/${checker.model}`, verdict: 'skipped', reasonKind: 'same-model', notes: ['même modèle'] })
+          this.#log(`mndt: turn ${turn.id}: its verifier @${verifier.handle} would play on the author's model (${author.provider}/${author.model}): not run, the draft published unverified`)
         } else if (spent !== undefined) {
           steps.push({ role: 'verifier', agentId: verifier.id, verdict: 'skipped', notes: [spent] })
         } else {

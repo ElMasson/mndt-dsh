@@ -48,6 +48,8 @@ export type ModelRolesRead =
 
 const ROUTE_NAME = /^[a-z][a-z0-9-]{0,31}$/
 const PROVIDER = /^[a-z0-9][a-z0-9-]{0,62}$/
+/** A model's name, as served on a step (Turn.model): never an address, a query or a key. */
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/
 const VARIABLE = /\$\{([A-Z_][A-Z0-9_]*)\}/g
 
 /**
@@ -91,7 +93,7 @@ export function parseModelRoles(
     const slash = expanded.indexOf('/')
     const provider = slash < 0 ? '' : expanded.slice(0, slash)
     const model = slash < 0 ? '' : expanded.slice(slash + 1)
-    if (!PROVIDER.test(provider) || model === '' || /\s/.test(model)) return { ok: false, reason: `roles.json : la route ${name} doit être « fournisseur/modèle », pas « ${value} »` }
+    if (!PROVIDER.test(provider) || !MODEL.test(model) || model.includes('://')) return { ok: false, reason: `roles.json : la route ${name} doit être « fournisseur/modèle », pas « ${value} »` }
     if (priceOf(prices, { provider, model }) === undefined) return { ok: false, reason: `roles.json : la route ${name} (${provider}/${model}) n’a pas de prix dans prices.json` }
     routes[name] = { provider, model }
   }
@@ -158,8 +160,11 @@ export async function readModelRoles(
   try {
     text = await readFile(file, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') text = undefined
-    else return { ok: false, reason: 'roles.json ne se lit pas' }
+    // The variable names a policy: a file gone is never « no policy », or every
+    // role would silently fall back to its agent's model (C on #178). Only an
+    // unset variable means no policy.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, reason: 'roles.json est absent de l’espace' }
+    return { ok: false, reason: 'roles.json ne se lit pas' }
   }
   const read = parseModelRoles(text, env, prices)
   if (read.ok) {

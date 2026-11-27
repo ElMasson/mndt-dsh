@@ -828,5 +828,13 @@ function readPrices(path: string): PriceGrid {
  * read at each call, so a change applies from the next turn.
  */
 export function modelRolesReader(ctx: Context, prices: PriceGrid): () => Promise<ModelRolesRead> {
-  return () => readModelRoles(process.env.DSH_MNDT_MODEL_ROLES_FILE, process.env, prices, (line) => { warnOperator(ctx, line) })
+  return async () => {
+    const file = process.env.DSH_MNDT_MODEL_ROLES_FILE
+    const read = await readModelRoles(file, process.env, prices, (line) => { warnOperator(ctx, line) })
+    if (!read.ok) {
+      const day = new Date().toISOString().slice(0, 10)
+      warnOperatorDaily(ctx, 'model-roles', `mndt: the space's models by role (${file ?? '?'}) refuse every turn (${day}): ${read.reason}`, day)
+    }
+    return read
+  }
 }

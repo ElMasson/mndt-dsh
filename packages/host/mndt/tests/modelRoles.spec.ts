@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parsePrices } from '../src/core/index.ts'
 import { NO_MODEL_ROLES, parseModelRoles, readModelRoles, resolveModel, stepRole } from '../src/model-roles.ts'
+import { modelRolesReader } from '../src/gateway.ts'
 
 const deploy = join(import.meta.dirname, '..', 'deploy', 'llm')
 const prices = parsePrices(readFileSync(join(deploy, 'prices.json'), 'utf8'))
@@ -63,6 +64,10 @@ describe('the space\'s models by role (roles.json)', () => {
     expect(refused('{"roles": {"redacteur": "agent"}}')).toContain('rôle inconnu')
     expect(refused('{"roles": {"verifier": "jugement"}}')).toContain('route inconnue « jugement »')
     expect(refused('{"routes": {"j": "scaleway-genapi/glm-5.3"}, "roles": {"author": "j"}}')).toContain('author: "agent"')
+    // A model's name, never an address, a query or a key (it is served on each step).
+    expect(refused('{"routes": {"r": "vllm-qwen/${VLLM_QWEN_MODEL}"}}'.replace('${VLLM_QWEN_MODEL}', 'http://10.0.0.1:8000/v1'))).toContain('fournisseur/modèle')
+    expect(parseModelRoles('{"routes": {"r": "vllm-qwen/${VLLM_QWEN_MODEL}"}}', { VLLM_QWEN_MODEL: 'q?key=sk-123' }, prices).ok).toBe(false)
+    expect(parseModelRoles('{"routes": {"r": "vllm-qwen/${VLLM_QWEN_MODEL}"}}', { VLLM_QWEN_MODEL: 'user:pw@host' }, prices).ok).toBe(false)
     // A comment key and the key PR 2 reads are accepted.
     expect(refused('{"_comment": "x", "onUnreachable": {}}')).toBe('accepted')
   })
@@ -85,7 +90,11 @@ describe('the space\'s models by role (roles.json)', () => {
       const file = join(dir, 'roles.json')
       const warned: string[] = []
       const warn = (line: string): void => { warned.push(line) }
-      expect(await readModelRoles(file, env, prices, warn)).toEqual({ ok: true, policy: NO_MODEL_ROLES, unavailable: [] })
+      // The variable names a file that is not there: refused, never « no policy » (C on #178).
+      expect(await readModelRoles(file, env, prices, warn)).toEqual({ ok: false, reason: 'roles.json est absent de l’espace' })
+      // Only an unset variable means no policy.
+      expect(await readModelRoles(undefined, env, prices, warn)).toEqual({ ok: true, policy: NO_MODEL_ROLES, unavailable: [] })
+      expect(await readModelRoles('', env, prices, warn)).toEqual({ ok: true, policy: NO_MODEL_ROLES, unavailable: [] })
       await writeFile(file, defaultPolicy)
       const read = await readModelRoles(file, { VLLM_QWEN_MODEL: '' }, prices, warn)
       expect(read.ok).toBe(true)
@@ -95,6 +104,25 @@ describe('the space\'s models by role (roles.json)', () => {
       expect(await readModelRoles(file, env, prices, warn)).toMatchObject({ ok: false })
       expect(await readModelRoles(dir, env, prices, warn)).toEqual({ ok: false, reason: 'roles.json ne se lit pas' })
     } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('the gateway\'s reader of the policy', () => {
+  it('DSH_MNDT_MODEL_ROLES_FILE set and its file gone: every turn refused, the operator told once a day, never « no policy »', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'roles-gw-'))
+    const before = process.env.DSH_MNDT_MODEL_ROLES_FILE
+    try {
+      process.env.DSH_MNDT_MODEL_ROLES_FILE = join(dir, 'roles.json')
+      const logged: string[] = []
+      const reader = modelRolesReader({ logger: { warn: (line: string) => { logged.push(line) } } } as never, prices)
+      expect(await reader()).toEqual({ ok: false, reason: 'roles.json est absent de l’espace' })
+      expect(await reader()).toMatchObject({ ok: false })
+      expect(logged.filter(line => line.includes('refuse every turn'))).toHaveLength(1)
+    } finally {
+      if (before === undefined) delete process.env.DSH_MNDT_MODEL_ROLES_FILE
+      else process.env.DSH_MNDT_MODEL_ROLES_FILE = before
       await rm(dir, { recursive: true, force: true })
     }
   })

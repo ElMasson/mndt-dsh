@@ -13,6 +13,7 @@ const PRICES: PriceGrid = {
   'route-a/*': { input: 1, output: 2 },
   'route-b/*': { input: 3, output: 4 },
   'route-j/*': { input: 10, output: 20 },
+  'route-q/*': { input: 0, output: 0 },
 }
 const noMissions: MissionRunner = { run: async () => ({ title: 't', markdown: 'm', sources: [] }) }
 
@@ -27,11 +28,11 @@ class RecordingEngine implements TurnEngine {
 }
 
 /** @param policy - a roles.json, or a reader. */
-function bench(policy: string | (() => Promise<ModelRolesRead>)) {
+function bench(policy: string | (() => Promise<ModelRolesRead>), lines: string[] = []) {
   const service = new WorkbenchService({ store: new MemoryStore() })
   const engine = new RecordingEngine()
   const modelRoles = typeof policy === 'string' ? async () => parseModelRoles(policy, {}, PRICES) : policy
-  const turns = new TurnScheduler({ service, engine, prices: PRICES, dataDir: '/data/mndt', modelRoles })
+  const turns = new TurnScheduler({ service, engine, prices: PRICES, dataDir: '/data/mndt', modelRoles, warn: (line) => { lines.push(line) } })
   const api = createMndtApi({
     service, runner: noMissions, turns,
     identity: { tokens: { owner: { user: owner } } },
@@ -85,6 +86,43 @@ describe('the models by role: the step is played on its role\'s model, the agent
     expect(asked?.turns?.[0]?.steps?.map(step => step.model)).toEqual(['route-a/m', 'route-b/m'])
   })
 
+  it('same-model after resolution, still the same: the verifier is not run, the draft goes out « non vérifiée : même modèle », the operator told', async () => {
+    const lines: string[] = []
+    const b = bench('{"routes": {"jugement": "route-a/m"}, "roles": {"verifier": "jugement"}}', lines)
+    const { verifier, channel } = await authorVerifier(b)
+    // The verifier's own agent moved to the author's model after the coordination was set.
+    await b.service.updateAgent(verifier, { provider: 'route-a' }, owner, 'owner')
+    const asked = await ask(b, channel)
+    expect(b.engine.seen.map(input => input.turnId.endsWith('-v'))).toEqual([false])
+    const step = asked?.turns?.[0]?.steps?.[1]
+    expect(step).toMatchObject({ role: 'verifier', agentId: verifier, model: 'route-a/m', verdict: 'skipped', reasonKind: 'same-model' })
+    const reply = ((await b.service.messages(channel)) as readonly Message[]).find(m => m.author.kind === 'agent')
+    expect(reply?.text).toBe('brouillon\n\nNon vérifié : même modèle.')
+    expect(lines.some(line => line.includes('not run, the draft published unverified'))).toBe(true)
+  })
+
+  it('the bound is checked at the resolved route\'s price: a worker on GLM is held at GLM\'s, one on Qwen at 0', async () => {
+    // Before its call, a step reserves its prompt plus 8 192 output tokens: 0.16 € on route-j (GLM here),
+    // 0.016 € on the workers' own route-a, 0 on route-q (Qwen here). The turn's bound: 0.10 €.
+    const fan = async (route: string) => {
+      const b = bench(`{"routes": {"r": "${route}"}, "roles": {"worker": "r"}}`)
+      const one = await b.agent('un', 'route-a')
+      const two = await b.agent('deux', 'route-a')
+      const synth = await b.agent('synthese', 'route-b')
+      const channel = ((await b.call('POST', '/channels', { name: 'eventail', agents: [one, two, synth] })).channel as { id: string }).id
+      await b.call('POST', `/channels/${channel}/coordination`, { mode: 'parallel-synthesis', workers: [one, two], synthesizer: synth, maxEurPerTurn: 0.1 })
+      const asked = await b.ask(channel, '@synthese fais le point')
+      return (asked?.turns?.[0]?.steps ?? []).filter(step => step.role === 'worker')
+    }
+    // On GLM: each worker's reservation passes the bound, so neither is run.
+    const onGlm = await fan('route-j/juge')
+    expect(onGlm.map(step => step.verdict)).toEqual(['skipped', 'skipped'])
+    expect(onGlm[0]?.notes?.[0]).toContain('atteindrait sa borne')
+    // On Qwen: both run, a million input tokens each, 0 €.
+    const onQwen = await fan('route-q/q')
+    expect(onQwen.map(step => [step.model, step.eur, step.verdict ?? null])).toEqual([['route-q/q', 0, null], ['route-q/q', 0, null]])
+  })
+
   it('without a policy, every step plays on its agent\'s model, as before', async () => {
     const b = bench(async () => parseModelRoles(undefined, {}, PRICES))
     const { channel } = await authorVerifier(b)
@@ -92,12 +130,17 @@ describe('the models by role: the step is played on its role\'s model, the agent
     expect(asked?.turns?.[0]?.steps?.map(step => step.model)).toEqual(['route-a/m', 'route-b/m'])
   })
 
-  it('a single turn says the model it was played on', async () => {
+  it('a single turn says the model it was played on: its name, never an address nor a key', async () => {
     const b = bench(JUGEMENT)
     const solo = await b.agent('solo', 'route-b')
     const channel = ((await b.call('POST', '/channels', { name: 'seul', agents: [solo] })).channel as { id: string }).id
     const asked = await b.ask(channel, '@solo bonjour')
     expect(asked?.turns?.[0]?.model).toBe('route-b/m')
+    // As served to a reader of the channel: the same name, and nothing that looks like an address or a key.
+    const served = await b.call('GET', `/channels/${channel}/messages`)
+    const turn = JSON.stringify(served).match(/"model":"([^"]*)"/g) ?? []
+    expect(turn.length).toBeGreaterThan(0)
+    for (const field of turn) expect(field).toMatch(/^"model":"[a-z0-9-]+\/[A-Za-z0-9._:-]+"$/)
   })
 
   it('a policy that cannot be read refuses the turn with its reason, and no model is called', async () => {

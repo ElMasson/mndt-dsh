@@ -375,6 +375,8 @@ export interface TurnStep {
   readonly eur?: number
   /** The verifier's reading: nothing to fix, things to fix, or no usable verdict. */
   readonly verdict?: 'ok' | 'issues' | 'unreadable' | 'skipped'
+  /** A verifier skipped because it would play on the author's very model, once the roles resolved (« non vérifiée : même modèle »). */
+  readonly reasonKind?: 'same-model'
   /** What the verifier asked to fix, or why the check did not happen. */
   readonly notes?: readonly string[]
   /**
