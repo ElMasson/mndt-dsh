@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatTranslate } from './chatLocales.ts'
-import type { AutomationRow, MndtFace } from './face.ts'
+import type { AutomationRow, MissionRow, MndtFace } from './face.ts'
 import { when } from './format.ts'
 import { cadenceWords, runTime } from './schedule.tsx'
 
@@ -53,7 +53,14 @@ type Said = { readonly id: string; readonly ran: true } | { readonly id: string;
 
 /** @param props - the face, the copy and how to open the owner's lane. @returns the screen. */
 export function ScheduledScreen(props: {
-  readonly api: Pick<MndtFace, 'automations' | 'toggleAutomation' | 'runAutomationNow' | 'saveAutomation'>
+  readonly api: Pick<MndtFace, 'automations' | 'toggleAutomation' | 'runAutomationNow' | 'saveAutomation'> & Partial<Pick<MndtFace, 'retryMission' | 'cancelMission'>>
+  /**
+   * The owner's missions (the page state): its scheduled runs and the missions run by hand, newest
+   * first, under « Derniers passages », with Relancer and Annuler (moved from the old team feed).
+   */
+  readonly missions?: readonly MissionRow[] | undefined
+  /** Read the page state again after a mission gesture. */
+  readonly onMissionsChanged?: (() => void) | undefined
   readonly onLane: () => void
   readonly title: string
   readonly t: ChatTranslate
@@ -211,6 +218,76 @@ export function ScheduledScreen(props: {
           ))}
         </div>
       )}
+      {props.missions === undefined || props.missions.length === 0 ? undefined : (
+        <RecentRuns missions={props.missions} api={api} onChanged={props.onMissionsChanged} t={t} />
+      )}
+    </section>
+  )
+}
+
+/** The newest missions shown under « Derniers passages ». */
+const RECENT = 20
+
+/** @param status - a mission's status as served. @returns its word key. */
+function missionWord(status: string): 'runQueued' | 'runRunning' | 'runDone' | 'runFailed' | 'runCancelled' | 'runOther' {
+  return status === 'queued' ? 'runQueued' : status === 'running' ? 'runRunning' : status === 'succeeded' || status === 'done' ? 'runDone'
+    : status === 'failed' ? 'runFailed' : status === 'cancelled' ? 'runCancelled' : 'runOther'
+}
+
+/**
+ * « Derniers passages »: the scheduled runs and the missions run by hand, in one place (moved from the
+ * old team feed, 27/11). Relancer a failed one, Annuler one that waits or runs, one gesture at a time;
+ * a refusal reads a fixed sentence. A mission's error is the host's sentence (#157), shown as text.
+ */
+function RecentRuns(props: {
+  readonly missions: readonly MissionRow[]
+  readonly api: Partial<Pick<MndtFace, 'retryMission' | 'cancelMission'>>
+  readonly onChanged?: (() => void) | undefined
+  readonly t: ChatTranslate
+}): ReactNode {
+  const { t } = props
+  const [busy, setBusy] = useState<string | undefined>(undefined)
+  const [refused, setRefused] = useState<string | undefined>(undefined)
+  const inFlight = useRef(false)
+  const recent = [...props.missions].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, RECENT)
+  const act = async (id: string, gesture: ((missionId: string) => Promise<{ readonly ok: boolean }>) | undefined): Promise<void> => {
+    if (gesture === undefined || inFlight.current) return
+    inFlight.current = true
+    setBusy(id)
+    setRefused(undefined)
+    try {
+      const outcome = await gesture(id)
+      if (!outcome.ok) setRefused(id)
+      props.onChanged?.()
+    } catch {
+      setRefused(id)
+    } finally {
+      inFlight.current = false
+      setBusy(undefined)
+    }
+  }
+  return (
+    <section className="mw-ctx-section" aria-label={t('runsTitle')} data-testid="recent-runs">
+      <h2 className="mw-ctx-title">{t('runsTitle')}</h2>
+      {recent.map(m => (
+        <div key={m.id} className="mw-ctx-row" data-testid="recent-run" data-status={m.status}>
+          <p className="mw-ctx-small">
+            <span className="mw-ctx-strong">{m.prompt.length > 90 ? `${m.prompt.slice(0, 90)}…` : m.prompt}</span>
+            {` · ${when(m.createdAt)}`}
+            <span className="mw-chip" data-testid="recent-run-status">{t(missionWord(m.status))}</span>
+          </p>
+          {m.error === undefined ? undefined : <p className="mw-ctx-small mw-ctx-muted">{m.error}</p>}
+          <div className="mw-ctx-actions">
+            {m.status !== 'failed' || props.api.retryMission === undefined ? undefined : (
+              <button type="button" className="mw-secondary" disabled={busy === m.id} onClick={() => { void act(m.id, props.api.retryMission) }}>{t('runRetry')}</button>
+            )}
+            {(m.status !== 'queued' && m.status !== 'running') || props.api.cancelMission === undefined ? undefined : (
+              <button type="button" className="mw-text-button" disabled={busy === m.id} onClick={() => { void act(m.id, props.api.cancelMission) }}>{t('runCancel')}</button>
+            )}
+          </div>
+          {refused === m.id ? <p role="alert" className="mw-ctx-error">{t('runRefused')}</p> : undefined}
+        </div>
+      ))}
     </section>
   )
 }

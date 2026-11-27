@@ -6,11 +6,12 @@
  * A channel is a perimeter of responsibility (the team, one mandate, the system),
  * every post is typed, and the approval card is the only place a decision is made.
  */
+import { MandateRuns } from './mandateRuns.tsx'
 import { MachineScreen, machinesServed } from './machine.tsx'
 import { ScheduledScreen } from './scheduledScreen.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AutomationsAnswer, DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
+import type { DecideOptions, MemberRow, MndtFace, SearchRow } from './face.ts'
 import { ChatRefusal } from './chat.ts'
 import type { AgentInput, ChatAgent, ChatChannel, ChatFace, ChatSkill, CoordinationChange, MountedConnector, OfferedModel, OpenEscalation, SkillWritten } from './chat.ts'
 import { chatEnglish } from './chatLocales.ts'
@@ -25,7 +26,6 @@ import { WebCard, originOf, shownName } from './TeamFeed.tsx'
 import type { IconName } from './Icons.tsx'
 import type { MndtKey } from './locales.ts'
 import { Icon } from './Icons.tsx'
-import { FaceRefusal } from './httpFace.ts'
 import type { DocumentsFace } from './documents.ts'
 import type { TeamPlace } from './TeamShell.tsx'
 import { isHostDown } from './hostDown.ts'
@@ -189,7 +189,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<View>('channel')
+  // The team frame starts on its own place (the lane, once read), never on the old feed: otherwise the
+  // owner's first landing would be taken for a request of the old feed and moved to Tâches planifiées.
+  const [view, setView] = useState<View>(team === undefined ? 'channel' : 'chat')
   // On a narrow screen the channel's context opens over the page (the team frame only).
   const [contextOpen, setContextOpen] = useState(false)
   // Team channels (lot 1): what the workbench serves, or why it could not be read.
@@ -536,7 +538,6 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     return decisionRefusal(outcome.error ?? decision, tc)
   }, [api, load, loadCards, chat, tc, loadOffered, loadMounted, loadChat])
 
-  const [automations, setAutomations] = useState<AutomationsAnswer | undefined>(undefined)
   // Whether the instance serves computers (« Mon ordinateur »): asked once; a 503 no-machines is « no ».
   const [machinesOn, setMachinesOn] = useState(false)
   useEffect(() => {
@@ -545,60 +546,14 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     void machinesServed(chat).then((served) => { if (live) setMachinesOn(served) })
     return () => { live = false }
   }, [chat, team])
-  const [automationError, setAutomationError] = useState<string | undefined>(undefined)
-  const [automationBusy, setAutomationBusy] = useState<string | undefined>(undefined)
-  const [automationNotice, setAutomationNotice] = useState<string | undefined>(undefined)
-
-  /** Read the automation registry, seeded on the Host side. */
-  const loadAutomations = useCallback(async () => {
-    try {
-      setAutomations(await api.automations())
-      setAutomationError(undefined)
-    } catch (failure) {
-      // In a team, automations are the owner's alone: the API answers 404 to anyone else.
-      setAutomationError(failure instanceof FaceRefusal && failure.status === 404
-        ? t('shell.owner-only')
-        : failure instanceof Error ? failure.message : String(failure))
-    }
-  }, [api, t])
-
+  // The old team feed is gone from the team frame (Stéphane, 27/11): whatever still asks for IT (the
+  // legacy channel « team », from a click on an Activité event or the search) lands where its content
+  // now lives: the owner's « Tâches planifiées » and its « Derniers passages »; anyone else, the lane.
+  // Any other channel opens as it is.
   useEffect(() => {
-    if (view === 'automations' && automations === undefined) void loadAutomations()
-  }, [view, automations, loadAutomations])
-
-  /** @param id - automation. @param enabled - target state. */
-  const toggleAutomation = async (id: string, enabled: boolean): Promise<void> => {
-    setAutomationBusy(id)
-    setAutomationNotice(undefined)
-    try {
-      const result = await api.toggleAutomation(id, enabled)
-      if (!result.ok) setAutomationError(result.error ?? 'le changement a ete refuse')
-      else await loadAutomations()
-    } catch (failure) {
-      setAutomationError(failure instanceof Error ? failure.message : String(failure))
-    } finally {
-      setAutomationBusy(undefined)
-    }
-  }
-
-  /** @param id - automation to run now, synchronously. */
-  const runAutomationNow = async (id: string): Promise<void> => {
-    setAutomationBusy(id)
-    setAutomationNotice(undefined)
-    try {
-      const result = await api.runAutomationNow(id)
-      if (!result.ok) setAutomationError(result.error ?? 'l execution a ete refusee')
-      else {
-        setAutomationNotice(`Execution terminee : ${result.value?.outcome ?? 'ok'}`)
-        await loadAutomations()
-      }
-    } catch (failure) {
-      setAutomationError(failure instanceof Error ? failure.message : String(failure))
-    } finally {
-      setAutomationBusy(undefined)
-    }
-  }
-
+    if (team === undefined || view !== 'channel' || channelId !== 'team') return
+    setView(team.owner === true ? 'scheduled' : 'chat')
+  }, [team, view, channelId])
 
   type MemberRole = 'viewer' | 'operator' | 'admin' | 'owner'
   const MEMBER_ROLES: readonly MemberRole[] = ['viewer', 'operator', 'admin', 'owner']
@@ -1178,7 +1133,6 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             >
               <span className="mndt-channel-hash">{'\u2699'}</span>
               <span className="mndt-channel-name">{t('ui.automatisations')}</span>
-              <span className="mndt-channel-badge">{automations?.items.filter(item => item.enabled).length ?? 0}</span>
             </button>
             {state.canAdmin !== true ? undefined : (
               <button
@@ -1484,60 +1438,25 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           </>
         )
       })()}
-      <section className="mndt-main mndt-automations" style={{ display: view === 'automations' ? undefined : 'none' }}>
-        <header className="mndt-channel-head">
-          <div className="mndt-channel-head-main">
-            <h1 className="mndt-channel-title">{t('ui.automatisations')}</h1>
-            <p className="mndt-channel-subject">
-              {t('ui.des-missions-planifiees-sans-conversation-elles-ne')}
-            </p>
-          </div>
-          <div className="mndt-channel-head-side">
-            <button type="button" className="mndt-button" onClick={() => { void loadAutomations() }}>{t('ui.rafraichir')}</button>
-            <span className="mndt-pill" data-tone="id">{automations?.items.length ?? 0} {t('ui.planifiees')}</span>
-          </div>
-        </header>
-        {automationError === undefined ? undefined : <div className="mndt-error mndt-error-banner"><span>{automationError}</span></div>}
-        {automationNotice === undefined ? undefined : <p className="mndt-empty">{automationNotice}</p>}
-        <div className="mndt-feed">
-          {(automations?.items ?? []).map(item => (
-            <article key={item.id} className="mndt-post-card" data-kind="automation">
-              <div className="mndt-post-head">
-                <span className="mndt-post-kind">{item.name}</span>
-                <span className="mndt-pill" data-tone="state">{item.enabled ? t('ui.active') : t('ui.suspendue')}</span>
-                <span className="mndt-pill" data-tone="id">{item.at} {t('ui.chaque-jour')}</span>
-                <span className="mndt-post-time">{item.kind}</span>
-              </div>
-              <p className="mndt-post-body">{item.prompt}</p>
-              <div className="mndt-post-actions">
-                {item.lastFiredDate === undefined ? undefined : <span className="mndt-tag">{t('ui.derniere')} {item.lastFiredDate}</span>}
-                {item.lastOutcome === undefined ? undefined : <span className="mndt-tag">{item.lastOutcome}</span>}
-                {automations?.canAdmin !== true ? undefined : (
-                  <>
-                    <button
-                      type="button"
-                      className="mndt-button"
-                      disabled={automationBusy === item.id}
-                      onClick={() => { void runAutomationNow(item.id) }}
-                    >
-                      {automationBusy === item.id ? t('ui.en-cours') : t('ui.executer-maintenant')}
-                    </button>
-                    <button
-                      type="button"
-                      className="mndt-button"
-                      disabled={automationBusy === item.id}
-                      onClick={() => { void toggleAutomation(item.id, !item.enabled) }}
-                    >
-                      {item.enabled ? t('ui.suspendre') : t('ui.activer')}
-                    </button>
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
-          {automations !== undefined && automations.items.length === 0 ? <p className="mndt-empty">{t('ui.aucune-automatisation')}</p> : undefined}
-        </div>
-      </section>
+      {/* One screen for the automations (Stéphane, 27/11: not two places with the same thing): the
+          team's « Tâches planifiées », shown here too for a workstation without the team frame. */}
+      {view !== 'automations' ? undefined : (
+        <section className="mndt-main mndt-automations">
+          <ScheduledScreen
+            api={api}
+            missions={state.missions}
+            onMissionsChanged={() => { void load() }}
+            onLane={() => {
+              // As in the team frame (#164): the person's lane, straight, never through the old feed.
+              const lane = chatChannels?.find(c => c.kind === 'solo')
+              if (lane !== undefined) setChatId(lane.id)
+              setView('chat')
+            }}
+            title={t('ui.automatisations')}
+            t={tc}
+          />
+        </section>
+      )}
 
       <section className="mndt-main mndt-admin" style={{ display: view === 'admin' ? undefined : 'none' }}>
         <header className="mndt-channel-head">
@@ -1662,6 +1581,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                   <span className="mndt-post-time">{item.delegant} {t('ui.vers')} {item.delegataire}</span>
                   <span className="mndt-pill" data-tone="state">{item.state}</span>
                   <span className="mndt-post-time">{t('ui.echeance')} {item.expiresOn}</span>
+                  {/* Its thread, moved from the old team feed: the missions run under this mandate. */}
+                  <MandateRuns missions={state.missions.filter(m => m.mandateId === item.id)} t={tc} />
                   {item.state !== 'proposed' ? undefined : (
                     <button type="button" className="mndt-button" disabled={adminBusy === `sign:${item.id}`} onClick={() => { void settleMandate(item.id, 'sign') }}>{t('ui.signer')}</button>
                   )}
@@ -2077,6 +1998,8 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
           {view !== 'scheduled' || team.owner !== true ? undefined : (
             <ScheduledScreen
               api={api}
+              missions={state.missions}
+              onMissionsChanged={() => { void load() }}
               title={t('shell.scheduled')}
               onLane={() => {
                 const lane = chatChannels?.find(c => c.kind === 'solo')
@@ -2103,23 +2026,6 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                       <span className="mw-tile-text">{t('shell.settings-admin')}</span>
                     </button>
                   </li>
-                )}
-                {/* Missions and automations are the owner's in a team (#63): nobody else is offered them. */}
-                {team.owner !== true ? undefined : (
-                  <>
-                    <li>
-                      <button type="button" className="mw-tile mw-tile-link" onClick={() => { setView('automations') }}>
-                        <span className="mw-tile-title"><Icon name="Clock" className="mw-slate" />{t('ui.automatisations')}</span>
-                        <span className="mw-tile-text">{t('shell.settings-automations')}</span>
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" className="mw-tile mw-tile-link" onClick={() => { setChannelId('team'); setView('channel') }}>
-                        <span className="mw-tile-title"><Icon name="Boxes" className="mw-slate" />{t('shell.legacy-feed')}</span>
-                        <span className="mw-tile-text">{t('shell.settings-legacy')}</span>
-                      </button>
-                    </li>
-                  </>
                 )}
                 {team.advancedHref === undefined ? undefined : (
                   <li>

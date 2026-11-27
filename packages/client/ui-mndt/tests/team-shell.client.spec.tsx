@@ -395,7 +395,7 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
     expect(tile.textContent).toMatch(/0,25\s€ ce mois-ci, sur 5,00\s€/u)
   })
 
-  it('Réglages offers missions, automations and the advanced mode to the owner only', async () => {
+  it('Réglages no longer offers the old Automatisations nor the old team feed; the advanced mode stays the owner\'s', async () => {
     const { unmount } = render(<CollabPage api={face(state())} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
     const member = screen.getByTestId('team-settings').textContent ?? ''
@@ -407,12 +407,14 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
     render(<CollabPage api={face(state())} team={{ owner: true, advancedHref: '/dsh/' }} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
     const owner = screen.getByTestId('team-settings').textContent ?? ''
-    expect(owner).toContain('Automatisations')
-    expect(owner).toContain('Fil de l\'équipe')
+    // Stéphane, 27/11: one place, « Tâches planifiées »; the old feed's uses moved there and to Mandats.
+    expect(owner).not.toContain('Automatisations')
+    expect(owner).not.toContain('Fil de l\'équipe')
+    expect(owner).toContain('Activité')
     expect(screen.getByTestId('advanced-mode').getAttribute('href')).toBe('/dsh/')
   })
 
-  it('a 404 on the automations says they are the owner\'s, not a raw error', async () => {
+  it('automations that cannot be read are said in a fixed sentence, never a raw error', async () => {
     const page = state()
     const refusal = new Proxy({}, {
       get: (_t, key) => key === 'state' ? async () => page
@@ -420,10 +422,10 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
           : key === 'automations' ? async () => { throw new FaceRefusal('not found', 404) }
             : async () => { throw new Error('non utilise') },
     }) as MndtFace
-    render(<CollabPage api={refusal} team={{ owner: true }} />)
-    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
-    fireEvent.click(screen.getByRole('button', { name: /Automatisations/u }))
-    expect(await screen.findByText('Réservé au propriétaire de l\'espace.')).toBeTruthy()
+    render(<CollabPage api={refusal} tc={chatFrench} team={{ owner: true }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Tâches planifiées' }))
+    expect(await screen.findByText('Les tâches planifiées ne se lisent pas pour l\'instant : réessayez dans un moment.')).toBeTruthy()
+    expect(screen.queryByText('not found')).toBeNull()
   })
 })
 
@@ -1156,5 +1158,52 @@ describe('the lane panel\'s agents: one truth (eighth jump)', { timeout: 20_000 
     const card = await screen.findByTestId('context-panel', {}, { timeout: 5000 })
     expect(within(card).getByTestId('agent-pills-label').textContent).toBe('Les agents de l\'espace :')
     expect(within(card).getByText('Aucun agent dans ce canal.')).toBeTruthy()
+  })
+})
+
+describe('review of #177', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-27T08:00:00.000Z'
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const compta = { id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const ownerFace = (): MndtFace => new Proxy(face(state()), {
+    get: (target, key) => (key === 'automations'
+      ? async () => ({ items: [{ id: 'auto_briefing', name: 'Briefing du matin', kind: 'briefing', prompt: 'x', at: '07:30', enabled: true, createdBy: 'scheduler' }], canAdmin: true })
+      : key === 'runAutomationNow' ? async () => ({ ok: true, value: { outcome: 'ok' } })
+        : (target as unknown as Record<string | symbol, unknown>)[key]),
+  })
+
+  it('the owner lands in their lane, not on Tâches planifiées', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    expect(await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('opening a real channel in the team frame stays on that channel', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    const nav = await screen.findByTestId('side-nav')
+    fireEvent.click(await within(nav).findByRole('button', { name: '# Compta' }))
+    expect(await screen.findByRole('heading', { level: 1, name: '# Compta' })).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('« Voir dans ma lane » after a run opens the lane, straight', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Tâches planifiées' }))
+    fireEvent.click(within((await screen.findAllByTestId('scheduled-row'))[0] as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    fireEvent.click(within(await screen.findByTestId('scheduled-ran')).getByRole('button', { name: 'Voir dans ma lane' }))
+    expect(await screen.findByTestId('lane-welcome')).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('a member who is not the owner has no « Derniers passages », nor the place that holds it', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{ owner: false }} />)
+    const nav = await screen.findByTestId('side-nav')
+    expect(within(nav).queryByRole('button', { name: 'Tâches planifiées' })).toBeNull()
+    expect(screen.queryByTestId('recent-runs')).toBeNull()
   })
 })

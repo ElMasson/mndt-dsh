@@ -7,6 +7,7 @@ import { createMockChat } from '../src/client/mockChat.ts'
 import { ChatRefusal } from '../src/client/chat.ts'
 import type { ChatFace } from '../src/client/chat.ts'
 import { FaceRefusal } from '../src/client/httpFace.ts'
+import { chatFrench } from '../src/client/chatLocales.ts'
 
 afterEach(() => { cleanup() })
 
@@ -250,13 +251,12 @@ describe('collaboration page', () => {
     const api = fakeFace()
     render(<CollabPage api={api} />)
     fireEvent.click(within(await rail()).getByRole('button', { name: /Automatisations/ }))
-    await waitFor(() => {
-      expect(document.querySelectorAll('.mndt-post-card[data-kind="automation"]').length).toBe(2)
-    })
-    const cards = [...document.querySelectorAll('.mndt-post-card[data-kind="automation"]')] as HTMLElement[]
+    // One screen for the automations: the team's « Tâches planifiées », shown here too.
+    await waitFor(() => { expect(screen.getAllByTestId('scheduled-row')).toHaveLength(2) })
+    const cards = screen.getAllByTestId('scheduled-row')
     const relance = cards.find(card => card.textContent?.includes('Relance des approbations'))
     expect(relance).toBeTruthy()
-    fireEvent.click(within(relance as HTMLElement).getByRole('button', { name: 'Activer' }))
+    fireEvent.click(within(relance as HTMLElement).getByRole('button', { name: 'Activate' }))
     await waitFor(() => {
       expect(api.toggleAutomation).toHaveBeenCalledWith('auto_approvals', true)
     })
@@ -613,5 +613,54 @@ describe('a briefing that ran without its facts', () => {
     render(<CollabPage api={fakeFace()} />)
     await screen.findByText('# equipe')
     expect(document.querySelector('[data-testid="mission-tools-unavailable"]')).toBeNull()
+  })
+})
+
+/** @returns a face with no automation, its gestures unused. */
+function noAutomations(): Record<string, unknown> {
+  return {
+    automations: async () => ({ items: [], canAdmin: true }), toggleAutomation: vi.fn(), runAutomationNow: vi.fn(), saveAutomation: vi.fn(),
+  }
+}
+
+describe('the old team feed\'s uses, moved (27/11)', () => {
+  it('« Derniers passages »: the missions, newest first; Relancer a failed one, Annuler one that runs', async () => {
+    const { ScheduledScreen } = await import('../src/client/scheduledScreen.tsx')
+    const retryMission = vi.fn(async () => ({ ok: true }))
+    const cancelMission = vi.fn(async () => ({ ok: true }))
+    const missions = [
+      {
+        id: 'mis_a', kind: 'briefing', prompt: 'briefing du matin', status: 'failed', createdBy: 'scheduler',
+        createdAt: '2026-11-26T03:30:00.000Z', error: 'Réponse coupée (limite de longueur atteinte).',
+      },
+      { id: 'mis_b', kind: 'custom', prompt: 'relance Orange', status: 'running', createdBy: 'duke@datanalysis.re', createdAt: '2026-11-27T06:00:00.000Z' },
+    ]
+    const api = { ...noAutomations(), retryMission, cancelMission }
+    render(<ScheduledScreen api={api as never} missions={missions} onLane={vi.fn()} title="Tâches planifiées" t={chatFrench} />)
+    const runs = await screen.findAllByTestId('recent-run')
+    expect(runs[0]?.textContent).toContain('relance Orange')
+    expect(runs[1]?.textContent).toContain('Réponse coupée')
+    fireEvent.click(within(runs[1] as HTMLElement).getByRole('button', { name: 'Relancer' }))
+    await waitFor(() => { expect(retryMission).toHaveBeenCalledWith('mis_a') })
+    fireEvent.click(within(runs[0] as HTMLElement).getByRole('button', { name: 'Annuler' }))
+    await waitFor(() => { expect(cancelMission).toHaveBeenCalledWith('mis_b') })
+  })
+
+  it('a refused gesture reads a fixed sentence', async () => {
+    const { ScheduledScreen } = await import('../src/client/scheduledScreen.tsx')
+    const missions = [{
+      id: 'mis_a', kind: 'custom', prompt: 'x', status: 'failed', createdBy: 'duke@datanalysis.re', createdAt: '2026-11-26T03:30:00.000Z',
+    }]
+    const api = { ...noAutomations(), retryMission: async () => ({ ok: false, error: 'upstream sk-live-1' }) }
+    render(<ScheduledScreen api={api as never} missions={missions} onLane={vi.fn()} title="Tâches planifiées" t={chatFrench} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Relancer' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Cela n\'a pas pu être fait : réessayez dans un moment.')
+  })
+
+  it('a mandate lists its missions in Administration', async () => {
+    const { MandateRuns } = await import('../src/client/mandateRuns.tsx')
+    render(<MandateRuns missions={[{ id: 'mis_1', prompt: 'revue des comptes', status: 'succeeded', createdAt: '2026-11-26T03:30:00.000Z' }]} t={chatFrench} />)
+    expect(screen.getByTestId('mandate-runs').textContent).toContain('1 mission sous ce mandat')
+    expect(screen.getByTestId('mandate-run').textContent).toContain('revue des comptes')
   })
 })
