@@ -17,7 +17,7 @@ import type { MndtTranslate } from './locales.ts'
 
 /** Where the navigation can lead. */
 export type TeamPlace =
-  'lane' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'settings'
+  'lane' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'machine' | 'settings'
 
 /** One sub-entry under Canaux or Agents. */
 export interface TeamSubLink {
@@ -48,6 +48,8 @@ export interface TeamShellProps {
   readonly live: boolean
   /** The owner's « Tâches planifiées » entry (missions and automations are the owner's, #63). */
   readonly scheduled?: boolean | undefined
+  /** « Mon ordinateur », offered only where the instance serves computers (#163). */
+  readonly machine?: boolean | undefined
   readonly children: ReactNode
 }
 
@@ -287,6 +289,7 @@ function RailLinks(props: TeamShellProps): ReactNode {
       {link('agents', 'Bot', t('shell.agents'))}
       {subs(props.agents, props.onAgent, false, 'rail-agents')}
       {props.scheduled === true ? link('scheduled', 'Clock', t('shell.scheduled')) : undefined}
+      {props.machine === true ? link('machine', 'Monitor', t('shell.machine')) : undefined}
       {/* No « Pilotage » until one of its places has a function (Stéphane: nothing shown without one). */}
       <div className="mw-foot">
         {link('settings', 'Settings2', t('shell.settings'))}

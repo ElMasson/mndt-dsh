@@ -7,6 +7,7 @@
  * every post is typed, and the approval card is the only place a decision is made.
  */
 import { MandateRuns } from './mandateRuns.tsx'
+import { MachineScreen, machinesServed } from './machine.tsx'
 import { ScheduledScreen } from './scheduledScreen.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -182,13 +183,15 @@ export interface TeamFrame {
 }
 
 /** The views of the page: the legacy feed, a team channel, and the places of the team frame. */
-type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'settings'
+type View = 'channel' | 'chat' | 'activity' | 'automations' | 'admin' | 'pending' | 'memory' | 'channels' | 'agents' | 'scheduled' | 'machine' | 'settings'
 
 export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTrace, team, documents }: CollabPageProps) {
   const [state, setState] = useState<CollabState | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [channelId, setChannelId] = useState('team')
-  const [view, setView] = useState<View>('channel')
+  // The team frame starts on its own place (the lane, once read), never on the old feed: otherwise the
+  // owner's first landing would be taken for a request of the old feed and moved to Tâches planifiées.
+  const [view, setView] = useState<View>(team === undefined ? 'channel' : 'chat')
   // On a narrow screen the channel's context opens over the page (the team frame only).
   const [contextOpen, setContextOpen] = useState(false)
   // Team channels (lot 1): what the workbench serves, or why it could not be read.
@@ -535,13 +538,22 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     return decisionRefusal(outcome.error ?? decision, tc)
   }, [api, load, loadCards, chat, tc, loadOffered, loadMounted, loadChat])
 
-  // The old team feed is gone from the team frame (Stéphane, 27/11): whatever still asks for it (a click
-  // on an Activité event, the search) lands where its content now lives: the owner's « Tâches
-  // planifiées » and its « Derniers passages »; anyone else, the lane.
+  // Whether the instance serves computers (« Mon ordinateur »): asked once; a 503 no-machines is « no ».
+  const [machinesOn, setMachinesOn] = useState(false)
   useEffect(() => {
-    if (team === undefined || view !== 'channel') return
+    if (chat?.machine === undefined || team === undefined) return
+    let live = true
+    void machinesServed(chat).then((served) => { if (live) setMachinesOn(served) })
+    return () => { live = false }
+  }, [chat, team])
+  // The old team feed is gone from the team frame (Stéphane, 27/11): whatever still asks for IT (the
+  // legacy channel « team », from a click on an Activité event or the search) lands where its content
+  // now lives: the owner's « Tâches planifiées » and its « Derniers passages »; anyone else, the lane.
+  // Any other channel opens as it is.
+  useEffect(() => {
+    if (team === undefined || view !== 'channel' || channelId !== 'team') return
     setView(team.owner === true ? 'scheduled' : 'chat')
-  }, [team, view])
+  }, [team, view, channelId])
 
   type MemberRole = 'viewer' | 'operator' | 'admin' | 'owner'
   const MEMBER_ROLES: readonly MemberRole[] = ['viewer', 'operator', 'admin', 'owner']
@@ -842,7 +854,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
     const current = chatChannels?.find(c => c.id === chatId)
     const place: TeamPlace | undefined = view === 'chat'
       ? (current === undefined || current.kind === 'solo' ? 'lane' : 'channels')
-      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'scheduled' || view === 'settings'
+      : view === 'pending' || view === 'memory' || view === 'channels' || view === 'agents' || view === 'scheduled' || view === 'machine' || view === 'settings'
         ? view
         : 'settings'
     return (
@@ -870,6 +882,7 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
         name={team.name}
         live={error === undefined}
         scheduled={team.owner === true}
+        machine={machinesOn}
       >
         {page}
       </TeamShell>
@@ -1433,7 +1446,12 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
             api={api}
             missions={state.missions}
             onMissionsChanged={() => { void load() }}
-            onLane={() => { setView('channel') }}
+            onLane={() => {
+              // As in the team frame (#164): the person's lane, straight, never through the old feed.
+              const lane = chatChannels?.find(c => c.kind === 'solo')
+              if (lane !== undefined) setChatId(lane.id)
+              setView('chat')
+            }}
             title={t('ui.automatisations')}
             t={tc}
           />
@@ -1973,6 +1991,9 @@ export function CollabPage({ api, t = translate, chat, tc = chatEnglish, openTra
                 </ul>
               )}
             </section>
+          )}
+          {view !== 'machine' || !machinesOn || chat === undefined ? undefined : (
+            <MachineScreen face={chat} canSeeMembers={state.canAdmin === true} names={team.names} title={t('shell.machine')} t={tc} />
           )}
           {view !== 'scheduled' || team.owner !== true ? undefined : (
             <ScheduledScreen

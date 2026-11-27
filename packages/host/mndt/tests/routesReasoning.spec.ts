@@ -31,6 +31,11 @@ const routes = join(
 
 /** @returns the scaleway-genapi provider of the rendered routes. */
 function scalewayRoute(): Record<string, unknown> {
+  return renderedRoute('scaleway-genapi')
+}
+
+/** @param name - a provider of the rendered routes. @returns its route, as render-llm-routes.py writes it. */
+function renderedRoute(name: string): Record<string, unknown> {
   const rendered = execFileSync('python3', [routes, '--print'], {
     env: {
       ...process.env,
@@ -45,9 +50,9 @@ function scalewayRoute(): Record<string, unknown> {
     config?: { providers?: Record<string, Record<string, unknown>> }
   }[]
   const provider = rows.find(row => row.id === 'llm-pi-ai')?.config
-    ?.providers?.['scaleway-genapi']
+    ?.providers?.[name]
   if (provider === undefined)
-    throw new Error('no scaleway-genapi route in the rendered routes')
+    throw new Error(`no ${name} route in the rendered routes`)
   return provider
 }
 
@@ -93,6 +98,29 @@ describe('the reasoning of the Scaleway routes', () => {
   }
 })
 
+describe('the thought of the vLLM route (Qwen)', () => {
+  it('sends chat_template_kwargs enable_thinking false when no effort is asked, true when « high » is, and never a reasoning_effort', async () => {
+    vi.stubEnv('VLLM_API_KEY', 'placeholder')
+    const server = await mockServer([
+      { events: textEvents },
+      { events: textEvents },
+    ])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'vllm-qwen': { ...renderedRoute('vllm-qwen'), baseURL: `${server.url}/v1` },
+      },
+    })
+    await assemble(ctx, { provider: 'vllm-qwen', model: 'qwen-test', messages: [] })
+    expect(server.requests[0]).toMatchObject({ model: 'qwen-test', chat_template_kwargs: { enable_thinking: false } })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+    await assemble(ctx, { provider: 'vllm-qwen', model: 'qwen-test', reasoningEffort: ReasoningEffortId('high'), messages: [] })
+    expect(server.requests[1]).toMatchObject({ chat_template_kwargs: { enable_thinking: true } })
+    expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
+  })
+})
+
 describe('the host never asks a reasoning effort', () => {
   /**
    * The only files that may speak of reasoning or effort outside a comment,
@@ -101,7 +129,7 @@ describe('the host never asks a reasoning effort', () => {
    * `enable_thinking` set in a connector or an environment file).
    */
   const EXCEPTIONS: Readonly<Record<string, string>> = {
-    'deploy/llm/routes.patch.yml.template': 'declares each Scaleway model\'s levels, « off » sent as « none »',
+    'deploy/llm/routes.patch.yml.template': 'declares each Scaleway model\'s levels, « off » sent as « none », and Qwen\'s template switch, off by default',
     'deploy/rehearsal/fake-llm.mjs': 'logs the effort each call sent (rehearse.sh scaleway-reasoning-none)',
     'deploy/rehearsal/rehearse.sh': 'checks those logs (scaleway-reasoning-none)',
     'deploy/rehearsal/expected-checks-rehearse.txt': 'names that check',

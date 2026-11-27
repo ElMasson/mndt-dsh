@@ -1138,3 +1138,72 @@ describe('« Tâches planifiées » in the navigation (owner)', { timeout: 20_00
     expect((await within(first as HTMLElement).findByRole('alert')).textContent).toBe('Cette heure est illisible : écrivez-la comme 07:30.')
   })
 })
+
+describe('the lane panel\'s agents: one truth (eighth jump)', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-27T08:00:00.000Z'
+  const one = { id: 'agt_1', handle: 'assistant', name: 'Assistant', provider: 'p', model: 'm', connectors: [], eurPerMonth: 5, createdBy: you, createdAt: at }
+  const two = { ...one, id: 'agt_2', handle: 'analyste', name: 'Analyste' }
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  it('an empty lane, for whoever may add: « Ajouter un agent à ma lane : » and the pills, no « Aucun agent » beside them', async () => {
+    const chat = createMockChat({ you, agents: [one, two], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{}} />)
+    const card = await screen.findByTestId('context-panel', {}, { timeout: 5000 })
+    expect(within(card).getByTestId('agent-pills-label').textContent).toBe('Ajouter un agent à ma lane :')
+    expect(within(card).queryByText('Aucun agent dans ce canal.')).toBeNull()
+  })
+  it('a reader reads the pills as the space\'s agents, inert, and who is in the channel apart', async () => {
+    const chat = createMockChat({ you, agents: [one, two], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state({ canWrite: false, canAdmin: false, role: 'viewer' }))} chat={chat} tc={chatFrench} team={{}} />)
+    const card = await screen.findByTestId('context-panel', {}, { timeout: 5000 })
+    expect(within(card).getByTestId('agent-pills-label').textContent).toBe('Les agents de l\'espace :')
+    expect(within(card).getByText('Aucun agent dans ce canal.')).toBeTruthy()
+  })
+})
+
+describe('review of #177', { timeout: 20_000 }, () => {
+  const you = 'stephane@datanalysis.re'
+  const at = '2026-11-27T08:00:00.000Z'
+  const lane = { id: 'chn_0', name: 'solo', title: 'Ma lane', kind: 'solo' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const compta = { id: 'chn_1', name: 'compta', title: 'Compta', kind: 'team' as const, members: [you], agents: [], connectors: [], createdBy: you, createdAt: at }
+  const ownerFace = (): MndtFace => new Proxy(face(state()), {
+    get: (target, key) => (key === 'automations'
+      ? async () => ({ items: [{ id: 'auto_briefing', name: 'Briefing du matin', kind: 'briefing', prompt: 'x', at: '07:30', enabled: true, createdBy: 'scheduler' }], canAdmin: true })
+      : key === 'runAutomationNow' ? async () => ({ ok: true, value: { outcome: 'ok' } })
+        : (target as unknown as Record<string | symbol, unknown>)[key]),
+  })
+
+  it('the owner lands in their lane, not on Tâches planifiées', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    expect(await screen.findByTestId('lane-welcome', {}, { timeout: 5000 })).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('opening a real channel in the team frame stays on that channel', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    const nav = await screen.findByTestId('side-nav')
+    fireEvent.click(await within(nav).findByRole('button', { name: '# Compta' }))
+    expect(await screen.findByRole('heading', { level: 1, name: '# Compta' })).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('« Voir dans ma lane » after a run opens the lane, straight', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane, compta] }, () => Date.parse(at))
+    render(<CollabPage api={ownerFace()} chat={chat} tc={chatFrench} team={{ owner: true }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Tâches planifiées' }))
+    fireEvent.click(within((await screen.findAllByTestId('scheduled-row'))[0] as HTMLElement).getByRole('button', { name: 'Lancer maintenant' }))
+    fireEvent.click(within(await screen.findByTestId('scheduled-ran')).getByRole('button', { name: 'Voir dans ma lane' }))
+    expect(await screen.findByTestId('lane-welcome')).toBeTruthy()
+    expect(screen.queryByTestId('team-scheduled')).toBeNull()
+  })
+
+  it('a member who is not the owner has no « Derniers passages », nor the place that holds it', async () => {
+    const chat = createMockChat({ you, agents: [], channels: [lane] }, () => Date.parse(at))
+    render(<CollabPage api={face(state())} chat={chat} tc={chatFrench} team={{ owner: false }} />)
+    const nav = await screen.findByTestId('side-nav')
+    expect(within(nav).queryByRole('button', { name: 'Tâches planifiées' })).toBeNull()
+    expect(screen.queryByTestId('recent-runs')).toBeNull()
+  })
+})

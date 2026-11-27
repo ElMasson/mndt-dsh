@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryStore, SPACE_PREAMBLE, WorkbenchService, emptyState } from '../src/core/index.ts'
 import type { PriceGrid, WorkbenchState, WorkbenchStore } from '../src/core/index.ts'
 import { createMndtApi } from '../src/api.ts'
-import { promptMeasure } from '../src/runner.ts'
+import { commonPrefixOfPrints, prefixPrints, PREFIX_BLOCK, promptMeasure } from '../src/runner.ts'
 import { TurnScheduler } from '../src/turns.ts'
 import { toolOrder, withoutDevPrompt } from '../src/tool-policy.ts'
 import type { AssembleListener, LineageAgentLike, PromptAssemblyLike } from '../src/tool-policy.ts'
@@ -273,10 +273,25 @@ describe('the measure of a prompt', () => {
 
   it('says its size, its head\'s fingerprints and the tokens, never a word of it', () => {
     const line = promptMeasure(input('k'.repeat(64)), { input: 10613, output: 51, cacheRead: 9000 })
-    expect(line).toMatch(/^mndt: prompt of turn trn_1 \(@alpha\): \d+ chars, head1k [0-9a-f]{12}, head4k [0-9a-f]{12}; /)
-    expect(line.endsWith('input 10613, cacheRead 9000, output 51')).toBe(true)
+    expect(line).toMatch(/^mndt: prompt of turn trn_1 \(@alpha\): \d+ chars, head1k [0-9a-f]{12}, head4k [0-9a-f]{12}, common -; /)
+    expect(line.endsWith('input 10613, cacheRead 9000, output 51; calls -')).toBe(true)
     expect(line).not.toContain('SECRET')
     expect(line).not.toContain('DATANALYSIS')
+  })
+
+  it('says the prefix shared with the same agent\'s previous prompt in the channel, and the model calls the tokens add up', () => {
+    const line = promptMeasure(input('k'.repeat(64)), { input: 12306, output: 693 }, { common: 1542, calls: 4 })
+    expect(line).toContain(', common 1542; input 12306, cacheRead 0, output 693; calls 4')
+    const block = 'a'.repeat(PREFIX_BLOCK)
+    const two = prefixPrints(`${block}${block}`)
+    // Two whole blocks shared, a third that differs: 512 characters, whatever follows.
+    expect(commonPrefixOfPrints(prefixPrints(`${block}${block}x${block}`), prefixPrints(`${block}${block}y${block}`))).toBe(2 * PREFIX_BLOCK)
+    // A first block that differs: nothing shared, even with the same second block.
+    expect(commonPrefixOfPrints(prefixPrints(`b${block.slice(1)}${block}`), two)).toBe(0)
+    // A partial block counts for nothing: the resolution is the block.
+    expect(prefixPrints('a'.repeat(PREFIX_BLOCK - 1))).toEqual([])
+    // A fingerprint is never a word of the prompt.
+    expect(prefixPrints(`SECRET-CLIENT-42${block}`).join('')).not.toContain('SECRET')
   })
 
   it('cannot be used to check a candidate mark: its fingerprints are keyed, never a plain hash of the head', () => {
