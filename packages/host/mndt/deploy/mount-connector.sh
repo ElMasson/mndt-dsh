@@ -33,7 +33,7 @@ if [ -z "${MNDT_PATCHFILE:-}" ] && [ ! -f "$(dirname "$RENDER")/patchfile.py" ] 
   export MNDT_PATCHFILE="$(cd "$(dirname "$0")" && pwd)/patchfile.py"
 fi
 
-usage() { echo "usage: $0 <serverName> (<command...> | --preset) [--env-file <f>] [--cwd <d>] [--allow <p,..>] [--deny <p,..>] [--no-restart]" >&2; exit 1; }
+usage() { echo "usage: $0 <serverName> (<command...> | --preset) [--env-file <f>] [--cwd <d>] [--allow <p,..>] [--deny <p,..>] [--no-restart] [--no-render]" >&2; exit 1; }
 [ $# -ge 2 ] || usage
 
 server=$1
@@ -45,6 +45,7 @@ allow=""
 deny=""
 preset=0
 restart=1
+render=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --env-file) env_file=$2; shift 2 ;;
@@ -53,6 +54,8 @@ while [ $# -gt 0 ]; do
     --deny) deny=$2; shift 2 ;;
     --preset) preset=1; shift ;;
     --no-restart) restart=0; shift ;;
+    # The descriptor only: a caller that rewrites several (seed-team.sh) renders once, after the last.
+    --no-render) render=0; restart=0; shift ;;
     *) command+=("$1"); shift ;;
   esac
 done
@@ -115,6 +118,7 @@ if [ -n "$env_named" ] && [ -f "$CONNECTORS/$(basename "$env_named")" ]; then
   chmod 600 "$CONNECTORS/$(basename "$env_named")"
 fi
 
+[ "$render" = 1 ] || exit 0
 # A render refused (a patch that does not parse) stops here, said: the workbench
 # is never restarted on a patch that does not carry the connector.
 python3 "$RENDER" || { echo "rendu refuse: le patch n'a pas ete modifie, le workbench n'est pas redemarre; reparer le patch puis relancer" >&2; exit 1; }

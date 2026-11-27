@@ -29,8 +29,6 @@ die() { echo "KO $1  $2"; exit 1; }
 old_image=${1:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 new_image=${2:?usage: rehearse-update.sh <old image> <new image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
-# The members' computers: their images, their settings, their cleanup.
-. "$here/machines-rehearsal.sh"
 . "$here/checks.sh"
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
@@ -42,6 +40,8 @@ old_ref=$OLD_REF
 # trap compares): change the list with the checks.
 EXPECTED_CHECKS=$here/expected-checks-update.txt
 project=mndt-rehearsal
+# The members' computers: their images, their settings, their cleanup.
+. "$here/machines-rehearsal.sh"
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
 tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
@@ -311,10 +311,6 @@ fake_scaleway
 for routes in $(grep -rl "id: agent-default-model" "$data" 2>/dev/null); do
   sed -i "s#config: {provider: scaleway-genapi, model: deepseek-v4.1-flash}#config: {provider: vllm-qwen, model: fake-qwen}#" "$routes"
 done
-# facts-mcp.mjs itself: this version's create-tenant.sh installed it (tools-current).
-printf 'Faits de repetition.\n' > "$data/tools/facts.md"
-MNDT_HOME=$data RENDER_SCRIPT="$deploy/connectors/render-connectors.py" \
-  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 echo "installed renderer now: $(grep -c patchfile "$app/gateway/render-connectors.py") mention(s) of patchfile"
 
 step "B2. docker compose up -d on $new_image: a container whose configuration did not change is kept"
@@ -345,6 +341,13 @@ approvals_after=$(approvals_print)
 restarted=0
 seed_restart_verdict "$approvals_before" "$approvals_after" "$started_before" "$started_after" || restarted=1
 own
+# The second MCP server no channel allows (the drive's tool probe), mounted now
+# that seed-team.sh has rewritten the descriptors from this version's catalog:
+# the instance renders nothing before it either. facts-mcp.mjs itself: this
+# version's create-tenant.sh installed it (tools-current).
+printf 'Faits de repetition.\n' > "$data/tools/facts.md"
+MNDT_HOME=$data RENDER_SCRIPT="$app/gateway/render-connectors.py" CONNECTOR_CATALOG="$app/gateway/catalog.json" \
+  bash "$deploy/enable-facts-connector.sh" /nonexistent.tar.gz --no-restart || echo "KO facts-mounted  the facts server was not mounted"
 patch_before=$(sha256sum < "$web_patch" 2>/dev/null)
 MNDT_HOME=$data python3 "$app/gateway/render-connectors.py"; rendered=$?; echo "installed renderer exit $rendered"
 # As install-connectors.sh: a restart only when the renderer changed the patch.

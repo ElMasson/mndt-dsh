@@ -22,14 +22,14 @@ set -uo pipefail
 die() { echo "KO $1  $2"; exit 1; }
 image=${1:?usage: rehearse.sh <workbench image> [rehearsal root]}
 here=$(cd "$(dirname "$0")" && pwd)
-# The members' computers: their images, their settings, their cleanup.
-. "$here/machines-rehearsal.sh"
 # The checks a full run makes, by name, each printed once OK or KO (the exit
 # trap compares): change the list with the checks.
 EXPECTED_CHECKS=$here/expected-checks-rehearse.txt
 deploy=$(cd "$here/.." && pwd)
 repo=$(cd "$deploy/../../../.." && pwd)
 project=mndt-rehearsal
+# The members' computers: their images, their settings, their cleanup.
+. "$here/machines-rehearsal.sh"
 # The rehearsal root is written freely (model.env, grants.json, chmod -R): never
 # an existing instance. Only a new or empty folder under the temporary directory.
 tmp_base=$(cd "${TMPDIR:-/tmp}" && pwd -P)

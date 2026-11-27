@@ -75,8 +75,9 @@ for block in yaml.safe_load(open(sys.argv[1])) or []:
     for row in block.get('insert') or []:
         config = row.get('config') or {}
         script = (config.get('args') or ['', ''])[1]
-        if 'exec "$@" ' not in script: continue
-        print(config.get('serverName', '?') + '\t' + script[:script.index('exec "$@" ') + len('exec "$@" ')] + probe)
+        marker = 'exec "$L" "$@" -- '
+        if marker not in script: continue
+        print(config.get('serverName', '?') + '\t' + script[:script.index(marker) + len(marker)] + probe)
 PY
 )
   if [ "$witness" = readable ] && [ "$ok" = 1 ] && [ "$others" -ge 1 ] && [[ $verdict == *approvals:* ]] && [[ $verdict == *machine:* ]]; then

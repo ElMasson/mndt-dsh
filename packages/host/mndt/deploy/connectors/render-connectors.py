@@ -62,8 +62,10 @@ NODE = '/usr/local/bin/node'
 # included), unless it is the very value the catalog sets for its own command.
 FORBIDDEN_ENV = re.compile(r'^(MNDT_|LD_|DYLD_)|^(NODE_OPTIONS|NODE_PATH|PATH|BASH_ENV|ENV)$')
 READ_ROOTS = ('/usr', '/lib', '/lib64', '/bin', '/sbin', '/etc', '/app', '/opt/mndt-tools',
-              '/dev/null', '/dev/zero', '/dev/urandom', '/dev/random')
-WRITE_ROOTS = ('/tmp', '/state/mcp-auth')
+              '/dev/zero', '/dev/urandom', '/dev/random')
+# /dev/null written too: a connector, or a child it starts, discards output there
+# (proved by the eighth jump's rehearsal: read-only, a redirection failed).
+WRITE_ROOTS = ('/tmp', '/state/mcp-auth', '/dev/null')
 GATEWAY_SECRET = '/run/secrets/mndt-gateway'
 STATE_PATH = re.compile(r'^/state/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$')
 

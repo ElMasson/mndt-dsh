@@ -53,11 +53,14 @@ spec = importlib.util.spec_from_file_location('render_connectors', sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 data = json.load(open(sys.argv[2], encoding='utf-8'))
-env = dict(data.get('env') or {})
-if 'MNDT_ACTOR_FILE' in env:
-    env['MNDT_ACTOR_FILE'] = '/tmp/mcp-check-actor.json'
-data['env'] = env
-print(module.script_for(data, data.get('serverName', 'connector')))
+# Rendered as the workbench renders it (the renderer refuses an MNDT_* value that
+# is not the catalog's own), then the actor file swapped for the check's, in
+# /tmp, which every connector may read under Landlock.
+script = module.script_for(data, data.get('serverName', 'connector'))
+actor = (data.get('env') or {}).get('MNDT_ACTOR_FILE')
+if actor:
+    script = script.replace('export MNDT_ACTOR_FILE=' + actor + ';', 'export MNDT_ACTOR_FILE=/tmp/mcp-check-actor.json;')
+print(script)
 PY
 )
   options=()

@@ -10,6 +10,15 @@ STATE=${DSH_HOME:-/state/home}
 # Inside a bridge network the shell must bind the interface address: a wildcard is
 # rejected and the loopback is unreachable from the front.
 WEB_BIND=${WEB_HOST:-}
+# A container on several networks (a team tenant: front and machines): the
+# address of the name it carries on the gateway's network only.
+if [ -z "$WEB_BIND" ] && [ -n "${WEB_HOST_ALIAS:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    WEB_BIND=$(getent hosts "$WEB_HOST_ALIAS" 2>/dev/null | awk "{print \$1}" | head -1)
+    [ -n "$WEB_BIND" ] && break
+    sleep 1
+  done
+fi
 if [ -z "$WEB_BIND" ]; then
   WEB_BIND=$(hostname -i 2>/dev/null | awk "{print \$1}")
 fi

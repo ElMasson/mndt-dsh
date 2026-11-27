@@ -43,27 +43,47 @@ for file in connectors/render-connectors.py connectors/catalog.json patchfile.py
 done
 
 if [ -z "$ceiling" ]; then
-  # The approvals connector and the machine connector (« Mon ordinateur »), from
-  # the versioned catalog, at this tenant's paths: written again on every run,
-  # because a descriptor an earlier version wrote lacks what the catalog now
-  # requires (the gateway secret since #56, without which every card is refused
-  # with 401 after an update). The workbench is restarted only when a
-  # descriptor changed.
+  # The connectors, from the versioned catalog, at this tenant's paths: written
+  # again on every run, because a descriptor an earlier version wrote lacks what
+  # the catalog now requires (the gateway secret since #56, without which every
+  # card is refused with 401 after an update; the absolute commands and the
+  # actor's folder since the eighth jump). The workbench is restarted only when
+  # a descriptor or the block changed.
   rendered="$data/home/profiles/web/cordis.patch.yml"
   # The descriptors AND the patch they render: a first run that rewrote a
   # descriptor but whose render failed (an unreadable patch, as on 13/11) is
   # rerun once the patch is fixed; the render then changes the patch, and the
   # workbench is restarted even though the descriptors are unchanged.
-  fingerprint() { for f in "$data/connectors/approvals.json" "$data/connectors/machine.json" "$rendered"; do if [ -f "$f" ]; then sha256sum < "$f"; else echo absent; fi; done; }
+  # Every connector of the catalog that is mounted, and the two every tenant has
+  # (approvals, machine): each descriptor rewritten from this version's catalog
+  # first, then the block rendered once. A descriptor an earlier version wrote
+  # (another command, another actor path) would make this version's renderer
+  # refuse the whole block, so none is left behind before the render.
+  catalog_names=$(python3 -c 'import json, sys; print(" ".join(k for k in json.load(open(sys.argv[1])) if not k.startswith("_")))' "$app/gateway/catalog.json")
+  connectors=(approvals machine)
+  for name in $catalog_names; do
+    case " ${connectors[*]} " in *" $name "*) continue ;; esac
+    [ -f "$data/connectors/$name.json" ] && connectors+=("$name")
+  done
+  fingerprint() {
+    local file
+    for file in "$rendered" "${connectors[@]}"; do
+      [ "$file" = "$rendered" ] || file="$data/connectors/$file.json"
+      if [ -f "$file" ]; then sha256sum < "$file"; else echo absent; fi
+    done
+  }
   before=$(fingerprint)
-  for connector in approvals machine; do
+  for connector in "${connectors[@]}"; do
     descriptor_before=$( [ -f "$data/connectors/$connector.json" ] && sha256sum < "$data/connectors/$connector.json" || echo absent)
     MNDT_HOME="$data" MNDT_FRONT="$app" RENDER_SCRIPT="$app/gateway/render-connectors.py" \
       CONNECTOR_CATALOG="$app/gateway/catalog.json" \
-      bash "$here/../mount-connector.sh" "$connector" --preset --no-restart  # its mode is not executable in git
+      bash "$here/../mount-connector.sh" "$connector" --preset --no-render  # its mode is not executable in git
     descriptor_after=$(sha256sum < "$data/connectors/$connector.json")
     [ "$descriptor_after" = "$descriptor_before" ] && echo "$connector: descriptor up to date"
   done
+  # One render for them all, through the tenant's own renderer (a refusal stops here, said).
+  MNDT_HOME="$data" CONNECTOR_CATALOG="$app/gateway/catalog.json" python3 "$app/gateway/render-connectors.py" \
+    || { echo "rendu refuse: le patch n'a pas ete modifie, le workbench n'est pas redemarre; reparer le patch puis relancer" >&2; exit 1; }
   if [ "$(fingerprint)" != "$before" ]; then
     # A restart, not up -d: the container's configuration did not change, so up -d
     # would leave it running without the connector it must now load.

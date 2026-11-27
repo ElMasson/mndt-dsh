@@ -12,7 +12,7 @@ const entrypoint = join(import.meta.dirname, '..', 'deploy', 'workbench-entrypoi
  * @param warnAfter - seconds before the entrypoint says the token is late.
  * @returns the entrypoint's exit code, its output, and the token file.
  */
-async function run(web: string, warnAfter: number): Promise<{ code: number | null; output: string; tokenFile: string }> {
+async function run(web: string, warnAfter: number, host: Record<string, string> = { WEB_HOST: '127.0.0.1' }): Promise<{ code: number | null; output: string; tokenFile: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'entrypoint-'))
   writeFileSync(join(dir, 'node'), `#!/bin/sh\n${web}\n`)
   chmodSync(join(dir, 'node'), 0o755)
@@ -25,13 +25,14 @@ async function run(web: string, warnAfter: number): Promise<{ code: number | nul
         DSH_HOME: join(dir, 'home'),
         DSH_MNDT_WEB_TOKEN_FILE: tokenFile,
         DSH_MNDT_TOKEN_WARN_AFTER: String(warnAfter),
-        WEB_HOST: '127.0.0.1',
+        WEB_HOST: '',
+        ...host,
       },
     })
     let output = ''
     child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
     child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
-    child.on('close', (code) => { resolve({ code, output, tokenFile }) })
+    child.on('close', (code) => { resolve({ code, output, tokenFile, dir }) })
   })
 }
 
@@ -52,6 +53,14 @@ describe('workbench-entrypoint.sh', { timeout: 30_000 }, () => {
     expect(statSync(tokenFile).mode & 0o777).toBe(0o600)
     expect(output).toContain('a new launch token was published')
     expect(output).not.toMatch(/first_1|second_2/)
+  })
+
+  it('on several networks, binds the address of the name it carries on the gateway\'s network (WEB_HOST_ALIAS)', async () => {
+    // The stand-in prints the --host it was given, then a token.
+    const { code, dir } = await run('for a in "$@"; do printf "arg:%s\\n" "$a"; done; echo "dsh web: http://x/?token=t_1"; sleep 1', 60, { WEB_HOST_ALIAS: 'localhost' })
+    expect(code).toBe(0)
+    const web = readFileSync(join(dir, 'home', 'web.log'), 'utf8')
+    expect(web).toMatch(/arg:(127\.0\.0\.1|::1)\b/)
   })
 
   it('stops with the web process when it exits before printing a token, with its log', async () => {

@@ -157,6 +157,39 @@ describe('seeding a tenant', { timeout: 30_000 }, () => {
     expect(restarts()).toBe(1)
   })
 
+  it('rewrites every catalog connector an earlier version mounted before rendering once: none of its old descriptors makes the block refused', () => {
+    const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
+    mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'governance.cfg'), 'client_id = "app-1"\n')
+    writeFileSync(join(root, 'etc', 'oauth2-proxy', 'client_secret'), 's')
+    execFileSync('bash', [join(deploy, 'create-tenant.sh'), 'datanalysis', 'equipe.datanalysis.re', '--owner', owner, '--no-docker'], {
+      env: { ...process.env, MNDT_ROOT: root },
+    })
+    const data = join(root, 'data/mndt/datanalysis/live')
+    mkdirSync(join(data, 'connectors'), { recursive: true })
+    // What the seventh jump left: node by name, the actor's record beside state.json.
+    for (const [name, script, extra] of [['approvals', 'approvals-mcp.mjs', { MNDT_APPROVALS_ALLOW_DECIDE: '0', MNDT_GATEWAY_SECRET_FILE: '/run/secrets/mndt-gateway' }],
+      ['office365', 'office365-mcp.mjs', { OFFICE365_MODE: 'application' }]] as const) {
+      writeFileSync(join(data, 'connectors', `${name}.json`), JSON.stringify({
+        serverName: name, command: ['node', `/opt/mndt-tools/${script}`], envFile: `${name}.env`,
+        env: { MNDT_ACTOR_FILE: '/state/mission-actor.json', ...extra }, allow: ['x'],
+      }))
+    }
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'docker'), '#!/bin/sh\ncat > /dev/null\nexit 0\n', { mode: 0o755 })
+    execFileSync('bash', [join(deploy, 'tenant', 'seed-team.sh'), 'datanalysis', '--owner', owner], {
+      env: { ...process.env, MNDT_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ''}` }, encoding: 'utf8',
+    })
+    for (const name of ['approvals', 'office365', 'machine']) {
+      const descriptor = JSON.parse(readFileSync(join(data, 'connectors', `${name}.json`), 'utf8')) as { command: string[]; env?: Record<string, string> }
+      expect(descriptor.command[0], name).toBe('/usr/local/bin/node')
+      expect(descriptor.env?.MNDT_ACTOR_FILE, name).toBe('/state/actor/mission-actor.json')
+    }
+    const patch = readFileSync(join(data, 'home/profiles/web/cordis.patch.yml'), 'utf8')
+    for (const id of ['mcp-approvals', 'mcp-office365', 'mcp-machine']) expect(patch).toContain(`id: ${id}`)
+  })
+
   it('restarts once the render succeeds, after a first run whose render failed on an unreadable patch', () => {
     const root = mkdtempSync(join(tmpdir(), 'seedsh-'))
     mkdirSync(join(root, 'etc', 'oauth2-proxy'), { recursive: true })

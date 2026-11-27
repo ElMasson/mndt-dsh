@@ -214,7 +214,10 @@ describe('create-tenant.sh', { timeout: 30_000 }, () => {
     expect(Object.keys(rendered.services.gateway?.networks as object).sort()).toEqual(['front', 'ingress'])
     expect(rendered.services.gateway?.environment?.LISTEN_ALIAS).toBe('gateway-ingress')
     // The workbench joins the machines network too (the API asks the sidecar), never the ingress.
-    expect(rendered.services.workbench?.networks).toEqual(['front', 'machines'])
+    expect(Object.keys(rendered.services.workbench?.networks as object).sort()).toEqual(['front', 'machines'])
+    // The shell binds the address of its name on the gateway's network only.
+    expect((rendered.services.workbench?.networks as Record<string, { aliases?: string[] }>).front?.aliases).toEqual(['workbench-front'])
+    expect(rendered.services.workbench?.environment?.WEB_HOST_ALIAS).toBe('workbench-front')
     expect(readFileSync(join(root, 'etc/mndt/datanalysis/oauth2.cfg'), 'utf8')).toContain('upstreams = ["http://gateway-ingress:8080/"]')
     create()
     expect(readFileSync(keyPath, 'utf8').trim()).toBe(key)

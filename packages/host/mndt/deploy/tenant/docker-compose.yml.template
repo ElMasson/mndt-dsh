@@ -117,6 +117,8 @@ services:
       DSH_MNDT_GRANTS_FILE: /state/grants.json
       # A message never decides: the approvals connector never offers decide_approval.
       MNDT_APPROVALS_ALLOW_DECIDE: "0"
+      # The shell's address: its name on the front network only.
+      WEB_HOST_ALIAS: workbench-front
       # The machine service: the members' computers (« Mon ordinateur »).
       MNDT_MACHINES_URL: http://machines-api:8796
       MACHINES_TOKEN_FILE: /run/secrets/mndt-machines
@@ -133,8 +135,12 @@ services:
       - __CONF__/machines_token:/run/secrets/mndt-machines:ro
       - launch:/run/mndt-launch
     networks:
-      - front
-      - machines
+      # The shell binds its address on this network (WEB_HOST_ALIAS, resolved by
+      # the entrypoint): with two networks, `hostname -i` may name the other one,
+      # which the gateway cannot reach.
+      front:
+        aliases: [workbench-front]
+      machines: {}
     restart: unless-stopped
 
   # « Mon ordinateur »: the members' computers, one each, under gVisor. The

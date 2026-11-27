@@ -101,7 +101,8 @@ describe('connector rows', { timeout: 30_000 }, () => {
       expect(grants.filter(arg => arg.startsWith('/run'))).toEqual(['approvals', 'machine'].includes(server) ? ['/run/secrets/mndt-gateway'].filter(path => existsSync(path)) : [])
       expect(grants.join(' ')).not.toMatch(/mndt-machines|mndt-launch/)
       const writable = grants.flatMap((arg, i) => (arg === '--rw' ? [grants[i + 1]] : []))
-      expect(writable.every(path => path === '/tmp' || path === '/state/mcp-auth')).toBe(true)
+      expect(writable.every(path => path === '/tmp' || path === '/state/mcp-auth' || path === '/dev/null')).toBe(true)
+      expect(writable).toContain('/dev/null')
       expect(args.slice(until + 1, until + 3)).toEqual(['/usr/local/bin/node', '/opt/mndt-tools/mcp-proxy.mjs'])
     }
     // No launcher: refused, said, nothing started.
