@@ -495,6 +495,18 @@ export const chatEn = {
   helpPeerCouldNotAnswer: '@{handle} could not answer.',
   helpPeerCouldNotAnswerWhy: '@{handle} could not answer ({why}).',
   staleAfterFailure: 'The turn failed after this message: what it announces will not happen.',
+  runsTitle: 'Latest runs',
+  runQueued: 'waiting',
+  runRunning: 'running',
+  runDone: 'done',
+  runFailed: 'failed',
+  runCancelled: 'cancelled',
+  runOther: 'other',
+  runRetry: 'Run again',
+  runCancel: 'Cancel',
+  runRefused: 'That could not be done: try again in a moment.',
+  mandateRunsOne: '1 mission under this mandate',
+  mandateRunsMany: '{n} missions under this mandate',
 } as const
 
 /** One copy key. */
@@ -990,6 +1002,18 @@ export const chatFr: Record<ChatKey, string> = {
   helpPeerCouldNotAnswer: '@{handle} n\'a pas pu répondre.',
   helpPeerCouldNotAnswerWhy: '@{handle} n\'a pas pu répondre ({why}).',
   staleAfterFailure: 'Le tour a échoué après ce message : ce qu\'il annonce n\'aura pas lieu.',
+  runsTitle: 'Derniers passages',
+  runQueued: 'en attente',
+  runRunning: 'en cours',
+  runDone: 'abouti',
+  runFailed: 'en échec',
+  runCancelled: 'annulé',
+  runOther: 'autre',
+  runRetry: 'Relancer',
+  runCancel: 'Annuler',
+  runRefused: 'Cela n\'a pas pu être fait : réessayez dans un moment.',
+  mandateRunsOne: '1 mission sous ce mandat',
+  mandateRunsMany: '{n} missions sous ce mandat',
 }
 
 /** The same slot, mirrored: the registry requires zh. */

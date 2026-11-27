@@ -395,7 +395,7 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
     expect(tile.textContent).toMatch(/0,25\s€ ce mois-ci, sur 5,00\s€/u)
   })
 
-  it('Réglages offers missions, automations and the advanced mode to the owner only', async () => {
+  it('Réglages no longer offers the old Automatisations nor the old team feed; the advanced mode stays the owner\'s', async () => {
     const { unmount } = render(<CollabPage api={face(state())} team={{}} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
     const member = screen.getByTestId('team-settings').textContent ?? ''
@@ -407,12 +407,14 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
     render(<CollabPage api={face(state())} team={{ owner: true, advancedHref: '/dsh/' }} />)
     fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
     const owner = screen.getByTestId('team-settings').textContent ?? ''
-    expect(owner).toContain('Automatisations')
-    expect(owner).toContain('Fil de l\'équipe')
+    // Stéphane, 27/11: one place, « Tâches planifiées »; the old feed's uses moved there and to Mandats.
+    expect(owner).not.toContain('Automatisations')
+    expect(owner).not.toContain('Fil de l\'équipe')
+    expect(owner).toContain('Activité')
     expect(screen.getByTestId('advanced-mode').getAttribute('href')).toBe('/dsh/')
   })
 
-  it('a 404 on the automations says they are the owner\'s, not a raw error', async () => {
+  it('automations that cannot be read are said in a fixed sentence, never a raw error', async () => {
     const page = state()
     const refusal = new Proxy({}, {
       get: (_t, key) => key === 'state' ? async () => page
@@ -420,10 +422,10 @@ describe('Agents and Réglages, as mndt-web draws them', () => {
           : key === 'automations' ? async () => { throw new FaceRefusal('not found', 404) }
             : async () => { throw new Error('non utilise') },
     }) as MndtFace
-    render(<CollabPage api={refusal} team={{ owner: true }} />)
-    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Réglages' }))
-    fireEvent.click(screen.getByRole('button', { name: /Automatisations/u }))
-    expect(await screen.findByText('Réservé au propriétaire de l\'espace.')).toBeTruthy()
+    render(<CollabPage api={refusal} tc={chatFrench} team={{ owner: true }} />)
+    fireEvent.click(within(await screen.findByTestId('side-nav')).getByRole('button', { name: 'Tâches planifiées' }))
+    expect(await screen.findByText('Les tâches planifiées ne se lisent pas pour l\'instant : réessayez dans un moment.')).toBeTruthy()
+    expect(screen.queryByText('not found')).toBeNull()
   })
 })
 
